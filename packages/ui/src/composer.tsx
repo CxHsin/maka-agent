@@ -42,7 +42,7 @@ import {
   takeComposerQueuedInput,
   type ComposerQueuedInput,
 } from './composer-helpers.js';
-import { useComposerDraft } from './use-composer-draft.js';
+import { useComposerDraft, type ComposerDraftPersistence } from './use-composer-draft.js';
 import { useComposerHistory } from './use-composer-history.js';
 import {
   composerWireText,
@@ -195,6 +195,8 @@ export const Composer = forwardRef<
     stopPending?: boolean;
     /** Runtime-only key used to keep unsent drafts isolated per session. */
     draftKey?: string;
+    /** Optional host persistence for reload-safe draft scopes. */
+    draftPersistence?: ComposerDraftPersistence;
     onSend(
       text: string,
       metadata?: ComposerSendMetadata,
@@ -580,6 +582,7 @@ export const Composer = forwardRef<
     text: textPort,
     draftKey: props.draftKey,
     onDraftKeyChange: resetPromptHistoryNavigation,
+    persistence: props.draftPersistence,
   });
   const { resetNavigation, rememberSentEntry, handleArrowKey } = useComposerHistory({
     text: textPort,

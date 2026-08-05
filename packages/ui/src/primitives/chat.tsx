@@ -37,7 +37,8 @@ export type MarkerVariant =
   | "lineage-row-reverse"
   | "lineage-badge"
   | "footer"
-  | "footer-action";
+  | "footer-action"
+  | "steer";
 
 const MARKER_CLASSES: Record<MarkerVariant, string> = {
   aborted: "maka-turn-aborted-marker",
@@ -50,6 +51,7 @@ const MARKER_CLASSES: Record<MarkerVariant, string> = {
   "lineage-badge": "maka-turn-lineage-badge",
   footer: "maka-turn-footer",
   "footer-action": "maka-turn-footer-action",
+  steer: "maka-turn-steer-marker",
 };
 
 function markerVariants({ variant }: { variant: MarkerVariant }): string {

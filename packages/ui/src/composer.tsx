@@ -21,7 +21,6 @@ import {
   Pencil,
   Plus,
   Sparkles,
-  Trash2,
   Upload,
   Workflow,
 } from './icons.js';
@@ -36,11 +35,7 @@ import { getConversationCopy } from './conversation-copy.js';
 import { type ChatModelChoice, modelChoiceValue } from './chat-model-helpers.js';
 import {
   appendPromptContextDraft,
-  enqueueComposerQueuedInput,
-  isComposerResponseBusy,
   isReferenceSizedPaste,
-  takeComposerQueuedInput,
-  type ComposerQueuedInput,
 } from './composer-helpers.js';
 import { WorkspacePicker, type WorkspacePickerModel } from './workspace-picker.js';
 import { useComposerDraft, type ComposerDraftPersistence } from './use-composer-draft.js';
@@ -126,18 +121,6 @@ function skillTokenValue(id: string): string {
  * rows before it scrolls; rows, not pixels, is the knob upstream exposes.
  */
 const COMPOSER_MAX_ROWS = 10;
-
-/**
- * Queued mid-turn submissions (#1954) render as a row strip above the
- * composer. Long drafts are truncated in the row label; the full text stays
- * in the queue state so firing sends the complete text.
- */
-const QUEUE_LABEL_MAX_CHARS = 64;
-function queueLabel(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.length <= QUEUE_LABEL_MAX_CHARS) return trimmed;
-  return `${trimmed.slice(0, QUEUE_LABEL_MAX_CHARS).trimEnd()}…`;
-}
 
 /**
  * PR-UI-15 (@yuejing 2026-05-22): Composer copy is locale-aware.
@@ -353,12 +336,6 @@ export const Composer = forwardRef<
       if (composerMountedRef.current) setPendingImportAction(action);
     });
   }
-  // #1954: text submitted while a turn is busy is queued here and shown above
-  // the composer; the queue's fire button sends it immediately (main routes it
-  // into the running turn's steering queue when one is active), and the auto
-  // drain releases items once the session is idle again.
-  const [queuedInputs, setQueuedInputs] = useState<ComposerQueuedInput[]>([]);
-  const queuedInputSeqRef = useRef(0);
 
   // The input is controlled: `text` is the serialized draft (inline tokens
   // collapse to their values), mirrored into a ref so the imperative handle —
@@ -922,22 +899,6 @@ export const Composer = forwardRef<
     const editable = editableNode();
     const workspaceFileReferences = editable ? workspaceFileReferencePositions(editable) : [];
     const submittedDraftKey = activeDraftKey();
-    // #1954: while a turn is busy, a plain-text submission must not open a
-    // parallel root turn (the embedded backend is single mutable state). Queue
-    // it; the queue strip offers an immediate fire (which steers the running
-    // turn via main) and the idle drain below sends it as a normal turn.
-    if (
-      isComposerResponseBusy({ streaming: props.streaming, sessionStatus: props.activeSession?.status })
-    ) {
-      queuedInputSeqRef.current += 1;
-      setQueuedInputs((current) =>
-        enqueueComposerQueuedInput(current, text, `queued-${Date.now()}-${queuedInputSeqRef.current}`),
-      );
-      clearDraft(submittedDraftKey);
-      textPort.setValue('');
-      saveCurrentDraft('');
-      return;
-    }
     sendPendingRef.current = true;
     setSendPending(true);
     let sent: boolean | void;
@@ -961,41 +922,6 @@ export const Composer = forwardRef<
     if (activeDraftKey() !== submittedDraftKey) return;
     textPort.setValue('');
     saveCurrentDraft('');
-  }
-
-  async function sendQueuedNow(id: string) {
-    if (props.disabled || sendPendingRef.current || importActionOwnerRef.current?.pending) return;
-    const taken = takeComposerQueuedInput(queuedInputs, id);
-    if (!taken.item) return;
-    // Drop it from the queue immediately so "fire" never looks like a no-op;
-    // a failed send is put back at the front below so it is not lost.
-    setQueuedInputs(taken.queue);
-    sendPendingRef.current = true;
-    setSendPending(true);
-    let sent: boolean | void;
-    try {
-      sent = await props.onSend(taken.item.text);
-    } catch {
-      sent = false;
-    } finally {
-      sendPendingRef.current = false;
-      if (composerMountedRef.current) setSendPending(false);
-    }
-    if (!composerMountedRef.current) return;
-    if (sent === false) setQueuedInputs((current) => [taken.item!, ...current]);
-  }
-
-  function removeQueuedInput(id: string) {
-    setQueuedInputs((current) => current.filter((entry) => entry.id !== id));
-  }
-
-  function editQueuedInput(id: string) {
-    const entry = queuedInputs.find((e) => e.id === id);
-    if (!entry) return;
-    setQueuedInputs((current) => current.filter((e) => e.id !== id));
-    textPort.setValue(entry.text);
-    saveCurrentDraft(entry.text);
-    focusInput();
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -1086,16 +1012,9 @@ export const Composer = forwardRef<
     saveCurrentDraft(next);
   }
 
-  // Auto drain: when the session is idle again (turn finished, permission
-  // answered), release queued submissions as normal sends.
-  useEffect(() => {
-    if (queuedInputs.length === 0) return;
-    if (props.disabled || sendPendingRef.current || importActionOwnerRef.current?.pending) return;
-    if (isComposerResponseBusy({ streaming: props.streaming, sessionStatus: props.activeSession?.status })) return;
-    const first = queuedInputs[0];
-    if (!first) return;
-    void sendQueuedNow(first.id);
-  });
+  // Auto drain removed with the #1954 composer queue strip (review §2): a busy
+  // send now routes through main's steering queue immediately instead of
+  // deferring, so there is nothing to release when the session goes idle.
 
   function canAcceptDroppedFiles(): boolean {
     return Boolean(props.onAttachFilePaths && !props.disabled && !props.streaming && !importActionOwnerRef.current?.pending);
@@ -1288,45 +1207,6 @@ export const Composer = forwardRef<
           >
             {props.revisionNotice.cancelLabel}
           </button>
-        </div>
-      )}
-      {!props.hidden && queuedInputs.length > 0 && (
-        <div className="maka-composer-queue" role="status" aria-label="排队中的消息">
-          {queuedInputs.map((entry) => (
-            <div key={entry.id} className="maka-composer-queue-row">
-              <span className="maka-composer-queue-text" title={entry.text}>
-                {queueLabel(entry.text)}
-              </span>
-              <UiButton
-                variant="ghost"
-                size="sm"
-                isDisabled={sendPending}
-                aria-busy={sendPending ? 'true' : undefined}
-                label="立即"
-                onClick={() => void sendQueuedNow(entry.id)}
-              />
-              <IconButton
-                variant="ghost"
-                type="button"
-                size="sm"
-                label="编辑"
-                tooltip="编辑这条消息"
-                isDisabled={sendPending}
-                onClick={() => editQueuedInput(entry.id)}
-                icon={<Pencil size={14} aria-hidden="true" />}
-              />
-              <IconButton
-                variant="ghost"
-                type="button"
-                size="sm"
-                label="删除"
-                tooltip="删除这条消息"
-                isDisabled={sendPending}
-                onClick={() => removeQueuedInput(entry.id)}
-                icon={<Trash2 size={14} aria-hidden="true" />}
-              />
-            </div>
-          ))}
         </div>
       )}
       <form

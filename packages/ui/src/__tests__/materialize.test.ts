@@ -674,3 +674,79 @@ describe("live tool status over persisted", () => {
     );
   });
 });
+
+describe("overlay steer dedupe (#1954 review 1.2)", () => {
+  test("a live steer whose messageId is already in the persisted timeline renders once", () => {
+    const settled = materializeTurns([
+      userMsg("t1", 1, "prompt"),
+      // The drained steer is persisted as a user row; buildTurnTimeline
+      // renders it as a steer entry.
+      { type: "user", id: "user-steer-1", turnId: "t1", ts: 2, text: "改成英文" },
+      {
+        type: "assistant",
+        id: "a1",
+        turnId: "t1",
+        ts: 3,
+        text: "answer",
+        modelId: "test-model",
+      },
+    ]);
+    const turns = overlayLiveTurn(settled, {
+      turnId: "t1",
+      phase: "streamed",
+      // The live overlay still carries the same steer (pending + bound): both
+      // must be skipped because the persisted timeline already shows it.
+      pendingSteers: [{ messageId: "user-steer-1", text: "改成英文", ts: 2 }],
+      steps: [
+        {
+          stepId: "a2",
+          tools: [],
+          steers: [{ messageId: "user-steer-1", text: "改成英文", ts: 2 }],
+          text: { text: "continuation", truncated: false, complete: true },
+        },
+      ],
+    });
+    const timeline = turns.find((turn) => turn.turnId === "t1")?.timeline ?? [];
+    const steers = timeline.filter((item: TurnTimelineItem) => item.kind === "steer");
+    assert.equal(steers.length, 1, "the persisted steer must not duplicate in the overlay");
+    assert.equal(steers[0]?.messageId, "user-steer-1");
+    assert.deepEqual(
+      timeline.map((item: TurnTimelineItem) => item.kind),
+      // The prompt row is `turn.user`, not a timeline entry; the persisted
+      // steer sits ahead of the persisted answer, and the live continuation
+      // step renders after it.
+      ["steer", "text", "text"],
+    );
+  });
+
+  test("a steer not yet persisted still renders from the live overlay", () => {
+    const settled = materializeTurns([
+      userMsg("t1", 1, "prompt"),
+      {
+        type: "assistant",
+        id: "a1",
+        turnId: "t1",
+        ts: 2,
+        text: "first answer",
+        modelId: "test-model",
+      },
+    ]);
+    const turns = overlayLiveTurn(settled, {
+      turnId: "t1",
+      phase: "streamed",
+      // Not persisted yet (arrived after the last refresh): live-only render.
+      pendingSteers: [{ messageId: "user-steer-live", text: "新指令", ts: 3 }],
+      steps: [
+        {
+          stepId: "a2",
+          tools: [],
+          text: { text: "continuation", truncated: false, complete: true },
+        },
+      ],
+    });
+    const timeline = turns.find((turn) => turn.turnId === "t1")?.timeline ?? [];
+    const steers = timeline.filter((item: TurnTimelineItem) => item.kind === "steer");
+    assert.equal(steers.length, 1);
+    assert.equal(steers[0]?.messageId, "user-steer-live");
+  });
+});

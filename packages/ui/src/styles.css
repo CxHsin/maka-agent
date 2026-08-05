@@ -311,24 +311,25 @@
 
 .maka-turn-aborted-marker em { font-style: italic; }
 
-/* Mid-turn steering injection (#1954): compact badge above the steered text so
-   the interjection reads as guidance rather than a new prompt. */
-.maka-steer-badge {
-  font: var(--maka-text-supporting);
-  display: inline-flex;
-  width: fit-content;
-  align-items: center;
+/* Mid-turn steering injection (#1954): the steer marker is a quiet, neutral
+   transcript note — same family as the aborted marker, not a tinted pill
+   (review §3: Marker primitive + established weak-info idiom, no invented
+   tokens, no bubble re-skin). The steered text itself renders in the standard
+   user bubble via MessageBody. */
+.maka-turn-steer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.maka-turn-steer-marker {
   gap: var(--space-1);
   margin-block: var(--space-0-5) var(--space-1);
   padding: var(--space-0-5) var(--space-1-5);
   border-radius: var(--radius-control);
-  background: var(--info-weak, color-mix(in oklab, var(--info) 12%, transparent));
-  color: var(--info-text, var(--foreground-secondary));
-}
-.maka-steer-marker .maka-chat-message-bubble {
-  border-color: var(--border-strong);
-  background: transparent;
-  opacity: 0.9;
+  background: oklch(from var(--info) l c h / 0.10);
+  color: var(--foreground-secondary);
+  font: var(--maka-text-supporting);
 }
 
 .maka-turn-automation-origin {
@@ -358,41 +359,9 @@
   content: "·";
 }
 
-/* #1954 queued mid-turn submissions: a strip above the composer, kept on the
-   same measure as the input card so the queue reads as part of the composer,
-   not a full-bleed bar. Each entry is a full-width row card with drag handle,
-   truncated text, and action buttons. */
-.maka-composer-queue {
-  width: min(var(--maka-chat-measure, 680px), calc(100% - (2 * var(--space-6))));
-  max-width: var(--maka-chat-measure, 680px);
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--space-1);
-  margin: 0 auto var(--space-1);
-  min-width: 0;
-}
-.maka-composer-queue-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  width: 100%;
-  padding: var(--space-1) var(--space-1-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--card-bg, var(--background));
-  box-shadow: var(--shadow-minimal-flat);
-}
-.maka-composer-queue-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font: var(--maka-text-body);
-  color: var(--foreground);
-}
-
+/* #1954 steer timeline entries render via the neutral `Marker` "steer" variant
+   (maka-turn-steer-marker) below; the composer queue strip was removed in
+   review §2, so its styles no longer exist. */
 .maka-turn-lineage-row,
 .maka-turn-footer {
   display: flex;

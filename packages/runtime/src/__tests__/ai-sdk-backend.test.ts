@@ -14680,4 +14680,175 @@ describe('AiSdkBackend steering continuation pass (#1954)', () => {
     assert.equal(streamCalls, 1);
     assert.equal(pullCalls, 1);
   });
+
+  test('caps steer-only continuation passes at MAX_STEERING_CONTINUATIONS and acks every drained steer', async () => {
+    // Review 4.3: the continuation bound. Every pass ends with another pending
+    // steer, so the loop must stop after the cap (1 main + 2 continuation
+    // passes) instead of spinning on billed provider calls, and each drained
+    // steer must still be durably acked on the continuation path.
+    let streamCalls = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        streamCalls += 1;
+        const chunks: LanguageModelV4StreamPart[] = [
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: `pass ${streamCalls}` },
+          { type: 'text-end', id: 't1' },
+          {
+            type: 'finish',
+            finishReason: { unified: 'stop', raw: 'stop' },
+            usage: continuationUsage(),
+          },
+        ];
+        return {
+          stream: simulateReadableStream({ chunks, initialDelayInMs: null, chunkDelayInMs: null }),
+        };
+      },
+    });
+    let leaseSeq = 0;
+    const acked: string[] = [];
+    const backend = createTestAiSdkBackend({
+      sessionId: 'session-1',
+      header: header(),
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      modelFactory: () => model,
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+    });
+    const events: SessionEvent[] = [];
+    await collectEvents(
+      backend.send({
+        turnId: 'turn-1',
+        text: 'start',
+        context: [],
+        pullSteering: () => {
+          leaseSeq += 1;
+          return [
+            {
+              id: `lease-${leaseSeq}`,
+              messageId: `message-${leaseSeq}`,
+              content: { text: `steer ${leaseSeq}` },
+            },
+          ];
+        },
+        hasPendingSteering: () => true,
+        ackSteering: (leaseIds) => acked.push(...leaseIds),
+        nackSteering: () => {},
+      }),
+      events,
+    );
+    // 1 main pass + 2 continuation passes; the third pending steer hits the
+    // cap and stops the loop.
+    assert.equal(streamCalls, 3);
+    // Every drained steer was echoed and acked, including on continuation passes.
+    assert.equal(events.filter((event) => event.type === 'steering_message').length, 3);
+    assert.deepEqual(acked.sort(), ['lease-1', 'lease-2', 'lease-3']);
+  });
+
+  test('a pending steer rides an already-justified tool pass without consuming the continuation budget', async () => {
+    // Review 4.3: the mixed branch. When the final step returns tool calls,
+    // the next pass is justified by the tools alone — the pending steer is
+    // drained into that same pass and must not count against
+    // MAX_STEERING_CONTINUATIONS (the steer-only counter).
+    let streamCalls = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        streamCalls += 1;
+        const chunks: LanguageModelV4StreamPart[] = (streamCalls === 1
+            ? [
+                { type: 'stream-start', warnings: [] },
+                {
+                  type: 'tool-call',
+                  toolCallId: 'tool-1',
+                  toolName: 'Read',
+                  input: { path: 'package.json' },
+                },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'stop', raw: 'stop' },
+                  usage: continuationUsage(),
+                },
+              ]
+            : [
+                { type: 'stream-start', warnings: [] },
+                { type: 'text-start', id: 't1' },
+                { type: 'text-delta', id: 't1', delta: 'final answer' },
+                { type: 'text-end', id: 't1' },
+                {
+                  type: 'finish',
+                  finishReason: { unified: 'stop', raw: 'stop' },
+                  usage: continuationUsage(),
+                },
+              ]) as LanguageModelV4StreamPart[];
+        return {
+          stream: simulateReadableStream({ chunks, initialDelayInMs: null, chunkDelayInMs: null }),
+        };
+      },
+    });
+    let pullCalls = 0;
+    let pulled = false;
+    const backend = createTestAiSdkBackend({
+      sessionId: 'session-1',
+      header: header(),
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      modelFactory: () => model,
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+    });
+    const events: SessionEvent[] = [];
+    await collectEvents(
+      backend.send({
+        turnId: 'turn-1',
+        text: 'start',
+        context: [],
+        // The steer lands BETWEEN passes: nothing to pull during pass 1, then
+        // the tool-justified pass 2 drains it.
+        pullSteering: () => {
+          pullCalls += 1;
+          if (pullCalls === 1) return [];
+          if (pullCalls === 2 && !pulled) {
+            pulled = true;
+            return [
+              {
+                id: 'lease-mixed',
+                messageId: 'message-mixed',
+                content: { text: 'steer alongside tools' },
+              },
+            ];
+          }
+          return [];
+        },
+        hasPendingSteering: () => !pulled && pullCalls >= 1,
+        ackSteering: () => {},
+        nackSteering: () => {},
+      }),
+      events,
+    );
+    // Tool pass + the tool-justified pass that drains the steer.
+    assert.equal(streamCalls, 2);
+    const secondPrompt = model.doStreamCalls[1]?.prompt as
+      | { role: string; content: unknown }[]
+      | undefined;
+    const last = secondPrompt?.[secondPrompt.length - 1];
+    const lastText =
+      typeof last?.content === 'string'
+        ? last.content
+        : (last?.content as { type: string; text?: string }[] | undefined)?.find(
+            (part) => part.type === 'text',
+          )?.text;
+    assert.ok(
+      typeof lastText === 'string' && lastText.includes('steer alongside tools'),
+      `the tool-justified pass should carry the steer, got: ${JSON.stringify(lastText)}`,
+    );
+    assert.equal(events.filter((event) => event.type === 'steering_message').length, 1);
+  });
 });

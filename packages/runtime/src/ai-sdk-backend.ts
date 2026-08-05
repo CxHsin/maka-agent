@@ -1517,9 +1517,11 @@ export class AiSdkBackend implements AgentBackend {
         // bounded continuation step so the steer steers THIS turn instead of
         // being deferred to the followup queue (#1954). Capped independently of
         // maxSteps so repeated mid-step steers cannot spin the loop forever on
-        // a turn that never calls tools.
+        // a turn that never calls tools. Review §5: two passes are enough —
+        // steers arriving during one step are all drained in a single pass
+        // anyway, and every pass is a billed provider call.
         let steeringContinuations = 0;
-        const MAX_STEERING_CONTINUATIONS = 8;
+        const MAX_STEERING_CONTINUATIONS = 2;
         agentLoop: for (;;) {
           await this.drainSteeringInto(scope, input, queue);
           if (this.input.loadTurnRuntimeEvents) {

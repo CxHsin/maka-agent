@@ -249,11 +249,15 @@ export interface MakaBridge {
           ok: true;
           /**
            * True when the send was routed into the running turn's steering queue
-           * (#1954) instead of opening a new turn. When set, no new turn was
-           * created: skip optimistic user-message / turn-arm bookkeeping and rely
-           * on the steering_message event + refreshMessages to surface the text.
+           * (#1954) instead of opening a new turn. Discriminated from the
+           * new-turn branch: a steered send creates no turn, so `turnId`/
+           * attachments/etc. do not exist (review §5).
            */
-          steered?: boolean;
+          steered: true;
+        }
+      | {
+          ok: true;
+          steered?: false;
           turnId: string;
           attachments: import('@maka/core').AttachmentRef[];
           inlineReferences: import('@maka/core').InlineReference[];

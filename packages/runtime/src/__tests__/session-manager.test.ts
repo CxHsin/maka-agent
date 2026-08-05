@@ -19758,6 +19758,60 @@ describe('SessionManager steering and followup queues', () => {
     // And the followup queue is the authoritative owner of the text.
     expect(manager.drainFollowup(session.id)).toBe('late');
   });
+
+  test('hasPendingSteering is scoped to the owning turn, not the session', async () => {
+    // Review 4.3: the kernel peek hook follows ownership. When an overlapping
+    // root turn takes the steering slot, the displaced turn stops seeing the
+    // queue (false) and the new owner sees it (true) — a stale run can never
+    // spin a continuation pass on another turn's steer, and the owner inherits
+    // whatever was queued before it began.
+    const store = new MemorySessionStore();
+    const runStore = new MemoryAgentRunStore();
+    const backends = new BackendRegistry();
+    let backendA: OwnershipPeekBackend | undefined;
+    let backendB: OwnershipPeekBackend | undefined;
+    backends.register('fake', (ctx) => {
+      const backend = new OwnershipPeekBackend(ctx);
+      if (!backendA) backendA = backend;
+      else backendB = backend;
+      return backend;
+    });
+    const manager = new SessionManager({
+      store,
+      runStore,
+      runtimeEventStore: runStore,
+      backends,
+      newId: nextId(),
+      now: nextNow(1_000),
+    });
+    const session = await manager.createSession(
+      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
+    );
+
+    // Turn A begins and owns the steering slot; a steer queues under it.
+    const turnA = drainAll(manager.sendMessage(session.id, { turnId: 'turn-a', text: 'a' }));
+    await waitUntil(() => backendA?.gates.has('turn-a') === true);
+    expect(manager.steer(session.id, 'steer queued under a').kind).toBe('queued');
+
+    // Overlapping turn B takes the owner slot before A's gate releases.
+    const turnB = drainAll(manager.sendMessage(session.id, { turnId: 'turn-b', text: 'b' }));
+    await waitUntil(() => backendB?.gates.has('turn-b') === true);
+
+    // A resumes: its peek must be false (no longer the owner).
+    backendA?.release('turn-a');
+    await waitUntil(() => (backendA?.peeks.get('turn-a')?.length ?? 0) > 0);
+    expect(backendA?.peeks.get('turn-a')?.at(-1)).toBe(false);
+    await turnA;
+
+    // B resumes: its peek is true — the queue is scoped to B now, and B
+    // drains the steer that was queued under A.
+    backendB?.release('turn-b');
+    await waitUntil(() => (backendB?.peeks.get('turn-b')?.length ?? 0) > 0);
+    expect(backendB?.peeks.get('turn-b')?.at(-1)).toBe(true);
+    const eventsB = await turnB;
+    expect(eventsB.some((event) => event.type === 'steering_message')).toBe(true);
+    expect(manager.drainFollowup(session.id)).toBe(null);
+  });
 });
 
 async function drainAll(iterable: AsyncIterable<SessionEvent>): Promise<SessionEvent[]> {
@@ -19886,7 +19940,6 @@ class GatedSteeringBackend implements AgentBackend {
   constructor(ctx: BackendFactoryContext) {
     this.sessionId = ctx.sessionId;
   }
-
   async *send(input: BackendSendInput): AsyncIterable<SessionEvent> {
     const gate = makeGate();
     const afterPull = makeGate();
@@ -19933,6 +19986,73 @@ class GatedSteeringBackend implements AgentBackend {
   release(turnId: string): void {
     this.gates.get(turnId)?.release();
     this.pullDone.get(turnId)?.release();
+  }
+
+  async stop(): Promise<void> {
+    for (const turnId of this.gates.keys()) this.release(turnId);
+  }
+
+  async respondToSandboxBoundary(_decision: SandboxBoundaryResponse): Promise<void> {}
+
+  async dispose(): Promise<void> {}
+}
+
+/**
+ * Gated backend that records `input.hasPendingSteering()` results per turn —
+ * the kernel-level ownership-scope probe for the steering continuation pass
+ * (review 4.3). The peek runs only after the caller releases the turn's gate,
+ * so the test can arrange WHO owns the steering slot at peek time.
+ */
+class OwnershipPeekBackend implements AgentBackend {
+  readonly kind = 'fake' as const;
+  readonly sessionId: string;
+  readonly gates = new Map<string, Gate>();
+  readonly peeks = new Map<string, boolean[]>();
+
+  constructor(ctx: BackendFactoryContext) {
+    this.sessionId = ctx.sessionId;
+  }
+
+  async *send(input: BackendSendInput): AsyncIterable<SessionEvent> {
+    const gate = makeGate();
+    this.gates.set(input.turnId, gate);
+    await gate.promise;
+    const record = this.peeks.get(input.turnId) ?? [];
+    record.push(input.hasPendingSteering?.() === true);
+    this.peeks.set(input.turnId, record);
+    const leases = input.pullSteering?.() ?? [];
+    let seq = 0;
+    for (const lease of leases) {
+      seq += 1;
+      yield {
+        type: 'steering_message',
+        id: `${input.turnId}-steer-${seq}`,
+        turnId: input.turnId,
+        ts: seq,
+        messageId: lease.messageId,
+        content: lease.content,
+      };
+    }
+    input.ackSteering?.(leases.map((lease) => lease.id));
+    yield {
+      type: 'text_complete',
+      id: `${input.turnId}-final`,
+      turnId: input.turnId,
+      ts: 10,
+      messageId: `${input.turnId}-m`,
+      text: 'ok',
+    };
+    yield {
+      type: 'complete',
+      id: `${input.turnId}-complete`,
+      turnId: input.turnId,
+      ts: 11,
+      stopReason: 'end_turn',
+    };
+  }
+
+  release(turnId: string): void {
+    this.gates.get(turnId)?.release();
   }
 
   async stop(): Promise<void> {

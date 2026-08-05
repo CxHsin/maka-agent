@@ -149,7 +149,10 @@ export function applyLiveTurnEvent(
     const steps = terminalizeLiveSteps(current.steps);
     if (steps.length === 0) return undefined;
     const { providerRetry: _providerRetry, ...withoutRetry } = confirmed(current);
-    return { ...withoutRetry, terminal: true, steps };
+    // Review 1.2: once the projection turns terminal the persisted timeline
+    // owns every drained steer (buildTurnTimeline), so the live overlay must
+    // stop rendering pendingSteers or the badge duplicates forever.
+    return { ...withoutRetry, terminal: true, steps, pendingSteers: [] };
   }
   if (event.type === 'complete') {
     if (!current || current.turnId !== event.turnId) return current;
@@ -159,6 +162,7 @@ export function applyLiveTurnEvent(
       ...withoutRetry,
       terminal: true,
       steps: terminalizeLiveSteps(current.steps),
+      pendingSteers: [],
     };
   }
   if (event.type === 'steering_message') {

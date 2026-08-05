@@ -357,6 +357,17 @@ export function createAppShellChatActions(deps: {
           await discardUnsentSession();
           return false;
         }
+        // A brand-new session cannot own a steering turn, so main only returns
+        // `steered: true` when the session already existed and was mid-turn (a
+        // create/send race). Treat it like the existing-session steered branch:
+        // no optimistic user message, keep the session, refresh the transcript.
+        if (sendResult.steered === true) {
+          unsentSessionId = undefined;
+          options.onSessionResolved?.(session.id);
+          await refreshMessages(session.id);
+          await refreshSessions();
+          return true;
+        }
         unsentSessionId = undefined;
         options.onSessionResolved?.(session.id);
         if (newChatOwner && isNewChatSendSurfaceActive(newChatOwner)) {
@@ -417,6 +428,11 @@ export function createAppShellChatActions(deps: {
         disarmTurnActive(sessionId, turnId);
         optimisticSessionId = undefined;
         optimisticTurnId = undefined;
+        // start_task binds taskSessionId via onSessionResolved; a steered send
+        // still belongs to this (already resolved) session, so the binding must
+        // not be skipped or steer_task fails with no_active_task (#1954 review
+        // 1.3).
+        options.onSessionResolved?.(sessionId);
         await refreshMessages(sessionId);
         await refreshSessions();
         return true;

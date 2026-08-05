@@ -432,7 +432,16 @@ export function overlayLiveTurn(
   // the auto-scroll viewport — "covered by subsequent content." Once the
   // next step opens, the steer binds to it (below) and leaves pendingSteers,
   // so this never duplicates a bound steer.
+  // Review 1.2: a drained steer is ALSO persisted as a user row, so
+  // buildTurnTimeline renders it. Skip a live steer whose messageId is
+  // already in the persisted timeline — otherwise the badge renders twice.
+  const timelineSteerIds = new Set(
+    timeline
+      .filter((item) => item.kind === "steer")
+      .map((item) => item.messageId),
+  );
   for (const steer of liveTurn.pendingSteers ?? []) {
+    if (timelineSteerIds.has(steer.messageId)) continue;
     timeline.push({
       kind: 'steer',
       text: steer.text,
@@ -445,6 +454,7 @@ export function overlayLiveTurn(
     // step's own content (between the previous step's answer and the
     // continuation that responds to the steer) - never as a trailing row.
     for (const steer of step.steers ?? []) {
+      if (timelineSteerIds.has(steer.messageId)) continue;
       timeline.push({
         kind: 'steer',
         text: steer.text,

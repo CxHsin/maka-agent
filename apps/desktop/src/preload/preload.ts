@@ -208,6 +208,11 @@ const makaBridge = {
     ): Promise<
       | {
           ok: true;
+          steered: true;
+        }
+      | {
+          ok: true;
+          steered?: false;
           turnId: string;
           attachments: AttachmentRef[];
           inlineReferences: InlineReference[];

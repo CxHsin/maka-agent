@@ -516,12 +516,19 @@ export function registerSessionsIpc(
     if (sendCommand.voiceOperationId && !voiceAudio) {
       throw new Error('voice_operation_unavailable');
     }
+    // #1954 review 1.1: a steer that arrived after its turn's final step
+    // boundary was folded into the followup queue by releaseSteeringTurn (the
+    // embedded runtime has no drain path wired on desktop). A new turn opening
+    // here is the drain point: prepend the folded text so it is never lost.
+    const drainedFollowup = runtime.drainFollowup(sessionId);
     const iterator = runtime.sendMessage(
       sessionId,
       {
         turnId,
         text:
-          skillInvocation.sendText || (sendCommand.voiceOperationId ? VOICE_INPUT_MARKER : ''),
+          [drainedFollowup, skillInvocation.sendText || (sendCommand.voiceOperationId ? VOICE_INPUT_MARKER : '')]
+            .filter((part) => part && part.trim().length > 0)
+            .join('\n\n'),
         ...(voiceAudio ? { voiceAudio } : {}),
         ...(skillInvocation.disposition === 'ready' || sendCommand.displayText !== undefined
           ? { displayText }

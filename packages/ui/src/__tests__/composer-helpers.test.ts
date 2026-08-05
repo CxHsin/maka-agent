@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  enqueueComposerQueuedInput,
-  isComposerResponseBusy,
   isReferenceSizedPaste,
   navigateComposerHistory,
   PASTE_AS_QUOTE_MIN_CHARS,
@@ -11,9 +9,7 @@ import {
   reconcileHistorySync,
   rememberComposerDraft,
   rememberComposerHistoryEntry,
-  takeComposerQueuedInput,
   type ComposerHistoryState,
-  type ComposerQueuedInput,
 } from '../composer-helpers.js';
 
 describe('reconcileHistorySync', () => {
@@ -121,55 +117,6 @@ describe('navigateComposerHistory', () => {
     }
     assert.equal(value, '原始输入');
     assert.deepEqual(state, { entries: ['one', 'two'], index: -1, savedDraft: '' });
-  });
-});
-
-describe('isComposerResponseBusy (mid-turn send routing, #1954)', () => {
-  it('treats active text streaming as busy even without a session status', () => {
-    assert.equal(isComposerResponseBusy({ streaming: true, sessionStatus: undefined }), true);
-  });
-  it('treats a running session as busy before assistant text streams', () => {
-    assert.equal(isComposerResponseBusy({ streaming: false, sessionStatus: 'running' }), true);
-  });
-  it('treats a session parked on a permission prompt (waiting_for_user) as busy', () => {
-    assert.equal(isComposerResponseBusy({ streaming: false, sessionStatus: 'waiting_for_user' }), true);
-  });
-  it('does not treat an idle non-running session as busy', () => {
-    assert.equal(isComposerResponseBusy({ streaming: false, sessionStatus: 'active' }), false);
-    assert.equal(isComposerResponseBusy({ streaming: false, sessionStatus: undefined }), false);
-  });
-});
-
-describe('composer queued inputs', () => {
-  it('trims and appends a queued input while preserving order', () => {
-    const current: ComposerQueuedInput[] = [{ id: 'q1', text: 'first' }];
-    const next = enqueueComposerQueuedInput(current, '  guide the answer  ', 'q2');
-    assert.deepEqual(next, [
-      { id: 'q1', text: 'first' },
-      { id: 'q2', text: 'guide the answer' },
-    ]);
-  });
-  it('ignores blank queued input text', () => {
-    const current: ComposerQueuedInput[] = [{ id: 'q1', text: 'first' }];
-    assert.equal(enqueueComposerQueuedInput(current, '   ', 'q2'), current);
-  });
-  it('takes one queued input by id and leaves the rest in order', () => {
-    const current: ComposerQueuedInput[] = [
-      { id: 'q1', text: 'first' },
-      { id: 'q2', text: 'urgent direction' },
-      { id: 'q3', text: 'later' },
-    ];
-    const result = takeComposerQueuedInput(current, 'q2');
-    assert.deepEqual(result.item, { id: 'q2', text: 'urgent direction' });
-    assert.deepEqual(result.queue, [
-      { id: 'q1', text: 'first' },
-      { id: 'q3', text: 'later' },
-    ]);
-  });
-  it('returns undefined for an unknown queued id', () => {
-    const result = takeComposerQueuedInput([{ id: 'q1', text: 'first' }], 'missing');
-    assert.equal(result.item, undefined);
-    assert.deepEqual(result.queue, [{ id: 'q1', text: 'first' }]);
   });
 });
 

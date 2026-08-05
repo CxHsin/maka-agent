@@ -874,17 +874,20 @@ function TurnTimelineEntry(props: {
   onStreamingSettled?: (messageId?: string) => void;
 }) {
   const { item } = props;
+  const steerCopy = getConversationCopy(useUiLocale()).messages;
   if (item.kind === 'thinking') {
     return <DeepThinking text={item.text} live={item.live === true} truncated={item.truncated === true} />;
   }
   if (item.kind === 'tools') return <ToolTrow items={item.items} />;
   if (item.kind === 'steer') {
     // Mid-turn steering injection (#1954): a user message routed into the
-    // running turn's steering queue. Rendered as a compact marker + the
-    // steered text so the interjection reads as guidance, not a new prompt.
+    // running turn's steering queue. Rendered as the neutral `Marker` "steer"
+    // variant + the steered text in the standard user bubble, so the
+    // interjection reads as guidance, not a new prompt (review §3: Marker
+    // primitive, no invented tokens, no bubble re-skin).
     return (
-      <div className="maka-steer-marker inline-flex flex-col gap-1 self-start">
-        <span className="maka-steer-badge">{'引导已注入'}</span>
+      <div className="maka-turn-steer">
+        <Marker variant="steer">{steerCopy.steerBadge}</Marker>
         <MessageBody role="user" text={item.text} ts={item.ts} />
       </div>
     );

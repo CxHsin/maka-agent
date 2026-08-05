@@ -117,15 +117,21 @@ export async function executeFilesystemOperation(
         operationBoundary,
       );
       // Read-before-write: the diff of an overwrite is what tells the reader
-      // what was lost. A missing file means the whole content is new.
-      let previous: string | undefined;
+      // what was lost. Only a missing file means the whole content is new —
+      // any other read failure leaves the previous state unknown, and
+      // claiming `--- /dev/null` would report the file as created.
+      let previous: 'new' | 'unknown' | string;
       try {
         previous = await fs.readFile(path, 'utf8');
-      } catch {
-        previous = undefined;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        previous = code === 'ENOENT' || code === 'ENOTDIR' ? 'new' : 'unknown';
       }
       await fs.writeFile(path, operation.content, 'utf8');
-      const diff = createUnifiedDiff(path, previous, operation.content);
+      const diff =
+        previous === 'unknown'
+          ? undefined
+          : createUnifiedDiff(path, previous === 'new' ? undefined : previous, operation.content);
       return {
         kind: 'write',
         ok: true,

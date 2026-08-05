@@ -215,16 +215,27 @@ function createWorkspaceFilesystemExecutor(
             scope,
           });
           // Read-before-write: an overwrite's diff is what tells the reader
-          // what was lost; a missing file means the whole content is new.
-          let previous: string | undefined;
+          // what was lost. Only a missing file means the whole content is
+          // new — an unreadable or binary existing file leaves the previous
+          // state unknown, and claiming `--- /dev/null` would report the
+          // file as created.
+          let previous: 'new' | 'unknown' | string;
           try {
             const read = await workspace.readFile({ cwd, path });
-            previous = 'bytes' in read ? undefined : read.content;
-          } catch {
-            previous = undefined;
+            previous = 'bytes' in read ? 'unknown' : read.content;
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            previous = code === 'ENOENT' || code === 'ENOTDIR' ? 'new' : 'unknown';
           }
           const written = await workspace.writeFile({ cwd, path, content: operation.content });
-          const diff = createUnifiedDiff(written.path, previous, operation.content);
+          const diff =
+            previous === 'unknown'
+              ? undefined
+              : createUnifiedDiff(
+                  written.path,
+                  previous === 'new' ? undefined : previous,
+                  operation.content,
+                );
           return {
             kind: 'write',
             ok: true,

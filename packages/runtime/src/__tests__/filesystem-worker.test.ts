@@ -391,7 +391,7 @@ describe('filesystem worker operations', () => {
     assert.equal(response.result.diff, undefined);
   });
 
-  test('returns no diff when FormatJson leaves the file unchanged', async () => {
+  test('omits the diff when FormatJson leaves the file unchanged', async () => {
     const root = await temporaryDirectory('maka-worker-format-same-');
     const target = join(root, 'data.json');
     await writeFile(target, '{\n  "a": 1\n}', 'utf8');
@@ -407,6 +407,44 @@ describe('filesystem worker operations', () => {
     assert.equal(response.result.kind, 'format_json');
     if (response.result.kind !== 'format_json') return;
     assert.equal(response.result.changed, false);
+    assert.equal(response.result.diff, undefined);
+  });
+
+  test('reports no diff — not a new-file diff — when an existing file cannot be read', async () => {
+    const root = await temporaryDirectory('maka-worker-unreadable-');
+    const target = join(root, 'locked.md');
+    await writeFile(target, 'secret\n', { mode: 0o222 });
+
+    const response = await executeFilesystemWorkerRequest(
+      requestFor(
+        { kind: 'write', cwd: root, path: target, content: 'replacement\n' },
+        { enforcementPath: target, access: 'write', scope: 'exact', targetType: 'file' },
+      ),
+    );
+
+    assert.ok(response.ok);
+    assert.equal(response.result.kind, 'write');
+    if (response.result.kind !== 'write') return;
+    // The write landed, but what was there before is unknown — claiming
+    // `--- /dev/null` would report the file as created.
+    assert.equal(response.result.diff, undefined);
+  });
+
+  test('reports no diff when overwriting an image', async () => {
+    const root = await temporaryDirectory('maka-worker-image-write-');
+    const target = join(root, 'pixel.png');
+    await writeFile(target, ONE_PIXEL_PNG);
+
+    const response = await executeFilesystemWorkerRequest(
+      requestFor(
+        { kind: 'write', cwd: root, path: target, content: 'not an image anymore\n' },
+        { enforcementPath: target, access: 'write', scope: 'exact', targetType: 'file' },
+      ),
+    );
+
+    assert.ok(response.ok);
+    assert.equal(response.result.kind, 'write');
+    if (response.result.kind !== 'write') return;
     assert.equal(response.result.diff, undefined);
   });
 });

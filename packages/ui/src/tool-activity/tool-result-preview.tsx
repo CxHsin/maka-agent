@@ -295,6 +295,11 @@ export function diffLineKind(line: string): 'add' | 'del' | 'hunk' | 'meta' | 'c
  * `previewVariants` has always declared for exactly this — the call site was
  * what went missing.
  */
+/** File header lines the diff panel hides visually (the heading names the path). */
+export function isDiffHeaderLine(line: string): boolean {
+  return line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('index ');
+}
+
 function FileDiffPreview(props: { diff: string; paths: string[] }) {
   const copy = getToolActivityCopy(useUiLocale()).result;
   // Apply UI-level redaction then cap the displayed lines. Both are
@@ -307,6 +312,11 @@ function FileDiffPreview(props: { diff: string; paths: string[] }) {
   // a blank tinted row at the end of every diff.
   const lines = body.split('\n');
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  // `---`/`+++` file headers and `index` hashes repeat what the heading
+  // already says — hidden visually; the copyable body keeps the full
+  // standard diff. `diff --git` stays: it is the only in-body boundary
+  // between files in a multi-file diff.
+  const visible = lines.filter((line) => !isDiffHeaderLine(line));
   return (
     <ToolOutputSurface
       kind="file_diff"
@@ -314,7 +324,7 @@ function FileDiffPreview(props: { diff: string; paths: string[] }) {
       body={body}
     >
       <pre className={previewVariants({ part: 'diff-body' })}>
-        {lines.map((line, index) => (
+        {visible.map((line, index) => (
           <span
             // Index keys: the list is a re-split of one immutable string, so a
             // line's position is its identity.

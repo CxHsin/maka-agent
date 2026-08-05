@@ -16,6 +16,17 @@ export function diffLineKind(line: string): DiffLineKind {
   return 'ctx';
 }
 
+/**
+ * File header lines the expanded diff hides: the `---`/`+++` markers repeat
+ * the path the tool card already names, and `index` hashes are noise. The
+ * trailing space is what separates a real file marker from the deletion of a
+ * YAML `---` line. `diff --git` stays visible as the only in-body boundary
+ * between files.
+ */
+export function isDiffHeaderLine(line: string): boolean {
+  return line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('index ');
+}
+
 /** Tint a diff line by kind: add→green, del→red, hunk→accent, meta→dim, ctx→plain. */
 export function colorDiffLine(line: string): string {
   switch (diffLineKind(line)) {

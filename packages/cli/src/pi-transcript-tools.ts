@@ -11,7 +11,7 @@ import {
 } from '@maka/core';
 import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
 import { ansi, disc } from './tui-ansi.js';
-import { colorDiff, diffLineKind } from './tui-diff.js';
+import { colorDiff, diffLineKind, isDiffHeaderLine } from './tui-diff.js';
 import {
   collapseToSingleLine,
   fitLine,
@@ -668,7 +668,11 @@ function renderShellRunResult(
 }
 
 function renderDiffResult(diff: string, width: number): string[] {
-  return renderIndented(colorDiff(limitText(diff, 12_000)), width, 2);
+  const visible = diff
+    .split('\n')
+    .filter((line) => !isDiffHeaderLine(line))
+    .join('\n');
+  return renderIndented(colorDiff(limitText(visible, 12_000)), width, 2);
 }
 
 function byteLength(text: string): number {

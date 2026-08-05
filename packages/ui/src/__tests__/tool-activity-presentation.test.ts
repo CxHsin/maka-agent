@@ -449,7 +449,13 @@ describe('tool activity presentation', () => {
     }));
 
     const kinds = Array.from(markup.matchAll(/data-line="(\w+)"/g)).map((m) => m[1]);
-    assert.deepEqual(kinds, ['meta', 'meta', 'meta', 'meta', 'hunk', 'ctx', 'del', 'add']);
+    // `index` and the `---`/`+++` file headers are hidden: the heading already
+    // names the path. The `diff --git` separator stays — it is the only
+    // in-body boundary between files in a multi-file diff.
+    assert.deepEqual(kinds, ['meta', 'hunk', 'ctx', 'del', 'add']);
+    assert.doesNotMatch(markup, /index 1111111/);
+    assert.doesNotMatch(markup, /--- a\/packages/);
+    assert.doesNotMatch(markup, /\+\+\+ b\/packages/);
     // The heading is the changed path, in the same surface a command uses.
     assert.equal((markup.match(/data-slot="tool-output"/g) ?? []).length, 1);
     assert.match(markup, /class="maka-tool-output-command"[^>]*>packages\/ui\/src\/tool-activity\.tsx</);

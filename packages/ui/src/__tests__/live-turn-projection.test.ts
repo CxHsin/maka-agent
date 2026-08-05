@@ -933,6 +933,42 @@ describe('mid-turn steering (#1954)', () => {
     assert.equal(texts?.length, 2, 'one settled + one live text, no duplicate');
   });
 
+  it('overlayLiveTurn renders a pending steer even before its continuation step opens', () => {
+    // #1954: a steer drained at a step boundary sits in `pendingSteers` until
+    // the next step opens. Before the fix, overlayLiveTurn only read
+    // `step.steers` and dropped pending steers, so the badge never appeared
+    // mid-stream. It renders AHEAD of the live streaming step (between
+    // settled content and the continuation) per the live-projection
+    // contract, so the growing answer does not push it below the viewport.
+    const live: LiveTurnProjection = {
+      turnId: 'turn-1',
+      phase: 'streamed',
+      steps: [
+        {
+          stepId: 'step-1',
+          tools: [],
+          contentOrder: ['text'],
+          text: { text: 'partial answer', complete: false, truncated: false },
+        },
+      ],
+      pendingSteers: [{ messageId: 'steer-msg-1', text: '改成英文输出', ts: 200 }],
+    };
+    const turn = {
+      turnId: 'turn-1',
+      status: 'running' as const,
+      partialOutputRetained: false,
+      tools: [],
+      notes: [],
+      timeline: [],
+      startedAt: 100,
+    };
+    const overlaid = overlayLiveTurn([turn], live);
+    const kinds = overlaid[0]?.timeline.map((item) => item.kind);
+    assert.deepEqual(kinds, ['steer', 'text']);
+    const steer = overlaid[0]?.timeline.find((item) => item.kind === 'steer');
+    assert.equal(steer?.kind === 'steer' ? steer.text : undefined, '改成英文输出');
+  });
+
   it('ignores a steering_message without text', () => {
     const base: LiveTurnProjection = {
       turnId: 'turn-1',

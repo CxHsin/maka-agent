@@ -353,6 +353,23 @@ export function overlayLiveTurn(
     const settledItems = item.items.filter((tool) => !liveToolIds.has(tool.toolUseId));
     if (settledItems.length > 0) timeline.push({ kind: 'tools', items: settledItems });
   }
+  // #1954: a steer drained at a step boundary whose continuation step has
+  // not opened yet stays in `pendingSteers`. Render it AHEAD of the live
+  // streaming step (between the settled content and the continuation that
+  // answers it), per the live-projection contract: "if a step is already
+  // streaming, the steer is still rendered ahead of it." Trailing placement
+  // (after the streaming text) let the growing answer push the badge below
+  // the auto-scroll viewport — "covered by subsequent content." Once the
+  // next step opens, the steer binds to it (below) and leaves pendingSteers,
+  // so this never duplicates a bound steer.
+  for (const steer of liveTurn.pendingSteers ?? []) {
+    timeline.push({
+      kind: 'steer',
+      text: steer.text,
+      messageId: steer.messageId,
+      ...(steer.ts !== undefined ? { ts: steer.ts } : {}),
+    });
+  }
   for (const step of liveTurn.steps) {
     // #1954: a steer drained before this step started renders ahead of the
     // step's own content (between the previous step's answer and the

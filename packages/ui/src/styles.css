@@ -338,6 +338,41 @@
   content: "·";
 }
 
+/* #1954 queued mid-turn submissions: a strip above the composer, kept on the
+   same measure as the input card so the queue reads as part of the composer,
+   not a full-bleed bar. Each entry is a full-width row card with drag handle,
+   truncated text, and action buttons. */
+.maka-composer-queue {
+  width: min(var(--maka-chat-measure, 680px), calc(100% - (2 * var(--space-6))));
+  max-width: var(--maka-chat-measure, 680px);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  margin: 0 auto var(--space-1);
+  min-width: 0;
+}
+.maka-composer-queue-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-1) var(--space-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--card-bg, var(--background));
+  box-shadow: var(--shadow-minimal-flat);
+}
+.maka-composer-queue-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--maka-text-body);
+  color: var(--foreground);
+}
+
 .maka-turn-lineage-row,
 .maka-turn-footer {
   display: flex;

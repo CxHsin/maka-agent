@@ -186,3 +186,45 @@ export function isReferenceSizedPaste(text: string): boolean {
   }
   return false;
 }
+
+/**
+ * Mid-turn send routing (#1954): true while the session is busy enough that a
+ * plain-text send should steer the running turn (or queue) instead of opening
+ * a parallel root turn. `waiting_for_user` is a running turn parked on a
+ * permission prompt - the single most natural moment to steer - so it counts
+ * as busy even though nothing is streaming.
+ */
+export function isComposerResponseBusy(input: {
+  streaming?: boolean;
+  sessionStatus?: string;
+}): boolean {
+  return input.streaming === true
+    || input.sessionStatus === 'running'
+    || input.sessionStatus === 'waiting_for_user';
+}
+
+export interface ComposerQueuedInput {
+  id: string;
+  text: string;
+}
+
+/** Append a trimmed queued input, preserving existing order. */
+export function enqueueComposerQueuedInput(
+  queue: ComposerQueuedInput[],
+  text: string,
+  id: string,
+): ComposerQueuedInput[] {
+  const trimmed = text.trim();
+  if (!trimmed) return queue;
+  return [...queue, { id, text: trimmed }];
+}
+
+/** Take one queued input by id, leaving the rest in order. */
+export function takeComposerQueuedInput(
+  queue: ComposerQueuedInput[],
+  id: string,
+): { item: ComposerQueuedInput | undefined; queue: ComposerQueuedInput[] } {
+  const item = queue.find((entry) => entry.id === id);
+  if (!item) return { item: undefined, queue };
+  return { item, queue: queue.filter((entry) => entry.id !== id) };
+}

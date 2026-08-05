@@ -89,47 +89,50 @@ export function WorkspacePicker(props: { workspacePicker: WorkspacePickerModel }
         'aria-label': copy.chooseAriaLabel(wp.label ?? copy.current, wp.branch ?? undefined),
       }}
     >
-      {wp.projects.map((project) => {
-        const missing = unavailable.has(project.id);
-        return (
-          <DropdownMenuItem
-            key={project.id}
-            icon={
-              missing ? (
-                <AlertTriangle size={13} aria-hidden="true" />
-              ) : (
-                <FolderOpen size={13} aria-hidden="true" />
-              )
-            }
-            label={project.name}
-            // A project whose directory has moved cannot be selected until it
-            // is pointed at a path again, so its row relinks instead of
-            // switching. The current project wears the same plain check as the
-            // model and thinking menus' current values.
-            endContent={
-              missing ? (
-                <span className="maka-workspace-picker-status">{copy.relink}</span>
-              ) : project.id === wp.selectedProjectId ? (
-                <Check size={13} aria-hidden="true" />
-              ) : undefined
-            }
-            isDisabled={locked}
-            onClick={() => {
-              if (missing) wp.onRelink(project.id);
-              else wp.onSelectProject(project.id);
-            }}
-          />
-        );
-      })}
-      {/* Catalogue first, then the two actions — pinned to the menu's bottom
-          edge while only the catalogue scrolls, so "add a project" never falls
-          under the fold on a long list. DropdownMenu scrolls its whole list as
-          one region and has no footer slot, so the pinning is done in CSS;
-          what makes it one rule instead of a stack of them is the group, which
-          renders as a single `role="group"` box. `composer.css` sticks that
-          box, and its height is whatever it actually contains.
-
-          Both actions carry an icon so every row shares one text axis. Without
+      {/* Catalogue first, in its own scroll region — the only thing that
+          scrolls. The two actions sit AFTER it in normal flow, so they are
+          outside the scroller entirely and cannot be carried along by it: the
+          old sticky-pinned box moved with the panel when overscroll chained
+          to the page behind the menu. The region renders only when there is a
+          catalogue; on first run the actions group is the menu's first child
+          and the CSS drops the divider that separates the two. */}
+      {wp.projects.length > 0 ? (
+        <div className="maka-workspace-picker-scroll">
+          {wp.projects.map((project) => {
+            const missing = unavailable.has(project.id);
+            return (
+              <DropdownMenuItem
+                key={project.id}
+                icon={
+                  missing ? (
+                    <AlertTriangle size={13} aria-hidden="true" />
+                  ) : (
+                    <FolderOpen size={13} aria-hidden="true" />
+                  )
+                }
+                label={project.name}
+                // A project whose directory has moved cannot be selected until
+                // it is pointed at a path again, so its row relinks instead of
+                // switching. The current project wears the same plain check as
+                // the model and thinking menus' current values.
+                endContent={
+                  missing ? (
+                    <span className="maka-workspace-picker-status">{copy.relink}</span>
+                  ) : project.id === wp.selectedProjectId ? (
+                    <Check size={13} aria-hidden="true" />
+                  ) : undefined
+                }
+                isDisabled={locked}
+                onClick={() => {
+                  if (missing) wp.onRelink(project.id);
+                  else wp.onSelectProject(project.id);
+                }}
+              />
+            );
+          })}
+        </div>
+      ) : null}
+      {/* Both actions carry an icon so every row shares one text axis. Without
           them the two labels started at the icon column while the projects'
           text started past it, which read as a broken list rather than as a
           separate group. The × also says what its row means: not using a

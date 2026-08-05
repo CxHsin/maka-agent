@@ -505,6 +505,12 @@ export {
   type QuietPreview,
   type ToolInvocationInput,
 } from './tool-quiet-preview.js';
+export {
+  countDiffLineStats,
+  parseUnifiedDiffRows,
+  type UnifiedDiffRow,
+  type UnifiedDiffRowKind,
+} from './unified-diff.js';
 export { redactSecrets as displayRedactSecrets } from './display-redaction.js';
 export {
   SHELL_RUN_ID_MAX_CHARS,

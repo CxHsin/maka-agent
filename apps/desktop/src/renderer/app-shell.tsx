@@ -1773,7 +1773,12 @@ function AppShellContent({
     onSteeringMessage: (sessionId, message) => {
       if (sessionId !== activeIdRef.current) return;
       setMessages((current) => [
-        ...current,
+        // Drop the optimistic pending-steer row (same turn, pending-steer- id)
+        // that the send path added on steer, so the durable row replaces it
+        // instead of duplicating it.
+        ...current.filter(
+          (m) => !(m.type === 'user' && m.turnId === message.turnId && m.id.startsWith('pending-steer-')),
+        ),
         {
           type: 'user',
           id: message.messageId,

@@ -20,6 +20,7 @@ import {
 } from '@maka/core';
 import type { LiveTurnProjection, NavSelection } from '@maka/ui';
 import { messageReadErrorMessage } from './app-shell-copy';
+import { preservePendingSteers } from './app-shell-chat-actions';
 import { getDesktopConversationCopy } from './locales/conversation-copy.js';
 import { getShellRemainingCopy } from './locales/shell-remaining-copy.js';
 import { applyTheme, applyThemePalette } from './theme';
@@ -211,7 +212,7 @@ export function useAppShellBootstrapSubscriptions(options: {
   refreshSessions: () => Promise<SessionSummary[]>;
   rendererMountedRef: RefBox<boolean>;
   setActiveId: (sessionId: string | undefined) => void;
-  setMessages: (messages: StoredMessage[]) => void;
+  setMessages: (messages: StoredMessage[] | ((current: StoredMessage[]) => StoredMessage[])) => void;
   setNavSelection: (selection: NavSelection) => void;
   setSessionEventHealthBySession: SessionEventHealthUpdater;
   toastApi: ToastApi;
@@ -381,7 +382,7 @@ export function useActiveSessionEvents(options: {
   markSessionReadLocally: (sessionId: string, readMessages: readonly StoredMessage[]) => void;
   setMessageLoadErrorBySession: (updater: (current: Record<string, string>) => Record<string, string>) => void;
   setMessageLoadPending: (pending: boolean) => void;
-  setMessages: (messages: StoredMessage[]) => void;
+  setMessages: (messages: StoredMessage[] | ((current: StoredMessage[]) => StoredMessage[])) => void;
   setSessionEventHealthBySession: SessionEventHealthUpdater;
   toastApi: Pick<ToastApi, 'error'>;
 }) {
@@ -393,7 +394,7 @@ export function useActiveSessionEvents(options: {
       // the optimistic copy shown to the user. length is enough only because
       // sends are serialized (one optimistic per session); parallel sends
       // would need a merge instead.
-      if (next.length > 0) options.setMessages(next);
+      if (next.length > 0) options.setMessages((current) => preservePendingSteers(current, next));
       options.setMessageLoadPending(false);
     }
   });

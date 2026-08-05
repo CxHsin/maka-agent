@@ -38,6 +38,7 @@ import {
   DateTimeInput,
   HStack,
   Selector,
+  Text,
   TextArea as UiTextarea,
   TextInput,
 } from '@astryxdesign/core';
@@ -268,6 +269,21 @@ export function PlanReminderFormDialog(props: {
                   placeholder={copy.notePlaceholder}
                   isDisabled={formInteractionDisabled}
                 />
+                {/* Open groups, not boxes. The form asks three different
+                    questions — what to say, when to fire, where to send — and
+                    a flat run of eight fields makes the reader re-derive that
+                    from the labels each time. The grouping is information
+                    architecture, so it stays.
+
+                    What does NOT come back is the pair of grey inset cards
+                    this used to draw. Those were designed for a non-modal
+                    aside floating beside the page, where a group needed a card
+                    to cut itself out of its surroundings; inside a Dialog the
+                    surface is already its own, and a filled card on it would
+                    be the card-in-a-card this app's settings rules forbid. A
+                    label and the layout's own spacing carry the same structure
+                    on one surface. */}
+                <Text type="supporting" weight="medium">{copy.groupSchedule}</Text>
                 <DateTimeInput
                   label={copy.field.time}
                   isRequired
@@ -328,6 +344,7 @@ export function PlanReminderFormDialog(props: {
                       : undefined}
                   />
                 )}
+                <Text type="supporting" weight="medium">{copy.groupDelivery}</Text>
                 <Selector
                   label={copy.field.channel}
                   value={deliveryChannel}

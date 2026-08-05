@@ -126,25 +126,13 @@ describe('parseUnifiedDiffRows', () => {
 
 describe('countDiffLineStats', () => {
   test('counts every change line, including `--`/`++`-prefixed content', () => {
-    const diff = [
-      '@@ -1,3 +1,3 @@',
-      ' kept',
-      '--- a',
-      '+i += 1;',
-      ' tail',
-    ].join('\n');
+    const diff = ['@@ -1,3 +1,3 @@', ' kept', '--- a', '+i += 1;', ' tail'].join('\n');
 
     assert.deepEqual(countDiffLineStats(diff), { additions: 1, deletions: 1 });
   });
 
   test('ignores file headers and hunk headers', () => {
-    const diff = [
-      '--- /dev/null',
-      '+++ b/new.md',
-      '@@ -0,0 +1,2 @@',
-      '+alpha',
-      '+beta',
-    ].join('\n');
+    const diff = ['--- /dev/null', '+++ b/new.md', '@@ -0,0 +1,2 @@', '+alpha', '+beta'].join('\n');
 
     assert.deepEqual(countDiffLineStats(diff), { additions: 2, deletions: 0 });
   });

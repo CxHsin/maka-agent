@@ -386,15 +386,14 @@ const editDiffResult = {
   diff: [
     '--- a/packages/ui/src/tool-activity.tsx',
     '+++ b/packages/ui/src/tool-activity.tsx',
-    '@@ -286,9 +286,10 @@',
+    '@@ -286,7 +286,8 @@',
     '   const calls: ChatToolCallItem[] = items.map((item) => ({',
     '     key: item.toolUseId,',
     '     name: resolveToolDisplayName(item, locale),',
     '     status: astryxToolStatus(item),',
-    '+    ...(item.result?.kind === \'file_diff\' ? diffLineStats(item.result.diff) : {}),',
+    '+    ...(item.result?.kind === \'file_diff\' ? diffRowStats(item.result.diff) : {}),',
     '     duration: formatDuration(item.durationMs) ?? undefined,',
-    '-    stats: outcomeWord(item, locale) ?? \'\',',
-    '+    stats: outcomeWord(item, locale),',
+    '     stats: outcomeWord(item, locale),',
     '     resultDetail: (',
   ].join('\n'),
 } satisfies ToolResultContent;

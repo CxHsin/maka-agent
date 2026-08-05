@@ -145,6 +145,8 @@ export const EditWriteDiffRows: Story = {
   render: (args) => <ToolRowBoard items={args.items} width={860} />,
 };
 
+// Real path: same settled Edit/Write call, its row expanded — the detail panel
+// renders the result's diff with the line-number gutter.
 export const EditWriteDiffDetails: Story = {
   args: { items: editWriteDiffItems },
   render: (args) => <ToolDetailBoard items={args.items} width={860} />,

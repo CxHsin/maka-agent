@@ -42,6 +42,7 @@ import {
   takeComposerQueuedInput,
   type ComposerQueuedInput,
 } from './composer-helpers.js';
+import { WorkspacePicker, type WorkspacePickerModel } from './workspace-picker.js';
 import { useComposerDraft, type ComposerDraftPersistence } from './use-composer-draft.js';
 import { useComposerHistory } from './use-composer-history.js';
 import {
@@ -55,7 +56,6 @@ import {
   type ChatInputActionOwner,
   type ComposerTextPort,
 } from './chat-input-behavior.js';
-import { ComposerWorkspacePickers, type ComposerBranchPicker, type ComposerWorkspacePicker } from './composer-workspace-pickers.js';
 import { SKILL_INVOCATION_TOKEN_SOURCE } from '@maka/core';
 import type { AttachmentRef, PermissionMode, ProviderType, QuoteRef, SessionSummary } from '@maka/core';
 import {
@@ -270,14 +270,12 @@ export const Composer = forwardRef<
       cancelLabel: string;
       onCancel(): void;
     };
-    workspacePicker?: ComposerWorkspacePicker;
     /**
-     * Git branch picker for the workspace row, shown to the right of
-     * the folder indicator when the workspace is a git repository.
-     * Clicking the trigger opens a Menu listing local branches; selecting
-     * one fires `onSelect` to switch branches (handled in the shell).
+     * Where a NEW chat starts. Rendered at the end of the footer's send-context
+     * group and only while no session owns the composer: the project is fixed
+     * the moment the first message creates the session.
      */
-    branchPicker?: ComposerBranchPicker;
+    workspacePicker?: WorkspacePickerModel;
     /**
      * PR-MOVE-PERMISSION-MODE (WAWQAQ 47fe0d0e + a667cf6c): the
      * permission mode picker lives inside the composer left-controls
@@ -1587,19 +1585,23 @@ export const Composer = forwardRef<
                   )}
                 </div>
               ) : null}
-              {/* Project and branch decide where a NEW chat starts, which makes
-                  them send context like the model beside them — so they sit in
-                  this row rather than on a bar of their own above the card,
-                  where they read as leftovers rather than controls. Not gated
-                  on `streaming`: `activeSession` already covers it, since
-                  sending the first message creates the session that hides
-                  these. They stay ahead of the mode marks so the modes keep
-                  trailing the send-context group. */}
+              {/* The project decides where a NEW chat starts, which makes it a
+                  parameter of this send like the model beside it — so it sits
+                  at the end of that group rather than in a header row of its
+                  own, which grew the card by a row for the draft state alone.
+                  Last in the group is what makes it cheap to lose: the first
+                  message creates the session and unmounts it, and nothing to
+                  its left moves. Not gated on `streaming`: `activeSession`
+                  already covers it.
+
+                  The wrapper is the popover's scope — Astryx's Layer renders
+                  the open menu next to the trigger rather than portaling it, so
+                  the palette rebinding and the pinned-footer rules attach
+                  here. */}
               {!props.activeSession && props.workspacePicker ? (
-                <ComposerWorkspacePickers
-                  workspacePicker={props.workspacePicker}
-                  branchPicker={props.branchPicker}
-                />
+                <div className="maka-composer-workspace">
+                  <WorkspacePicker workspacePicker={props.workspacePicker} />
+                </div>
               ) : null}
               {/* Mode readouts sit after the model pair, so a mode turning on
                   or off never nudges the model and thinking pickers (#1897).

@@ -33,22 +33,6 @@
   gap: var(--space-1);
   min-width: 0;
   max-width: 100%;
-
-  /* The Astryx neutral theme lives on the app Theme wrapper, closer to these
-     controls than Maka's palette tokens on <html>. Rebind the color tokens at
-     this product seam so both selector triggers and their popovers follow the
-     currently selected Maka palette instead of staying neutral white/gray. */
-  --color-background-surface: var(--background);
-  --color-background-popover: var(--background-elevated);
-  --color-text-primary: var(--foreground);
-  --color-text-secondary: var(--muted-foreground);
-  --color-text-disabled: var(--muted-foreground);
-  --color-icon-primary: var(--foreground);
-  --color-icon-secondary: var(--muted-foreground);
-  --color-border-emphasized: var(--border-strong);
-  --color-overlay-hover: var(--state-hover-bg);
-  --color-accent: var(--accent);
-  --color-accent-muted: oklch(from var(--accent) l c h / 0.12);
 }
 
 .maka-model-picker-root {
@@ -63,12 +47,16 @@
   max-width: min(260px, 28vw);
 }
 
-/* Quiet ghost triggers (composer / new-chat). Astryx Selector's default is a
-   bordered field; product owns these classNames only on chat pickers — Settings
-   ModelPicker does not set them. Geometry mirrors .maka-composer-model-chip. */
+/* Quiet ghost triggers for the chat surface: the composer's model and thinking
+   pickers, and the project picker beside them. Astryx Selector's
+   default is a bordered field, which reads as an input asking to be filled in
+   rather than as a chip carrying a current value; product owns these
+   classNames only on chat pickers — Settings ModelPicker does not set them.
+   Geometry mirrors .maka-composer-model-chip. */
 .maka-model-switcher-trigger.astryx-selector,
 .maka-new-chat-model-selector.astryx-selector,
-.maka-thinking-level-selector.astryx-selector {
+.maka-thinking-level-selector.astryx-selector,
+.maka-workspace-picker.astryx-selector {
   font: var(--maka-text-label);
   /* #1879: this rule used to force a height — 26px originally, then 24px on the
      ruler. Both were wrong for the same reason the sidebar update button was:
@@ -100,9 +88,21 @@
   flex: 0 0 auto;
 }
 
+/* Sizes to the project name rather than holding a column width: it is the last
+   control in a row that already wraps, so a fixed width would spend space the
+   model chip beside it needs. The cap is what keeps a long directory name from
+   pushing the send button off the row. */
+.maka-workspace-picker.astryx-selector {
+  width: max-content;
+  min-width: 0;
+  max-width: min(280px, 60vw);
+  flex: 0 0 auto;
+}
+
 .maka-model-switcher-trigger.astryx-selector:hover:not([aria-disabled="true"]),
 .maka-new-chat-model-selector.astryx-selector:hover:not([aria-disabled="true"]),
-.maka-thinking-level-selector.astryx-selector:hover:not([aria-disabled="true"]) {
+.maka-thinking-level-selector.astryx-selector:hover:not([aria-disabled="true"]),
+.maka-workspace-picker.astryx-selector:hover:not([aria-disabled="true"]) {
   background: var(--state-hover-bg);
   color: var(--foreground);
   border-color: transparent;
@@ -111,7 +111,8 @@
 
 .maka-model-switcher-trigger.astryx-selector:focus-within,
 .maka-new-chat-model-selector.astryx-selector:focus-within,
-.maka-thinking-level-selector.astryx-selector:focus-within {
+.maka-thinking-level-selector.astryx-selector:focus-within,
+.maka-workspace-picker.astryx-selector:focus-within {
   border-color: transparent;
   background: var(--state-hover-bg);
   box-shadow: none;
@@ -120,7 +121,8 @@
 
 .maka-model-switcher-trigger.astryx-selector[aria-disabled="true"],
 .maka-new-chat-model-selector.astryx-selector[aria-disabled="true"],
-.maka-thinking-level-selector.astryx-selector[aria-disabled="true"] {
+.maka-thinking-level-selector.astryx-selector[aria-disabled="true"],
+.maka-workspace-picker.astryx-selector[aria-disabled="true"] {
   background: transparent;
   border-color: transparent;
   box-shadow: none;

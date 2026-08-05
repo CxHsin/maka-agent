@@ -619,6 +619,13 @@ export async function runTaskOnceWithStorage(
       }
     }
 
+    // Agent phase ends here. Kill every still-managed shell session before the
+    // verifier observes the workspace, so no background build or PTY the model
+    // left running can race the grade. Processes the model deliberately
+    // detached are not managed and are left alone: some tasks are graded
+    // against a service the agent was asked to leave running.
+    await deps.realBackendIsolation?.toolExecutor?.shellSessions?.terminateAll()?.catch(() => {});
+
     await appendTaskEvent(taskRunStore, taskRunId, {
       type: 'task_run_verifying',
       id: newId(),

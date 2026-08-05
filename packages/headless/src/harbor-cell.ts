@@ -489,6 +489,15 @@ export async function runHarborCellWithStorage(
     sendMessageError = error;
   } finally {
     if (settlementTimer) clearTimeout(settlementTimer);
+    // The agent phase is over here, and grading runs after this process exits.
+    // Anything the model left managed — a background build, a PTY it never
+    // closed — has to die now: it cannot influence verification, and a PTY
+    // child outliving this process would be an orphan nobody can reap.
+    // Processes the model deliberately detached (`nohup … &`) are NOT managed
+    // and deliberately survive, because some tasks are graded against a
+    // service the agent was asked to leave running.
+    // Best-effort: a failure here must not mask the run's own outcome.
+    await input.realBackendIsolation?.toolExecutor?.shellSessions?.terminateAll()?.catch(() => {});
     try {
       if (settlementAttempt) {
         await settlementAttempt;

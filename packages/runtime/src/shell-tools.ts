@@ -133,6 +133,30 @@ export function buildManagedBashTool(
   options: {
     executionFacts?: ToolExecutionFacts;
     shell?: ShellPlan;
+    /** Opening sentence of the description, before the shared foreground/background/PTY contract. */
+    lead?: string;
+    /**
+     * Whether this host has a sandbox boundary the model can be asked to declare.
+     * False drops `required_boundary` from the schema entirely rather than
+     * accepting and ignoring it: a parameter no host enforces is pure noise in
+     * the model's tool selection. Headless runs inside an external isolation
+     * boundary with no in-process sandbox manager, so it passes false.
+     */
+    declareSandboxBoundary?: boolean;
+    /**
+     * Foreground timeout when the model does not ask for one. Defaults to
+     * DEFAULT_BASH_TIMEOUT_MS; hosts whose operators configure their own floor
+     * pass it here so managed foreground commands are not killed earlier than
+     * the same host's unmanaged ones were. Clamped by the launcher to
+     * MAX_FOREGROUND_BASH_TIMEOUT_MS — longer work belongs in the background.
+     */
+    defaultForegroundTimeoutMs?: number;
+    /** Observes each committed result; used by hosts that record tool evidence. */
+    afterResult?: (
+      input: { command: string; cwd: string; timeoutMs?: number },
+      result: TerminalToolResult | ShellRunToolResult,
+      ctx: MakaToolContext,
+    ) => Promise<void> | void;
     transformCommand?: (input: {
       command: string;
       pty: boolean;
@@ -151,55 +175,67 @@ export function buildManagedBashTool(
   } = {},
 ): MakaTool {
   const shell = options.shell ?? defaultShellPlan();
+  const declareSandboxBoundary = options.declareSandboxBoundary !== false;
+  const managedBashFields = {
+    command: z.string().describe('The shell command to execute'),
+    timeout_ms: z.number().int().positive().max(MAX_SHELL_RUN_TIMEOUT_MS).optional(),
+    run_in_background: z.boolean().optional(),
+    pty: z.boolean().optional(),
+  };
+  const refineManagedBash = (
+    { timeout_ms, run_in_background, pty }: z.infer<z.ZodObject<typeof managedBashFields>>,
+    ctx: z.core.$RefinementCtx,
+  ) => {
+    if (
+      !run_in_background &&
+      timeout_ms !== undefined &&
+      timeout_ms > MAX_FOREGROUND_BASH_TIMEOUT_MS
+    ) {
+      ctx.addIssue({
+        code: 'too_big',
+        maximum: MAX_FOREGROUND_BASH_TIMEOUT_MS,
+        origin: 'number',
+        inclusive: true,
+        path: ['timeout_ms'],
+        message: `Foreground Bash timeout may not exceed ${MAX_FOREGROUND_BASH_TIMEOUT_MS}ms`,
+      });
+    }
+    if (pty && !run_in_background) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['pty'],
+        message: 'PTY Bash requires run_in_background=true',
+      });
+    }
+  };
   return {
     name: 'Bash',
     activityKind: 'command',
     description:
-      withShellGuidance('Run a shell command in the session cwd.', shell) +
+      withShellGuidance(options.lead ?? 'Run a shell command in the session cwd.', shell) +
       ` Foreground is the default (timeout ${DEFAULT_BASH_TIMEOUT_MS}ms, maximum ${MAX_FOREGROUND_BASH_TIMEOUT_MS}ms).` +
       ` Set run_in_background=true only when the command should continue as a tracked runtime background task; background commands have no default timeout (maximum explicit timeout ${MAX_SHELL_RUN_TIMEOUT_MS}ms).` +
-      ' Set pty=true together with run_in_background=true only for terminal semantics or later input; use the returned ref with Read or WriteStdin. Enforced by the current session sandbox boundary.',
-    parameters: z
-      .object({
-        command: z.string().describe('The shell command to execute'),
-        timeout_ms: z.number().int().positive().max(MAX_SHELL_RUN_TIMEOUT_MS).optional(),
-        run_in_background: z.boolean().optional(),
-        pty: z.boolean().optional(),
-        required_boundary: sandboxBoundaryExpansionSchema
-          .optional()
-          .describe(
-            'Declare the exact filesystem or network sandbox authority this command requires. Do not infer it from command text.',
-          ),
-      })
-      .strict()
-      .superRefine(({ timeout_ms, run_in_background, pty }, ctx) => {
-        if (
-          !run_in_background &&
-          timeout_ms !== undefined &&
-          timeout_ms > MAX_FOREGROUND_BASH_TIMEOUT_MS
-        ) {
-          ctx.addIssue({
-            code: 'too_big',
-            maximum: MAX_FOREGROUND_BASH_TIMEOUT_MS,
-            origin: 'number',
-            inclusive: true,
-            path: ['timeout_ms'],
-            message: `Foreground Bash timeout may not exceed ${MAX_FOREGROUND_BASH_TIMEOUT_MS}ms`,
-          });
-        }
-        if (pty && !run_in_background) {
-          ctx.addIssue({
-            code: 'custom',
-            path: ['pty'],
-            message: 'PTY Bash requires run_in_background=true',
-          });
-        }
-      }),
+      ' Set pty=true together with run_in_background=true only for terminal semantics or later input; use the returned ref with Read or WriteStdin.' +
+      (declareSandboxBoundary ? ' Enforced by the current session sandbox boundary.' : ''),
+    parameters: declareSandboxBoundary
+      ? z
+          .object({
+            ...managedBashFields,
+            required_boundary: sandboxBoundaryExpansionSchema
+              .optional()
+              .describe(
+                'Declare the exact filesystem or network sandbox authority this command requires. Do not infer it from command text.',
+              ),
+          })
+          .strict()
+          .superRefine(refineManagedBash)
+      : z.object(managedBashFields).strict().superRefine(refineManagedBash),
     toModelOutput: ({ output }) => bashToolResultToModelOutput(output),
     ...(options.executionFacts ? { executionFacts: options.executionFacts } : {}),
-    impl: async ({ command, timeout_ms, run_in_background, pty, required_boundary }, ctx) => {
+    impl: async (input, ctx) => {
+      const { command, timeout_ms, run_in_background, pty } = input;
       const normalizedRequiredBoundary = await preflightDeclaredSandboxBoundary(
-        required_boundary,
+        'required_boundary' in input ? input.required_boundary : undefined,
         ctx,
       );
       const transformed = options.transformCommand?.({
@@ -209,6 +245,8 @@ export function buildManagedBashTool(
         ctx,
       });
       const onCompletion = onceCompletion(transformed?.onCompletion);
+      const timeoutMs =
+        timeout_ms ?? (run_in_background ? undefined : options.defaultForegroundTimeoutMs);
       try {
         const result = await shellRuns[
           run_in_background ? 'runBackgroundBash' : 'runForegroundBash'
@@ -223,7 +261,7 @@ export function buildManagedBashTool(
           ...(transformed?.argv ? { argv: transformed.argv } : { shell }),
           ...(transformed?.env ? { env: transformed.env } : {}),
           ...(transformed?.fdInputs ? { fdInputs: transformed.fdInputs } : {}),
-          ...(timeout_ms !== undefined ? { timeoutMs: timeout_ms } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
           abortSignal: ctx.abortSignal,
           emitOutput: ctx.emitOutput,
           ...(transformed?.sandboxType ? { sandboxType: transformed.sandboxType } : {}),
@@ -234,6 +272,15 @@ export function buildManagedBashTool(
             successful: result.status === 'completed' && result.exitCode === 0,
           });
         }
+        await options.afterResult?.(
+          {
+            command,
+            cwd: transformed?.cwd ?? ctx.cwd,
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          },
+          result,
+          ctx,
+        );
         return result;
       } catch (error) {
         onCompletion?.({ successful: false });

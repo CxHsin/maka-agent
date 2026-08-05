@@ -422,7 +422,7 @@ export type {
   PiAgentTransport,
 } from './pi-agent-backend.js';
 
-export { buildBuiltinTools } from './builtin-tools.js';
+export { buildBuiltinTools, classifyRuntimeResourceRef } from './builtin-tools.js';
 export { createToolResultArchiveCapability } from './tool-result-archive-capability.js';
 export type {
   ToolResultArchiveCapability,

@@ -109,3 +109,53 @@ export function stoppedTurnBroadcasts(
       : stoppedTurnIds.map((turnId) => ({ reason, turnId })),
   );
 }
+
+
+/**
+ * The subset of a normalized send command that decides whether it can be
+ * routed through the embedded runtime's steering queue (#1954).
+ */
+export interface SendSteeringCandidate {
+  text: string;
+  skillIds?: readonly string[];
+  voiceOperationId?: string;
+  attachmentItems?: unknown;
+  turnOrchestration?: unknown;
+  quotes?: unknown;
+  workspaceFileReferences?: unknown;
+}
+
+/**
+ * True when a send command is a plain-text submission that the embedded
+ * runtime can route through its steering queue (#1954). Complex payloads
+ * (attachments, quotes, skills, voice, orchestration, file references) are
+ * turn-bound and must open a real new turn instead.
+ */
+export function isPlainTextSendCommand(command: SendSteeringCandidate): boolean {
+  return (
+    command.text.trim().length > 0 &&
+    command.skillIds === undefined &&
+    command.voiceOperationId === undefined &&
+    command.attachmentItems === undefined &&
+    command.turnOrchestration === undefined &&
+    command.quotes === undefined &&
+    command.workspaceFileReferences === undefined
+  );
+}
+
+/** #1954 routing outcome for a plain-text send. */
+export type SendSteeringOutcome = 'steered' | 'fallthrough';
+
+/**
+ * Decide whether a send should steer the running turn or fall through to a
+ * new turn. `steer` is the runtime's queue enqueue (returning `queued` when a
+ * steering-capable top-level turn owns the session). Complex payloads always
+ * fall through.
+ */
+export function routeSendSteering(input: {
+  isPlainText: boolean;
+  steer: () => { kind: 'queued' } | { kind: 'fallback' };
+}): SendSteeringOutcome {
+  if (!input.isPlainText) return 'fallthrough';
+  return input.steer().kind === 'queued' ? 'steered' : 'fallthrough';
+}

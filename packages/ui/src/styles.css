@@ -311,6 +311,26 @@
 
 .maka-turn-aborted-marker em { font-style: italic; }
 
+/* Mid-turn steering injection (#1954): compact badge above the steered text so
+   the interjection reads as guidance rather than a new prompt. */
+.maka-steer-badge {
+  font: var(--maka-text-supporting);
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: var(--space-1);
+  margin-block: var(--space-0-5) var(--space-1);
+  padding: var(--space-0-5) var(--space-1-5);
+  border-radius: var(--radius-control);
+  background: var(--info-weak, color-mix(in oklab, var(--info) 12%, transparent));
+  color: var(--info-text, var(--foreground-secondary));
+}
+.maka-steer-marker .maka-chat-message-bubble {
+  border-color: var(--border-strong);
+  background: transparent;
+  opacity: 0.9;
+}
+
 .maka-turn-automation-origin {
   align-self: flex-end;
   gap: var(--space-1);

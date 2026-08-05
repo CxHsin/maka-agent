@@ -1512,6 +1512,14 @@ export class AiSdkBackend implements AgentBackend {
         let overflowRetryUsed = false;
         let result: ModelStreamResult;
         let finishReason: ModelFinishReason = 'stop';
+        // Steering continuations: when a steer arrives during the turn's final
+        // provider step (no tool call to justify another loop pass), we run one
+        // bounded continuation step so the steer steers THIS turn instead of
+        // being deferred to the followup queue (#1954). Capped independently of
+        // maxSteps so repeated mid-step steers cannot spin the loop forever on
+        // a turn that never calls tools.
+        let steeringContinuations = 0;
+        const MAX_STEERING_CONTINUATIONS = 8;
         agentLoop: for (;;) {
           await this.drainSteeringInto(scope, input, queue);
           if (this.input.loadTurnRuntimeEvents) {
@@ -1966,12 +1974,18 @@ export class AiSdkBackend implements AgentBackend {
             ...(providerStepUsage ? { usage: providerStepUsage } : {}),
           });
           const stepLimitReached = this.maxSteps !== undefined && runtimeSteps >= this.maxSteps;
-          if (
-            returnedToolCalls.length > 0 &&
-            !stepLimitReached &&
-            !scope.loopStopRequested &&
-            !scope.aborted
-          ) {
+          const steeringPending = input.hasPendingSteering?.() === true;
+          const wantsAnotherStep = returnedToolCalls.length > 0 || steeringPending;
+          if (wantsAnotherStep && !stepLimitReached && !scope.loopStopRequested && !scope.aborted) {
+            if (returnedToolCalls.length === 0 && steeringPending) {
+              // A steer-only continuation: the next loop pass drains the pending
+              // steer (durable-consume ack) and feeds it to the model as a
+              // trailing steering message, so the running turn answers it.
+              steeringContinuations += 1;
+              if (steeringContinuations > MAX_STEERING_CONTINUATIONS) {
+                break agentLoop;
+              }
+            }
             currentStepMessageId = this.newId();
             continue agentLoop;
           }

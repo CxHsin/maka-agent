@@ -27,7 +27,7 @@ import type { PreparedSkillInvocationMessage, SessionManager } from '@maka/runti
 import type { ArtifactStore, createSessionStore } from '@maka/storage';
 import type { ConnectionStore, SettingsStore } from '@maka/storage';
 import { runThreadSearch } from './search/thread-search.js';
-import { createRunStartedHook, resolveSessionSend, stoppedTurnBroadcasts } from './session-send-resolve.js';
+import { createRunStartedHook, isPlainTextSendCommand, resolveSessionSend, routeSendSteering, stoppedTurnBroadcasts } from './session-send-resolve.js';
 import { resizeImageForAttachment } from './attachment-resize-native.js';
 import { releaseBrowserSession } from './browser/session.js';
 import { sessionReadMessagesFailureMessage } from './session-read-error-copy.js';
@@ -446,6 +446,24 @@ export function registerSessionsIpc(
   ipcMain.handle('sessions:send', async (event, sessionId: string, command: unknown) => {
     const sendCommand = normalizeSessionSendCommand(command);
     if (!sendCommand) return;
+    // #1954: a plain-text submission while a steering-capable top-level run owns
+    // the session routes through the steering queue instead of opening a parallel
+    // root turn. The embedded AiSdkBackend is a single mutable-state instance, so
+    // two concurrent sends stomp the backend state and one run fails. Complex
+    // payloads (attachments, quotes, skills, voice, orchestration, file refs)
+    // cannot be steered and fall through to the new-turn path below. Converged
+    // here so chat / bot / voice-fallback / goal entrypoints share one route.
+    const sendSteering = routeSendSteering({
+      isPlainText: isPlainTextSendCommand(sendCommand),
+      steer: () => runtime.steer(sessionId, sendCommand.text),
+    });
+    if (sendSteering === 'steered') {
+      // The queue accepted the message: it is injected into the running turn's
+      // next LLM step (durable-consume ack) and the renderer sees it via the
+      // steering_message event. No new turn opens, so tell the caller to skip
+      // new-turn bookkeeping (armTurnActive / optimistic user message / poll).
+      return { ok: true as const, steered: true as const };
+    }
     const sendPlan = await prepareSessionSendSkillPlan({
       prepare: () =>
         prepareSkillInvocation

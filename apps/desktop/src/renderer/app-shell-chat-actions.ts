@@ -409,6 +409,18 @@ export function createAppShellChatActions(deps: {
         disarmTurnActive(sessionId, turnId);
         return false;
       }
+      // #1954: main routed this plain-text send into the running turn's steering
+      // queue instead of opening a new turn. Undo the new-turn bookkeeping we
+      // armed above (no second turn is starting) and refresh so the steering
+      // message (persisted as a user row) appears in the transcript.
+      if (sendResult.steered === true) {
+        disarmTurnActive(sessionId, turnId);
+        optimisticSessionId = undefined;
+        optimisticTurnId = undefined;
+        await refreshMessages(sessionId);
+        await refreshSessions();
+        return true;
+      }
       options.onSessionResolved?.(sessionId);
       if (activeIdRef.current === sessionId) {
         showSkillInvocationFeedback(uiLocale, toastApi, sendResult.skillInvocation);

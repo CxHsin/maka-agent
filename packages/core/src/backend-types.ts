@@ -90,6 +90,16 @@ export interface BackendSendInput {
   ackSteering?: (leaseIds: readonly string[]) => void;
   /** Return undelivered leased steering messages to the queue (see pullSteering). */
   nackSteering?: (leaseIds: readonly string[]) => void;
+  /**
+   * Peek (do NOT consume) whether the steering queue holds messages still
+   * pending for THIS turn. A turn whose final provider step produced no tool
+   * calls uses this to decide whether to run one more continuation step so a
+   * steer that arrived mid-step still steers the running turn instead of being
+   * deferred to the followup queue (#1954). Absent for callers that do not
+   * steer (child agents, benchmarks) and for hosted message authorities that
+   * own the queue themselves.
+   */
+  hasPendingSteering?: () => boolean;
   /** Exact hosted-Run Interaction authority. Omitted for embedded execution. */
   hostedInteraction?: HostedInteractionBridge;
 }

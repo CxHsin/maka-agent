@@ -14505,3 +14505,168 @@ function runtimeExecute(
       })
     ).result;
 }
+
+
+describe('AiSdkBackend steering continuation pass (#1954)', () => {
+  // A steer that arrives DURING the turn's final provider step (a pure-text
+  // answer, no tool call to justify another loop pass) must still steer the
+  // RUNNING turn: the backend runs one bounded continuation step that pulls
+  // the pending steer and feeds it to the model, instead of deferring it to
+  // the followup queue (which would only fire on the next turn).
+  function continuationUsage() {
+    return {
+      inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 1, text: 1, reasoning: 0 },
+    };
+  }
+
+  test('a steer arriving during the final step triggers one continuation pass that addresses it', async () => {
+    let streamCalls = 0;
+    let releaseFirstPass!: () => void;
+    const firstPassGate = new Promise<void>((resolve) => {
+      releaseFirstPass = resolve;
+    });
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        streamCalls += 1;
+        const first = streamCalls === 1;
+        const chunks: LanguageModelV4StreamPart[] = [
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: first ? 'answer' : 'followup' },
+          { type: 'text-end', id: 't1' },
+        ];
+        return {
+          stream: new ReadableStream<LanguageModelV4StreamPart>({
+            async start(controller) {
+              for (const chunk of chunks) controller.enqueue(chunk);
+              if (first) {
+                // Hold the first pass open after its text so the steer lands
+                // after this pass's prepareStep (no step consumed it yet).
+                await firstPassGate;
+              }
+              controller.enqueue({
+                type: 'finish',
+                finishReason: { unified: 'stop', raw: 'stop' },
+                usage: continuationUsage(),
+              });
+              controller.close();
+            },
+          }),
+        };
+      },
+    });
+
+    let pullCalls = 0;
+    const steers: Array<{ id: string; messageId: string; content: { text: string } }> = [];
+    let pendingSteer = false;
+    const backend = createTestAiSdkBackend({
+      sessionId: 'session-1',
+      header: header(),
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      modelFactory: () => model,
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+    });
+    const events: SessionEvent[] = [];
+    const sendPromise = (async () => {
+      for await (const event of backend.send({
+        turnId: 'turn-1',
+        text: 'start',
+        context: [],
+        pullSteering: () => {
+          pullCalls += 1;
+          if (pullCalls === 1) return [];
+          if (pullCalls === 2 && steers.length > 0) return steers.splice(0);
+          return [];
+        },
+        hasPendingSteering: () => pendingSteer && steers.length > 0,
+        ackSteering: () => {},
+        nackSteering: () => {},
+      })) events.push(event);
+    })();
+
+    await waitFor(() => events.some((event) => event.type === 'text_delta'));
+    // Steer arrives mid-step: queue it and flip the peek flag, then release
+    // the first pass so its step finishes with a pending steer.
+    steers.push({ id: 'lease-1', messageId: 'message-1', content: { text: 'steer mid answer' } });
+    pendingSteer = true;
+    releaseFirstPass();
+    await sendPromise;
+
+    // Main pass + exactly one continuation pass.
+    assert.equal(streamCalls, 2);
+    assert.equal(model.doStreamCalls.length, 2);
+    // The continuation request carries the steer as a trailing envelope.
+    const continuationPrompt = model.doStreamCalls[1]?.prompt as { role: string; content: unknown }[] | undefined;
+    const last = continuationPrompt?.[continuationPrompt.length - 1];
+    assert.equal(last?.role, 'user');
+    const lastText = typeof last?.content === 'string'
+      ? last.content
+      : (last?.content as { type: string; text?: string }[] | undefined)?.find((part) => part.type === 'text')?.text;
+    assert.ok(
+      typeof lastText === 'string' && lastText.includes('steer mid answer'),
+      `continuation should carry the steer, got: ${JSON.stringify(lastText)}`,
+    );
+    // The steer was echoed durably as a steering_message event.
+    assert.equal(events.filter((event) => event.type === 'steering_message').length, 1);
+    assert.equal(events.filter((event) => event.type === 'text_complete').length, 2);
+  });
+
+  test('a continuation pass stops when no steer is pending', async () => {
+    let streamCalls = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        streamCalls += 1;
+        const chunks: LanguageModelV4StreamPart[] = [
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: `pass ${streamCalls}` },
+          { type: 'text-end', id: 't1' },
+          {
+            type: 'finish',
+            finishReason: { unified: 'stop', raw: 'stop' },
+            usage: continuationUsage(),
+          },
+        ];
+        return { stream: simulateReadableStream({ chunks, initialDelayInMs: null, chunkDelayInMs: null }) };
+      },
+    });
+    let pullCalls = 0;
+    const backend = createTestAiSdkBackend({
+      sessionId: 'session-1',
+      header: header(),
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      modelFactory: () => model,
+      tools: [],
+      newId: idGenerator(),
+      now: monotonicClock(),
+    });
+    const events: SessionEvent[] = [];
+    await collectEvents(
+      backend.send({
+        turnId: 'turn-1',
+        text: 'start',
+        context: [],
+        pullSteering: () => {
+          pullCalls += 1;
+          return [];
+        },
+        hasPendingSteering: () => false,
+        ackSteering: () => {},
+        nackSteering: () => {},
+      }),
+      events,
+    );
+    // No steer ever pends: exactly one provider call, no continuation.
+    assert.equal(streamCalls, 1);
+    assert.equal(pullCalls, 1);
+  });
+});

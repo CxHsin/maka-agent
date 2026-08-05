@@ -244,7 +244,8 @@ function mergeLiveOverPersisted(
 export type TurnTimelineItem =
   | { kind: 'thinking'; text: string; messageId: string; live?: boolean; truncated?: boolean }
   | { kind: 'text'; text: string; messageId: string; ts?: number; live?: boolean; complete?: boolean; truncated?: boolean }
-  | { kind: 'tools'; items: ToolActivityItem[] };
+  | { kind: 'tools'; items: ToolActivityItem[] }
+  | { kind: 'steer'; text: string; messageId: string; ts?: number };
 
 /**
  * A single conversational turn — typically one user message, the assistant's
@@ -507,6 +508,10 @@ export function materializeTurns(messages: readonly StoredMessage[]): TurnViewMo
     if (turnMessageList) turnMessageList.push(message);
     else messagesByTurn.set(turnId, [message]);
     if (message.type === 'user') {
+      // The first user row in a turn is the prompt. Any later user row is a
+      // mid-turn steering injection (#1954) and must NOT replace the prompt;
+      // it is surfaced as a `steer` timeline entry by buildTurnTimeline.
+      if (turn.user) continue;
       turn.user = {
         id: message.id,
         role: 'user',
@@ -727,8 +732,25 @@ function buildTurnTimeline(
   const flushTools = (items: ToolActivityItem[]): void => {
     if (items.length > 0) raw.push({ kind: 'tools', items });
   };
+  // The first `user` row in a turn is the prompt (already surfaced as
+  // `turn.user`). Any later user row is a mid-turn steering injection
+  // (#1954 / runtime steer queue) and becomes a `steer` entry; steering is
+  // drained at step boundaries, so a steer never splits a tool_call from its
+  // tool_result - pending tools stay pending across it.
+  let seenPrompt = false;
   for (const message of turnMessages) {
-    if (message.type === 'tool_call') {
+    if (message.type === 'user') {
+      if (!seenPrompt) {
+        seenPrompt = true;
+      } else if ((message.displayText ?? message.text).trim().length > 0) {
+        raw.push({
+          kind: 'steer',
+          text: message.displayText ?? message.text,
+          messageId: message.id,
+          ...(message.ts !== undefined ? { ts: message.ts } : {}),
+        });
+      }
+    } else if (message.type === 'tool_call') {
       const item = toolItemByUseId.get(message.id);
       if (item) pending.push(item);
     } else if (message.type === 'assistant') {

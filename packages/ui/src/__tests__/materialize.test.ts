@@ -25,6 +25,58 @@ const codeAttachment: AttachmentRef = {
   ref: { kind: 'workspace_file', relativePath: 'src/main.ts' },
 };
 
+describe('materializeTurns mid-turn steering (#1954)', () => {
+  test('keeps the turn prompt and surfaces a later user row as a steer timeline entry', () => {
+    const messages: StoredMessage[] = [
+      { type: 'user', id: 'u1', turnId: 't1', ts: 1, text: '这个项目的目的是什么' },
+      { type: 'user', id: 'u2', turnId: 't1', ts: 4, text: '本地修改代码是做什么的' },
+      { type: 'assistant', id: 'a1', turnId: 't1', ts: 5, text: '回答', modelId: 'fake-model' },
+    ];
+    const turns = materializeTurns(messages);
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].user?.text, '这个项目的目的是什么');
+    assert.equal(turns[0].user?.id, 'u1');
+    const steers = turns[0].timeline.filter((item) => item.kind === 'steer');
+    assert.equal(steers.length, 1);
+    assert.equal(steers[0].kind, 'steer');
+    assert.equal(steers[0].text, '本地修改代码是做什么的');
+    assert.equal(steers[0].messageId, 'u2');
+  });
+
+  test('a guidance continuation renders as steer followed by assistant text', () => {
+    const messages: StoredMessage[] = [
+      { type: 'user', id: 'u1', turnId: 't1', ts: 1, text: '这个项目的目的是什么' },
+      { type: 'assistant', id: 'a1', turnId: 't1', ts: 2, text: '回答一', modelId: 'fake-model' },
+      { type: 'user', id: 'u2', turnId: 't1', ts: 5, text: '补充两点' },
+      { type: 'assistant', id: 'a2', turnId: 't1', ts: 9, text: '好的，按两要点重新说明', modelId: 'fake-model' },
+    ];
+    const turns = materializeTurns(messages);
+    assert.equal(turns[0].assistant?.text, '回答一\n\n好的，按两要点重新说明');
+    assert.deepEqual(turns[0].timeline.map((item) => item.kind), ['text', 'steer', 'text']);
+  });
+
+  test('does not fragment a normal multi-step turn into steer entries', () => {
+    const messages: StoredMessage[] = [
+      { type: 'user', id: 'u1', turnId: 't1', ts: 1, text: 'hello' },
+      { type: 'assistant', id: 'a1', turnId: 't1', ts: 2, text: 'part 1', modelId: 'fake-model' },
+      { type: 'assistant', id: 'a2', turnId: 't1', ts: 3, text: 'part 2', modelId: 'fake-model' },
+    ];
+    const turns = materializeTurns(messages);
+    assert.equal(turns[0].assistant?.text, 'part 1\n\npart 2');
+    assert.deepEqual(turns[0].timeline.map((item) => item.kind), ['text', 'text']);
+  });
+
+  test('leaves no steer when a turn has only the prompt', () => {
+    const messages: StoredMessage[] = [
+      { type: 'user', id: 'u1', turnId: 't1', ts: 1, text: 'hello' },
+      { type: 'assistant', id: 'a1', turnId: 't1', ts: 2, text: 'hi', modelId: 'fake-model' },
+    ];
+    const turns = materializeTurns(messages);
+    assert.equal(turns[0].timeline.filter((item) => item.kind === 'steer').length, 0);
+    assert.equal(turns[0].user?.text, 'hello');
+  });
+});
+
 describe('materializeChat attachments', () => {
   test('projects frozen inline references onto chat and turn user messages', () => {
     const inlineReferences = [

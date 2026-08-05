@@ -1527,6 +1527,7 @@ export class RuntimeKernel implements RuntimeKernelLike {
     let pullSteering: (() => readonly SteeringLease[]) | undefined;
     let ackSteering: ((leaseIds: readonly string[]) => void) | undefined;
     let nackSteering: ((leaseIds: readonly string[]) => void) | undefined;
+    let hasPendingSteering: (() => boolean) | undefined;
     if (messageOwner) {
       pullSteering = () => messageOwner?.pull() ?? [];
       ackSteering = (leaseIds) => messageOwner?.ack(leaseIds);
@@ -1549,6 +1550,16 @@ export class RuntimeKernel implements RuntimeKernelLike {
           ...leased.map((message) => ({ ...message, issuingTurnId: run.turnId })),
         );
         return leased.map((message) => ({ ...message }));
+      };
+      // Peek (never consume): lets the backend run one bounded continuation
+      // step when the turn's final provider step produced no tool calls but a
+      // steer is still queued for this turn (#1954) - so a steer arriving
+      // mid-step steers the running turn instead of being deferred to the
+      // followup queue. Scoped to this turn's ownership: an overlapping turn
+      // must not see (or drain) another owner's queue.
+      hasPendingSteering = () => {
+        const current = this.steeringBySession.get(sessionId);
+        return Boolean(current && current.activeTurnId === run.turnId && current.steering.length > 0);
       };
       // Settlement is keyed by lease id + issuing turn, NOT by current
       // ownership: an overlapping turn that takes the owner slot must not
@@ -1667,6 +1678,7 @@ export class RuntimeKernel implements RuntimeKernelLike {
         ...(pullSteering ? { pullSteering } : {}),
         ...(ackSteering ? { ackSteering } : {}),
         ...(nackSteering ? { nackSteering } : {}),
+        ...(hasPendingSteering ? { hasPendingSteering } : {}),
         abortSignal: abortController.signal,
       })
       .then(

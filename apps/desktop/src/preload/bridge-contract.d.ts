@@ -247,6 +247,13 @@ export interface MakaBridge {
     ): Promise<
       | {
           ok: true;
+          /**
+           * True when the send was routed into the running turn's steering queue
+           * (#1954) instead of opening a new turn. When set, no new turn was
+           * created: skip optimistic user-message / turn-arm bookkeeping and rely
+           * on the steering_message event + refreshMessages to surface the text.
+           */
+          steered?: boolean;
           turnId: string;
           attachments: import('@maka/core').AttachmentRef[];
           inlineReferences: import('@maka/core').InlineReference[];

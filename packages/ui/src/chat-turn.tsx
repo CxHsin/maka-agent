@@ -388,7 +388,9 @@ export const TurnView = memo(function TurnView(props: {
       ? item.live === true
       : item.kind === 'text'
         ? item.live === true
-        : item.items.some((tool) => isInFlightToolStatus(tool.status)),
+        : item.kind === 'tools'
+          ? item.items.some((tool) => isInFlightToolStatus(tool.status))
+          : false,
   );
   // #1307: the collapsed "Processing" fold is derived at render time from the
   // flat timeline. Settled turn identities are stable (memoized projections),
@@ -876,6 +878,17 @@ function TurnTimelineEntry(props: {
     return <DeepThinking text={item.text} live={item.live === true} truncated={item.truncated === true} />;
   }
   if (item.kind === 'tools') return <ToolTrow items={item.items} />;
+  if (item.kind === 'steer') {
+    // Mid-turn steering injection (#1954): a user message routed into the
+    // running turn's steering queue. Rendered as a compact marker + the
+    // steered text so the interjection reads as guidance, not a new prompt.
+    return (
+      <div className="maka-steer-marker inline-flex flex-col gap-1 self-start">
+        <span className="maka-steer-badge">{'引导已注入'}</span>
+        <MessageBody role="user" text={item.text} ts={item.ts} />
+      </div>
+    );
+  }
   if (item.kind === 'text' && item.live) {
     return (
       <StreamingAssistantBubble

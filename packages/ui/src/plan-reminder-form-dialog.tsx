@@ -29,6 +29,7 @@ import {
   type PlanReminderFormSeed,
   formatPlanDeliveryProviderList,
   planReminderFormValidation,
+  planReminderPresetRunAt,
   planReminderTemplateSeed,
   toPlanReminderLocalDateTimeValue,
 } from './plan-reminder-helpers.js';
@@ -280,6 +281,31 @@ export function PlanReminderFormDialog(props: {
                     ? { type: 'error', message: validation.message }
                     : undefined}
                 />
+                {/* One tap for the times people actually pick. The picker
+                    above can express any instant, which is why it stays, but
+                    reaching "in an hour" through a calendar costs a date, an
+                    hour and a minute to say something the user already knows
+                    in full. These are a shortcut past that, not a second way
+                    to enter a time: each one writes the same field, which then
+                    shows the result and remains editable.
+
+                    They set `runAtLocal` only — recurrence is a separate
+                    question, so choosing 明天 9 点 on a weekly reminder moves
+                    the next occurrence without silently making it one-off. */}
+                <HStack gap={2} wrap="wrap" role="group" aria-label={copy.presetsAriaLabel}>
+                  {copy.presets.map(([preset, label]) => (
+                    <UiButton
+                      key={preset}
+                      variant="secondary"
+                      size="sm"
+                      label={label}
+                      isDisabled={formInteractionDisabled}
+                      onClick={() => setRunAtLocal(
+                        toPlanReminderLocalDateTimeValue(planReminderPresetRunAt(preset)),
+                      )}
+                    />
+                  ))}
+                </HStack>
                 <Selector
                   label={copy.field.recurrence}
                   value={recurrence}

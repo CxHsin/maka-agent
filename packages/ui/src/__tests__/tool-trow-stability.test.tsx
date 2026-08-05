@@ -51,4 +51,23 @@ describe('ToolTrow stable structure', () => {
     assert.match(html, />\+2</);
     assert.match(html, />-1</);
   });
+
+  it('omits a zero count instead of painting -0 on a pure-additions write', () => {
+    const item: ToolActivityItem = {
+      toolUseId: 'tool-1',
+      toolName: 'Write',
+      status: 'completed',
+      args: { path: 'new.md' },
+      result: {
+        kind: 'file_diff',
+        paths: ['new.md'],
+        diff: '--- /dev/null\n+++ b/new.md\n@@ -0,0 +1,2 @@\n+alpha\n+beta',
+      },
+    };
+
+    const html = renderToStaticMarkup(createElement(ToolTrow, { items: [item] }));
+
+    assert.match(html, />\+2</);
+    assert.doesNotMatch(html, />-0</);
+  });
 });

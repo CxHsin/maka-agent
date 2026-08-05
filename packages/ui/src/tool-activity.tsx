@@ -314,8 +314,8 @@ export function ToolTrow({ items }: { items: ToolActivityItem[] }) {
   return <ChatToolCalls calls={calls} />;
 }
 
-/** Green `+N` / red `-N` on the row, counted from the result's unified diff. */
-function diffLineStats(diff: string): { additions: number; deletions: number } {
+/** Green `+N` / red `-N` on the row, counted from the result's unified diff; zero counts stay unpainted. */
+function diffLineStats(diff: string): { additions?: number; deletions?: number } {
   let additions = 0;
   let deletions = 0;
   for (const line of diff.split('\n')) {
@@ -323,7 +323,10 @@ function diffLineStats(diff: string): { additions: number; deletions: number } {
     if (line.startsWith('+')) additions += 1;
     else if (line.startsWith('-')) deletions += 1;
   }
-  return { additions, deletions };
+  return {
+    ...(additions > 0 ? { additions } : {}),
+    ...(deletions > 0 ? { deletions } : {}),
+  };
 }
 
 function astryxToolStatus(item: ToolActivityItem): ChatToolCallItem['status'] {

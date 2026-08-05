@@ -1,5 +1,10 @@
 import { useEffect, useRef, type ComponentType } from 'react';
-import { isInFlightToolStatus, type ToolResultContent, type UiLocale } from '@maka/core';
+import {
+  countDiffLineStats,
+  isInFlightToolStatus,
+  type ToolResultContent,
+  type UiLocale,
+} from '@maka/core';
 import {
   Check,
   Clock,
@@ -285,7 +290,7 @@ export function ToolTrow({ items }: { items: ToolActivityItem[] }) {
   if (items.length === 0) return null;
   const calls: ChatToolCallItem[] = items.map((item) => {
     const diffStats =
-      item.result?.kind === 'file_diff' ? diffLineStats(item.result.diff) : undefined;
+      item.result?.kind === 'file_diff' ? diffRowStats(item.result.diff) : undefined;
     return {
       key: item.toolUseId,
       // The name is what a person reads to tell one call from the next, and for
@@ -314,15 +319,9 @@ export function ToolTrow({ items }: { items: ToolActivityItem[] }) {
   return <ChatToolCalls calls={calls} />;
 }
 
-/** Green `+N` / red `-N` on the row, counted from the result's unified diff; zero counts stay unpainted. */
-function diffLineStats(diff: string): { additions?: number; deletions?: number } {
-  let additions = 0;
-  let deletions = 0;
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('+++') || line.startsWith('---')) continue;
-    if (line.startsWith('+')) additions += 1;
-    else if (line.startsWith('-')) deletions += 1;
-  }
+/** Green `+N` / red `-N` on the row, from the shared structural parse; zero counts stay unpainted. */
+function diffRowStats(diff: string): { additions?: number; deletions?: number } {
+  const { additions, deletions } = countDiffLineStats(diff);
   return {
     ...(additions > 0 ? { additions } : {}),
     ...(deletions > 0 ? { deletions } : {}),

@@ -471,7 +471,7 @@ describe('tool activity presentation', () => {
         kind: 'file_diff',
         paths: ['x.ts'],
         diff: [
-          '@@ -10,2 +10,2 @@',
+          '@@ -10,3 +10,3 @@',
           ' kept',
           '-old',
           '+new',
@@ -490,6 +490,15 @@ describe('tool activity presentation', () => {
     );
     assert.deepEqual(diffGutterNumbers(markup), ['10', '11', '11', '12', '20', '20', '21']);
     assert.doesNotMatch(markup, /@@/);
+  });
+
+  it('describes a file_write result with its path and byte count', () => {
+    const markup = renderToStaticMarkup(createElement(ToolResultPreview, {
+      content: { kind: 'file_write', path: 'huge.bin', bytes: 70000 },
+    }));
+
+    assert.match(markup, /Wrote 70000 bytes to huge\.bin/);
+    assert.doesNotMatch(markup, /\[file_write\]/);
   });
 
   // `---`/`+++` only mark a file when the marker is followed by a path. Testing

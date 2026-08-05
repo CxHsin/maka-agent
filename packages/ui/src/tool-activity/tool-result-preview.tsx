@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import {
   isShellOutput,
   normalizeSearchUrl,
+  parseUnifiedDiffRows,
   ptyHumanTerminalText,
   readWriteStdinInputPreview,
   type ShellOutput,
@@ -212,8 +213,15 @@ export function ToolResultPreview(props: {
     );
   }
 
-  // file_write / image / summary / unknown — show a compact descriptor so the
-  // user knows what kind landed without dumping binary or storage refs.
+  // image / summary / unknown — show a compact descriptor so the user knows
+  // what kind landed without dumping binary or storage refs.
+  if (content.kind === 'file_write') {
+    return (
+      <div data-kind={content.kind}>
+        <ToolCodeBlock code={`Wrote ${content.bytes} bytes to ${content.path}`} />
+      </div>
+    );
+  }
   return (
     <div data-kind={content.kind}>
       <ToolCodeBlock code={`[${content.kind}]`} />
@@ -295,11 +303,6 @@ export function diffLineKind(line: string): 'add' | 'del' | 'hunk' | 'meta' | 'c
  * `previewVariants` has always declared for exactly this — the call site was
  * what went missing.
  */
-/** File header lines the diff panel hides visually (the heading names the path). */
-export function isDiffHeaderLine(line: string): boolean {
-  return line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('index ');
-}
-
 type DiffPreviewRow = {
   kind: 'add' | 'del' | 'ctx' | 'meta';
   text: string;
@@ -307,45 +310,22 @@ type DiffPreviewRow = {
 };
 
 /**
- * Parse a unified diff into display rows. `@@` headers feed the line-number
- * counters instead of becoming rows: a deletion shows its old-side number,
- * additions and context the new-side one, and a numbering jump is what marks
- * a hunk boundary. `diff --git` separators stay as unnumbered meta rows —
- * the only in-body boundary between files. A foreign diff with no hunk
- * headers degrades to unnumbered rows.
+ * Display rows for the gutter, from the shared structural parse in
+ * `@maka/core`: hunk headers are consumed into the line numbers (a deletion
+ * shows its old-side number, additions and context the new-side one) and file
+ * headers never survive the parse — so a deleted SQL `-- a` comment can no
+ * longer be mistaken for one. A foreign diff with no hunk headers degrades
+ * to unnumbered meta rows.
  */
 function diffPreviewRows(lines: string[]): DiffPreviewRow[] {
-  const rows: DiffPreviewRow[] = [];
-  let oldLine = 0;
-  let newLine = 0;
-  let seenHunk = false;
-  for (const line of lines) {
-    if (isDiffHeaderLine(line)) continue;
-    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
-    if (hunk) {
-      oldLine = Number(hunk[1]);
-      newLine = Number(hunk[2]);
-      seenHunk = true;
-      continue;
-    }
-    const kind = diffLineKind(line);
-    if (kind === 'del') {
-      rows.push({ kind, text: line, ...(seenHunk ? { lineNumber: oldLine } : {}) });
-      if (seenHunk) oldLine += 1;
-    } else if (kind === 'add') {
-      rows.push({ kind, text: line, ...(seenHunk ? { lineNumber: newLine } : {}) });
-      if (seenHunk) newLine += 1;
-    } else if (kind === 'ctx') {
-      rows.push({ kind, text: line, ...(seenHunk ? { lineNumber: newLine } : {}) });
-      if (seenHunk) {
-        oldLine += 1;
-        newLine += 1;
-      }
-    } else {
-      rows.push({ kind: 'meta', text: line });
-    }
-  }
-  return rows;
+  return parseUnifiedDiffRows(lines.join('\n')).flatMap((row): DiffPreviewRow[] => {
+    if (row.kind === 'hunk') return [];
+    if (row.kind === 'meta') return [{ kind: 'meta' as const, text: row.text }];
+    const lineNumber = row.kind === 'del' ? row.oldLine : row.newLine;
+    return [
+      { kind: row.kind, text: row.text, ...(lineNumber !== undefined ? { lineNumber } : {}) },
+    ];
+  });
 }
 
 function FileDiffPreview(props: { diff: string; paths: string[] }) {
@@ -360,9 +340,8 @@ function FileDiffPreview(props: { diff: string; paths: string[] }) {
   // a blank tinted row at the end of every diff.
   const lines = body.split('\n');
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-  // `---`/`+++` file headers and `index` hashes repeat what the heading
-  // already says — hidden visually; the copyable body keeps the full
-  // standard diff.
+  // The copyable body keeps the full standard diff; the rendered rows come
+  // from the structural parse, which drops the redundant file headers.
   const rows = diffPreviewRows(lines);
   const numbered = rows.some((row) => row.lineNumber !== undefined);
   const digits = numbered

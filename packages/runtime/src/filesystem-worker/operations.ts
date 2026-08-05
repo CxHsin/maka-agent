@@ -6,6 +6,7 @@ import { isPathInside, realpathAllowMissing } from '../path-containment.js';
 import { sandboxBoundaryExpansionAllowsPath } from '@maka/core';
 
 import { computeEditedSource } from '../edit-replace.js';
+import { createUnifiedDiff } from '../unified-diff.js';
 import { isSupportedImagePath, readWorkspaceImage } from '../image-file.js';
 import {
   FILESYSTEM_WORKER_PROTOCOL_VERSION,
@@ -115,8 +116,23 @@ export async function executeFilesystemOperation(
         'Write',
         operationBoundary,
       );
+      // Read-before-write: the diff of an overwrite is what tells the reader
+      // what was lost. A missing file means the whole content is new.
+      let previous: string | undefined;
+      try {
+        previous = await fs.readFile(path, 'utf8');
+      } catch {
+        previous = undefined;
+      }
       await fs.writeFile(path, operation.content, 'utf8');
-      return { kind: 'write', ok: true, path, bytes: Buffer.byteLength(operation.content, 'utf8') };
+      const diff = createUnifiedDiff(path, previous, operation.content);
+      return {
+        kind: 'write',
+        ok: true,
+        path,
+        bytes: Buffer.byteLength(operation.content, 'utf8'),
+        ...(diff !== undefined ? { diff } : {}),
+      };
     }
     case 'edit': {
       const path = await resolveExistingAllowed(
@@ -142,6 +158,7 @@ export async function executeFilesystemOperation(
         );
       }
       await fs.writeFile(path, edited.content, 'utf8');
+      const diff = createUnifiedDiff(path, content, edited.content);
       return {
         kind: 'edit',
         ok: true,
@@ -150,6 +167,7 @@ export async function executeFilesystemOperation(
         matchedVia: edited.matchedVia,
         startLine: edited.startLine,
         endLine: edited.endLine,
+        ...(diff !== undefined ? { diff } : {}),
       };
     }
     case 'format_json': {
@@ -180,6 +198,8 @@ export async function executeFilesystemOperation(
       const formatted = JSON.stringify(operation.sortKeys ? sortKeysDeep(parsed) : parsed, null, 2);
       await fs.writeFile(path, formatted, 'utf8');
       const bytesAfter = Buffer.byteLength(formatted, 'utf8');
+      const diff =
+        formatted === original ? undefined : createUnifiedDiff(path, original, formatted);
       return {
         kind: 'format_json',
         ok: true,
@@ -189,6 +209,7 @@ export async function executeFilesystemOperation(
         bytesAfter,
         byteDelta: bytesAfter - bytesBefore,
         changed: formatted !== original,
+        ...(diff !== undefined ? { diff } : {}),
       };
     }
     case 'glob': {

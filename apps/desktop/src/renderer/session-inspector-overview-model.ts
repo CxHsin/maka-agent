@@ -46,8 +46,6 @@ export interface InspectorContextBudget {
 export interface InspectorModelRef {
   providerId: string;
   modelId: string;
-  /** Latest window any attempt of this model was metered against. */
-  contextWindow?: number;
   /** Logical calls (retries nest inside), session-wide. */
   callCount: number;
 }
@@ -57,25 +55,17 @@ export interface InspectorOverviewModel {
   context?: InspectorContextBudget;
   /** Absent when no attempt in the session reported usage. */
   sessionTokens?: InspectorTokenStats;
-  /** The latest turn's slice of the same metering, when it reported any. */
-  latestTurnTokens?: InspectorTokenStats;
   /** Absent when the session made no recorded model call. */
   model?: InspectorModelRef;
-  /** First turn's start, last turn's end — the session's active span. */
-  startedAt?: number;
+  /** Last turn's end — when the session was last active. */
   lastActivityAt?: number;
 }
 
 export function deriveInspectorOverviewModel(trace: SessionTrace | undefined): InspectorOverviewModel {
   if (!trace || trace.turns.length === 0) return {};
 
-  const latestTurn = trace.turns.reduce((latest, turn) =>
-    turn.startedAt >= latest.startedAt ? turn : latest,
-  );
-
   const modelSteps = trace.turns.flatMap(modelCallSteps);
   const sessionTokens = tokenStats(modelSteps.flatMap((step) => step.attempts));
-  const turnTokens = tokenStats(modelCallSteps(latestTurn).flatMap((step) => step.attempts));
 
   const latestStep = modelSteps.reduce<TraceModelCallStep | undefined>(
     (latest, step) => (latest === undefined || step.endedAt >= latest.endedAt ? step : latest),
@@ -87,20 +77,15 @@ export function deriveInspectorOverviewModel(trace: SessionTrace | undefined): I
   return {
     ...(context ? { context } : {}),
     ...(sessionTokens ? { sessionTokens } : {}),
-    ...(turnTokens ? { latestTurnTokens: turnTokens } : {}),
     ...(latestStep
       ? {
           model: {
             providerId: latestStep.providerId,
             modelId: latestStep.modelId,
-            ...(latestContextWindow(latestStep) !== undefined
-              ? { contextWindow: latestContextWindow(latestStep) }
-              : {}),
             callCount: modelSteps.length,
           },
         }
       : {}),
-    startedAt: trace.turns.reduce((earliest, turn) => Math.min(earliest, turn.startedAt), Number.POSITIVE_INFINITY),
     lastActivityAt: trace.turns.reduce((latest, turn) => Math.max(latest, turn.endedAt), 0),
   };
 }
@@ -171,13 +156,6 @@ function contextBudget(steps: readonly TraceModelCallStep[]): InspectorContextBu
     windowTokens: latest.contextWindow!,
     ratio: latest.inputTokens! / latest.contextWindow!,
   };
-}
-
-function latestContextWindow(step: TraceModelCallStep): number | undefined {
-  return step.attempts.reduce<number | undefined>(
-    (carry, attempt) => attempt.contextWindow ?? carry,
-    undefined,
-  );
 }
 
 function sum(attempts: readonly TraceModelAttempt[], pick: (attempt: TraceModelAttempt) => number | undefined): number {

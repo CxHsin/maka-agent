@@ -212,29 +212,6 @@ describe('inspector overview model', () => {
     assert.equal(model.sessionTokens?.cacheHitRate, 0.75);
   });
 
-  it('scopes the latest-turn stats to the turn with the latest start', () => {
-    const earlier = modelCall({
-      attempts: [attempt({ inputTokens: 8_000, outputTokens: 100 })],
-    });
-    const later = modelCall({
-      id: 'call-2',
-      turnId: 'turn-2',
-      attempts: [attempt({ inputTokens: 12_000, cacheReadInputTokens: 6_000, outputTokens: 200 })],
-    });
-    const model = deriveInspectorOverviewModel(
-      trace({
-        turns: [
-          turn([earlier], { startedAt: NOW, endedAt: NOW + 2_000 }),
-          turn([later], { turnId: 'turn-2', startedAt: NOW + 10_000, endedAt: NOW + 12_000 }),
-        ],
-      }),
-    );
-
-    assert.equal(model.latestTurnTokens?.inputTokens, 12_000);
-    assert.equal(model.latestTurnTokens?.cacheHitRate, 0.5);
-    assert.equal(model.sessionTokens?.inputTokens, 20_000);
-  });
-
   it('names the model of the most recent call and counts logical calls', () => {
     const model = deriveInspectorOverviewModel(
       trace({
@@ -261,7 +238,7 @@ describe('inspector overview model', () => {
     });
   });
 
-  it('spans the session from the first turn start to the last turn end', () => {
+  it('marks the session last-active at the latest turn end', () => {
     const model = deriveInspectorOverviewModel(
       trace({
         turns: [
@@ -271,7 +248,6 @@ describe('inspector overview model', () => {
       }),
     );
 
-    assert.equal(model.startedAt, NOW);
     assert.equal(model.lastActivityAt, NOW + 30_000);
   });
 });

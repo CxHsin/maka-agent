@@ -88,23 +88,14 @@ export interface DesktopConversationCopy {
     filterClear: string;
     noMatches: string;
     hiddenByFilter: string;
-    /** Summary sections above the raw timeline. */
+    /** Summary above the raw timeline. */
     overview: {
       context: string;
-      tokens: string;
-      turnColumn: string;
-      sessionColumn: string;
-      rows: {
-        input: string;
-        cacheRead: string;
-        output: string;
-        reasoning: string;
-        hitRate: string;
-      };
-      session: string;
       model: string;
-      contextWindow: string;
-      started: string;
+      input: string;
+      cacheRead: string;
+      output: string;
+      reasoning: string;
       lastActivity: string;
       raw: string;
     };
@@ -215,20 +206,11 @@ const COPY = {
       hiddenByFilter: '项被筛选隐藏',
       overview: {
         context: '上下文',
-        tokens: 'Token 与缓存',
-        turnColumn: '本回合',
-        sessionColumn: '会话',
-        rows: {
-          input: '输入',
-          cacheRead: '缓存读取',
-          output: '输出',
-          reasoning: '推理',
-          hitRate: '缓存命中率',
-        },
-        session: '会话与成本',
         model: '模型',
-        contextWindow: '上下文窗口',
-        started: '开始时间',
+        input: '输入 token',
+        cacheRead: '缓存读取',
+        output: '输出 token',
+        reasoning: '推理',
         lastActivity: '最后活动',
         raw: '原始记录',
       },
@@ -324,20 +306,11 @@ const COPY = {
       hiddenByFilter: 'hidden by the filter',
       overview: {
         context: 'Context',
-        tokens: 'Tokens & cache',
-        turnColumn: 'This turn',
-        sessionColumn: 'Session',
-        rows: {
-          input: 'Input',
-          cacheRead: 'Cache read',
-          output: 'Output',
-          reasoning: 'Reasoning',
-          hitRate: 'Cache hit rate',
-        },
-        session: 'Session & cost',
         model: 'Model',
-        contextWindow: 'Context window',
-        started: 'Started',
+        input: 'Input tokens',
+        cacheRead: 'Cache read',
+        output: 'Output tokens',
+        reasoning: 'reasoning',
         lastActivity: 'Last active',
         raw: 'Raw trace',
       },

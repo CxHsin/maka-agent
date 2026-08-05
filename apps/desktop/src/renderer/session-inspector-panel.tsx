@@ -5,6 +5,7 @@ import { Button } from '@astryxdesign/core/Button';
 import { Collapsible } from '@astryxdesign/core/Collapsible';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { HStack, VStack } from '@astryxdesign/core/Layout';
+import { MetadataList, MetadataListItem } from '@astryxdesign/core/MetadataList';
 import { ProgressBar } from '@astryxdesign/core/ProgressBar';
 import { Section } from '@astryxdesign/core/Section';
 import { Switch } from '@astryxdesign/core/Switch';
@@ -18,10 +19,7 @@ import {
   applyInspectorFilter,
   type InspectorFilter,
 } from './session-inspector-filter.js';
-import {
-  deriveInspectorOverviewModel,
-  type InspectorTokenStats,
-} from './session-inspector-overview-model.js';
+import { deriveInspectorOverviewModel } from './session-inspector-overview-model.js';
 import {
   deriveInspectorPanelModel,
   type InspectorStepRow,
@@ -204,7 +202,7 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
   );
 }
 
-/** The glance layer: context fullness, token/cache shape, session facts. */
+/** The glance layer: context fullness, then the session's facts as one list. */
 function InspectorOverview(props: {
   copy: InspectorCopy;
   locale: UiLocale;
@@ -213,145 +211,76 @@ function InspectorOverview(props: {
 }) {
   const { copy, overview } = props;
   const formatNumber = numberFormatter(props.locale);
-  const num = (value: number | undefined) =>
-    value !== undefined ? formatNumber(value) : undefined;
   const context = overview.context;
+  const tokens = overview.sessionTokens;
 
   return (
-    <VStack gap={0} data-maka-contract="session-inspector-overview">
+    <VStack gap={3} data-maka-contract="session-inspector-overview">
       {context && (
-        <section
-          className="maka-inspector-section"
-          data-maka-contract="session-inspector-context"
-          aria-label={copy.overview.context}
-        >
-          <HStack className="maka-inspector-section-head">
-            <span className="maka-inspector-section-title">{copy.overview.context}</span>
-            <span className="maka-inspector-context-percent">{formatPercent(context.ratio)}</span>
-          </HStack>
+        <VStack gap={1} data-maka-contract="session-inspector-context">
           <ProgressBar
             value={context.usedTokens}
             max={context.windowTokens}
             label={copy.overview.context}
-            isLabelHidden
+            hasValueLabel
+            formatValueLabel={() => formatPercent(context.ratio)}
             variant={context.ratio >= 0.9 ? 'error' : context.ratio >= 0.7 ? 'warning' : 'accent'}
           />
           <Text type="supporting" color="secondary" className="maka-inspector-cost">
             {formatNumber(context.usedTokens)} / {formatNumber(context.windowTokens)}
           </Text>
-        </section>
+        </VStack>
       )}
 
-      {overview.sessionTokens && (
-        <section
-          className="maka-inspector-section"
-          data-maka-contract="session-inspector-tokens"
-          aria-label={copy.overview.tokens}
-        >
-          <span className="maka-inspector-section-title">{copy.overview.tokens}</span>
-          <div className="maka-inspector-stats">
-            <span className="maka-inspector-stats-head" />
-            <Text type="supporting" color="secondary" className="maka-inspector-stats-head">
-              {copy.overview.turnColumn}
-            </Text>
-            <Text type="supporting" color="secondary" className="maka-inspector-stats-head">
-              {copy.overview.sessionColumn}
-            </Text>
-            <TokenRow label={copy.overview.rows.input} pick={(stats) => num(stats.inputTokens)} turn={overview.latestTurnTokens} session={overview.sessionTokens} />
-            <TokenRow label={copy.overview.rows.cacheRead} pick={(stats) => num(stats.cacheReadInputTokens)} turn={overview.latestTurnTokens} session={overview.sessionTokens} />
-            <TokenRow label={copy.overview.rows.output} pick={(stats) => num(stats.outputTokens)} turn={overview.latestTurnTokens} session={overview.sessionTokens} />
-            <TokenRow label={copy.overview.rows.reasoning} pick={(stats) => num(stats.reasoningTokens)} turn={overview.latestTurnTokens} session={overview.sessionTokens} />
-            <TokenRow
-              label={copy.overview.rows.hitRate}
-              pick={(stats) => (stats.cacheHitRate !== undefined ? formatPercent(stats.cacheHitRate) : undefined)}
-              turn={overview.latestTurnTokens}
-              session={overview.sessionTokens}
-            />
-          </div>
-        </section>
-      )}
-
-      <section
-        className="maka-inspector-section"
-        data-maka-contract="session-inspector-session"
-        aria-label={copy.overview.session}
-      >
-        <span className="maka-inspector-section-title">{copy.overview.session}</span>
-        <div className="maka-inspector-kv">
-          {overview.model && (
-            <FactRow label={copy.overview.model}>
-              {providerLabel(overview.model.providerId)} / {overview.model.modelId}
-            </FactRow>
-          )}
-          {overview.model?.contextWindow !== undefined && context === undefined && (
-            <FactRow label={copy.overview.contextWindow}>
-              {formatNumber(overview.model.contextWindow)}
-            </FactRow>
-          )}
-          {overview.model && (
-            <FactRow label={props.copy.totals.calls}>{formatNumber(overview.model.callCount)}</FactRow>
-          )}
-          {props.model.totals.retries > 0 && (
-            <FactRow label={copy.totals.retries}>{formatNumber(props.model.totals.retries)}</FactRow>
-          )}
-          {props.model.totals.compactions > 0 && (
-            <FactRow label={copy.totals.compactions}>
-              {formatNumber(props.model.totals.compactions)}
-            </FactRow>
-          )}
-          <FactRow label={copy.totals.cost}>
-            {formatCost(props.model.totals.costUsd, copy.costUnavailable)}
-          </FactRow>
-          <FactRow label={copy.totals.duration}>{formatDuration(props.model.totals.durationMs)}</FactRow>
-          {overview.startedAt !== undefined && (
-            <FactRow label={copy.overview.started}>
-              {formatDateTime(props.locale, overview.startedAt)}
-            </FactRow>
-          )}
-          {overview.lastActivityAt !== undefined && (
-            <FactRow label={copy.overview.lastActivity}>
-              {formatDateTime(props.locale, overview.lastActivityAt)}
-            </FactRow>
-          )}
-        </div>
-      </section>
+      <MetadataList>
+        {overview.model && (
+          <MetadataListItem label={copy.overview.model}>
+            {providerLabel(overview.model.providerId)} / {overview.model.modelId}
+          </MetadataListItem>
+        )}
+        {tokens?.inputTokens !== undefined && (
+          <MetadataListItem label={copy.overview.input}>
+            {formatNumber(tokens.inputTokens)}
+          </MetadataListItem>
+        )}
+        {tokens?.cacheReadInputTokens !== undefined && (
+          <MetadataListItem label={copy.overview.cacheRead}>
+            {formatNumber(tokens.cacheReadInputTokens)}
+            {tokens.cacheHitRate !== undefined && ` · ${formatPercent(tokens.cacheHitRate)}`}
+          </MetadataListItem>
+        )}
+        {tokens?.outputTokens !== undefined && (
+          <MetadataListItem label={copy.overview.output}>
+            {formatNumber(tokens.outputTokens)}
+            {tokens.reasoningTokens !== undefined &&
+              ` · ${copy.overview.reasoning} ${formatNumber(tokens.reasoningTokens)}`}
+          </MetadataListItem>
+        )}
+        {overview.model && (
+          <MetadataListItem label={props.copy.totals.calls}>
+            {formatNumber(overview.model.callCount)}
+            {props.model.totals.retries > 0 &&
+              ` · ${copy.totals.retries} ${formatNumber(props.model.totals.retries)}`}
+          </MetadataListItem>
+        )}
+        {props.model.totals.compactions > 0 && (
+          <MetadataListItem label={copy.totals.compactions}>
+            {formatNumber(props.model.totals.compactions)}
+          </MetadataListItem>
+        )}
+        <MetadataListItem label={copy.totals.cost}>
+          {formatCost(props.model.totals.costUsd, copy.costUnavailable)}
+        </MetadataListItem>
+        <MetadataListItem label={copy.totals.duration}>
+          {formatDuration(props.model.totals.durationMs)}
+        </MetadataListItem>
+        {overview.lastActivityAt !== undefined && (
+          <MetadataListItem label={copy.overview.lastActivity}>
+            {formatDateTime(props.locale, overview.lastActivityAt)}
+          </MetadataListItem>
+        )}
+      </MetadataList>
     </VStack>
-  );
-}
-
-/** One row of the token/cache grid: label, this-turn figure, session figure. */
-function TokenRow(props: {
-  label: string;
-  pick: (stats: InspectorTokenStats) => string | undefined;
-  turn?: InspectorTokenStats;
-  session: InspectorTokenStats;
-}) {
-  return (
-    <>
-      <Text type="supporting" color="secondary">
-        {props.label}
-      </Text>
-      <Text type="supporting" className="maka-inspector-stats-value" hasTabularNumbers>
-        {(props.turn && props.pick(props.turn)) ?? '—'}
-      </Text>
-      <Text type="supporting" className="maka-inspector-stats-value" hasTabularNumbers>
-        {props.pick(props.session) ?? '—'}
-      </Text>
-    </>
-  );
-}
-
-/** One label/value line of the session section. */
-function FactRow(props: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="maka-inspector-kv-row">
-      <Text type="supporting" color="secondary" as="span">
-        {props.label}
-      </Text>
-      <Text type="supporting" as="span" className="maka-inspector-kv-value" hasTabularNumbers>
-        {props.children}
-      </Text>
-    </div>
   );
 }
 

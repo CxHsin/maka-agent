@@ -9647,6 +9647,52 @@ describe('AiSdkBackend context budget and prompt attribution', () => {
     );
   });
 
+  test('replay hands the model a bounded summary for an Edit file_diff result, not the diff', () => {
+    const diff = ['--- a/a.ts', '+++ b/a.ts', '@@ -1,2 +1,2 @@', ' keep', '-old', '+new'].join(
+      '\n',
+    );
+    const events = [
+      runtimeEvent({
+        id: 'edit-call',
+        turnId: 't1',
+        role: 'model',
+        author: 'agent',
+        content: {
+          kind: 'function_call',
+          id: 'tool-edit',
+          name: 'Edit',
+          args: { path: 'a.ts' },
+        },
+      }),
+      runtimeEvent({
+        id: 'edit-result',
+        turnId: 't1',
+        role: 'tool',
+        author: 'tool',
+        content: {
+          kind: 'function_response',
+          id: 'tool-edit',
+          name: 'Edit',
+          result: { kind: 'file_diff', paths: ['a.ts'], diff },
+        },
+      }),
+    ];
+
+    const plan = buildRuntimeEventModelReplayPlan(events);
+    const result = plan.items.find(
+      (item) => item.kind === 'tool_result' && item.toolCallId === 'tool-edit',
+    );
+
+    assert.equal(result?.kind === 'tool_result' ? result.output : undefined, 'Edited a.ts (+1 -1)');
+    // The durable event itself keeps the full diff — only the model-facing
+    // projection is bounded.
+    const durable = events[1].content;
+    assert.equal(
+      durable?.kind === 'function_response' ? (durable.result as { kind: string }).kind : undefined,
+      'file_diff',
+    );
+  });
+
   test('usage events include prompt segments and context budget diagnostics', async () => {
     const model = completionModel();
     const events: SessionEvent[] = [];

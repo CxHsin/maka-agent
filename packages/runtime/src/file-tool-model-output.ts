@@ -1,3 +1,4 @@
+import { countDiffLineStats } from '@maka/core';
 import type { ToolResultOutput } from './model-protocol.js';
 import { toolResultOutput } from './tool-result-output.js';
 
@@ -11,17 +12,37 @@ export function fileWriteToolResultToModelOutput(
   toolName: 'Write' | 'Edit' | 'FormatJson',
   output: unknown,
 ): ToolResultOutput {
+  const summary = fileWriteToolResultSummary(toolName, output);
+  return summary !== undefined ? { type: 'text', value: summary } : toolResultOutput(output, false);
+}
+
+/**
+ * Replay counterpart of `fileWriteToolResultToModelOutput`. The durable ledger
+ * keeps the full diff for the UI, and every model re-read of history — prior
+ * turns, compaction, resume — flows through the replay plan. Without this
+ * projection the model saw a one-line summary live but the full diff JSON on
+ * every later turn, which is both a token leak and a shape inconsistency.
+ * Same precedent as `projectBashToolResultForModel`.
+ */
+export function projectFileWriteToolResultForModel(toolName: string, output: unknown): unknown {
+  if (toolName !== 'Edit' && toolName !== 'Write' && toolName !== 'FormatJson') return output;
+  return fileWriteToolResultSummary(toolName, output) ?? output;
+}
+
+function fileWriteToolResultSummary(
+  toolName: 'Write' | 'Edit' | 'FormatJson',
+  output: unknown,
+): string | undefined {
   if (isFileDiff(output)) {
     const path = output.paths[0] ?? 'file';
-    const { additions, deletions } = diffLineStats(output.diff);
+    const { additions, deletions } = countDiffLineStats(output.diff);
     if (toolName === 'Write' && output.diff.startsWith('--- /dev/null'))
-      return { type: 'text', value: `Created ${path} (+${additions})` };
+      return `Created ${path} (+${additions})`;
     const verb = toolName === 'Write' ? 'Overwrote' : toolName === 'Edit' ? 'Edited' : 'Formatted';
-    return { type: 'text', value: `${verb} ${path} (+${additions} -${deletions})` };
+    return `${verb} ${path} (+${additions} -${deletions})`;
   }
-  if (isFileWrite(output))
-    return { type: 'text', value: `Wrote ${output.bytes} bytes to ${output.path}` };
-  return toolResultOutput(output, false);
+  if (isFileWrite(output)) return `Wrote ${output.bytes} bytes to ${output.path}`;
+  return undefined;
 }
 
 function isFileDiff(
@@ -45,15 +66,4 @@ function isFileWrite(
     (output as { kind?: unknown }).kind === 'file_write' &&
     typeof (output as { bytes?: unknown }).bytes === 'number'
   );
-}
-
-function diffLineStats(diff: string): { additions: number; deletions: number } {
-  let additions = 0;
-  let deletions = 0;
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('+++') || line.startsWith('---')) continue;
-    if (line.startsWith('+')) additions += 1;
-    else if (line.startsWith('-')) deletions += 1;
-  }
-  return { additions, deletions };
 }

@@ -349,6 +349,42 @@ describe('file tools surface a file_diff result', () => {
 
     assert.deepEqual(output, { type: 'text', value: 'Edited a.ts (+1 -1)' });
   });
+
+  test('the model output counts additions whose content starts with ++', async () => {
+    const tools = buildBuiltinTools();
+    const tool = tools.find((candidate) => candidate.name === 'Edit');
+    if (!tool?.toModelOutput) throw new Error('Edit toModelOutput missing');
+
+    const output = await tool.toModelOutput({
+      toolCallId: 'tool-1',
+      input: { path: 'a.ts', old_string: 'let i = 0;', new_string: 'let i = 0;\n++i;' },
+      output: {
+        kind: 'file_diff',
+        paths: ['a.ts'],
+        diff: '@@ -1,1 +1,2 @@\n let i = 0;\n+++i;',
+      },
+    });
+
+    assert.deepEqual(output, { type: 'text', value: 'Edited a.ts (+1 -0)' });
+  });
+
+  test('the model output for a new-file write names it created with its line count', async () => {
+    const tools = buildBuiltinTools();
+    const tool = tools.find((candidate) => candidate.name === 'Write');
+    if (!tool?.toModelOutput) throw new Error('Write toModelOutput missing');
+
+    const output = await tool.toModelOutput({
+      toolCallId: 'tool-1',
+      input: { path: 'new.md', content: 'alpha\nbeta\n' },
+      output: {
+        kind: 'file_diff',
+        paths: ['new.md'],
+        diff: '--- /dev/null\n+++ b/new.md\n@@ -0,0 +1,2 @@\n+alpha\n+beta',
+      },
+    });
+
+    assert.deepEqual(output, { type: 'text', value: 'Created new.md (+2)' });
+  });
 });
 
 async function runTool(

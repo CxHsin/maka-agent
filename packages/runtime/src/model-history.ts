@@ -50,6 +50,7 @@ import {
 import type { AttachmentRef, QuoteRef } from '@maka/core/events';
 import type { ModelMessage, UserContent, UserModelMessage } from './model-protocol.js';
 import { projectBashToolResultForModel } from './bash-model-output.js';
+import { projectFileWriteToolResultForModel } from './file-tool-model-output.js';
 
 export const PROVIDER_REPLAY_PROJECTION_VERSION = 1;
 
@@ -596,6 +597,11 @@ export function buildRuntimeEventModelReplayPlan(
         }
         if (!invalidResultMessage && event.content.name === 'Bash') {
           normalizedResult = projectBashToolResultForModel(normalizedResult);
+        } else if (!invalidResultMessage) {
+          normalizedResult = projectFileWriteToolResultForModel(
+            event.content.name,
+            normalizedResult,
+          );
         }
         if (invalidResultMessage) {
           const call = callsById.get(event.content.id);

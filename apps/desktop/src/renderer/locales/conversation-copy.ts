@@ -88,6 +88,26 @@ export interface DesktopConversationCopy {
     filterClear: string;
     noMatches: string;
     hiddenByFilter: string;
+    /** Summary sections above the raw timeline. */
+    overview: {
+      context: string;
+      tokens: string;
+      turnColumn: string;
+      sessionColumn: string;
+      rows: {
+        input: string;
+        cacheRead: string;
+        output: string;
+        reasoning: string;
+        hitRate: string;
+      };
+      session: string;
+      model: string;
+      contextWindow: string;
+      started: string;
+      lastActivity: string;
+      raw: string;
+    };
   };
   quoteCompanion: {
     /** Read-only exploration hint shown in the empty companion panel. */
@@ -193,6 +213,25 @@ const COPY = {
       filterClear: '清除筛选',
       noMatches: '没有匹配的步骤——这个会话本身是有内容的',
       hiddenByFilter: '项被筛选隐藏',
+      overview: {
+        context: '上下文',
+        tokens: 'Token 与缓存',
+        turnColumn: '本回合',
+        sessionColumn: '会话',
+        rows: {
+          input: '输入',
+          cacheRead: '缓存读取',
+          output: '输出',
+          reasoning: '推理',
+          hitRate: '缓存命中率',
+        },
+        session: '会话与成本',
+        model: '模型',
+        contextWindow: '上下文窗口',
+        started: '开始时间',
+        lastActivity: '最后活动',
+        raw: '原始记录',
+      },
     },
     quoteCompanion: {
       hint: '这里的追问会带上主对话的完整上下文：只做解释和只读探索，不会改动文件，也不写回主对话。在主对话里继续选中文本追问，会加进这个侧栏。',
@@ -283,6 +322,25 @@ const COPY = {
       filterClear: 'Clear filter',
       noMatches: 'Nothing matches this filter — the session itself is not empty',
       hiddenByFilter: 'hidden by the filter',
+      overview: {
+        context: 'Context',
+        tokens: 'Tokens & cache',
+        turnColumn: 'This turn',
+        sessionColumn: 'Session',
+        rows: {
+          input: 'Input',
+          cacheRead: 'Cache read',
+          output: 'Output',
+          reasoning: 'Reasoning',
+          hitRate: 'Cache hit rate',
+        },
+        session: 'Session & cost',
+        model: 'Model',
+        contextWindow: 'Context window',
+        started: 'Started',
+        lastActivity: 'Last active',
+        raw: 'Raw trace',
+      },
     },
     quoteCompanion: {
       hint: 'Questions here carry the full context of the main conversation: read-only exploration and explanation, no file changes, and nothing is written back to the main conversation. Select more text in the main transcript to add it to this side panel.',

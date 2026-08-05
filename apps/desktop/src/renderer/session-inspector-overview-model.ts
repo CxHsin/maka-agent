@@ -20,12 +20,12 @@ export interface InspectorTokenStats {
   /** Physical requests that reported any usage at all. */
   meteredAttempts: number;
   /** Prompt tokens, cache hits included — what the provider counted as input. */
-  inputTokens: number;
+  inputTokens?: number;
   /** The portion of input served from the provider's prompt cache. */
-  cacheReadInputTokens: number;
-  outputTokens: number;
+  cacheReadInputTokens?: number;
+  outputTokens?: number;
   /** Reasoning portion of output, when the provider breaks it out. */
-  reasoningTokens: number;
+  reasoningTokens?: number;
   /**
    * cacheRead / input over attempts that reported input. Absent when no input
    * was metered at all — a rate over nothing is not zero, it is unknown.
@@ -109,23 +109,39 @@ function modelCallSteps(turn: TurnTrace): TraceModelCallStep[] {
   return turn.steps.filter((step): step is TraceModelCallStep => step.kind === 'model_call');
 }
 
+/**
+ * Every field sums only the attempts that reported it: a provider that never
+ * breaks out reasoning leaves the row unknown, not zero, because "did not
+ * report" and "reported none" are different facts (#1679 keeps them apart in
+ * the ledger, and the panel keeps them apart here).
+ */
 function tokenStats(attempts: readonly TraceModelAttempt[]): InspectorTokenStats | undefined {
-  const metered = attempts.filter((attempt) => attempt.inputTokens !== undefined);
-  const outputMetered = attempts.filter((attempt) => attempt.outputTokens !== undefined);
-  if (metered.length === 0 && outputMetered.length === 0) return undefined;
+  const input = attempts.filter((attempt) => attempt.inputTokens !== undefined);
+  const cacheRead = attempts.filter((attempt) => attempt.cacheReadInputTokens !== undefined);
+  const output = attempts.filter((attempt) => attempt.outputTokens !== undefined);
+  const reasoning = attempts.filter((attempt) => attempt.reasoningTokens !== undefined);
+  const metered = new Set([...input, ...cacheRead, ...output, ...reasoning]);
+  if (metered.size === 0) return undefined;
 
-  const inputTokens = sum(metered, (attempt) => attempt.inputTokens);
-  const cacheReadInputTokens = sum(metered, (attempt) => attempt.cacheReadInputTokens);
-  const outputTokens = sum(attempts, (attempt) => attempt.outputTokens);
-  const reasoningTokens = sum(attempts, (attempt) => attempt.reasoningTokens);
-
+  const inputTokens = sum(input, (attempt) => attempt.inputTokens);
   return {
-    meteredAttempts: new Set([...metered, ...outputMetered]).size,
-    inputTokens,
-    cacheReadInputTokens,
-    outputTokens,
-    reasoningTokens,
-    ...(inputTokens > 0 ? { cacheHitRate: cacheReadInputTokens / inputTokens } : {}),
+    meteredAttempts: metered.size,
+    ...(input.length > 0 ? { inputTokens } : {}),
+    ...(cacheRead.length > 0
+      ? { cacheReadInputTokens: sum(cacheRead, (attempt) => attempt.cacheReadInputTokens) }
+      : {}),
+    ...(output.length > 0 ? { outputTokens: sum(output, (attempt) => attempt.outputTokens) } : {}),
+    ...(reasoning.length > 0
+      ? { reasoningTokens: sum(reasoning, (attempt) => attempt.reasoningTokens) }
+      : {}),
+    // An input-reported attempt without a cache figure reads as a miss: the
+    // providers that cache always count the hits.
+    ...(input.length > 0 && inputTokens > 0
+      ? {
+          cacheHitRate:
+            sum(input, (attempt) => attempt.cacheReadInputTokens) / inputTokens,
+        }
+      : {}),
   };
 }
 

@@ -190,7 +190,26 @@ describe('inspector overview model', () => {
     );
 
     assert.equal(model.sessionTokens?.cacheHitRate, undefined);
+    assert.equal(model.sessionTokens?.inputTokens, undefined);
     assert.equal(model.sessionTokens?.outputTokens, 400);
+  });
+
+  it('keeps an unreported breakdown absent rather than summing it as zero', () => {
+    const model = deriveInspectorOverviewModel(
+      trace({
+        turns: [
+          turn([
+            modelCall({
+              attempts: [attempt({ inputTokens: 12_000, cacheReadInputTokens: 9_000, outputTokens: 300 })],
+            }),
+          ]),
+        ],
+      }),
+    );
+
+    // The provider never broke reasoning out: the row is unknown, not zero.
+    assert.equal(model.sessionTokens?.reasoningTokens, undefined);
+    assert.equal(model.sessionTokens?.cacheHitRate, 0.75);
   });
 
   it('scopes the latest-turn stats to the turn with the latest start', () => {

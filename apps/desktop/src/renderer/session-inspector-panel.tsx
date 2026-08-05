@@ -2,13 +2,15 @@ import { useMemo, useState } from 'react';
 import { Badge } from '@astryxdesign/core/Badge';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
+import { Collapsible } from '@astryxdesign/core/Collapsible';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { HStack, VStack } from '@astryxdesign/core/Layout';
-import { MetadataList, MetadataListItem } from '@astryxdesign/core/MetadataList';
+import { ProgressBar } from '@astryxdesign/core/ProgressBar';
 import { Section } from '@astryxdesign/core/Section';
 import { Switch } from '@astryxdesign/core/Switch';
 import { Text } from '@astryxdesign/core/Text';
 import { TextInput } from '@astryxdesign/core/TextInput';
+import { PROVIDER_REGISTRY, uiLocaleToIntlLocale, type UiLocale } from '@maka/core';
 import { useUiLocale } from '@maka/ui';
 import { Activity } from '@maka/ui/icons';
 import { getDesktopConversationCopy } from './locales/conversation-copy.js';
@@ -17,21 +19,31 @@ import {
   type InspectorFilter,
 } from './session-inspector-filter.js';
 import {
+  deriveInspectorOverviewModel,
+  type InspectorTokenStats,
+} from './session-inspector-overview-model.js';
+import {
   deriveInspectorPanelModel,
   type InspectorStepRow,
   type InspectorTurnRow,
 } from './session-inspector-panel-model.js';
 import { useSessionTrace } from './use-session-trace.js';
 
+type InspectorCopy = ReturnType<typeof getDesktopConversationCopy>['inspector'];
+
 /**
- * Per-session causal timeline (#1625): what the session did, in order, with
- * what each model call cost and how long it took.
+ * Per-session trace (#1625), led by what the session cost and where its
+ * context stands, with the causal timeline folded underneath as the raw
+ * record. The overview answers the glance questions — how full is the
+ * context, what did the tokens and cache do, which model — and the timeline
+ * stays one disclosure away for "what exactly happened".
  *
- * Read-only. Every judgement it makes lives in `deriveInspectorPanelModel`;
- * this file lays the result out — in the same components the rest of the
- * workbar uses, so a read that failed looks like every other failed read
- * (Banner), and a session that did nothing looks like every other empty
- * surface (EmptyState) rather than like a stray paragraph.
+ * Read-only. Every judgement it makes lives in `deriveInspectorOverviewModel`
+ * and `deriveInspectorPanelModel`; this file lays the result out — in the
+ * same components the rest of the workbar uses, so a read that failed looks
+ * like every other failed read (Banner), and a session that did nothing looks
+ * like every other empty surface (EmptyState) rather than like a stray
+ * paragraph.
  */
 export function SessionInspectorPanel(props: { sessionId: string; active: boolean }) {
   const locale = useUiLocale();
@@ -45,7 +57,12 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
     () => applyInspectorFilter(deriveInspectorPanelModel(snapshot.trace), filter),
     [snapshot.trace, filter],
   );
+  const overview = useMemo(() => deriveInspectorOverviewModel(snapshot.trace), [snapshot.trace]);
   const hidden = model.hiddenTurns + model.hiddenSteps;
+  const hasOverview =
+    overview.context !== undefined ||
+    overview.sessionTokens !== undefined ||
+    overview.model !== undefined;
 
   return (
     <Section
@@ -86,57 +103,6 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
           />
         )}
 
-        {!model.empty && (
-          <MetadataList orientation="horizontal" label={{ position: 'top' }}>
-            <MetadataListItem label={copy.totals.duration}>
-              {formatDuration(model.totals.durationMs)}
-            </MetadataListItem>
-            <MetadataListItem label={copy.totals.calls}>
-              {model.totals.modelAttempts}
-            </MetadataListItem>
-            {model.totals.retries > 0 && (
-              <MetadataListItem label={copy.totals.retries}>
-                {model.totals.retries}
-              </MetadataListItem>
-            )}
-            {model.totals.compactions > 0 && (
-              <MetadataListItem label={copy.totals.compactions}>
-                {model.totals.compactions}
-              </MetadataListItem>
-            )}
-            <MetadataListItem label={copy.totals.cost}>
-              {formatCost(model.totals.costUsd, copy.costUnavailable)}
-            </MetadataListItem>
-          </MetadataList>
-        )}
-
-        {!model.empty && (
-          <HStack gap={2} vAlign="center" wrap="wrap">
-            <TextInput
-              size="sm"
-              label={copy.filterLabel}
-              isLabelHidden
-              hasClear
-              value={filter.query ?? ''}
-              placeholder={copy.filterPlaceholder}
-              onChange={(value) => setFilter({ ...filter, query: value })}
-            />
-            <Switch
-              label={copy.filterFailedOnly}
-              value={filter.failedOnly ?? false}
-              onChange={(checked) => setFilter({ ...filter, failedOnly: checked })}
-            />
-            {model.filtered && (
-              <Button
-                variant="ghost"
-                size="sm"
-                label={copy.filterClear}
-                onClick={() => setFilter({})}
-              />
-            )}
-          </HStack>
-        )}
-
         {/* Three different silences, kept apart: a read that failed, a filter
             that matches nothing, and a session that did nothing. Only the last
             one is "nothing to trace".
@@ -166,7 +132,7 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
               data-maka-contract="session-inspector-no-matches"
             />
           )}
-          {model.filtered && hidden > 0 && model.turns.length > 0 && (
+          {!model.empty && model.filtered && hidden > 0 && model.turns.length > 0 && (
             <Text
               type="supporting"
               color="secondary"
@@ -177,20 +143,238 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
           )}
         </div>
 
-        <ol className="maka-inspector-turns">
-          {model.turns.map((turn) => (
-            <TurnRow
-              key={turn.turnId}
-              turn={turn}
-              costUnavailable={copy.costUnavailable}
-              failedLabel={copy.turnFailed}
-              recoveredLabel={copy.recovered}
-            />
-          ))}
-        </ol>
+        {!model.empty && hasOverview && (
+          <InspectorOverview copy={copy} locale={locale} model={model} overview={overview} />
+        )}
+
+        {!model.empty && (
+          <Collapsible
+            className="maka-inspector-raw"
+            data-maka-contract="session-inspector-raw"
+            defaultIsOpen={!hasOverview}
+            trigger={
+              <span className="maka-inspector-raw-trigger">
+                <span>{copy.overview.raw}</span>
+                <Badge variant="neutral" label={model.turns.length} />
+              </span>
+            }
+          >
+            <VStack gap={2} className="maka-inspector-raw-body">
+              <HStack gap={2} vAlign="center" wrap="wrap">
+                <TextInput
+                  size="sm"
+                  label={copy.filterLabel}
+                  isLabelHidden
+                  hasClear
+                  value={filter.query ?? ''}
+                  placeholder={copy.filterPlaceholder}
+                  onChange={(value) => setFilter({ ...filter, query: value })}
+                />
+                <Switch
+                  label={copy.filterFailedOnly}
+                  value={filter.failedOnly ?? false}
+                  onChange={(checked) => setFilter({ ...filter, failedOnly: checked })}
+                />
+                {model.filtered && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    label={copy.filterClear}
+                    onClick={() => setFilter({})}
+                  />
+                )}
+              </HStack>
+
+              <ol className="maka-inspector-turns">
+                {model.turns.map((turn) => (
+                  <TurnRow
+                    key={turn.turnId}
+                    turn={turn}
+                    costUnavailable={copy.costUnavailable}
+                    failedLabel={copy.turnFailed}
+                    recoveredLabel={copy.recovered}
+                  />
+                ))}
+              </ol>
+            </VStack>
+          </Collapsible>
+        )}
       </VStack>
     </Section>
   );
+}
+
+/** The glance layer: context fullness, token/cache shape, session facts. */
+function InspectorOverview(props: {
+  copy: InspectorCopy;
+  locale: UiLocale;
+  model: ReturnType<typeof deriveInspectorPanelModel>;
+  overview: ReturnType<typeof deriveInspectorOverviewModel>;
+}) {
+  const { copy, overview } = props;
+  const formatNumber = numberFormatter(props.locale);
+  const num = (value: number | undefined) =>
+    value !== undefined ? formatNumber(value) : undefined;
+  const context = overview.context;
+
+  return (
+    <VStack gap={0} data-maka-contract="session-inspector-overview">
+      {context && (
+        <section
+          className="maka-inspector-section"
+          data-maka-contract="session-inspector-context"
+          aria-label={copy.overview.context}
+        >
+          <HStack className="maka-inspector-section-head">
+            <span className="maka-inspector-section-title">{copy.overview.context}</span>
+            <span className="maka-inspector-context-percent">{formatPercent(context.ratio)}</span>
+          </HStack>
+          <ProgressBar
+            value={context.usedTokens}
+            max={context.windowTokens}
+            label={copy.overview.context}
+            isLabelHidden
+            variant={context.ratio >= 0.9 ? 'error' : context.ratio >= 0.7 ? 'warning' : 'accent'}
+          />
+          <Text type="supporting" color="secondary" className="maka-inspector-cost">
+            {formatNumber(context.usedTokens)} / {formatNumber(context.windowTokens)}
+          </Text>
+        </section>
+      )}
+
+      {overview.sessionTokens && (
+        <section
+          className="maka-inspector-section"
+          data-maka-contract="session-inspector-tokens"
+          aria-label={copy.overview.tokens}
+        >
+          <span className="maka-inspector-section-title">{copy.overview.tokens}</span>
+          <div className="maka-inspector-stats">
+            <span className="maka-inspector-stats-head" />
+            <Text type="supporting" color="secondary" className="maka-inspector-stats-head">
+              {copy.overview.turnColumn}
+            </Text>
+            <Text type="supporting" color="secondary" className="maka-inspector-stats-head">
+              {copy.overview.sessionColumn}
+            </Text>
+            <TokenRow label={copy.overview.rows.input} pick={(stats) => num(stats.inputTokens)} turn={overview.latestTurnTokens} session={overview.sessionTokens} />
+            <TokenRow label={copy.overview.rows.cacheRead} pick={(stats) => num(stats.cacheReadInputTokens)} turn={overview.latestTurnTokens} session={overview.sessionTokens} />
+            <TokenRow label={copy.overview.rows.output} pick={(stats) => num(stats.outputTokens)} turn={overview.latestTurnTokens} session={overview.sessionTokens} />
+            <TokenRow label={copy.overview.rows.reasoning} pick={(stats) => num(stats.reasoningTokens)} turn={overview.latestTurnTokens} session={overview.sessionTokens} />
+            <TokenRow
+              label={copy.overview.rows.hitRate}
+              pick={(stats) => (stats.cacheHitRate !== undefined ? formatPercent(stats.cacheHitRate) : undefined)}
+              turn={overview.latestTurnTokens}
+              session={overview.sessionTokens}
+            />
+          </div>
+        </section>
+      )}
+
+      <section
+        className="maka-inspector-section"
+        data-maka-contract="session-inspector-session"
+        aria-label={copy.overview.session}
+      >
+        <span className="maka-inspector-section-title">{copy.overview.session}</span>
+        <div className="maka-inspector-kv">
+          {overview.model && (
+            <FactRow label={copy.overview.model}>
+              {providerLabel(overview.model.providerId)} / {overview.model.modelId}
+            </FactRow>
+          )}
+          {overview.model?.contextWindow !== undefined && context === undefined && (
+            <FactRow label={copy.overview.contextWindow}>
+              {formatNumber(overview.model.contextWindow)}
+            </FactRow>
+          )}
+          {overview.model && (
+            <FactRow label={props.copy.totals.calls}>{formatNumber(overview.model.callCount)}</FactRow>
+          )}
+          {props.model.totals.retries > 0 && (
+            <FactRow label={copy.totals.retries}>{formatNumber(props.model.totals.retries)}</FactRow>
+          )}
+          {props.model.totals.compactions > 0 && (
+            <FactRow label={copy.totals.compactions}>
+              {formatNumber(props.model.totals.compactions)}
+            </FactRow>
+          )}
+          <FactRow label={copy.totals.cost}>
+            {formatCost(props.model.totals.costUsd, copy.costUnavailable)}
+          </FactRow>
+          <FactRow label={copy.totals.duration}>{formatDuration(props.model.totals.durationMs)}</FactRow>
+          {overview.startedAt !== undefined && (
+            <FactRow label={copy.overview.started}>
+              {formatDateTime(props.locale, overview.startedAt)}
+            </FactRow>
+          )}
+          {overview.lastActivityAt !== undefined && (
+            <FactRow label={copy.overview.lastActivity}>
+              {formatDateTime(props.locale, overview.lastActivityAt)}
+            </FactRow>
+          )}
+        </div>
+      </section>
+    </VStack>
+  );
+}
+
+/** One row of the token/cache grid: label, this-turn figure, session figure. */
+function TokenRow(props: {
+  label: string;
+  pick: (stats: InspectorTokenStats) => string | undefined;
+  turn?: InspectorTokenStats;
+  session: InspectorTokenStats;
+}) {
+  return (
+    <>
+      <Text type="supporting" color="secondary">
+        {props.label}
+      </Text>
+      <Text type="supporting" className="maka-inspector-stats-value" hasTabularNumbers>
+        {(props.turn && props.pick(props.turn)) ?? '—'}
+      </Text>
+      <Text type="supporting" className="maka-inspector-stats-value" hasTabularNumbers>
+        {props.pick(props.session) ?? '—'}
+      </Text>
+    </>
+  );
+}
+
+/** One label/value line of the session section. */
+function FactRow(props: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="maka-inspector-kv-row">
+      <Text type="supporting" color="secondary" as="span">
+        {props.label}
+      </Text>
+      <Text type="supporting" as="span" className="maka-inspector-kv-value" hasTabularNumbers>
+        {props.children}
+      </Text>
+    </div>
+  );
+}
+
+function providerLabel(providerId: string): string {
+  const entry = (PROVIDER_REGISTRY as Readonly<Record<string, { label?: string }>>)[providerId];
+  return entry?.label ?? providerId;
+}
+
+function numberFormatter(locale: UiLocale): (value: number) => string {
+  const formatter = new Intl.NumberFormat(uiLocaleToIntlLocale(locale));
+  return (value) => formatter.format(value);
+}
+
+/** Absolute date-time in the reader's locale, the way Pawwork stamps it. */
+function formatDateTime(locale: UiLocale, ms: number): string {
+  return new Intl.DateTimeFormat(uiLocaleToIntlLocale(locale), {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(ms));
+}
+
+function formatPercent(ratio: number): string {
+  return `${(ratio * 100).toFixed(1)}%`;
 }
 
 function TurnRow(props: {

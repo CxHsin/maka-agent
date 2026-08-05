@@ -192,6 +192,95 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Inspector overview: the glance layer above the raw timeline. Sections are
+   separated by a hairline the way turns are, titles take the heading-5 role
+   because they title what sits below them (maka-tokens' role table), and
+   every figure aligns on tabular numbers. */
+.maka-inspector-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-block: var(--space-3);
+  border-top: var(--border-width-hairline) solid var(--border);
+}
+
+/* The first section's hairline would double the panel's own top spacing. */
+.maka-inspector-section:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.maka-inspector-section-title {
+  font: var(--maka-text-heading-5);
+  color: var(--foreground-secondary);
+}
+
+.maka-inspector-section-head {
+  justify-content: space-between;
+}
+
+.maka-inspector-context-percent {
+  font: var(--maka-text-heading-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Token & cache grid: label, this-turn figure, session figure. */
+.maka-inspector-stats {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  column-gap: var(--space-4);
+  row-gap: var(--space-1);
+  align-items: baseline;
+}
+
+.maka-inspector-stats-head {
+  text-align: right;
+}
+
+.maka-inspector-stats-value {
+  text-align: right;
+}
+
+/* Session & cost facts: label left, value right, one line each. */
+.maka-inspector-kv {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.maka-inspector-kv-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.maka-inspector-kv-value {
+  text-align: right;
+}
+
+.maka-inspector-raw {
+  border-top: var(--border-width-hairline) solid var(--border);
+  padding-top: var(--space-2);
+}
+
+/* Same disclosure shape as the task ledger's 最近结束 fold: the Astryx
+   Collapsible trigger button carries a static color that cannot follow the
+   theme, so the product span carries its own (task-ledger.css precedent). */
+.maka-inspector-raw-trigger {
+  font: var(--maka-text-heading-5);
+  color: var(--foreground-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.maka-inspector-raw-body {
+  padding-top: var(--space-2);
+}
+
+
 .maka-session-workbar .maka-browser-panel,
 .maka-session-workbar .maka-artifact-pane {
   width: 100%;

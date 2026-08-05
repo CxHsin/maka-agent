@@ -2,7 +2,7 @@
  * Project menu pinning contract.
  *
  * The open project menu keeps `添加项目` / `无项目` against its bottom edge
- * while the catalogue scrolls behind them. Astryx `Selector` has no footer
+ * while the catalogue scrolls behind them. Astryx `DropdownMenu` has no footer
  * slot, so the pinning is product CSS — and it is the kind of CSS that fails
  * silently: the rows still render, just in the wrong place or over each other,
  * and nothing throws.
@@ -10,13 +10,12 @@
  * Two properties carry the whole construction, so this pins those rather than
  * the pixels:
  *
- * 1. The sticky box is the section's `role="group"`, not the option rows. The
- *    group's height is whatever it contains, so a search that matches one
- *    action pins one row. An earlier version stuck the rows and declared the
- *    block's height in CSS; a search that filtered one action out then left an
- *    opaque backdrop 29px taller than the rows, covering the catalogue rows
- *    behind it and swallowing their clicks.
- * 2. The background sits on the group, never on the option rows. Astryx paints
+ * 1. The sticky box is the actions' `role="group"`, not the item rows. The
+ *    group's height is whatever it contains, so it pins exactly its two rows.
+ *    An earlier version stuck the rows and declared the block's height in CSS,
+ *    which left an opaque backdrop taller than the rows, covering the
+ *    catalogue rows behind it and swallowing their clicks.
+ * 2. The background sits on the group, never on the item rows. Astryx paints
  *    hover and keyboard-highlight as `background-color` on the row, and this
  *    file's `components` layer outranks `astryx-components` — so an opaque
  *    colour on a row would win the cascade and silently kill both states.
@@ -28,7 +27,7 @@ import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import { readAllRendererCss, stripCssComments } from './css-test-helpers.js';
 
-const SCOPE = '.maka-composer-workspace [role="listbox"]';
+const SCOPE = '.maka-composer-workspace [role="menu"]';
 
 /** Rule bodies whose selector starts with `prefix`, in source order. */
 function ruleBodiesForPrefix(css: string, prefix: string): { selector: string; body: string }[] {

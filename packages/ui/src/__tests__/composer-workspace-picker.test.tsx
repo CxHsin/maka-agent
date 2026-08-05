@@ -70,6 +70,13 @@ describe('Composer workspace picker', () => {
     const modelIdx = leftControls.indexOf('maka-model-selection-controls');
     const pickerIdx = leftControls.indexOf('maka-composer-workspace');
     assert.ok(modelIdx >= 0 && pickerIdx > modelIdx, 'picker follows the model pair');
+
+    // The trigger is a ghost button opening a menu — the footer toolbar
+    // family (model, thinking, ＋, permission) — not a combobox field. That
+    // family is what carries the tooltip and the Button focus ring the
+    // Selector this replaced had no slots for.
+    const pickerTrigger = leftControls.match(/<button[^>]*maka-workspace-picker[^>]*>/)?.[0] ?? '';
+    assert.match(pickerTrigger, /aria-haspopup="menu"/, 'picker trigger opens a menu, not a listbox');
   });
 
   it('drops it once a session owns the composer, even though the host still passes it', () => {

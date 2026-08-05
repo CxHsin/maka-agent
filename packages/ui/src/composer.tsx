@@ -161,7 +161,9 @@ export const Composer = forwardRef<
     /**
      * When true, a turn is in flight — live output OR the pre-first-token wait.
      * Send becomes Stop. The ＋ menu and permission control stay reachable
-     * (#1444); import stays blocked mid-turn.
+     * (#1444); the model and thinking menus stay mounted but lock with an
+     * explanatory tooltip, so the footer row never reflows mid-turn; import
+     * stays blocked mid-turn.
      */
     streaming?: boolean;
     /**
@@ -1082,13 +1084,26 @@ export const Composer = forwardRef<
   // disabled reasons (empty draft, in-flight import) keep the neutral label.
   const sendTitle = noModelConnection && !props.disabled ? copy.noModelSendTitle : copy.sendLabel;
   const modelChipLabel = props.modelLabel?.trim() || copy.selectModel;
-  const modelSwitcherDisabledReason = props.streaming
-    ? copy.switchDisabledStreaming
+  // Mid-turn the model and thinking menus stay mounted but locked, each
+  // carrying the reason in its own words (model vs thinking level) — the
+  // lock is one state with two wordings, not two locks.
+  const switchLock = props.streaming
+    ? 'streaming'
     : props.activeSession?.status === 'running'
-      ? copy.switchDisabledRunning
+      ? 'running'
       : props.activeSession?.status === 'waiting_for_user'
-        ? copy.switchDisabledPermission
+        ? 'permission'
         : undefined;
+  const modelSwitcherDisabledReason =
+    switchLock === 'streaming' ? copy.switchDisabledStreaming
+    : switchLock === 'running' ? copy.switchDisabledRunning
+    : switchLock === 'permission' ? copy.switchDisabledPermission
+    : undefined;
+  const thinkingSwitcherDisabledReason =
+    switchLock === 'streaming' ? copy.thinkingDisabledStreaming
+    : switchLock === 'running' ? copy.thinkingDisabledRunning
+    : switchLock === 'permission' ? copy.thinkingDisabledPermission
+    : undefined;
 
   /**
    * The drawer's contract is context staged for the *next send*: quotes and
@@ -1223,7 +1238,6 @@ export const Composer = forwardRef<
         <AstryxChatComposer
           className="maka-composer-astryx"
           data-maka-contract="composer-inner"
-          data-streaming={props.streaming ? 'true' : undefined}
           // Unreachable, and required. The shell only submits its own value,
           // and it never has one: `value` is passed straight to the controlled
           // ChatComposerInput, so the shell's copy stays empty and its submit
@@ -1300,7 +1314,7 @@ export const Composer = forwardRef<
             </div>
           )}
           footerActions={(
-            <div className="maka-composer-left-controls" data-streaming={props.streaming ? 'true' : undefined}>
+            <div className="maka-composer-left-controls">
               {/* Resting order: ＋ leftmost, then permission icon. */}
               {showPlusMenu ? (
                 <span className="maka-composer-plus-menu">
@@ -1415,56 +1429,58 @@ export const Composer = forwardRef<
                 />
               ) : null}
               {/* Model + thinking sit left after permission (adjacent pair), not
-                  in the send cluster. Thinking is its own Selector, only when
-                  the active/new-chat model offers levels. */}
-              {!props.streaming ? (
-                <div className="maka-model-selection-controls">
-                  {props.activeSession ? (
-                    <ChatModelSwitcher
-                      activeSession={props.activeSession}
-                      activeModel={props.activeModel}
-                      activeConnectionLabel={props.activeConnectionLabel}
-                      activeModelLabel={props.activeModelLabel}
-                      currentProviderType={props.activeProviderType}
-                      choices={props.modelChoices ?? []}
-                      pending={props.modelChangePending}
-                      disabledReason={modelSwitcherDisabledReason}
-                      renderProviderMark={props.renderProviderMark}
-                      onChange={props.onModelChange}
-                    />
-                  ) : props.onPickNewChatModel && (props.modelChoices?.length ?? 0) > 0 ? (
-                    <NewChatModelPicker
-                      label={modelChipLabel}
-                      choices={props.modelChoices ?? []}
-                      currentValue={
-                        props.newChatModel
-                          ? modelChoiceValue(props.newChatModel.llmConnectionSlug, props.newChatModel.model)
-                          : undefined
-                      }
-                      currentProviderType={props.newChatProviderType}
-                      renderProviderMark={props.renderProviderMark}
-                      onPick={props.onPickNewChatModel}
-                    />
-                  ) : (
-                    <ModelChipStatic label={modelChipLabel} onOpenSettings={props.onOpenModelSettings} />
-                  )}
-                  {props.activeSession ? (
-                    <ThinkingLevelSelector
-                      levels={props.activeThinkingLevels ?? []}
-                      current={props.activeThinkingLevel}
-                      onChange={props.onThinkingLevelChange}
-                      disabled={Boolean(modelSwitcherDisabledReason) || props.modelChangePending}
-                      loading={props.modelChangePending}
-                    />
-                  ) : (
-                    <ThinkingLevelSelector
-                      levels={props.newChatThinkingLevels ?? []}
-                      current={props.newChatThinkingLevel}
-                      onChange={props.onNewChatThinkingLevelChange}
-                    />
-                  )}
-                </div>
-              ) : null}
+                  in the send cluster. Thinking is its own menu, only when the
+                  active/new-chat model offers levels. Mid-turn the pair stays
+                  mounted — `modelSwitcherDisabledReason` carries the lock and
+                  its explanation, so the footer never reflows when a turn
+                  starts or ends. */}
+              <div className="maka-model-selection-controls">
+                {props.activeSession ? (
+                  <ChatModelSwitcher
+                    activeSession={props.activeSession}
+                    activeModel={props.activeModel}
+                    activeConnectionLabel={props.activeConnectionLabel}
+                    activeModelLabel={props.activeModelLabel}
+                    currentProviderType={props.activeProviderType}
+                    choices={props.modelChoices ?? []}
+                    pending={props.modelChangePending}
+                    disabledReason={modelSwitcherDisabledReason}
+                    renderProviderMark={props.renderProviderMark}
+                    onChange={props.onModelChange}
+                  />
+                ) : props.onPickNewChatModel && (props.modelChoices?.length ?? 0) > 0 ? (
+                  <NewChatModelPicker
+                    label={modelChipLabel}
+                    choices={props.modelChoices ?? []}
+                    currentValue={
+                      props.newChatModel
+                        ? modelChoiceValue(props.newChatModel.llmConnectionSlug, props.newChatModel.model)
+                        : undefined
+                    }
+                    currentProviderType={props.newChatProviderType}
+                    renderProviderMark={props.renderProviderMark}
+                    onPick={props.onPickNewChatModel}
+                  />
+                ) : (
+                  <ModelChipStatic label={modelChipLabel} onOpenSettings={props.onOpenModelSettings} />
+                )}
+                {props.activeSession ? (
+                  <ThinkingLevelSelector
+                    levels={props.activeThinkingLevels ?? []}
+                    current={props.activeThinkingLevel}
+                    onChange={props.onThinkingLevelChange}
+                    disabled={Boolean(modelSwitcherDisabledReason) || props.modelChangePending}
+                    disabledReason={thinkingSwitcherDisabledReason}
+                    loading={props.modelChangePending}
+                  />
+                ) : (
+                  <ThinkingLevelSelector
+                    levels={props.newChatThinkingLevels ?? []}
+                    current={props.newChatThinkingLevel}
+                    onChange={props.onNewChatThinkingLevelChange}
+                  />
+                )}
+              </div>
               {/* The project decides where a NEW chat starts, which makes it a
                   parameter of this send like the model beside it — so it sits
                   at the end of that group rather than in a header row of its

@@ -16,7 +16,7 @@ import type {
   StoredMessage,
 } from '@maka/core';
 import { isDeepResearchSession } from '@maka/core';
-import { Button, ButtonGroup, ChatMessage, ChatMessageList, EmptyState } from '@astryxdesign/core';
+import { Button, ButtonGroup, ChatMessageList, EmptyState } from '@astryxdesign/core';
 import { useChatLayoutContext } from '@astryxdesign/core/Chat';
 import { useLayer } from '@astryxdesign/core/Layer';
 import { materializeChat } from './materialize.js';
@@ -25,6 +25,7 @@ import type { LiveTurnProjection } from './live-turn-projection.js';
 import {
   ModelContinuingIndicator,
   ModelProviderRetryIndicator,
+  LocalizedChatMessage,
   ModelProcessingIndicator,
   TurnView,
   type ReadAttachmentBytes,
@@ -215,7 +216,8 @@ export function ChatView(props: {
    */
   onAskAboutSelection?(input: { text: string; turnId?: string }): void;
 }) {
-  const copy = getConversationCopy(useUiLocale()).chat;
+  const conversationCopy = getConversationCopy(useUiLocale());
+  const copy = conversationCopy.chat;
   // chat survives for the empty-state path; the main message log is driven by
   // `turns` (per @kenji UI-04 turn-grouping projection).
   const drainingMessageIdsKey = JSON.stringify(
@@ -561,7 +563,11 @@ export function ChatView(props: {
                   `tailTurnId` is undefined), so the answer never double-renders. */}
               {streamingActive && !tailTurnId && (
                 <section className="maka-turn" data-live-streaming="true">
-                  <ChatMessage sender="assistant" className="maka-chat-message maka-assistant-answer">
+                  <LocalizedChatMessage
+                    accessibleLabel={conversationCopy.messages.assistantAriaLabel}
+                    sender="assistant"
+                    className="maka-chat-message maka-assistant-answer"
+                  >
                     <div className="maka-assistant-answer-content">
                       {props.liveTurn?.providerRetry ? (
                         <ModelProviderRetryIndicator retry={props.liveTurn.providerRetry} />
@@ -573,7 +579,7 @@ export function ChatView(props: {
                       )}
                     </div>
                     <div aria-hidden="true" className="maka-live-turn-footer-placeholder" />
-                  </ChatMessage>
+                  </LocalizedChatMessage>
                 </section>
               )}
               {conversationItems

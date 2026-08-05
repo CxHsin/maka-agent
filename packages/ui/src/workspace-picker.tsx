@@ -28,13 +28,18 @@
  * beside it was one too); #2230 moved the model and thinking pickers onto the
  * ghost-menu family, and this control followed once the row had one toolbar
  * convention left. Search died with the Selector, matching the model menu's
- * precedent — the panel keeps its 300px scroll and Astryx first-character
- * typeahead. The trigger's tooltip came back with the Button: Selector had no
- * slot for it, so the current git branch rode in the accessible name alone.
+ * precedent: the menu keeps Astryx's first-character typeahead over printable
+ * keys, which for CJK labels means arrow traversal in practice — IME input
+ * does not produce the keydown events typeahead listens for. The catalogue
+ * scrolls inside its own region, and the two actions after it sit outside the
+ * scroller, so the wheel can never carry them away. The trigger's tooltip
+ * came back with the Button: Selector had no slot for it, so the current git
+ * branch rode in the accessible name alone.
  *
  * The current git branch rides in the trigger's tooltip and accessible name
- * only. Switching branches is the agent's job — see the commit that removed
- * the branch picker.
+ * only — the open menu's own name is the short trigger label, an Astryx
+ * behaviour the model menu shares. Switching branches is the agent's job —
+ * see the commit that removed the branch picker.
  *
  * Purely presentational: a value control fed by host-injected props.
  */
@@ -119,7 +124,7 @@ export function WorkspacePicker(props: { workspacePicker: WorkspacePickerModel }
                   missing ? (
                     <span className="maka-workspace-picker-status">{copy.relink}</span>
                   ) : project.id === wp.selectedProjectId ? (
-                    <Check size={13} aria-hidden="true" />
+                    <Check size={14} aria-hidden="true" />
                   ) : undefined
                 }
                 isDisabled={locked}
@@ -137,7 +142,7 @@ export function WorkspacePicker(props: { workspacePicker: WorkspacePickerModel }
           text started past it, which read as a broken list rather than as a
           separate group. The × also says what its row means: not using a
           project is a deliberate way to work, not a missing setting. */}
-      <div role="group" className="maka-workspace-picker-actions">
+      <div role="group">
         <DropdownMenuItem
           icon={<Plus size={13} aria-hidden="true" />}
           label={copy.addProject}
@@ -149,7 +154,7 @@ export function WorkspacePicker(props: { workspacePicker: WorkspacePickerModel }
         <DropdownMenuItem
           icon={<X size={13} aria-hidden="true" />}
           label={copy.noProject}
-          endContent={wp.selectedProjectId === null ? <Check size={13} aria-hidden="true" /> : undefined}
+          endContent={wp.selectedProjectId === null ? <Check size={14} aria-hidden="true" /> : undefined}
           isDisabled={locked}
           onClick={() => {
             wp.onSelectNoProject();

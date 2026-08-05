@@ -358,17 +358,6 @@
   scrollbar-width: thin;
 }
 
-.maka-workspace-picker-scroll::-webkit-scrollbar {
-  width: 8px;
-}
-
-.maka-workspace-picker-scroll::-webkit-scrollbar-thumb {
-  border: var(--border-width-thick) solid transparent;
-  border-radius: var(--radius-pill);
-  background: var(--border-strong);
-  background-clip: padding-box;
-}
-
 /* The rule between catalogue and actions, drawn by the group's own top border.
    `:not(:first-child)` covers first run — no projects yet — where the group
    would open the menu with a rule dividing nothing. Nothing scrolls under the

@@ -78,9 +78,24 @@ describe('project menu scroll contract', () => {
       'the scroller must be the catalogue region, not the menu panel',
     );
     assert.match(scrollers[0]?.body ?? '', /max-height/, 'the catalogue region owns the height budget');
+    // The chaining fix: without `contain`, a wheel past the catalogue's end
+    // scrolls the page behind the popover and drags the actions along — the
+    // exact bug this construction exists to fix.
+    assert.match(
+      scrollers[0]?.body ?? '',
+      /overscroll-behavior:\s*contain/,
+      'the catalogue region must contain its overscroll',
+    );
 
-    // The panel rule may lift Astryx's 300px cap (max-height/overflow), but
-    // must not introduce a scroller of its own.
+    // The panel rule must LIFT Astryx's 300px cap: the cap comes with
+    // `overflow-y: auto` (astryx.css), which would scroll the actions with
+    // the panel again even with the region in place.
+    const panelRule = scoped.find((rule) => rule.selector === SCOPE);
+    assert.ok(panelRule, `a rule on the bare ${SCOPE} selector must lift the cap`);
+    assert.match(panelRule.body, /max-height:\s*none/, 'the panel must lift Astryx\'s 300px max-height');
+    assert.match(panelRule.body, /overflow:\s*visible/, 'the panel must not scroll itself');
+
+    // No other rule under the menu may scroll.
     for (const rule of scoped) {
       if (!/overflow/.test(rule.body)) continue;
       assert.doesNotMatch(
@@ -89,6 +104,22 @@ describe('project menu scroll contract', () => {
         `${rule.selector} makes the menu panel scroll; the panel must leave scrolling to the catalogue region`,
       );
     }
+  });
+
+  it('keeps the catalogue/actions divider only when there is a catalogue', async () => {
+    const css = stripCssComments(await readAllRendererCss());
+    const divider = ruleBodiesForPrefix(css, SCOPE).filter((rule) => /border-top/.test(rule.body));
+
+    assert.equal(
+      divider.length,
+      1,
+      `exactly one rule may draw the catalogue/actions divider; got ${divider.length}: ${JSON.stringify(divider.map((r) => r.selector))}`,
+    );
+    assert.match(
+      divider[0]?.selector ?? '',
+      /:not\(:first-child\)/,
+      'first run (no projects) must open with the actions group as the menu\'s first child and no divider above it',
+    );
   });
 
   it('has no sticky positioning anywhere under the menu', async () => {

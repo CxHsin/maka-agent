@@ -32,4 +32,23 @@ describe('ToolTrow stable structure', () => {
     assert.doesNotMatch(two, /aria-expanded="true"/);
     assert.match(two, />Grep</);
   });
+
+  it('renders addition and deletion counts for a file_diff result', () => {
+    const item: ToolActivityItem = {
+      toolUseId: 'tool-1',
+      toolName: 'Edit',
+      status: 'completed',
+      args: { path: 'a.ts' },
+      result: {
+        kind: 'file_diff',
+        paths: ['a.ts'],
+        diff: '--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,3 @@\n keep\n-old\n+new\n+more',
+      },
+    };
+
+    const html = renderToStaticMarkup(createElement(ToolTrow, { items: [item] }));
+
+    assert.match(html, />\+2</);
+    assert.match(html, />-1</);
+  });
 });

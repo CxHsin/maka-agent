@@ -16,6 +16,12 @@ test('quote companion removes one staged quote, forks, answers, and cleans up on
 
   const firstSourceReply = page.getByText(/Fake backend received: quote companion source one/);
   await expect(firstSourceReply).toBeVisible();
+  // A visible final text delta can precede the terminal session projection by
+  // a tick. Wait for the first source turn to leave `running`; otherwise the
+  // second plain-text send is intentionally routed as mid-turn steering.
+  await expect
+    .poll(async () => (await page.evaluate(() => window.maka.sessions.list()))[0]?.status)
+    .not.toBe('running');
   await mainComposer.fill('quote companion source two');
   await mainComposer.press('Enter');
   const secondSourceReply = page.getByText(/Fake backend received: quote companion source two/);

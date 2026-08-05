@@ -19768,12 +19768,9 @@ describe('SessionManager steering and followup queues', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    let backendA: OwnershipPeekBackend | undefined;
-    let backendB: OwnershipPeekBackend | undefined;
+    let backend: OwnershipPeekBackend | undefined;
     backends.register('fake', (ctx) => {
-      const backend = new OwnershipPeekBackend(ctx);
-      if (!backendA) backendA = backend;
-      else backendB = backend;
+      backend = new OwnershipPeekBackend(ctx);
       return backend;
     });
     const manager = new SessionManager({
@@ -19790,24 +19787,24 @@ describe('SessionManager steering and followup queues', () => {
 
     // Turn A begins and owns the steering slot; a steer queues under it.
     const turnA = drainAll(manager.sendMessage(session.id, { turnId: 'turn-a', text: 'a' }));
-    await waitUntil(() => backendA?.gates.has('turn-a') === true);
+    await waitUntil(() => backend?.gates.has('turn-a') === true);
     expect(manager.steer(session.id, 'steer queued under a').kind).toBe('queued');
 
     // Overlapping turn B takes the owner slot before A's gate releases.
     const turnB = drainAll(manager.sendMessage(session.id, { turnId: 'turn-b', text: 'b' }));
-    await waitUntil(() => backendB?.gates.has('turn-b') === true);
+    await waitUntil(() => backend?.gates.has('turn-b') === true);
 
     // A resumes: its peek must be false (no longer the owner).
-    backendA?.release('turn-a');
-    await waitUntil(() => (backendA?.peeks.get('turn-a')?.length ?? 0) > 0);
-    expect(backendA?.peeks.get('turn-a')?.at(-1)).toBe(false);
+    backend?.release('turn-a');
+    await waitUntil(() => (backend?.peeks.get('turn-a')?.length ?? 0) > 0);
+    expect(backend?.peeks.get('turn-a')?.at(-1)).toBe(false);
     await turnA;
 
     // B resumes: its peek is true — the queue is scoped to B now, and B
     // drains the steer that was queued under A.
-    backendB?.release('turn-b');
-    await waitUntil(() => (backendB?.peeks.get('turn-b')?.length ?? 0) > 0);
-    expect(backendB?.peeks.get('turn-b')?.at(-1)).toBe(true);
+    backend?.release('turn-b');
+    await waitUntil(() => (backend?.peeks.get('turn-b')?.length ?? 0) > 0);
+    expect(backend?.peeks.get('turn-b')?.at(-1)).toBe(true);
     const eventsB = await turnB;
     expect(eventsB.some((event) => event.type === 'steering_message')).toBe(true);
     expect(manager.drainFollowup(session.id)).toBe(null);

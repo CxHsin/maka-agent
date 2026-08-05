@@ -14759,18 +14759,19 @@ describe('AiSdkBackend steering continuation pass (#1954)', () => {
     const model = new MockLanguageModelV4({
       doStream: async () => {
         streamCalls += 1;
-        const chunks: LanguageModelV4StreamPart[] = (streamCalls === 1
+        const chunks: LanguageModelV4StreamPart[] = (
+          streamCalls === 1
             ? [
                 { type: 'stream-start', warnings: [] },
                 {
                   type: 'tool-call',
                   toolCallId: 'tool-1',
                   toolName: 'Read',
-                  input: { path: 'package.json' },
+                  input: JSON.stringify({ path: 'package.json' }),
                 },
                 {
                   type: 'finish',
-                  finishReason: { unified: 'stop', raw: 'stop' },
+                  finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
                   usage: continuationUsage(),
                 },
               ]
@@ -14784,7 +14785,8 @@ describe('AiSdkBackend steering continuation pass (#1954)', () => {
                   finishReason: { unified: 'stop', raw: 'stop' },
                   usage: continuationUsage(),
                 },
-              ]) as LanguageModelV4StreamPart[];
+              ]
+        ) as LanguageModelV4StreamPart[];
         return {
           stream: simulateReadableStream({ chunks, initialDelayInMs: null, chunkDelayInMs: null }),
         };
@@ -14792,6 +14794,32 @@ describe('AiSdkBackend steering continuation pass (#1954)', () => {
     });
     let pullCalls = 0;
     let pulled = false;
+    const anchor = runtimeTextEvent({
+      id: 'runtime-user',
+      turnId: 'turn-1',
+      role: 'user',
+      author: 'user',
+      text: 'start',
+    });
+    const ledger: RuntimeEvent[] = [anchor];
+    const mappingMemory = createSessionEventMapMemory();
+    const mappingContext: InvocationContext = {
+      sessionId: 'session-1',
+      invocationId: 'invocation-1',
+      runId: 'run-1',
+      turnId: 'turn-1',
+      source: 'desktop',
+      startedAt: 1,
+      request: {
+        sessionId: 'session-1',
+        turnId: 'turn-1',
+        text: 'start',
+        source: 'desktop',
+        initialRuntimeEvent: anchor,
+      },
+      newId: idGenerator(),
+      now: monotonicClock(),
+    };
     const backend = createTestAiSdkBackend({
       sessionId: 'session-1',
       header: header(),
@@ -14800,39 +14828,49 @@ describe('AiSdkBackend steering continuation pass (#1954)', () => {
       apiKey: 'sk-test',
       modelId: 'mock-model-id',
       modelFactory: () => model,
-      tools: [],
+      tools: [
+        {
+          name: 'Read',
+          description: 'read a file',
+          parameters: z.object({ path: z.string() }),
+          impl: async () => ({ kind: 'text', text: 'file contents' }),
+        },
+      ],
+      loadTurnRuntimeEvents: async () => ledger,
       newId: idGenerator(),
       now: monotonicClock(),
     });
     const events: SessionEvent[] = [];
-    await collectEvents(
-      backend.send({
-        turnId: 'turn-1',
-        text: 'start',
-        context: [],
-        // The steer lands BETWEEN passes: nothing to pull during pass 1, then
-        // the tool-justified pass 2 drains it.
-        pullSteering: () => {
-          pullCalls += 1;
-          if (pullCalls === 1) return [];
-          if (pullCalls === 2 && !pulled) {
-            pulled = true;
-            return [
-              {
-                id: 'lease-mixed',
-                messageId: 'message-mixed',
-                content: { text: 'steer alongside tools' },
-              },
-            ];
-          }
-          return [];
-        },
-        hasPendingSteering: () => !pulled && pullCalls >= 1,
-        ackSteering: () => {},
-        nackSteering: () => {},
-      }),
-      events,
-    );
+    for await (const event of backend.send({
+      turnId: 'turn-1',
+      text: 'start',
+      context: [],
+      headAnchorRuntimeEvent: anchor,
+      // The steer lands BETWEEN passes: nothing to pull during pass 1, then
+      // the tool-justified pass 2 drains it.
+      pullSteering: () => {
+        pullCalls += 1;
+        if (pullCalls === 1) return [];
+        if (pullCalls === 2 && !pulled) {
+          pulled = true;
+          return [
+            {
+              id: 'lease-mixed',
+              messageId: 'message-mixed',
+              content: { text: 'steer alongside tools' },
+            },
+          ];
+        }
+        return [];
+      },
+      hasPendingSteering: () => !pulled && pullCalls >= 1,
+      ackSteering: () => {},
+      nackSteering: () => {},
+    })) {
+      events.push(event);
+      const mapped = mapSessionEventToRuntimeEvent(event, mappingContext, mappingMemory);
+      if (mapped.partial !== true && mapped.content?.kind !== 'error') ledger.push(mapped);
+    }
     // Tool pass + the tool-justified pass that drains the steer.
     assert.equal(streamCalls, 2);
     const secondPrompt = model.doStreamCalls[1]?.prompt as

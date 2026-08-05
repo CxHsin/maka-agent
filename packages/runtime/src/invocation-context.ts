@@ -115,6 +115,7 @@ export interface InvocationRequest {
    * `BackendSendInput.pullSteering`.
    */
   pullSteering?: () => readonly SteeringLease[];
+  hasPendingSteering?: () => boolean;
   ackSteering?: (leaseIds: readonly string[]) => void;
   nackSteering?: (leaseIds: readonly string[]) => void;
   /** Caller-owned abort signal; flows and tools SHOULD observe it. */

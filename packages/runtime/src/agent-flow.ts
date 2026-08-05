@@ -88,6 +88,7 @@ export interface FlowInput {
    * `BackendSendInput.pullSteering`.
    */
   pullSteering?: () => readonly SteeringLease[];
+  hasPendingSteering?: () => boolean;
   ackSteering?: (leaseIds: readonly string[]) => void;
   nackSteering?: (leaseIds: readonly string[]) => void;
   /** Abort signal propagated to the underlying engine. */

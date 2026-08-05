@@ -694,6 +694,9 @@ export class AiSdkFlow implements AgentFlow, AgentFlowControl {
         ...(input.runtimeContext !== undefined ? { runtimeContext: input.runtimeContext } : {}),
         ...(input.continuation !== undefined ? { continuation: input.continuation } : {}),
         ...(input.pullSteering !== undefined ? { pullSteering: input.pullSteering } : {}),
+        ...(input.hasPendingSteering !== undefined
+          ? { hasPendingSteering: input.hasPendingSteering }
+          : {}),
         ...(input.ackSteering !== undefined ? { ackSteering: input.ackSteering } : {}),
         ...(input.nackSteering !== undefined ? { nackSteering: input.nackSteering } : {}),
         ...(this.hostedInteraction ? { hostedInteraction: this.hostedInteraction } : {}),

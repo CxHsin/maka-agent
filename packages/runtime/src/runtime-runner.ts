@@ -612,6 +612,9 @@ function snapshotInvocationRequest(
       ? { lineage: cloneAndFreezeSnapshotValue(request.lineage) }
       : {}),
     ...(request.pullSteering !== undefined ? { pullSteering: request.pullSteering } : {}),
+    ...(request.hasPendingSteering !== undefined
+      ? { hasPendingSteering: request.hasPendingSteering }
+      : {}),
     ...(request.ackSteering !== undefined ? { ackSteering: request.ackSteering } : {}),
     ...(request.nackSteering !== undefined ? { nackSteering: request.nackSteering } : {}),
     ...(request.abortSignal !== undefined ? { abortSignal: request.abortSignal } : {}),
@@ -795,6 +798,9 @@ function buildFlowInput(request: InvocationRequest): FlowInput {
     ...(request.attachments !== undefined ? { attachments: request.attachments } : {}),
     ...(request.quotes !== undefined ? { quotes: request.quotes } : {}),
     ...(request.pullSteering !== undefined ? { pullSteering: request.pullSteering } : {}),
+    ...(request.hasPendingSteering !== undefined
+      ? { hasPendingSteering: request.hasPendingSteering }
+      : {}),
     ...(request.ackSteering !== undefined ? { ackSteering: request.ackSteering } : {}),
     ...(request.nackSteering !== undefined ? { nackSteering: request.nackSteering } : {}),
     ...(request.abortSignal ? { abortSignal: request.abortSignal } : {}),

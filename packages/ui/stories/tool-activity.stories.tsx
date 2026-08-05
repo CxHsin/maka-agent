@@ -4,6 +4,7 @@ import { ToolCallDetail, ToolTrow } from '../src/tool-activity.js';
 import type { ToolActivityItem } from '../src/materialize.js';
 import {
   denseMixedResultItems,
+  editWriteDiffItems,
   errorsAndPermissionDeniedItems,
   shellCommandSurfaceItems,
 } from './tool-activity.fixtures.js';
@@ -133,6 +134,19 @@ export const DenseMixedResults: Story = {
 // background case has no other story.
 export const ShellCommandSurface: Story = {
   args: { items: shellCommandSurfaceItems },
+  render: (args) => <ToolDetailBoard items={args.items} width={860} />,
+};
+
+// Real path: an Edit or Write settles in a turn (#2232) — the collapsed row
+// carries green +N / red -N counted from the result's diff, and expanding the
+// row renders the diff itself in the shared panel.
+export const EditWriteDiffRows: Story = {
+  args: { items: editWriteDiffItems },
+  render: (args) => <ToolRowBoard items={args.items} width={860} />,
+};
+
+export const EditWriteDiffDetails: Story = {
+  args: { items: editWriteDiffItems },
   render: (args) => <ToolDetailBoard items={args.items} width={860} />,
 };
 

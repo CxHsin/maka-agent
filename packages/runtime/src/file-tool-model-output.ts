@@ -24,7 +24,9 @@ export function fileWriteToolResultToModelOutput(
   return toolResultOutput(output, false);
 }
 
-function isFileDiff(output: unknown): output is { kind: 'file_diff'; paths: string[]; diff: string } {
+function isFileDiff(
+  output: unknown,
+): output is { kind: 'file_diff'; paths: string[]; diff: string } {
   return (
     typeof output === 'object' &&
     output !== null &&
@@ -34,7 +36,9 @@ function isFileDiff(output: unknown): output is { kind: 'file_diff'; paths: stri
   );
 }
 
-function isFileWrite(output: unknown): output is { kind: 'file_write'; path: string; bytes: number } {
+function isFileWrite(
+  output: unknown,
+): output is { kind: 'file_write'; path: string; bytes: number } {
   return (
     typeof output === 'object' &&
     output !== null &&

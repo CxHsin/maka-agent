@@ -374,7 +374,13 @@ describe('filesystem worker operations', () => {
 
     const response = await executeFilesystemWorkerRequest(
       requestFor(
-        { kind: 'edit', cwd: root, path: target, oldString: 'const v0 = 0;', newString: 'const v0 = -1;' },
+        {
+          kind: 'edit',
+          cwd: root,
+          path: target,
+          oldString: 'const v0 = 0;',
+          newString: 'const v0 = -1;',
+        },
         { enforcementPath: target, access: 'write', scope: 'exact', targetType: 'file' },
       ),
     );

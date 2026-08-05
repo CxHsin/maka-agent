@@ -244,7 +244,12 @@ describe('file tools surface a file_diff result', () => {
       diff: DIFF,
     });
 
-    const result = await runTool(tools, 'Edit', { path: 'a.ts', old_string: 'old', new_string: 'new' }, cwd);
+    const result = await runTool(
+      tools,
+      'Edit',
+      { path: 'a.ts', old_string: 'old', new_string: 'new' },
+      cwd,
+    );
 
     assert.deepEqual(result, { kind: 'file_diff', paths: ['a.ts'], diff: DIFF });
   });
@@ -261,7 +266,12 @@ describe('file tools surface a file_diff result', () => {
       endLine: 2,
     });
 
-    const result = await runTool(tools, 'Edit', { path: 'a.ts', old_string: 'old', new_string: 'new' }, cwd);
+    const result = await runTool(
+      tools,
+      'Edit',
+      { path: 'a.ts', old_string: 'old', new_string: 'new' },
+      cwd,
+    );
 
     assert.deepEqual(result, {
       ok: true,
@@ -294,7 +304,12 @@ describe('file tools surface a file_diff result', () => {
 
   test('Write degrades to a file_write descriptor when the worker reports no diff', async () => {
     const cwd = await temporaryDirectory('maka-write-nodiff-');
-    const tools = toolsWithWorkerResult({ kind: 'write', ok: true, path: 'huge.bin', bytes: 70000 });
+    const tools = toolsWithWorkerResult({
+      kind: 'write',
+      ok: true,
+      path: 'huge.bin',
+      bytes: 70000,
+    });
 
     const result = await runTool(tools, 'Write', { path: 'huge.bin', content: 'x' }, cwd);
 

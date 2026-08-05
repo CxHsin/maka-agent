@@ -1766,6 +1766,23 @@ function AppShellContent({
       // never surfaces as an unhandled promise rejection.
       void window.maka.notifications.runEnded({ kind, title, body }).catch(() => {});
     },
+    // #1954: surface a steered message in the transcript immediately instead of
+    // waiting for the persisted read (which lags the active turn's in-flight
+    // projection cache). The id is the ledger event id, so the durable read
+    // replaces rather than duplicates this optimistic row.
+    onSteeringMessage: (sessionId, message) => {
+      if (sessionId !== activeIdRef.current) return;
+      setMessages((current) => [
+        ...current,
+        {
+          type: 'user',
+          id: message.messageId,
+          turnId: message.turnId,
+          ts: message.ts,
+          text: message.text,
+        },
+      ]);
+    },
   });
 
   // Streaming-settle handoff, FALLBACK path only. The bubble's primary

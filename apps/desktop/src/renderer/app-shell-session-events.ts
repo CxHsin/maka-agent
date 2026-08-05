@@ -46,6 +46,19 @@ export function createAppShellSessionEventHandlers(options: {
   showModelSetupToast: (description: string, reason?: string) => void;
   toastApi: ToastApi;
   notifyRunEnded?: (payload: { kind: 'completed' | 'errored'; sessionId: string; body?: string }) => void;
+  /**
+   * #1954: a steering message was injected into the running turn. Called
+   * immediately so the renderer can surface the steered text in the transcript
+   * WITHOUT waiting for the persisted read (which lags the in-flight projection
+   * cache of an active turn). The message id is the ledger event id, so the
+   * persisted read replaces rather than duplicates it.
+   */
+  onSteeringMessage?: (sessionId: string, message: {
+    messageId: string;
+    turnId: string;
+    ts: number;
+    text: string;
+  }) => void;
 }): AppShellSessionEventHandlers {
   const {
     uiLocale,
@@ -60,6 +73,7 @@ export function createAppShellSessionEventHandlers(options: {
     showModelSetupToast,
     toastApi,
     notifyRunEnded,
+    onSteeringMessage,
   } = options;
 
   function updateLiveTurn(sessionId: string, event: SessionEvent): void {
@@ -153,9 +167,17 @@ export function createAppShellSessionEventHandlers(options: {
         break;
       case 'steering_message':
         // #1954: the runtime persisted a mid-turn steering message as a user
-        // RuntimeEvent; re-read so the injected text appears in the transcript
-        // (previously fell into the default branch and stayed invisible until
-        // the next unrelated refresh).
+        // RuntimeEvent. Surface it immediately (the in-flight projection cache
+        // of an active turn lags the persisted read), then refresh so the
+        // durable row eventually replaces the optimistic copy.
+        if (event.content?.text) {
+          onSteeringMessage?.(sessionId, {
+            messageId: event.messageId,
+            turnId: event.turnId,
+            ts: event.ts,
+            text: event.content.text,
+          });
+        }
         void refreshMessages(sessionId);
         break;
       case 'error':

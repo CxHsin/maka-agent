@@ -156,7 +156,7 @@ export interface IsolatedShellSessions
    * The executor's own default command timeout, so a managed foreground command
    * is not killed earlier than the same operator's `exec` commands were.
    */
-  readonly defaultForegroundTimeoutMs?: number;
+  readonly defaultCommandTimeoutMs?: number;
   /**
    * Terminates every still-live managed session. Called once when the agent
    * phase ends so no managed process survives into grading, and so PTY children
@@ -278,6 +278,31 @@ export interface HeadlessBackendContext extends Partial<HeadlessSessionCapabilit
   heavyTaskSelfCheck?: HeavyTaskSelfCheckRecorder;
   /** Present only when heavy-task mode is enabled for compact public evidence capture. */
   heavyTaskEvidence?: HeavyTaskEvidenceRecorder;
+}
+
+/**
+ * Ends the agent phase's managed processes.
+ *
+ * Every headless orchestrator has to enforce the same rule — nothing the model
+ * left managed may still be running when the workspace is graded, and no PTY
+ * child may outlive the process that spawned it — so the rule is written once
+ * here and triggered from each orchestrator rather than remembered three times.
+ *
+ * Call it at the agent-to-verification handoff AND from the enclosing finally:
+ * the handoff covers the normal path, the finally covers the thrown one, and
+ * terminateAll is idempotent. Processes the model deliberately detached are not
+ * managed and are untouched — some tasks are graded against a service the agent
+ * was asked to leave running.
+ */
+export async function endManagedShellSessions(
+  isolation: RealBackendIsolation | undefined,
+): Promise<void> {
+  try {
+    await isolation?.toolExecutor?.shellSessions?.terminateAll();
+  } catch {
+    // Best-effort: reaping is cleanup, and failing it must not mask the run's
+    // own outcome or replace a real error on the throwing path.
+  }
 }
 
 export function validateRealBackendIsolation(isolation: RealBackendIsolation | undefined): void {

@@ -64,7 +64,7 @@ import {
   type HeadlessStorageWriter,
 } from './headless-storage.js';
 import type { HeadlessBackendContext, RealBackendIsolation } from './isolation.js';
-import { validateRealBackendIsolation } from './isolation.js';
+import { endManagedShellSessions, validateRealBackendIsolation } from './isolation.js';
 import { PiCliJsonTransport } from './pi-cli-json-transport.js';
 import { providerFromEnv, resolveHarborCellAiSdkEnv } from './provider-env.js';
 import { backendNeedsIsolation } from './runner.js';
@@ -496,8 +496,7 @@ export async function runHarborCellWithStorage(
     // Processes the model deliberately detached (`nohup … &`) are NOT managed
     // and deliberately survive, because some tasks are graded against a
     // service the agent was asked to leave running.
-    // Best-effort: a failure here must not mask the run's own outcome.
-    await input.realBackendIsolation?.toolExecutor?.shellSessions?.terminateAll()?.catch(() => {});
+    await endManagedShellSessions(input.realBackendIsolation);
     try {
       if (settlementAttempt) {
         await settlementAttempt;

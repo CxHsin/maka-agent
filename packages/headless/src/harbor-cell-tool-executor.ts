@@ -205,7 +205,7 @@ export function createHarborCellLocalToolExecutor(
 
 function createTaskShellSessions(
   commandEnv: NodeJS.ProcessEnv,
-  defaultForegroundTimeoutMs: number,
+  defaultCommandTimeoutMs: number,
 ): IsolatedShellSessions {
   const manager = new ShellRunProcessManager({
     store: createTaskShellRunStore(),
@@ -214,7 +214,7 @@ function createTaskShellSessions(
   });
   return {
     commandEnv,
-    defaultForegroundTimeoutMs,
+    defaultCommandTimeoutMs,
     runForegroundBash: (input) => manager.runForegroundBash(input),
     runBackgroundBash: (input) => manager.runBackgroundBash(input),
     readRuntimeResource: (sessionId, ref, abortSignal) =>

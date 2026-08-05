@@ -144,13 +144,19 @@ export function buildManagedBashTool(
      */
     declareSandboxBoundary?: boolean;
     /**
-     * Foreground timeout when the model does not ask for one. Defaults to
-     * DEFAULT_BASH_TIMEOUT_MS; hosts whose operators configure their own floor
-     * pass it here so managed foreground commands are not killed earlier than
-     * the same host's unmanaged ones were. Clamped by the launcher to
-     * MAX_FOREGROUND_BASH_TIMEOUT_MS — longer work belongs in the background.
+     * Foreground timeout when the model does not ask for one, per command —
+     * the same hook shape buildForegroundBashTool exposes, so a host that
+     * carves out a slow command keeps that carve-out on both paths instead of
+     * re-implementing it on one.
+     *
+     * A host default is CLAMPED to MAX_FOREGROUND_BASH_TIMEOUT_MS rather than
+     * passed through: the launcher REJECTS anything larger, so an operator who
+     * raised their own floor past ten minutes would otherwise break every
+     * foreground command instead of merely capping it. A timeout the model asks
+     * for explicitly is still rejected above the maximum — that is a stated
+     * schema bound, not a host misconfiguration.
      */
-    defaultForegroundTimeoutMs?: number;
+    defaultTimeoutMs?: (command: string) => number | undefined;
     /** Observes each committed result; used by hosts that record tool evidence. */
     afterResult?: (
       input: { command: string; cwd: string; timeoutMs?: number },
@@ -246,7 +252,10 @@ export function buildManagedBashTool(
       });
       const onCompletion = onceCompletion(transformed?.onCompletion);
       const timeoutMs =
-        timeout_ms ?? (run_in_background ? undefined : options.defaultForegroundTimeoutMs);
+        timeout_ms ??
+        (run_in_background
+          ? undefined
+          : clampHostForegroundTimeout(options.defaultTimeoutMs?.(command)));
       try {
         const result = await shellRuns[
           run_in_background ? 'runBackgroundBash' : 'runForegroundBash'
@@ -288,6 +297,11 @@ export function buildManagedBashTool(
       }
     },
   };
+}
+
+function clampHostForegroundTimeout(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  return Math.min(value, MAX_FOREGROUND_BASH_TIMEOUT_MS);
 }
 
 function onceCompletion(

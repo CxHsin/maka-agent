@@ -178,9 +178,10 @@ export function buildIsolatedBashTool(
       // No in-process sandbox manager exists behind an external isolation
       // boundary, so there is no authority for the model to declare.
       declareSandboxBoundary: false,
-      ...(sessions.defaultForegroundTimeoutMs !== undefined
-        ? { defaultForegroundTimeoutMs: sessions.defaultForegroundTimeoutMs }
-        : {}),
+      // Same resolver as the unmanaged path: a command must not be killed at a
+      // different time depending on which isolation mode ran it.
+      defaultTimeoutMs: (command) =>
+        cleanupCommandTimeoutMs(command) ?? sessions.defaultCommandTimeoutMs,
       // The only reason this hook exists: ShellRunProcessManager falls back to
       // the headless process's own env when a launch carries none, and in a
       // Harbor cell that env holds the provider credentials. The executor's
@@ -189,9 +190,11 @@ export function buildIsolatedBashTool(
       ...(options.heavyTaskEvidence
         ? {
             afterResult: async (input, result, ctx) => {
-              // Only foreground results carry a completed command's output.
-              // A background launch has produced no evidence yet; what it
-              // eventually produces is recorded when the model Reads its ref.
+              // Only a foreground result carries a completed command's output,
+              // which is what the Bash evidence contract describes. A background
+              // launch has produced none yet, and reading its ref later yields a
+              // live task's screen — neither a file read nor a finished command —
+              // so nothing is recorded for it on either call.
               if (result.kind !== 'terminal' || result.output.mode !== 'pipes') return;
               await options.heavyTaskEvidence?.recordToolEvidence(
                 {

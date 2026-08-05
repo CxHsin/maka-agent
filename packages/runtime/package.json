@@ -20,6 +20,7 @@
     "./tool-output-delta": "./dist/tool-output-delta.js",
     "./stream-watchdog": "./dist/stream-watchdog.js",
     "./model-factory": "./dist/model-factory.js",
+    "./model-runtime": "./dist/model-runtime.js",
     "./context-budget": "./dist/context-budget.js",
     "./active-full-compact": "./dist/active-full-compact.js",
     "./semantic-compact": "./dist/semantic-compact.js",

@@ -1,4 +1,5 @@
-import { PROVIDER_DEFAULTS, type ProviderType } from '@maka/core/llm-connections';
+import { PROVIDER_DEFAULTS, type ModelInfo, type ProviderType } from '@maka/core/llm-connections';
+import { type ModelRuntimeWire, resolveModelRuntime } from '@maka/runtime/model-runtime';
 import type { ProviderAuthProxyMode, ProviderUsageProtocol } from './provider-auth-proxy.js';
 
 export type HarnessAgentId =
@@ -72,6 +73,7 @@ export function providerProxyUsageProtocol(
   agent: HarnessAgentId,
   provider: string,
   apiProtocol?: string,
+  modelId?: string,
 ): ProviderUsageProtocol | undefined {
   if (agent === 'codex') return 'openai-responses-sse';
   if (agent === 'claude-code') return 'anthropic-sse';
@@ -79,9 +81,46 @@ export function providerProxyUsageProtocol(
   if (provider === 'kimi-coding-plan' && apiProtocol === 'openai-chat') return 'openai-chat-sse';
   if (provider === 'kimi-coding-plan' && apiProtocol === 'anthropic-messages')
     return 'anthropic-sse';
+  // The Maka arm dials whatever wire its own runtime resolves, so that runtime
+  // is the authority here — the adapter kind is a guess, and a guess that
+  // drifts is not a gap but a wrong number: when deepseek-v4-flash moved to
+  // Responses, a proxy still parsing Chat SSE never saw `[DONE]`, recorded
+  // every request `interrupted` with no usage, and the runner threw each
+  // graded cell away as an infra failure.
+  const wire = agent === 'maka' && modelId ? makaRuntimeWire(provider, modelId, apiProtocol) : null;
+  if (wire) return usageProtocolForWire(wire);
   const definition = providerDefinition(provider);
   if (definition?.runtimeAdapter.kind === 'anthropic') return 'anthropic-sse';
   if (definition?.runtimeAdapter.kind === 'openai-compatible') return 'openai-chat-sse';
+  return undefined;
+}
+
+function makaRuntimeWire(
+  provider: string,
+  modelId: string,
+  apiProtocol?: string,
+): ModelRuntimeWire | null {
+  if (!providerDefinition(provider)) return null;
+  const advertised = modelApiProtocol(apiProtocol);
+  return resolveModelRuntime(
+    {
+      providerType: provider as ProviderType,
+      ...(advertised ? { models: [{ id: modelId, apiProtocol: advertised }] } : {}),
+    },
+    modelId,
+  ).wire;
+}
+
+function modelApiProtocol(value: string | undefined): ModelInfo['apiProtocol'] {
+  return value === 'openai-chat' || value === 'openai-responses' || value === 'anthropic-messages'
+    ? value
+    : undefined;
+}
+
+function usageProtocolForWire(wire: ModelRuntimeWire): ProviderUsageProtocol | undefined {
+  if (wire === 'anthropic-messages') return 'anthropic-sse';
+  if (wire === 'openai-chat') return 'openai-chat-sse';
+  if (wire === 'openai-responses') return 'openai-responses-sse';
   return undefined;
 }
 

@@ -717,7 +717,11 @@ test('harness CLI freezes the synchronized DeepSeek three-way composition', asyn
     manifest.arms.map(
       (arm: { metadata?: { config?: { transport?: string } } }) => arm.metadata?.config?.transport,
     ),
-    ['openai-chat', 'openai-responses', 'anthropic-messages'],
+    // The Maka arm records the wire its runtime actually dials: deepseek-v4-flash
+    // resolves to Responses, so a manifest claiming Chat here would describe a
+    // run that never happened — and the proxy parsing it that way measured none
+    // of it.
+    ['openai-responses', 'openai-responses', 'anthropic-messages'],
   );
   assert.equal(manifest.maxConcurrentAttempts, 6);
   assert.equal(

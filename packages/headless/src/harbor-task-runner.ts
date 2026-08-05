@@ -1422,7 +1422,12 @@ async function hostSideProviderRuntime(options: HarborTaskRunnerOptions): Promis
         : { apiKeyFile: apiKeyFile! }),
       clientAuthMode: providerProxyClientAuthMode(agent, provider, apiProtocol),
       upstreamAuthMode: providerProxyUpstreamAuthMode(agent, provider, apiProtocol),
-      usageProtocol: providerProxyUsageProtocol(agent, provider, apiProtocol),
+      usageProtocol: providerProxyUsageProtocol(
+        agent,
+        provider,
+        apiProtocol,
+        modelIdForProvider(options.model, provider),
+      ),
     });
     return {
       env:

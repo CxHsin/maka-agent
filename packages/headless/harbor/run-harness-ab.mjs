@@ -854,8 +854,8 @@ export function harnessMakaAgentEnv(benchmarkProfile, env = process.env) {
   };
 }
 
-function harnessMeasuredTransport(agentId, provider) {
-  const protocol = providerProxyUsageProtocol(agentId, provider);
+function harnessMeasuredTransport(agentId, provider, model) {
+  const protocol = providerProxyUsageProtocol(agentId, provider, undefined, model);
   if (protocol === 'openai-chat-sse') return 'openai-chat';
   if (protocol === 'openai-responses-sse') return 'openai-responses';
   if (protocol === 'anthropic-sse') return 'anthropic-messages';
@@ -929,7 +929,7 @@ export function buildHarnessAbManifest({
         config: {
           adapter: harnessAgentImportPath('maka'),
           ...(competitorProfiles.length > 1
-            ? { transport: harnessMeasuredTransport('maka', execution.provider) }
+            ? { transport: harnessMeasuredTransport('maka', execution.provider, execution.model) }
             : {}),
           // The runner hands every arm MAKA_SYSTEM_PROMPT, but only the Maka
           // cell applies it; the native CLIs hash it into their execution
@@ -964,7 +964,13 @@ export function buildHarnessAbManifest({
           adapter: harnessAgentImportPath(profile.id),
           ...profile.config,
           ...(competitorProfiles.length > 1
-            ? { transport: harnessMeasuredTransport(profile.id, execution.provider) }
+            ? {
+                transport: harnessMeasuredTransport(
+                  profile.id,
+                  execution.provider,
+                  execution.model,
+                ),
+              }
             : {}),
           ...(profile.id === 'codex' && runtimeProfile.provider === 'deepseek'
             ? { modelCatalogFingerprint: CODEX_DEEPSEEK_MODEL_CATALOG_FINGERPRINT }

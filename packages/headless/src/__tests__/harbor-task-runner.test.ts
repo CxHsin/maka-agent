@@ -126,6 +126,31 @@ test('DeepSeek routes each CLI through its native wire protocol', () => {
   assert.equal(harnessAgentImportPath('reasonix'), 'reasonix_agent:MakaReasonixAgent');
 });
 
+test('the Maka arm measures the wire its own runtime resolves, not the adapter kind', () => {
+  // deepseek-v4-flash routes through the Responses API (`openAiAdapterApiProtocol`),
+  // so a proxy parsing it as Chat SSE never sees `[DONE]`, marks every request
+  // `interrupted`, and the runner throws the whole graded cell away as infra.
+  assert.equal(
+    providerProxyUsageProtocol('maka', 'deepseek', undefined, 'deepseek-v4-flash'),
+    'openai-responses-sse',
+  );
+  // Same provider, a model that stays on Chat Completions.
+  assert.equal(
+    providerProxyUsageProtocol('maka', 'deepseek', undefined, 'deepseek-v3.2'),
+    'openai-chat-sse',
+  );
+  // An account-advertised protocol still wins over the model default.
+  assert.equal(
+    providerProxyUsageProtocol('maka', 'deepseek', 'openai-chat', 'deepseek-v4-flash'),
+    'openai-chat-sse',
+  );
+  // Competitors run their own CLI, so the Maka runtime says nothing about them.
+  assert.equal(
+    providerProxyUsageProtocol('reasonix', 'deepseek', undefined, 'deepseek-v4-flash'),
+    'openai-chat-sse',
+  );
+});
+
 interface FakeOptions {
   reward?: string;
   cell?: HarborCellOutput | null;

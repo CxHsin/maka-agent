@@ -66,6 +66,8 @@ export type {
   SteeringMessageEvent,
   QueueUpdateEvent,
   QueueEnqueueOutcome,
+  MessageEnqueueOutcome,
+  MessageQueueSnapshot,
   ProviderRetryEvent,
   ProviderRetryScheduledEvent,
   ProviderRetryStartedEvent,

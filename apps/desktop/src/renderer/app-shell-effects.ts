@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useLayoutEffect } from 'react';
 import { useHotkeys } from '@astryxdesign/core/hooks';
 import type {
   ConnectionEvent,
+  MessageQueueSnapshot,
   PlanReminder,
   SessionChangedEvent,
   SessionEvent,
@@ -381,6 +382,9 @@ export function useActiveSessionEvents(options: {
   markSessionReadLocally: (sessionId: string, readMessages: readonly StoredMessage[]) => void;
   setMessageLoadErrorBySession: (updater: (current: Record<string, string>) => Record<string, string>) => void;
   setMessageLoadPending: (pending: boolean) => void;
+  setMessageQueueBySession?: (
+    updater: (current: Record<string, MessageQueueSnapshot>) => Record<string, MessageQueueSnapshot>
+  ) => void;
   setMessages: (messages: StoredMessage[]) => void;
   setSessionEventHealthBySession: SessionEventHealthUpdater;
   toastApi: Pick<ToastApi, 'error'>;
@@ -438,6 +442,7 @@ export function useActiveSessionEvents(options: {
   useLayoutEffect(() => {
     if (!activeId) return;
     let disposed = false;
+    let queueEventObserved = false;
     const subscribedAt = Date.now();
     options.setMessageLoadErrorBySession((current) => {
       if (!current[activeId]) return current;
@@ -452,6 +457,10 @@ export function useActiveSessionEvents(options: {
         now: subscribedAt,
       }),
     }));
+    const unsubscribe = window.maka.sessions.subscribeEvents(activeId, (event) => {
+      if (event.type === 'queue_update') queueEventObserved = true;
+      handleSessionEvent(activeId, event);
+    });
     void window.maka.sessions
       .readMessages(activeId)
       .then((next) => {
@@ -460,9 +469,10 @@ export function useActiveSessionEvents(options: {
       .catch((error) => {
         applyReadError(activeId, error, () => disposed);
       });
-    const unsubscribe = window.maka.sessions.subscribeEvents(activeId, (event) => {
-      handleSessionEvent(activeId, event);
-    });
+    void window.maka.sessions.readMessageQueue(activeId).then((queue) => {
+      if (disposed || queueEventObserved) return;
+      options.setMessageQueueBySession?.((current) => ({ ...current, [activeId]: queue }));
+    }).catch(() => {});
     return () => {
       disposed = true;
       unsubscribe();

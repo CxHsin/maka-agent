@@ -355,7 +355,13 @@ describe('a send in flight versus a stale session list', () => {
         create: async () => ({ id: sessionId }),
         send: async (_sessionId: string, command: { turnId: string }) => {
           sentTurnId = command.turnId;
-          return { ok: true, attachments: [], skillInvocation: { loaded: [], failed: [] } };
+          return {
+            ok: true,
+            turnId: command.turnId,
+            attachments: [],
+            inlineReferences: [],
+            skillInvocation: { loaded: [], failed: [], receipts: [] },
+          };
         },
         readMessages: async () => (
           sentTurnId
@@ -468,5 +474,46 @@ describe('steered mid-turn send rollback (#1954 review 4.2)', () => {
     // The optimistic arm was disarmed: no unconfirmed live turn survives.
     const armed = controller.getState().liveTurnBySession[sessionId];
     assert.equal(armed, undefined, 'a steered send must not leave an armed turn behind');
+  });
+});
+
+describe('Host-authoritative turn admission', () => {
+  it('replaces the renderer arm with the turn id returned by the Host', async () => {
+    const sessionId = 'session-1';
+    const controller = createAppShellSessionUiStateController();
+    const restoreWindow = installWindow({
+      sessions: {
+        send: async () => ({
+          ok: true,
+          turnId: 'host-turn',
+          attachments: [],
+          inlineReferences: [],
+          skillInvocation: { loaded: [], failed: [], receipts: [] },
+        }),
+        readMessages: async () => [{
+          type: 'user',
+          id: 'user-host-turn',
+          turnId: 'host-turn',
+          ts: 1,
+          text: 'hello',
+        }],
+        remove: async () => undefined,
+      },
+    });
+    try {
+      const actions = createAppShellChatActions({
+        ...createActionsDeps(),
+        activeIdRef: { current: sessionId },
+        setLiveTurnBySession: controller.setLiveTurnBySession,
+      });
+      assert.equal(await actions.send('hello'), true);
+    } finally {
+      restoreWindow();
+    }
+
+    assert.equal(
+      controller.getState().liveTurnBySession[sessionId]?.turnId,
+      'host-turn',
+    );
   });
 });

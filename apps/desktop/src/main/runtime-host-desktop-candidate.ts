@@ -86,7 +86,7 @@ export interface DesktopRuntimeHostCandidate {
   readonly botIncoming: BotIncomingMainService;
   readonly client: DesktopRuntimeHostClient;
   readonly closed: Promise<void>;
-  stopSession(sessionId: string): Promise<void>;
+  stopSession(sessionId: string): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -101,7 +101,7 @@ class DesktopRuntimeHostCandidateImpl implements DesktopRuntimeHostCandidate {
   readonly #closeNativeCapabilities: () => Promise<void>;
   readonly #disposeClientIpc: (() => void | Promise<void>) | undefined;
   readonly #hasRegisteredCapabilities: () => boolean;
-  readonly #stopSession: (sessionId: string) => Promise<void>;
+  readonly #stopSession: (sessionId: string) => Promise<string>;
   #closeTask: Promise<void> | undefined;
 
   constructor(input: {
@@ -113,7 +113,7 @@ class DesktopRuntimeHostCandidateImpl implements DesktopRuntimeHostCandidate {
     disposeClientIpc: (() => void | Promise<void>) | undefined;
     connectionClosed: Promise<void>;
     hasRegisteredCapabilities: () => boolean;
-    stopSession: (sessionId: string) => Promise<void>;
+    stopSession: (sessionId: string) => Promise<string>;
   }) {
     this.#client = input.client;
     this.client = input.client;
@@ -133,7 +133,7 @@ class DesktopRuntimeHostCandidateImpl implements DesktopRuntimeHostCandidate {
     return this.#closeTask;
   }
 
-  stopSession(sessionId: string): Promise<void> {
+  stopSession(sessionId: string): Promise<string> {
     return this.#stopSession(sessionId);
   }
 

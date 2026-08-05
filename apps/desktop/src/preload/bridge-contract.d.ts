@@ -57,7 +57,8 @@ import type {
   PlanReminderDeliveryTarget,
   PlanReminderRecurrence,
   DailyReviewArchive,
-  QueueEnqueueOutcome,
+  MessageEnqueueOutcome,
+  MessageQueueSnapshot,
   VoiceBeginRequest,
   VoiceBeginResult,
   VoiceCapturedAudio,
@@ -269,8 +270,11 @@ export interface MakaBridge {
           skillInvocation: import('@maka/runtime').SkillInvocationResult;
         }
     >;
-    stop(sessionId: string, input?: { source?: 'stop_button' }): Promise<void>;
-    steer(sessionId: string, text: string): Promise<QueueEnqueueOutcome>;
+    stop(sessionId: string, input?: { source?: 'stop_button' }): Promise<string>;
+    steer(sessionId: string, text: string): Promise<MessageEnqueueOutcome>;
+    queueMessage(sessionId: string, text: string): Promise<MessageEnqueueOutcome>;
+    readMessageQueue(sessionId: string): Promise<MessageQueueSnapshot>;
+    retractQueue(sessionId: string): Promise<string>;
     readMessages(sessionId: string): Promise<StoredMessage[]>;
     readExecutionBoundary(sessionId: string): Promise<ExecutionBoundaryReadModel>;
     listActiveInteractions(sessionId: string): Promise<ActiveInteractionRequestEvent[]>;

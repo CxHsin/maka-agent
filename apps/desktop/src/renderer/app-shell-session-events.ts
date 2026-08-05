@@ -1,4 +1,4 @@
-import type { SessionEvent, StoredMessage, UiLocale } from '@maka/core';
+import type { MessageQueueSnapshot, SessionEvent, StoredMessage, UiLocale } from '@maka/core';
 import {
   applyLiveTurnEvent,
   clearInteractions,
@@ -40,6 +40,7 @@ export function createAppShellSessionEventHandlers(options: {
   refreshSessions: () => Promise<unknown>;
   setLiveTurnBySession: StateUpdater<Record<string, LiveTurnProjection>>;
   setInteractionBySession: StateUpdater<InteractionQueues>;
+  setMessageQueueBySession?: StateUpdater<Record<string, MessageQueueSnapshot>>;
   onInteractionChanged?: (sessionId: string) => void;
   /** A boundary decision settled: the session's execution boundary may have moved. */
   onExecutionBoundaryChanged?: (sessionId: string) => void;
@@ -55,6 +56,7 @@ export function createAppShellSessionEventHandlers(options: {
     refreshSessions,
     setLiveTurnBySession,
     setInteractionBySession,
+    setMessageQueueBySession,
     onInteractionChanged,
     onExecutionBoundaryChanged,
     showModelSetupToast,
@@ -119,6 +121,15 @@ export function createAppShellSessionEventHandlers(options: {
     updateLiveTurn(sessionId, event);
 
     switch (event.type) {
+      case 'queue_update':
+        setMessageQueueBySession?.((current) => ({
+          ...current,
+          [sessionId]: {
+            steering: event.steering,
+            followup: event.followup,
+          },
+        }));
+        break;
       case 'text_complete':
         void refreshMessages(sessionId, { requiredAssistantMessageId: event.messageId }).catch(() => false);
         break;

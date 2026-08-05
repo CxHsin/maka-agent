@@ -72,7 +72,8 @@ import type {
   PlanReminderRecurrence,
   DailyReviewArchive,
   DailyReviewArchiveSummary,
-  QueueEnqueueOutcome,
+  MessageEnqueueOutcome,
+  MessageQueueSnapshot,
   VoiceBeginRequest,
   VoiceBeginResult,
   VoiceCapturedAudio,
@@ -239,11 +240,20 @@ const makaBridge = {
     > {
       return ipcRenderer.invoke('sessions:resumeLatest', sessionId);
     },
-    stop(sessionId: string, input?: { source?: 'stop_button' }): Promise<void> {
+    stop(sessionId: string, input?: { source?: 'stop_button' }): Promise<string> {
       return ipcRenderer.invoke('sessions:stop', sessionId, input);
     },
-    steer(sessionId: string, text: string): Promise<QueueEnqueueOutcome> {
+    steer(sessionId: string, text: string): Promise<MessageEnqueueOutcome> {
       return ipcRenderer.invoke('sessions:steer', sessionId, text);
+    },
+    queueMessage(sessionId: string, text: string): Promise<MessageEnqueueOutcome> {
+      return ipcRenderer.invoke('sessions:queueMessage', sessionId, text);
+    },
+    readMessageQueue(sessionId: string): Promise<MessageQueueSnapshot> {
+      return ipcRenderer.invoke('sessions:readMessageQueue', sessionId);
+    },
+    retractQueue(sessionId: string): Promise<string> {
+      return ipcRenderer.invoke('sessions:retractQueue', sessionId);
     },
     readMessages(sessionId: string): Promise<StoredMessage[]> {
       return ipcRenderer.invoke('sessions:readMessages', sessionId);

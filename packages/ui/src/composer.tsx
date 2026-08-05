@@ -52,7 +52,14 @@ import {
   type ComposerTextPort,
 } from './chat-input-behavior.js';
 import { SKILL_INVOCATION_TOKEN_SOURCE } from '@maka/core';
-import type { AttachmentRef, PermissionMode, ProviderType, QuoteRef, SessionSummary } from '@maka/core';
+import type {
+  AttachmentRef,
+  MessageQueueSnapshot,
+  PermissionMode,
+  ProviderType,
+  QuoteRef,
+  SessionSummary,
+} from '@maka/core';
 import {
   Button as UiButton,
   ChatComposer as AstryxChatComposer,
@@ -186,6 +193,12 @@ export const Composer = forwardRef<
       text: string,
       metadata?: ComposerSendMetadata,
     ): boolean | void | Promise<boolean | void>;
+    onQueueNext?(
+      text: string,
+      metadata?: ComposerSendMetadata,
+    ): boolean | void | Promise<boolean | void>;
+    messageQueue?: MessageQueueSnapshot;
+    onRetractQueue?(): void | Promise<void>;
     onStop(): void | Promise<void>;
     onPickAttachments?(): void | Promise<void>;
     onAttachFilePaths?(files: File[]): void | Promise<void>;
@@ -891,7 +904,9 @@ export const Composer = forwardRef<
     [],
   );
 
-  async function sendCurrent() {
+  async function submitCurrent(
+    submitDraft: NonNullable<typeof props.onQueueNext> | typeof props.onSend,
+  ) {
     if (props.disabled || sendPendingRef.current || importActionOwnerRef.current?.pending) return;
     // There is one authoritative draft: staged Skills and files serialize into
     // `text`. The optional metadata below is a send-time rendering snapshot of
@@ -905,7 +920,7 @@ export const Composer = forwardRef<
     setSendPending(true);
     let sent: boolean | void;
     try {
-      sent = await props.onSend(
+      sent = await submitDraft(
         text,
         workspaceFileReferences.length > 0 ? { workspaceFileReferences } : undefined,
       );
@@ -924,6 +939,17 @@ export const Composer = forwardRef<
     if (activeDraftKey() !== submittedDraftKey) return;
     textPort.setValue('');
     saveCurrentDraft('');
+  }
+
+  function sendCurrent() {
+    return submitCurrent(props.onSend);
+  }
+
+  function queueNext() {
+    if (!props.onQueueNext || props.pendingAttachments?.length || props.pendingQuotes?.length) {
+      return Promise.resolve();
+    }
+    return submitCurrent(props.onQueueNext);
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -994,6 +1020,20 @@ export const Composer = forwardRef<
       if (handleArrowKey(event)) return;
     }
     if (event.key !== 'Enter') return;
+    // While a turn is active, Alt+Enter explicitly schedules the draft as the
+    // next turn. Rich context stays in the composer because the runtime queue
+    // is text-only. Outside a turn, Alt+Enter retains its line-break behavior.
+    if (
+      event.altKey &&
+      props.streaming &&
+      props.onQueueNext &&
+      !props.pendingAttachments?.length &&
+      !props.pendingQuotes?.length
+    ) {
+      event.preventDefault();
+      void queueNext();
+      return;
+    }
     // Shift+Enter / Alt+Enter insert a line break instead of sending. We have
     // to insert it ourselves rather than fall through: ChatComposerInput's own
     // Enter branch only exempts Shift, so a bare `return` here would hand it
@@ -1187,6 +1227,10 @@ export const Composer = forwardRef<
     || props.onGraphModeChange,
   );
   const showVoiceCapture = Boolean(props.onToggleVoiceCapture) && !props.streaming;
+  const queuedMessages = [
+    ...(props.messageQueue?.steering.map((text) => ({ lane: 'steering' as const, text })) ?? []),
+    ...(props.messageQueue?.followup.map((text) => ({ lane: 'followup' as const, text })) ?? []),
+  ];
 
   return (
     <>
@@ -1222,6 +1266,32 @@ export const Composer = forwardRef<
           >
             {props.revisionNotice.cancelLabel}
           </button>
+        </div>
+      )}
+      {!props.hidden && queuedMessages.length > 0 && (
+        <div className="maka-composer-queue" role="status">
+          <ul className="maka-composer-queue-list">
+            {queuedMessages.map((message, index) => (
+              <li key={`${message.lane}-${index}`} className="maka-composer-queue-item">
+                <span className="maka-composer-queue-lane">
+                  {message.lane === 'steering'
+                    ? copy.queuedForCurrentTurn
+                    : copy.queuedForNextTurn}
+                </span>
+                <span className="maka-composer-queue-text">{message.text}</span>
+              </li>
+            ))}
+          </ul>
+          {props.onRetractQueue ? (
+            <button
+              type="button"
+              className="maka-composer-queue-retract"
+              disabled={sendPending}
+              onClick={() => { void props.onRetractQueue?.(); }}
+            >
+              {copy.retractQueueLabel}
+            </button>
+          ) : null}
         </div>
       )}
       <form
@@ -1529,6 +1599,24 @@ export const Composer = forwardRef<
           )}
           sendActions={(
             <div className="maka-composer-right-controls">
+              {props.streaming && props.onQueueNext ? (
+                <IconButton
+                  variant="ghost"
+                  type="button"
+                  size="sm"
+                  isDisabled={
+                    props.disabled
+                    || sendPending
+                    || !text.trim()
+                    || Boolean(props.pendingAttachments?.length)
+                    || Boolean(props.pendingQuotes?.length)
+                  }
+                  label={copy.queueNextLabel}
+                  tooltip={`${copy.queueNextLabel} · Alt+Enter`}
+                  onClick={() => { void queueNext(); }}
+                  icon={<ListTodo size={15} aria-hidden="true" />}
+                />
+              ) : null}
               {showVoiceCapture ? (
                 <IconButton
                   variant="ghost"

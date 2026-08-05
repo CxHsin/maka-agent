@@ -290,22 +290,117 @@ test("forwards explicit Skill invocation to the Host-owned Turn admission", asyn
   });
 });
 
-test("binds steer and stop to Host-owned queue and active Turn identities", async () => {
+test("routes an active plain-text send through Host steering admission", async () => {
+  const submits: unknown[] = [];
+  const starts: unknown[] = [];
+  const ipc = ipcHarness();
+  registerRuntimeHostSessionExecutionIpc(
+    {
+      client: executionClient({
+        getSession: async () => session(),
+        submitMessage: async (input) => {
+          submits.push(input);
+          return { disposition: "steering", queueRevision: 2 };
+        },
+        startTurn: async (input) => {
+          starts.push(input);
+          throw new Error("active plain-text send must not open a parallel turn");
+        },
+      }),
+      observer: unusedObserver(),
+      attachmentApprovals: createAttachmentApprovalRegistry(),
+      emitSessionsChanged() {},
+      stat: async () => ({ size: 0 }),
+      resizeImage: async (bytes) => bytes,
+      beforeStop() {},
+      newId: () => "message-1",
+    },
+    ipc,
+  );
+
+  assert.deepEqual(
+    await ipc.invoke("sessions:send", "session-1", {
+      type: "send",
+      turnId: "renderer-turn",
+      text: "Change direction",
+    }),
+    { ok: true, steered: true },
+  );
+  assert.deepEqual(submits, [
+    {
+      sessionId: "session-1",
+      messageId: "message-1",
+      content: { text: "Change direction" },
+      placement: "current_turn",
+    },
+  ]);
+  assert.deepEqual(starts, []);
+});
+
+test("returns the Host-authoritative turn when plain-text admission starts one", async () => {
+  const ipc = ipcHarness();
+  registerRuntimeHostSessionExecutionIpc(
+    {
+      client: executionClient({
+        getSession: async () => session(),
+        submitMessage: async () => ({
+          disposition: "turn_started",
+          turnId: "host-turn",
+        }),
+      }),
+      observer: unusedObserver(),
+      attachmentApprovals: createAttachmentApprovalRegistry(),
+      emitSessionsChanged() {},
+      stat: async () => ({ size: 0 }),
+      resizeImage: async (bytes) => bytes,
+      beforeStop() {},
+      newId: () => "message-1",
+    },
+    ipc,
+  );
+
+  assert.deepEqual(
+    await ipc.invoke("sessions:send", "session-1", {
+      type: "send",
+      turnId: "renderer-turn",
+      text: "Start now",
+    }),
+    {
+      ok: true,
+      turnId: "host-turn",
+      attachments: [],
+      inlineReferences: [],
+      skillInvocation: { loaded: [], failed: [], receipts: [] },
+    },
+  );
+});
+
+test("binds message queue controls and stop to Host-owned identities", async () => {
   const submits: unknown[] = [];
   const interrupts: unknown[] = [];
+  const retracts: unknown[] = [];
   const stopLifecycle: string[] = [];
   let sequence = 0;
   const client = executionClient({
     submitMessage: async (input) => {
       submits.push(input);
-      return { disposition: "steering", queueRevision: 2 };
+      return input.placement === "current_turn"
+        ? { disposition: "steering", queueRevision: 2 }
+        : { disposition: "followup", queueRevision: 3 };
+    },
+    retractQueue: async (input) => {
+      retracts.push(input);
+      return {
+        queueRevision: 4,
+        retracted: [retractedMessage("retracted-1", "queued draft", "next_turn")],
+      };
     },
     interruptTurn: async (input) => {
       stopLifecycle.push("interrupt");
       interrupts.push(input);
       return {
-        queueRevision: 3,
-        retracted: [],
+        queueRevision: 5,
+        retracted: [retractedMessage("retracted-2", "stopped draft", "next_turn")],
         turn: {
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -341,7 +436,22 @@ test("binds steer and stop to Host-owned queue and active Turn identities", asyn
       kind: "queued",
     },
   );
-  await ipc.invoke("sessions:stop", "session-1");
+  assert.deepEqual(
+    await ipc.invoke("sessions:queueMessage", "session-1", "  Later  "),
+    { kind: "queued" },
+  );
+  assert.deepEqual(await ipc.invoke("sessions:readMessageQueue", "session-1"), {
+    steering: [],
+    followup: [],
+  });
+  assert.equal(
+    await ipc.invoke("sessions:retractQueue", "session-1"),
+    "queued draft",
+  );
+  assert.equal(
+    await ipc.invoke("sessions:stop", "session-1"),
+    "stopped draft",
+  );
   assert.deepEqual(stopLifecycle, ["teardown", "interrupt"]);
 
   assert.deepEqual(submits, [
@@ -351,17 +461,40 @@ test("binds steer and stop to Host-owned queue and active Turn identities", asyn
       content: { text: "Continue" },
       placement: "current_turn",
     },
+    {
+      sessionId: "session-1",
+      messageId: "id-2",
+      content: { text: "Later" },
+      placement: "next_turn",
+    },
+  ]);
+  assert.deepEqual(retracts, [
+    { sessionId: "session-1", retractId: "id-3" },
   ]);
   assert.deepEqual(interrupts, [
     {
       sessionId: "session-1",
-      interruptId: "id-2",
+      interruptId: "id-4",
       turnId: "turn-1",
       runId: "run-1",
     },
   ]);
   await observer.close();
 });
+
+function retractedMessage(
+  entryId: string,
+  text: string,
+  placement: "current_turn" | "next_turn",
+) {
+  return {
+    entryId,
+    messageId: `${entryId}-message`,
+    content: { text },
+    placement,
+    state: "retracted" as const,
+  };
+}
 
 type ExecutionClient = RuntimeHostSessionExecutionIpcDeps["client"];
 
@@ -379,6 +512,7 @@ function executionClient(overrides: Partial<ExecutionClient>): ExecutionClient {
     queryTurnResume: unavailable,
     readExecutionBoundary: unavailable,
     regenerateTurn: unavailable,
+    retractQueue: unavailable,
     setSessionReadMarker: unavailable,
     startTurn: unavailable,
     startTurnResume: unavailable,

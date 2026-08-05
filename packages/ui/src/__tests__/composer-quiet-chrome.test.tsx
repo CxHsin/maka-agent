@@ -170,6 +170,30 @@ describe('composer quiet chrome', () => {
     assert.doesNotMatch(tagCarrying(atRest, 'maka-thinking-level-selector'), /aria-disabled/, 'at rest the thinking menu is enabled');
   });
 
+  it('shows the authoritative message queue and the explicit next-turn action', () => {
+    const markup = render(
+      <Composer
+        onSend={() => true}
+        onStop={() => {}}
+        onQueueNext={() => true}
+        onRetractQueue={() => {}}
+        streaming
+        messageQueue={{
+          steering: ['change direction'],
+          followup: ['then summarize'],
+        }}
+      />,
+    );
+
+    assert.match(markup, /maka-composer-queue/);
+    assert.match(markup, /等待加入当前回答/);
+    assert.match(markup, /change direction/);
+    assert.match(markup, /下一轮/);
+    assert.match(markup, /then summarize/);
+    assert.match(markup, /撤回到输入框/);
+    assert.match(markup, /aria-label="下一轮发送"/);
+  });
+
   it('reads active modes off the footer toolbar, after the model pair', () => {
     const markup = render(
       <Composer

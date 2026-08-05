@@ -362,7 +362,7 @@ export function registerSessionsIpc(
   // Named rather than inline so the mirror's stop control and the menu bar
   // item's Stop rows can be pointed at it. Every place that stops a run must
   // stop it identically.
-  async function stopSession(sessionId: string, input?: { source?: 'stop_button' }): Promise<void> {
+  async function stopSession(sessionId: string, input?: { source?: 'stop_button' }): Promise<string> {
     computerUseOverlay.clearForSession(sessionId);
     computerUsePip?.clearForSession(sessionId);
     computerUseScreenLock?.clearForSession(sessionId);
@@ -375,6 +375,10 @@ export function registerSessionsIpc(
     // send→run-start window. Unnamed, it would leave that client's claim with
     // nothing to release it, making Stop the one control unable to undo Stop.
     const stoppedTurnIds = runtime.runningTurnIds(sessionId);
+    // Interrupt clears the runtime queues. Reclaim every message that has not
+    // crossed the durable steering boundary first so the renderer can put it
+    // back in the draft instead of silently discarding it.
+    const retracted = runtime.retractQueue(sessionId);
     await runtime.stopSession(sessionId, normalizeStopSessionInput(input));
     await runtime.interruptActivePlanExecution(sessionId, 'user_stopped_execution').catch(() => null);
     for (const broadcast of stoppedTurnBroadcasts(stoppedTurnIds)) {
@@ -384,6 +388,7 @@ export function registerSessionsIpc(
         ...(broadcast.turnId ? [{ turnId: broadcast.turnId }] : []),
       );
     }
+    return retracted;
   }
   computerUsePip?.setStopHandler((sessionId) => {
     void stopSession(sessionId, { source: 'stop_button' });
@@ -444,6 +449,49 @@ export function registerSessionsIpc(
     await ensureSessionWorkspaceAvailable(sessionId);
     return runtime.respondToUserQuestion(sessionId, normalized);
   });
+
+  function driveEmbeddedTurn(
+    sessionId: string,
+    turnId: string,
+    iterator: AsyncIterable<SessionEvent>,
+  ): void {
+    const completion = streamEvents(sessionId, iterator, {
+      turnId,
+      goalBoundary: 'external',
+    });
+    void completion.then(async (result) => {
+      if (!result.ok || runtime.readMessageQueue(sessionId).followup.length === 0) return;
+
+      // Runtime Host owns this transition atomically. Embedded execution has
+      // the same queue but no owner above SessionManager, so Desktop opens the
+      // successor turn after a successful boundary. Readiness runs before the
+      // destructive drain; if admission is unavailable the queue remains
+      // visible and retractable.
+      await ensureSessionCanSend(sessionId);
+      const followup = runtime.drainFollowup(sessionId);
+      if (!followup) return;
+      const followupTurnId = randomUUID();
+      const followupIterator = runtime.sendMessage(
+        sessionId,
+        { turnId: followupTurnId, text: followup },
+        {
+          onRunStarted: createRunStartedHook({
+            sessionId,
+            turnId: followupTurnId,
+            emitSessionsChanged: (id, turn) =>
+              emitSessionsChanged('status-change', id, { turnId: turn }),
+            commitRevisionVersion: (id) => runtime.commitRevisionVersion(id),
+          }),
+        },
+      );
+      driveEmbeddedTurn(sessionId, followupTurnId, followupIterator);
+    }).catch(() => {
+      // The original turn has already projected its outcome. A failed
+      // successor readiness check leaves the queue intact; a started successor
+      // reports its own failure through the ordinary SessionEvent stream.
+    });
+  }
+
   ipcMain.handle('sessions:send', async (event, sessionId: string, command: unknown) => {
     const sendCommand = normalizeSessionSendCommand(command);
     if (!sendCommand) return;
@@ -549,7 +597,7 @@ export function registerSessionsIpc(
         }),
       },
     );
-    void streamEvents(sessionId, iterator, { turnId, goalBoundary: 'external' });
+    driveEmbeddedTurn(sessionId, turnId, iterator);
     return {
       ok: true as const,
       turnId,
@@ -564,6 +612,21 @@ export function registerSessionsIpc(
     }
     await store.readHeader(sessionId);
     return runtime.steer(sessionId, text.trim());
+  });
+  ipcMain.handle('sessions:queueMessage', async (_event, sessionId: string, text: unknown) => {
+    if (typeof text !== 'string' || text.trim().length === 0 || text.length > 128_000) {
+      throw new Error('Invalid followup text');
+    }
+    await store.readHeader(sessionId);
+    return runtime.queueMessage(sessionId, text.trim());
+  });
+  ipcMain.handle('sessions:readMessageQueue', async (_event, sessionId: string) => {
+    await store.readHeader(sessionId);
+    return runtime.readMessageQueue(sessionId);
+  });
+  ipcMain.handle('sessions:retractQueue', async (_event, sessionId: string) => {
+    await store.readHeader(sessionId);
+    return runtime.retractQueue(sessionId);
   });
   ipcMain.handle(
     'attachments:pickFiles',

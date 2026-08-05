@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import type { SessionEventStreamSnapshot } from '@maka/core';
+import type { MessageQueueSnapshot, SessionEventStreamSnapshot } from '@maka/core';
 import { confirmLiveTurn, type InteractionQueues, type LiveTurnProjection } from '@maka/ui';
 import type { ShellRunUpdatesBySession } from './shell-run-update-state.js';
 
@@ -9,6 +9,7 @@ export interface AppShellSessionUiState {
   messageLoadErrorBySession: Record<string, string>;
   messageRetryPendingBySession: Record<string, boolean>;
   stopPendingBySession: Record<string, boolean>;
+  messageQueueBySession: Record<string, MessageQueueSnapshot>;
   liveTurnBySession: Record<string, LiveTurnProjection>;
   shellRunUpdatesBySession: ShellRunUpdatesBySession;
   interactionBySession: InteractionQueues;
@@ -22,6 +23,7 @@ const SESSION_UI_MAP_KEYS = [
   'messageLoadErrorBySession',
   'messageRetryPendingBySession',
   'stopPendingBySession',
+  'messageQueueBySession',
   'liveTurnBySession',
   'shellRunUpdatesBySession',
   'interactionBySession',
@@ -148,6 +150,7 @@ export function createAppShellSessionUiStateController(
     setMessageLoadErrorBySession: createMapSetter('messageLoadErrorBySession'),
     setMessageRetryPendingBySession: createMapSetter('messageRetryPendingBySession'),
     setStopPendingBySession: createMapSetter('stopPendingBySession'),
+    setMessageQueueBySession: createMapSetter('messageQueueBySession'),
     setLiveTurnBySession: createMapSetter('liveTurnBySession'),
     setShellRunUpdatesBySession: createMapSetter('shellRunUpdatesBySession'),
     setInteractionBySession: createMapSetter('interactionBySession'),
@@ -207,6 +210,7 @@ export function useAppShellSessionUiState() {
     setMessageLoadErrorBySession: controller.setMessageLoadErrorBySession,
     setMessageRetryPendingBySession: controller.setMessageRetryPendingBySession,
     setStopPendingBySession: controller.setStopPendingBySession,
+    setMessageQueueBySession: controller.setMessageQueueBySession,
     setLiveTurnBySession: controller.setLiveTurnBySession,
     setShellRunUpdatesBySession: controller.setShellRunUpdatesBySession,
     setInteractionBySession: controller.setInteractionBySession,

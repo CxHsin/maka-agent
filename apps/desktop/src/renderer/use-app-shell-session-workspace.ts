@@ -81,6 +81,7 @@ export function useAppShellSessionWorkspace(toastApi: ToastApi) {
     setMessageLoadErrorBySession: sessionUi.setMessageLoadErrorBySession,
     setMessageRetryPendingBySession: sessionUi.setMessageRetryPendingBySession,
     setStopPendingBySession: sessionUi.setStopPendingBySession,
+    setMessageQueueBySession: sessionUi.setMessageQueueBySession,
     setLiveTurnBySession: sessionUi.setLiveTurnBySession,
     setShellRunUpdatesBySession: sessionUi.setShellRunUpdatesBySession,
     setInteractionBySession: sessionUi.setInteractionBySession,

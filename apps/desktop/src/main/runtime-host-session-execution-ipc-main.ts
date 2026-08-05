@@ -27,6 +27,7 @@ import {
   type RuntimeHostSessionObserverTarget,
 } from "./runtime-host-session-observer.js";
 import { toDesktopHostSessionSummary } from "./runtime-host-session-catalog-ipc-main.js";
+import { isPlainTextSendCommand } from "./session-send-resolve.js";
 import { mergeWorkspaceFileInlineReferences } from "./session-workspace-inline-references.js";
 
 const EMPTY_SKILL_INVOCATION: SkillInvocationResult = {
@@ -46,6 +47,7 @@ type RuntimeHostSessionExecutionClient = Pick<
   | "queryTurnResume"
   | "readExecutionBoundary"
   | "regenerateTurn"
+  | "retractQueue"
   | "setSessionReadMarker"
   | "startTurn"
   | "startTurnResume"
@@ -76,7 +78,7 @@ export interface RuntimeHostSessionExecutionIpcDeps {
 export function registerRuntimeHostSessionExecutionIpc(
   deps: RuntimeHostSessionExecutionIpcDeps,
   ipcMain: Pick<IpcMain, "handle">,
-): (sessionId: string) => Promise<void> {
+): (sessionId: string) => Promise<string> {
   const newId = deps.newId ?? randomUUID;
   const stopSession = createRuntimeHostSessionStop(deps, newId);
 
@@ -126,6 +128,25 @@ export function registerRuntimeHostSessionExecutionIpc(
       const session = await deps.client.getSession(sessionId);
       if (!session)
         throw new Error(`Runtime Host Session not found: ${sessionId}`);
+      if (isPlainTextSendCommand(command)) {
+        const submitted = await submitHostMessage(
+          deps,
+          sessionId,
+          command.text,
+          "current_turn",
+          newId,
+        );
+        if (submitted.kind === "queued") {
+          return { ok: true as const, steered: true as const };
+        }
+        return {
+          ok: true as const,
+          turnId: submitted.turnId,
+          attachments: [],
+          inlineReferences: [],
+          skillInvocation: EMPTY_SKILL_INVOCATION,
+        };
+      }
       const turnId = command.turnId ?? newId();
       let attachments: AttachmentRef[] = [];
       if (command.attachmentItems !== undefined) {
@@ -195,16 +216,40 @@ export function registerRuntimeHostSessionExecutionIpc(
   ipcMain.handle(
     "sessions:steer",
     async (_event, sessionId: string, text: unknown) => {
-      const content = steeringContent(text);
-      await deps.client.submitMessage({
+      return submitHostMessage(
+        deps,
         sessionId,
-        messageId: newId(),
-        content: { text: content },
-        placement: "current_turn",
-      });
-      return { kind: "queued" as const };
+        steeringContent(text),
+        "current_turn",
+        newId,
+      );
     },
   );
+  ipcMain.handle(
+    "sessions:queueMessage",
+    async (_event, sessionId: string, text: unknown) =>
+      submitHostMessage(
+        deps,
+        sessionId,
+        steeringContent(text),
+        "next_turn",
+        newId,
+      ),
+  );
+  ipcMain.handle("sessions:readMessageQueue", async (_event, sessionId: string) => {
+    const queue = (await deps.observer.snapshot(sessionId)).queue;
+    return {
+      steering: queue.steering.map((entry) => entry.content.text),
+      followup: queue.followup.map((entry) => entry.content.text),
+    };
+  });
+  ipcMain.handle("sessions:retractQueue", async (_event, sessionId: string) => {
+    const result = await deps.client.retractQueue({
+      sessionId,
+      retractId: newId(),
+    });
+    return retractedText(result.retracted);
+  });
   ipcMain.handle("sessions:stop", async (_event, sessionId: string) =>
     stopSession(sessionId),
   );
@@ -339,12 +384,18 @@ function createRuntimeHostSessionStop(
     "beforeStop" | "client" | "observer" | "emitSessionsChanged"
   >,
   newId: () => string = randomUUID,
-): (sessionId: string) => Promise<void> {
+): (sessionId: string) => Promise<string> {
   return async (sessionId) => {
     await deps.beforeStop(sessionId);
     const turn = (await deps.observer.snapshot(sessionId)).rootTurn;
-    if (!turn || isTerminalStatus(turn.status)) return;
-    await deps.client.interruptTurn({
+    if (!turn || isTerminalStatus(turn.status)) {
+      const result = await deps.client.retractQueue({
+        sessionId,
+        retractId: newId(),
+      });
+      return retractedText(result.retracted);
+    }
+    const result = await deps.client.interruptTurn({
       sessionId,
       interruptId: newId(),
       turnId: turn.turnId,
@@ -353,7 +404,32 @@ function createRuntimeHostSessionStop(
     deps.emitSessionsChanged("turn-status-change", sessionId, {
       turnId: turn.turnId,
     });
+    return retractedText(result.retracted);
   };
+}
+
+async function submitHostMessage(
+  deps: Pick<RuntimeHostSessionExecutionIpcDeps, "client" | "emitSessionsChanged">,
+  sessionId: string,
+  text: string,
+  placement: "current_turn" | "next_turn",
+  newId: () => string,
+) {
+  const result = await deps.client.submitMessage({
+    sessionId,
+    messageId: newId(),
+    content: { text },
+    placement,
+  });
+  if (result.disposition !== "turn_started") return { kind: "queued" as const };
+  deps.emitSessionsChanged("status-change", sessionId, { turnId: result.turnId });
+  return { kind: "started" as const, turnId: result.turnId };
+}
+
+function retractedText(
+  entries: readonly { content: { text: string } }[],
+): string {
+  return entries.map((entry) => entry.content.text).join("\n\n");
 }
 
 function latestVisibleMessageId(

@@ -22,6 +22,7 @@ import type {
   AbortEvent,
   PermissionDecisionAckEvent,
   PermissionRequestEvent,
+  MessageQueueSnapshot,
   QueueEnqueueOutcome,
   ShellRunUpdate,
   MessageContent,
@@ -4861,6 +4862,10 @@ export class SessionManager {
   /** Queue a user message to open the turn after the current one finishes. */
   queueMessage(sessionId: string, text: string): QueueEnqueueOutcome {
     return this.runtimeKernel.queueMessage(sessionId, text);
+  }
+
+  readMessageQueue(sessionId: string): MessageQueueSnapshot {
+    return this.runtimeKernel.readMessageQueue(sessionId);
   }
 
   /** Drain the followup queue into one `\n\n`-joined prompt, or null if empty. */

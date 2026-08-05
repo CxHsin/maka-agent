@@ -980,6 +980,19 @@ export interface SteeringMessageEvent extends BaseEvent {
 export type QueueEnqueueOutcome = { kind: 'queued' } | { kind: 'fallback' };
 
 /**
+ * Desktop message admission can race the active turn's final boundary. A
+ * hosted authority closes that race atomically by opening the successor turn;
+ * embedded execution reports `fallback` so its caller can do the same.
+ */
+export type MessageEnqueueOutcome = QueueEnqueueOutcome | { kind: 'started'; turnId: string };
+
+/** Current authoritative contents of the two user-message queue lanes. */
+export interface MessageQueueSnapshot {
+  steering: string[];
+  followup: string[];
+}
+
+/**
  * Authoritative queue snapshot pushed into the active turn's event stream
  * whenever either pending queue changes (enqueue, step-boundary consumption, or
  * interrupt clear). UI observers mirror it; the runtime owns the source of truth.

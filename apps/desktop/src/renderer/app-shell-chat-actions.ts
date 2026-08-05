@@ -368,6 +368,12 @@ export function createAppShellChatActions(deps: {
           await refreshSessions();
           return true;
         }
+        const admittedTurnId = sendResult.turnId;
+        if (admittedTurnId !== turnId) {
+          disarmTurnActive(session.id, turnId);
+          armTurnActive(session.id, admittedTurnId);
+          optimisticTurnId = admittedTurnId;
+        }
         unsentSessionId = undefined;
         options.onSessionResolved?.(session.id);
         if (newChatOwner && isNewChatSendSurfaceActive(newChatOwner)) {
@@ -378,7 +384,7 @@ export function createAppShellChatActions(deps: {
           setActiveId(session.id);
           showOptimisticUserMessage(
             session.id,
-            turnId,
+            admittedTurnId,
             options.displayText ??
               skillInvocationDisplayText(text, sendResult.skillInvocation),
             sendResult.attachments,
@@ -390,7 +396,7 @@ export function createAppShellChatActions(deps: {
           );
         }
         if (activeIdRef.current === session.id) {
-          await refreshMessagesUntilTurn(session.id, turnId);
+          await refreshMessagesUntilTurn(session.id, admittedTurnId);
         }
         await refreshSessions();
         return true;
@@ -437,13 +443,19 @@ export function createAppShellChatActions(deps: {
         await refreshSessions();
         return true;
       }
+      const admittedTurnId = sendResult.turnId;
+      if (admittedTurnId !== turnId) {
+        disarmTurnActive(sessionId, turnId);
+        armTurnActive(sessionId, admittedTurnId);
+        optimisticTurnId = admittedTurnId;
+      }
       options.onSessionResolved?.(sessionId);
       if (activeIdRef.current === sessionId) {
         showSkillInvocationFeedback(uiLocale, toastApi, sendResult.skillInvocation);
       }
       showOptimisticUserMessage(
         sessionId,
-        turnId,
+        admittedTurnId,
         options.displayText ??
           skillInvocationDisplayText(text, sendResult.skillInvocation),
         sendResult.attachments,
@@ -452,7 +464,7 @@ export function createAppShellChatActions(deps: {
           inlineReferences: sendResult.inlineReferences ?? [],
         },
       );
-      await refreshMessagesUntilTurn(sessionId, turnId);
+      await refreshMessagesUntilTurn(sessionId, admittedTurnId);
       return true;
     } catch (error) {
       await discardUnsentSession();

@@ -12,6 +12,7 @@ import { isSessionInlineRun } from '@maka/core';
 import type {
   ActiveInteractionRequestEvent,
   CompleteEvent,
+  MessageQueueSnapshot,
   QueueEnqueueOutcome,
   QueueUpdateEvent,
   SessionEvent,
@@ -153,6 +154,8 @@ export interface RuntimeKernelLike {
   steer(sessionId: string, text: string): QueueEnqueueOutcome;
   /** Queue a user message to open the turn after the current one finishes. */
   queueMessage(sessionId: string, text: string): QueueEnqueueOutcome;
+
+  readMessageQueue(sessionId: string): MessageQueueSnapshot;
   /** Drain the followup queue into one `\n\n`-joined prompt, or null if empty. */
   drainFollowup(sessionId: string): string | null;
   /** Take back every queued message (both queues) as one `\n\n`-joined string. */
@@ -275,7 +278,19 @@ interface SessionSteeringState {
   followup: string[];
   /** Pushes a `queue_update` into the active turn's stream; unset when idle. */
   sink?: (event: QueueUpdateEvent) => void;
+  /** Queue state changed while no stream was available to publish it. */
+  snapshotDirty?: boolean;
   activeTurnId?: string;
+}
+
+function messageQueueSnapshot(state: SessionSteeringState): MessageQueueSnapshot {
+  return {
+    steering: [
+      ...state.inFlight.map((message) => message.content.text),
+      ...state.steering.map((message) => message.content.text),
+    ],
+    followup: [...state.followup],
+  };
 }
 
 export type BackendActivationBoundary = <T>(operation: () => Promise<T> | T) => Promise<T>;
@@ -1538,6 +1553,7 @@ export class RuntimeKernel implements RuntimeKernelLike {
         void sessionEvents.push(event).catch(() => {});
       };
       state.activeTurnId = run.turnId;
+      if (state.snapshotDirty) this.emitQueueUpdate(sessionId, state);
       // Lease, don't consume: pulled messages move to in-flight and only an
       // ack (durable + injected) removes them; a nack or a retract/clear/
       // release reclaims them, so an abort window can never drop text.
@@ -2429,6 +2445,13 @@ export class RuntimeKernel implements RuntimeKernelLike {
     return { kind: 'queued' };
   }
 
+  readMessageQueue(sessionId: string): MessageQueueSnapshot {
+    this.assertEmbeddedMessageQueue('readMessageQueue');
+    const state = this.steeringBySession.get(sessionId);
+    if (!state) return { steering: [], followup: [] };
+    return messageQueueSnapshot(state);
+  }
+
   drainFollowup(sessionId: string): string | null {
     this.assertEmbeddedMessageQueue('drainFollowup');
     const state = this.steeringBySession.get(sessionId);
@@ -2483,16 +2506,17 @@ export class RuntimeKernel implements RuntimeKernelLike {
   }
 
   private emitQueueUpdate(sessionId: string, state: SessionSteeringState): void {
-    state.sink?.({
+    if (!state.sink) {
+      state.snapshotDirty = true;
+      return;
+    }
+    state.snapshotDirty = false;
+    state.sink({
       type: 'queue_update',
       id: this.deps.newId(),
       turnId: state.activeTurnId ?? '',
       ts: this.deps.now(),
-      steering: [
-        ...state.inFlight.map((message) => message.content.text),
-        ...state.steering.map((message) => message.content.text),
-      ],
-      followup: [...state.followup],
+      ...messageQueueSnapshot(state),
     });
   }
 

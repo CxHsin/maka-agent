@@ -19744,6 +19744,10 @@ describe('SessionManager steering and followup queues', () => {
     await waitUntil(() => backend?.pulls.has('turn-1') === true);
     // …so this steer is stranded: no step is left to consume it.
     expect(manager.steer(session.id, 'late').kind).toBe('queued');
+    expect(manager.readMessageQueue(session.id)).toEqual({
+      steering: ['late'],
+      followup: [],
+    });
     backend?.pullDone.get('turn-1')?.release();
     const events = await turn;
 
@@ -19756,7 +19760,28 @@ describe('SessionManager steering and followup queues', () => {
     expect(updates.at(-1)?.steering).toEqual([]);
     expect(updates.at(-1)?.followup).toEqual(['late']);
     // And the followup queue is the authoritative owner of the text.
+    expect(manager.readMessageQueue(session.id)).toEqual({
+      steering: [],
+      followup: ['late'],
+    });
     expect(manager.drainFollowup(session.id)).toBe('late');
+    expect(manager.readMessageQueue(session.id)).toEqual({
+      steering: [],
+      followup: [],
+    });
+
+    const successor = drainAll(
+      manager.sendMessage(session.id, { turnId: 'turn-2', text: 'followup' }),
+    );
+    await waitUntil(() => backend?.gates.has('turn-2') === true);
+    backend?.gates.get('turn-2')?.release();
+    await waitUntil(() => backend?.pulls.has('turn-2') === true);
+    backend?.pullDone.get('turn-2')?.release();
+    const successorEvents = await successor;
+    expect(successorEvents.find((event) => event.type === 'queue_update')).toMatchObject({
+      steering: [],
+      followup: [],
+    });
   });
 
   test('hasPendingSteering is scoped to the owning turn, not the session', async () => {
@@ -20156,6 +20181,10 @@ class DelegatingRuntimeKernel implements RuntimeKernelLike {
 
   queueMessage(): QueueEnqueueOutcome {
     return { kind: 'fallback' };
+  }
+
+  readMessageQueue(): { steering: string[]; followup: string[] } {
+    return { steering: [], followup: [] };
   }
 
   drainFollowup(): string | null {

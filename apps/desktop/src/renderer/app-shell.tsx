@@ -45,6 +45,7 @@ import {
   type WorkspacePickerModel,
   useToast,
   activeInteractionFor,
+  armLiveTurn,
   enqueueInteraction,
   getConversationCopy,
   getSharedUiCopy,
@@ -272,6 +273,7 @@ function AppShellContent({
     setMessageLoadErrorBySession,
     setMessageRetryPendingBySession,
     setStopPendingBySession,
+    setMessageQueueBySession,
     setLiveTurnBySession,
     confirmLiveTurn,
     setShellRunUpdatesBySession,
@@ -327,6 +329,7 @@ function AppShellContent({
     pendingSessionModelBySession,
     streamingSessionIds,
     activeLiveTurnSnapshot,
+    activeMessageQueue,
   } = useAppShellSessionUiReads(sessionUiController, activeId);
   // PR-MEMORY-VISIBILITY-INDICATOR-0: session-context memory state (MEMORY.md
   // injected into the system prompt). State and the fire-and-forget refresh
@@ -1510,6 +1513,13 @@ function AppShellContent({
             taskSessionId: sessionId,
           };
         }
+        if (outcome.kind === 'started') {
+          await observeStartedHostTurn(sessionId, outcome.turnId);
+          return {
+            output: { ok: true, started: true, sessionId },
+            taskSessionId: sessionId,
+          };
+        }
         return {
           output: { ok: true, queued: true, sessionId },
           taskSessionId: sessionId,
@@ -1759,6 +1769,74 @@ function AppShellContent({
     return ok;
   }
 
+  async function observeStartedHostTurn(sessionId: string, turnId: string): Promise<void> {
+    setLiveTurnBySession((current) => ({
+      ...current,
+      [sessionId]: armLiveTurn(turnId),
+    }));
+    await refreshSessions();
+    if (activeIdRef.current === sessionId) {
+      await refreshMessages(sessionId);
+    }
+  }
+
+  function restoreQueuedDraft(sessionId: string, queuedText: string): void {
+    if (!queuedText) return;
+    if (activeIdRef.current !== sessionId) {
+      composerRef.current?.appendDraft?.(sessionId, queuedText);
+      return;
+    }
+    const current = composerRef.current?.getText() ?? '';
+    composerRef.current?.setText(
+      current.trim() ? `${queuedText}\n\n${current}` : queuedText,
+    );
+  }
+
+  async function queueNextMessage(
+    text: string,
+    metadata?: { workspaceFileReferences?: readonly WorkspaceFileReferencePosition[] },
+  ): Promise<boolean> {
+    const sessionId = activeIdRef.current;
+    if (!sessionId) return false;
+    try {
+      const outcome = await window.maka.sessions.queueMessage(sessionId, text);
+      if (outcome.kind === 'queued') return true;
+      if (outcome.kind === 'started') {
+        await observeStartedHostTurn(sessionId, outcome.turnId);
+        return true;
+      }
+      return send(text, undefined, {
+        ...(metadata?.workspaceFileReferences?.length
+          ? { workspaceFileReferences: metadata.workspaceFileReferences }
+          : {}),
+      });
+    } catch (error) {
+      if (activeIdRef.current === sessionId) {
+        const copy = getDesktopConversationCopy(uiLocale).actions;
+        toastApi.error(
+          copy.operationFailedTitle,
+          localizedShellErrorMessage(error, copy.operationFailedFallback, uiLocale),
+        );
+      }
+      return false;
+    }
+  }
+
+  async function retractMessageQueue(): Promise<void> {
+    const sessionId = activeIdRef.current;
+    if (!sessionId) return;
+    try {
+      restoreQueuedDraft(sessionId, await window.maka.sessions.retractQueue(sessionId));
+    } catch (error) {
+      if (activeIdRef.current !== sessionId) return;
+      const copy = getDesktopConversationCopy(uiLocale).actions;
+      toastApi.error(
+        copy.operationFailedTitle,
+        localizedShellErrorMessage(error, copy.operationFailedFallback, uiLocale),
+      );
+    }
+  }
+
   const stop = createAppShellStopAction({
     uiLocale,
     activeIdRef,
@@ -1766,6 +1844,7 @@ function AppShellContent({
     clearPendingSessionAction,
     setStopPendingBySession,
     stopPendingRef,
+    restoreQueuedDraft,
     toastApi,
   });
 
@@ -1777,6 +1856,7 @@ function AppShellContent({
     refreshSessions,
     setLiveTurnBySession,
     setInteractionBySession,
+    setMessageQueueBySession,
     onInteractionChanged: markInteractionChanged,
     onExecutionBoundaryChanged: reloadActiveExecutionBoundary,
     showModelSetupToast,
@@ -1870,6 +1950,7 @@ function AppShellContent({
     markSessionReadLocally,
     setMessageLoadErrorBySession,
     setMessageLoadPending,
+    setMessageQueueBySession,
     setMessages,
     setSessionEventHealthBySession,
     toastApi,
@@ -2294,6 +2375,13 @@ function AppShellContent({
                   }
                   onToggleRealtimeVoice={voiceInput.toggleRealtime}
                   onSend={sendWithAttachments}
+                  onQueueNext={
+                    activeId && !(revisionDraft && activeId === revisionDraft.draftSessionId)
+                      ? queueNextMessage
+                      : undefined
+                  }
+                  messageQueue={activeMessageQueue}
+                  onRetractQueue={retractMessageQueue}
                   onStop={stop}
                   revisionNotice={
                     revisionDraft && activeId === revisionDraft.draftSessionId

@@ -1,3 +1,4 @@
+import type { MessageQueueSnapshot } from '@maka/core';
 import type { InteractionQueues } from '@maka/ui';
 import type { AppShellSessionUiState, AppShellSessionUiStateController } from './app-shell-session-ui-state.js';
 import {
@@ -12,6 +13,9 @@ import { useAppShellSessionUiSelector } from './use-app-shell-session-ui-selecto
 const selectMessageLoadError = (state: AppShellSessionUiState) => state.messageLoadErrorBySession;
 const selectMessageRetryPending = (state: AppShellSessionUiState) => state.messageRetryPendingBySession;
 const selectStopPending = (state: AppShellSessionUiState) => state.stopPendingBySession;
+const EMPTY_MESSAGE_QUEUE: MessageQueueSnapshot = { steering: [], followup: [] };
+const selectActiveMessageQueue = (state: AppShellSessionUiState, sessionId: string | undefined) =>
+  (sessionId ? state.messageQueueBySession[sessionId] : undefined) ?? EMPTY_MESSAGE_QUEUE;
 const selectInteraction = (state: AppShellSessionUiState) => state.interactionBySession;
 const selectPendingPermissionMode = (state: AppShellSessionUiState) => state.pendingPermissionModeBySession;
 const selectPendingSessionModel = (state: AppShellSessionUiState) => state.pendingSessionModelBySession;
@@ -56,6 +60,7 @@ export function useAppShellSessionUiReads(
   pendingSessionModelBySession: Record<string, boolean>;
   streamingSessionIds: Set<string>;
   activeLiveTurnSnapshot: LiveTurnSnapshot;
+  activeMessageQueue: MessageQueueSnapshot;
 } {
   return {
     messageLoadErrorBySession: useAppShellSessionUiSelector(controller, selectMessageLoadError),
@@ -70,6 +75,11 @@ export function useAppShellSessionUiReads(
       selectActiveSnapshot,
       activeId,
       liveTurnSnapshotsEqual,
+    ),
+    activeMessageQueue: useAppShellSessionUiSelector(
+      controller,
+      selectActiveMessageQueue,
+      activeId,
     ),
   };
 }

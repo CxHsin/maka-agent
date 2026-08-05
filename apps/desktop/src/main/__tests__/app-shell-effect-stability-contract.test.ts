@@ -67,6 +67,7 @@ type RendererMakaStub = {
     list(): Promise<ProjectRecord[]>;
   };
   sessions: {
+    readMessageQueue(sessionId: string): Promise<{ steering: string[]; followup: string[] }>;
     readMessages(sessionId: string): Promise<StoredMessage[]>;
     subscribeChanges(callback: (event: { reason: string; sessionId?: string; ts: number; turnId?: string }) => void): () => void;
     subscribeEvents(sessionId: string, callback: (event: SessionEvent) => void): () => void;
@@ -994,6 +995,7 @@ function installFakeMaka(captured: CapturedSubscriptions): void {
       list: async () => [],
     },
     sessions: {
+      readMessageQueue: async () => ({ steering: [], followup: [] }),
       readMessages: async () => [],
       subscribeChanges(callback: (event: { reason: string; sessionId?: string; ts: number; turnId?: string }) => void) {
         captured.sessionChange = callback;

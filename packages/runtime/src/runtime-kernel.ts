@@ -1559,7 +1559,9 @@ export class RuntimeKernel implements RuntimeKernelLike {
       // must not see (or drain) another owner's queue.
       hasPendingSteering = () => {
         const current = this.steeringBySession.get(sessionId);
-        return Boolean(current && current.activeTurnId === run.turnId && current.steering.length > 0);
+        return Boolean(
+          current && current.activeTurnId === run.turnId && current.steering.length > 0,
+        );
       };
       // Settlement is keyed by lease id + issuing turn, NOT by current
       // ownership: an overlapping turn that takes the owner slot must not

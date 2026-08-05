@@ -14506,7 +14506,6 @@ function runtimeExecute(
     ).result;
 }
 
-
 describe('AiSdkBackend steering continuation pass (#1954)', () => {
   // A steer that arrives DURING the turn's final provider step (a pure-text
   // answer, no tool call to justify another loop pass) must still steer the
@@ -14587,7 +14586,8 @@ describe('AiSdkBackend steering continuation pass (#1954)', () => {
         hasPendingSteering: () => pendingSteer && steers.length > 0,
         ackSteering: () => {},
         nackSteering: () => {},
-      })) events.push(event);
+      }))
+        events.push(event);
     })();
 
     await waitFor(() => events.some((event) => event.type === 'text_delta'));
@@ -14602,12 +14602,17 @@ describe('AiSdkBackend steering continuation pass (#1954)', () => {
     assert.equal(streamCalls, 2);
     assert.equal(model.doStreamCalls.length, 2);
     // The continuation request carries the steer as a trailing envelope.
-    const continuationPrompt = model.doStreamCalls[1]?.prompt as { role: string; content: unknown }[] | undefined;
+    const continuationPrompt = model.doStreamCalls[1]?.prompt as
+      | { role: string; content: unknown }[]
+      | undefined;
     const last = continuationPrompt?.[continuationPrompt.length - 1];
     assert.equal(last?.role, 'user');
-    const lastText = typeof last?.content === 'string'
-      ? last.content
-      : (last?.content as { type: string; text?: string }[] | undefined)?.find((part) => part.type === 'text')?.text;
+    const lastText =
+      typeof last?.content === 'string'
+        ? last.content
+        : (last?.content as { type: string; text?: string }[] | undefined)?.find(
+            (part) => part.type === 'text',
+          )?.text;
     assert.ok(
       typeof lastText === 'string' && lastText.includes('steer mid answer'),
       `continuation should carry the steer, got: ${JSON.stringify(lastText)}`,
@@ -14633,7 +14638,9 @@ describe('AiSdkBackend steering continuation pass (#1954)', () => {
             usage: continuationUsage(),
           },
         ];
-        return { stream: simulateReadableStream({ chunks, initialDelayInMs: null, chunkDelayInMs: null }) };
+        return {
+          stream: simulateReadableStream({ chunks, initialDelayInMs: null, chunkDelayInMs: null }),
+        };
       },
     });
     let pullCalls = 0;

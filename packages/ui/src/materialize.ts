@@ -354,6 +354,17 @@ export function overlayLiveTurn(
     if (settledItems.length > 0) timeline.push({ kind: 'tools', items: settledItems });
   }
   for (const step of liveTurn.steps) {
+    // #1954: a steer drained before this step started renders ahead of the
+    // step's own content (between the previous step's answer and the
+    // continuation that responds to the steer) - never as a trailing row.
+    for (const steer of step.steers ?? []) {
+      timeline.push({
+        kind: 'steer',
+        text: steer.text,
+        messageId: steer.messageId,
+        ...(steer.ts !== undefined ? { ts: steer.ts } : {}),
+      });
+    }
     const contentOrder = step.contentOrder ?? [
       ...(step.thinking ? ['thinking' as const] : []),
       ...(step.text ? ['text' as const] : []),

@@ -828,3 +828,126 @@ describe('reconcileTerminalLiveTurn', () => {
     });
   });
 });
+
+
+describe('mid-turn steering (#1954)', () => {
+  type Override = Record<string, unknown>;
+  const steerEvent = (overrides: Override = {}) =>
+    ({
+      type: 'steering_message',
+      id: 'steer-1',
+      turnId: 'turn-1',
+      messageId: 'steer-msg-1',
+      ts: 200,
+      content: { text: '改成英文输出' },
+      ...overrides,
+    }) as never;
+
+  const textDelta = (overrides: Override = {}) =>
+    ({
+      type: 'text_delta',
+      id: 't-1',
+      turnId: 'turn-1',
+      messageId: 'step-2',
+      ts: 250,
+      text: 'The summary',
+      ...overrides,
+    }) as never;
+
+  it('queues a steer into pendingSteers and binds it to the next step', () => {
+    // step-1 finished; steer drained at the boundary before step-2 opens.
+    const base: LiveTurnProjection = {
+      turnId: 'turn-1',
+      phase: 'streamed',
+      steps: [{ stepId: 'step-1', tools: [] }],
+      pendingSteers: [],
+    };
+    const steered = applyLiveTurnEvent(base, steerEvent());
+    assert.deepEqual(steered?.pendingSteers, [
+      { messageId: 'steer-msg-1', text: '改成英文输出', ts: 200 },
+    ]);
+    assert.equal(steered?.steps.length, 1, 'a steer alone opens no step');
+
+    // step-2 opens: it claims the pending steer.
+    const continued = applyLiveTurnEvent(steered, textDelta());
+    const step2 = continued?.steps[1];
+    assert.equal(step2?.stepId, 'step-2');
+    assert.deepEqual(step2?.steers, [
+      { messageId: 'steer-msg-1', text: '改成英文输出', ts: 200 },
+    ]);
+    assert.equal(continued?.pendingSteers?.length, 0, 'steer claimed by the new step');
+  });
+
+  it('keeps a steer pending when the steer and the step arrive out of order', () => {
+    // text_delta arrives first (existing streaming step), then the steer.
+    const base: LiveTurnProjection = {
+      turnId: 'turn-1',
+      phase: 'streamed',
+      steps: [{ stepId: 'step-1', tools: [] }],
+      pendingSteers: [],
+    };
+    const streamed = applyLiveTurnEvent(base, textDelta({ messageId: 'step-1' }));
+    const steered = applyLiveTurnEvent(streamed, steerEvent());
+    assert.deepEqual(steered?.pendingSteers, [
+      { messageId: 'steer-msg-1', text: '改成英文输出', ts: 200 },
+    ]);
+    // step-1 already existed, so no step claims the steer; it waits for step-2.
+    assert.equal(steered?.steps.length, 1);
+  });
+
+  it('overlayLiveTurn renders a bound steer ahead of the step content', () => {
+    // Realistic shape: step-1 already settled out of the live projection (its
+    // text lives in the persisted timeline); only the streaming step-2 remains,
+    // carrying the steer drained at the boundary between them.
+    const live: LiveTurnProjection = {
+      turnId: 'turn-1',
+      phase: 'streamed',
+      steps: [
+        {
+          stepId: 'step-2',
+          tools: [],
+          contentOrder: ['text'],
+          text: { text: 'The summary', complete: false, truncated: false },
+          steers: [{ messageId: 'steer-msg-1', text: '改成英文输出', ts: 200 }],
+        },
+      ],
+    };
+    const turn = {
+      turnId: 'turn-1',
+      status: 'running' as const,
+      partialOutputRetained: false,
+      tools: [],
+      notes: [],
+      timeline: [
+        { kind: 'text' as const, text: 'done', messageId: 'step-1', complete: true },
+      ],
+      startedAt: 100,
+    };
+    const overlaid = overlayLiveTurn([turn], live);
+    const kinds = overlaid[0]?.timeline.map((item) => item.kind);
+    // steer renders between step-1's text and step-2's live text.
+    assert.deepEqual(kinds, ['text', 'steer', 'text']);
+    const steer = overlaid[0]?.timeline.find((item) => item.kind === 'steer');
+    assert.equal(steer?.kind === 'steer' ? steer.text : undefined, '改成英文输出');
+    const texts = overlaid[0]?.timeline.filter((item) => item.kind === 'text');
+    assert.equal(texts?.length, 2, 'one settled + one live text, no duplicate');
+  });
+
+  it('ignores a steering_message without text', () => {
+    const base: LiveTurnProjection = {
+      turnId: 'turn-1',
+      phase: 'streamed',
+      steps: [],
+      pendingSteers: [],
+    };
+    const empty = applyLiveTurnEvent(base, {
+      type: 'steering_message',
+      id: 's',
+      turnId: 'turn-1',
+      messageId: 'm',
+      ts: 1,
+      content: { text: '   ' },
+    } as never);
+    assert.equal(empty, base, 'blank steer leaves the projection untouched');
+  });
+});

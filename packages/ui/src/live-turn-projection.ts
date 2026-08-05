@@ -6,12 +6,25 @@ import type { ToolActivityItem } from './materialize.js';
 import { applyThinkingComplete, applyThinkingDelta } from './thinking-stream.js';
 import { applyToolOutputChunk } from './tool-output-stream.js';
 
-type LiveTurnContentEvent = Extract<SessionEvent, { type: 'thinking_delta' | 'thinking_complete' | 'text_delta' | 'text_complete' | 'tool_start' | 'tool_output_delta' | 'tool_result' }>;
+type LiveTurnContentEvent = Extract<SessionEvent, { type: 'thinking_delta' | 'thinking_complete' | 'text_delta' | 'text_complete' | 'tool_start' | 'tool_output_delta' | 'tool_result' | 'steering_message' }>;
 
 export interface LiveThinkingProjection {
   text: string;
   truncated: boolean;
   complete: boolean;
+}
+
+/**
+ * A mid-turn steering injection surfaced at its step boundary (#1954). The
+ * backend emits `steering_message` when it drains the steer queue; the next
+ * live step that opens afterwards carries it, so it renders between the
+ * previous step's content and the continuation that answers it - never as a
+ * trailing row appended to the turn.
+ */
+export interface LiveSteerProjection {
+  messageId: string;
+  text: string;
+  ts: number;
 }
 
 export interface LiveTurnStepProjection {
@@ -20,6 +33,8 @@ export interface LiveTurnStepProjection {
   thinking?: LiveThinkingProjection;
   text?: LiveTextProjection;
   tools: ToolActivityItem[];
+  /** Steers drained before this step started; rendered ahead of its content. */
+  steers?: LiveSteerProjection[];
 }
 
 export type LiveTurnStepContentKind = 'thinking' | 'text' | 'tools';
@@ -48,6 +63,13 @@ export interface LiveTurnProjection {
   unconfirmed?: true;
   providerRetry?: ProviderRetryEvent;
   steps: LiveTurnStepProjection[];
+  /**
+   * Steers drained at a step boundary whose continuation step has not opened
+   * yet. Bound to the next step when it is created, so the steer renders ahead
+   * of the content that answers it (#1954).
+   */
+  /** Present once a steer is drained; absent for turns without steering. */
+  pendingSteers?: LiveSteerProjection[];
 }
 
 function terminalizeLiveSteps(steps: readonly LiveTurnStepProjection[]): LiveTurnStepProjection[] {
@@ -78,7 +100,7 @@ function appendContentKind(
 }
 
 export function armLiveTurn(turnId: string): LiveTurnProjection {
-  return { turnId, phase: 'waiting', steps: [], unconfirmed: true };
+  return { turnId, phase: 'waiting', steps: [], pendingSteers: [], unconfirmed: true };
 }
 
 /** Drop the `unconfirmed` claim; identity-preserving when there is none. */
@@ -119,7 +141,7 @@ export function applyLiveTurnEvent(
   if (event.type === 'provider_retry') {
     const prior = current?.turnId === event.turnId
       ? current
-      : { turnId: event.turnId, phase: 'waiting' as const, steps: [] };
+      : { turnId: event.turnId, phase: 'waiting' as const, steps: [], pendingSteers: [] };
     return { ...confirmed(prior), providerRetry: event };
   }
   if (event.type === 'error' || event.type === 'abort') {
@@ -139,6 +161,23 @@ export function applyLiveTurnEvent(
       steps: terminalizeLiveSteps(current.steps),
     };
   }
+  if (event.type === 'steering_message') {
+    if (!event.content?.text?.trim()) return current;
+    const prior = current?.turnId === event.turnId
+      ? current
+      : { turnId: event.turnId, phase: 'streamed' as const, steps: [], pendingSteers: [] };
+    // A steering message is drained at a step boundary, so the steer binds to
+    // the NEXT step (the continuation that answers it). If a step is already
+    // streaming, the steer is still rendered ahead of it: it belongs between
+    // the finished step's content and everything that follows.
+    return {
+      ...confirmed(prior),
+      pendingSteers: [
+        ...(prior.pendingSteers ?? []),
+        { messageId: event.messageId, text: event.content.text, ts: event.ts },
+      ],
+    };
+  }
   if (
     event.type !== 'thinking_delta'
     && event.type !== 'thinking_complete'
@@ -152,7 +191,7 @@ export function applyLiveTurnEvent(
   }
   const prior = current?.turnId === event.turnId
     ? current
-    : { turnId: event.turnId, phase: 'streamed' as const, steps: [] };
+    : { turnId: event.turnId, phase: 'streamed' as const, steps: [], pendingSteers: [] };
   const { providerRetry: _providerRetry, ...priorWithoutRetry } = confirmed(prior);
   const messageEvent = event.type === 'thinking_delta'
     || event.type === 'thinking_complete'
@@ -169,7 +208,20 @@ export function applyLiveTurnEvent(
       ? event.stepId ?? existingToolStep?.stepId ?? `tool:${event.toolUseId}`
       : existingToolStep?.stepId ?? `tool:${event.toolUseId}`;
   const stepIndex = prior.steps.findIndex((step) => step.stepId === stepId);
-  const step = stepIndex >= 0 ? prior.steps[stepIndex]! : { stepId, tools: [] };
+  // #1954: a steer drained at the previous step boundary binds to the NEXT
+  // step (the continuation that answers it), rendering ahead of its content.
+  // The pending list clears once claimed; a steer arriving while this step is
+  // already streaming stays pending for the following step.
+  const isNewStep = stepIndex < 0;
+  const priorSteers = prior.pendingSteers ?? [];
+  const step: LiveTurnStepProjection = isNewStep
+    ? {
+        stepId,
+        tools: [],
+        ...(priorSteers.length > 0 ? { steers: priorSteers } : {}),
+      }
+    : prior.steps[stepIndex]!;
+  const nextPendingSteers = isNewStep ? [] : priorSteers;
   let nextStep: LiveTurnStepProjection;
   if (event.type === 'thinking_delta') {
     const applied = applyThinkingDelta(step.thinking?.text ?? '', event.text, { locale });
@@ -311,7 +363,7 @@ export function applyLiveTurnEvent(
       ? prior.steps.map((candidate, index) => index === stepIndex ? nextStep : candidate)
       : [...prior.steps, nextStep];
   }
-  return { ...priorWithoutRetry, phase: 'streamed', steps };
+  return { ...priorWithoutRetry, phase: 'streamed', steps, pendingSteers: nextPendingSteers };
 }
 
 /**

@@ -1766,28 +1766,6 @@ function AppShellContent({
       // never surfaces as an unhandled promise rejection.
       void window.maka.notifications.runEnded({ kind, title, body }).catch(() => {});
     },
-    // #1954: surface a steered message in the transcript immediately instead of
-    // waiting for the persisted read (which lags the active turn's in-flight
-    // projection cache). The id is the ledger event id, so the durable read
-    // replaces rather than duplicates this optimistic row.
-    onSteeringMessage: (sessionId, message) => {
-      if (sessionId !== activeIdRef.current) return;
-      setMessages((current) => [
-        // Drop the optimistic pending-steer row (same turn, pending-steer- id)
-        // that the send path added on steer, so the durable row replaces it
-        // instead of duplicating it.
-        ...current.filter(
-          (m) => !(m.type === 'user' && m.turnId === message.turnId && m.id.startsWith('pending-steer-')),
-        ),
-        {
-          type: 'user',
-          id: message.messageId,
-          turnId: message.turnId,
-          ts: message.ts,
-          text: message.text,
-        },
-      ]);
-    },
   });
 
   // Streaming-settle handoff, FALLBACK path only. The bubble's primary

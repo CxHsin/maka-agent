@@ -113,26 +113,6 @@ function toIngestItems(pending: readonly PendingAttachment[]): RendererIngestInp
   );
 }
 
-/**
- * #1954: keep locally-optimistic steering rows across a persisted read.
- * `refreshMessages` replaces the whole list with the durable snapshot, but a
- * pending steer (queued at send, before the backend emits its durable
- * steering_message at the next step boundary) only exists locally - the
- * in-flight projection cache of a running turn lags it. Without this the
- * optimistic row vanishes the moment the refresh lands and the steered text
- * is invisible until the turn settles; the durable steering_message handler
- * removes the pending row when it appends the real one.
- */
-export function preservePendingSteers(
-  current: readonly StoredMessage[],
-  next: readonly StoredMessage[],
-): StoredMessage[] {
-  const pending = current.filter(
-    (message) => message.type === 'user' && message.id.startsWith('pending-steer-'),
-  );
-  return pending.length > 0 ? [...next, ...pending] : [...next];
-}
-
 export function createAppShellChatActions(deps: {
   uiLocale: UiLocale;
   activeIdRef: RefBox<string | undefined>;
@@ -437,25 +417,6 @@ export function createAppShellChatActions(deps: {
         disarmTurnActive(sessionId, turnId);
         optimisticSessionId = undefined;
         optimisticTurnId = undefined;
-        // #1954: the steer is queued in the running turn, but the backend only
-        // emits the durable steering_message at the next step boundary - which,
-        // while the model is still streaming, may be a long way off. Surface the
-        // guided text immediately with a local pending-steer row so the user
-        // sees their steer land; the durable steering_message handler replaces
-        // it (same turnId + pending-steer- id prefix) once the step flushes.
-        if (activeIdRef.current === sessionId) {
-          const pendingId = `pending-steer-${turnId}-${Date.now()}`;
-          setMessages((current) => [
-            ...current,
-            {
-              type: 'user',
-              id: pendingId,
-              turnId,
-              ts: Date.now(),
-              text,
-            },
-          ]);
-        }
         await refreshMessages(sessionId);
         await refreshSessions();
         return true;
@@ -573,7 +534,7 @@ export function createAppShellChatActions(deps: {
       const next = result.messages;
       if (activeIdRef.current === sessionId) {
         markSessionReadLocally(sessionId, next);
-        setMessages((current) => preservePendingSteers(current, next));
+        setMessages(next);
         setMessageLoadErrorBySession((current) => {
           if (!current[sessionId]) return current;
           const updated = { ...current };

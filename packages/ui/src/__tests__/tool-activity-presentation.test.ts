@@ -452,14 +452,44 @@ describe('tool activity presentation', () => {
     // `index` and the `---`/`+++` file headers are hidden: the heading already
     // names the path. The `diff --git` separator stays — it is the only
     // in-body boundary between files in a multi-file diff.
-    assert.deepEqual(kinds, ['meta', 'hunk', 'ctx', 'del', 'add']);
+    assert.deepEqual(kinds, ['meta', 'ctx', 'del', 'add']);
     assert.doesNotMatch(markup, /index 1111111/);
     assert.doesNotMatch(markup, /--- a\/packages/);
     assert.doesNotMatch(markup, /\+\+\+ b\/packages/);
+    // Every content row carries its line number: new-side for ctx/add,
+    // old-side for del; the hunk header feeds the counters and is not a row.
+    assert.deepEqual(diffGutterNumbers(markup), ['', '1', '2', '2']);
     // The heading is the changed path, in the same surface a command uses.
     assert.equal((markup.match(/data-slot="tool-output"/g) ?? []).length, 1);
     assert.match(markup, /class="maka-tool-output-command"[^>]*>packages\/ui\/src\/tool-activity\.tsx</);
     assert.doesNotMatch(markup, /astryx-codeblock/);
+  });
+
+  it('resumes line numbering from each hunk header', () => {
+    const markup = renderToStaticMarkup(createElement(ToolResultPreview, {
+      content: {
+        kind: 'file_diff',
+        paths: ['x.ts'],
+        diff: [
+          '@@ -10,2 +10,2 @@',
+          ' kept',
+          '-old',
+          '+new',
+          ' tail',
+          '@@ -20,1 +20,2 @@',
+          '-gone',
+          '+first',
+          '+second',
+        ].join('\n'),
+      },
+    }));
+
+    assert.deepEqual(
+      Array.from(markup.matchAll(/data-line="(\w+)"/g)).map((m) => m[1]),
+      ['ctx', 'del', 'add', 'ctx', 'del', 'add', 'add'],
+    );
+    assert.deepEqual(diffGutterNumbers(markup), ['10', '11', '11', '12', '20', '20', '21']);
+    assert.doesNotMatch(markup, /@@/);
   });
 
   // `---`/`+++` only mark a file when the marker is followed by a path. Testing
@@ -485,7 +515,7 @@ describe('tool activity presentation', () => {
     }));
     assert.deepEqual(
       Array.from(markup.matchAll(/data-line="(\w+)"/g)).map((m) => m[1]),
-      ['hunk', 'del', 'add'],
+      ['del', 'add'],
     );
   });
 
@@ -658,6 +688,10 @@ describe('tool activity presentation', () => {
     });
   });
 });
+
+function diffGutterNumbers(markup: string): string[] {
+  return Array.from(markup.matchAll(/maka-tool-diff-gutter"[^>]*>([^<]*)</g)).map((m) => m[1]);
+}
 
 function pipeOutput(stdout = '', stderr = '') {
   return {

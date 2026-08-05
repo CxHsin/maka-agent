@@ -300,6 +300,54 @@ export function isDiffHeaderLine(line: string): boolean {
   return line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('index ');
 }
 
+type DiffPreviewRow = {
+  kind: 'add' | 'del' | 'ctx' | 'meta';
+  text: string;
+  lineNumber?: number;
+};
+
+/**
+ * Parse a unified diff into display rows. `@@` headers feed the line-number
+ * counters instead of becoming rows: a deletion shows its old-side number,
+ * additions and context the new-side one, and a numbering jump is what marks
+ * a hunk boundary. `diff --git` separators stay as unnumbered meta rows —
+ * the only in-body boundary between files. A foreign diff with no hunk
+ * headers degrades to unnumbered rows.
+ */
+function diffPreviewRows(lines: string[]): DiffPreviewRow[] {
+  const rows: DiffPreviewRow[] = [];
+  let oldLine = 0;
+  let newLine = 0;
+  let seenHunk = false;
+  for (const line of lines) {
+    if (isDiffHeaderLine(line)) continue;
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      seenHunk = true;
+      continue;
+    }
+    const kind = diffLineKind(line);
+    if (kind === 'del') {
+      rows.push({ kind, text: line, ...(seenHunk ? { lineNumber: oldLine } : {}) });
+      if (seenHunk) oldLine += 1;
+    } else if (kind === 'add') {
+      rows.push({ kind, text: line, ...(seenHunk ? { lineNumber: newLine } : {}) });
+      if (seenHunk) newLine += 1;
+    } else if (kind === 'ctx') {
+      rows.push({ kind, text: line, ...(seenHunk ? { lineNumber: newLine } : {}) });
+      if (seenHunk) {
+        oldLine += 1;
+        newLine += 1;
+      }
+    } else {
+      rows.push({ kind: 'meta', text: line });
+    }
+  }
+  return rows;
+}
+
 function FileDiffPreview(props: { diff: string; paths: string[] }) {
   const copy = getToolActivityCopy(useUiLocale()).result;
   // Apply UI-level redaction then cap the displayed lines. Both are
@@ -314,9 +362,12 @@ function FileDiffPreview(props: { diff: string; paths: string[] }) {
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
   // `---`/`+++` file headers and `index` hashes repeat what the heading
   // already says — hidden visually; the copyable body keeps the full
-  // standard diff. `diff --git` stays: it is the only in-body boundary
-  // between files in a multi-file diff.
-  const visible = lines.filter((line) => !isDiffHeaderLine(line));
+  // standard diff.
+  const rows = diffPreviewRows(lines);
+  const numbered = rows.some((row) => row.lineNumber !== undefined);
+  const digits = numbered
+    ? String(rows.reduce((max, row) => Math.max(max, row.lineNumber ?? 0), 0)).length
+    : 0;
   return (
     <ToolOutputSurface
       kind="file_diff"
@@ -324,15 +375,20 @@ function FileDiffPreview(props: { diff: string; paths: string[] }) {
       body={body}
     >
       <pre className={previewVariants({ part: 'diff-body' })}>
-        {visible.map((line, index) => (
+        {rows.map((row, index) => (
           <span
             // Index keys: the list is a re-split of one immutable string, so a
             // line's position is its identity.
             key={index}
             className={previewVariants({ part: 'diff-line' })}
-            data-line={diffLineKind(line)}
+            data-line={row.kind}
           >
-            {line}
+            {numbered && (
+              <span className="maka-tool-diff-gutter" style={{ minWidth: `${digits}ch` }}>
+                {row.lineNumber ?? ''}
+              </span>
+            )}
+            {row.text}
             {'\n'}
           </span>
         ))}

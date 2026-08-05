@@ -505,6 +505,16 @@
   padding-block: 0;
 }
 .maka-tool-diff-line { display: block; padding-inline: var(--space-2); white-space: pre; }
+.maka-tool-diff-gutter {
+  display: inline-block;
+  box-sizing: content-box;
+  text-align: right;
+  padding-right: var(--space-2);
+  margin-right: var(--space-1);
+  border-right: 1px solid var(--border);
+  color: var(--muted-foreground);
+  user-select: none;
+}
 .maka-tool-diff-line[data-line="add"] { background: oklch(from var(--success) l c h / 0.1); color: var(--success-text); }
 .maka-tool-diff-line[data-line="del"] { background: oklch(from var(--destructive) l c h / 0.1); color: var(--destructive); }
 .maka-tool-diff-line[data-line="hunk"] {

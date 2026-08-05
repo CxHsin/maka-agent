@@ -21,10 +21,18 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 let sequence = 0;
 const counter = () => (sequence += 1);
 
-/** Liveness observed from OUTSIDE the manager, so a record-only mutation fails. */
+/**
+ * Liveness observed from OUTSIDE the manager, so a record-only mutation fails.
+ *
+ * pgrep runs unwrapped on purpose. A `sh -c "pgrep -f MARKER || true"` wrapper
+ * carries the marker in its OWN argv, and pgrep excludes only itself, not its
+ * parent shell — the wrapper would count itself and make this probe report 1 no
+ * matter what the manager did. pgrep exits 1 when nothing matches, which is the
+ * zero case rather than an error.
+ */
 async function markedProcessCount(marker: string): Promise<number> {
   try {
-    const { stdout } = await execFileAsync('/bin/sh', ['-c', `pgrep -f ${marker} || true`]);
+    const { stdout } = await execFileAsync('pgrep', ['-f', marker]);
     return stdout.split('\n').filter((line) => line.trim().length > 0).length;
   } catch {
     return 0;

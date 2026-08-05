@@ -88,6 +88,8 @@ export interface DesktopConversationCopy {
     filterClear: string;
     noMatches: string;
     hiddenByFilter: string;
+    /** Display name of one turn in the raw record: 第 N 轮 / Turn N. */
+    turnLabel: (index: number) => string;
     /** Summary above the raw timeline. */
     overview: {
       context: string;
@@ -204,6 +206,7 @@ const COPY = {
       filterClear: '清除筛选',
       noMatches: '没有匹配的步骤——这个会话本身是有内容的',
       hiddenByFilter: '项被筛选隐藏',
+      turnLabel: (index) => `第 ${index} 轮`,
       overview: {
         context: '上下文',
         model: '模型',
@@ -304,6 +307,7 @@ const COPY = {
       filterClear: 'Clear filter',
       noMatches: 'Nothing matches this filter — the session itself is not empty',
       hiddenByFilter: 'hidden by the filter',
+      turnLabel: (index) => `Turn ${index}`,
       overview: {
         context: 'Context',
         model: 'Model',

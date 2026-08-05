@@ -161,35 +161,80 @@
   padding: 0;
   display: flex;
   flex-direction: column;
+}
+
+.maka-inspector-turns {
+  gap: 0;
+}
+
+/* One turn is one block: a hairline above, a header line that names it the
+   way a reader counts turns (第 N 轮, never the uuid), and hanging steps. */
+.maka-inspector-turn {
+  border-top: var(--border-width-hairline) solid var(--border);
+  padding-block: var(--space-2);
+  display: flex;
+  flex-direction: column;
   gap: var(--space-1);
 }
 
-.maka-inspector-turn {
-  border-top: var(--border-width-hairline) solid var(--border);
-  padding-top: var(--space-2);
+.maka-inspector-turn-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.maka-inspector-turn-meta {
+  margin-left: auto;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .maka-inspector-steps {
-  padding-left: var(--space-3);
+  gap: var(--space-0-5);
 }
 
 .maka-inspector-step {
   display: flex;
   align-items: baseline;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+  gap: var(--space-1-5);
 }
 
-.maka-inspector-step-kind {
-  text-transform: lowercase;
+.maka-inspector-step-icon {
+  align-self: center;
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
 }
 
-.maka-inspector-step[data-failed='true'] {
+.maka-inspector-step-meta {
+  margin-left: auto;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.maka-inspector-step[data-failed='true'],
+.maka-inspector-step[data-failed='true'] .maka-inspector-step-icon {
   color: var(--destructive-text);
 }
 
 .maka-inspector-cost {
   font-variant-numeric: tabular-nums;
+}
+
+/* The coverage notice, demoted: one quiet line inside the raw record, not a
+   banner competing with the overview it comments on. */
+.maka-inspector-coverage-note {
+  font: var(--maka-text-supporting);
+  color: var(--warning-text);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1-5);
+  margin: 0;
+}
+
+.maka-inspector-coverage-note > svg {
+  align-self: center;
+  flex: 0 0 auto;
 }
 
 .maka-inspector-raw {

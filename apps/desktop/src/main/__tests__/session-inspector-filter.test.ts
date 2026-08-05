@@ -24,6 +24,7 @@ function step(overrides: Partial<InspectorStepRow> = {}): InspectorStepRow {
 function turn(overrides: Partial<InspectorTurnRow> = {}): InspectorTurnRow {
   return {
     turnId: 'turn-1',
+    index: 1,
     startedAt: 1_000,
     durationMs: 500,
     totals: emptyTraceTotals(),

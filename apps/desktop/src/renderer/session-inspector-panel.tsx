@@ -13,7 +13,15 @@ import { Text } from '@astryxdesign/core/Text';
 import { TextInput } from '@astryxdesign/core/TextInput';
 import { PROVIDER_REGISTRY, uiLocaleToIntlLocale, type UiLocale } from '@maka/core';
 import { useUiLocale } from '@maka/ui';
-import { Activity } from '@maka/ui/icons';
+import {
+  Activity,
+  AlertTriangle,
+  Archive,
+  ShieldCheck,
+  Sparkles,
+  Terminal,
+  type LucideIcon,
+} from '@maka/ui/icons';
 import { getDesktopConversationCopy } from './locales/conversation-copy.js';
 import {
   applyInspectorFilter,
@@ -82,25 +90,6 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
           />
         )}
 
-        {model.coverage && (
-          <Banner
-            status="warning"
-            data-maka-contract="session-inspector-coverage"
-            title={model.coverage.kind === 'absent' ? copy.coverageAbsent : copy.coveragePartial}
-            description={
-              [
-                model.coverage.turnsMissing > 0 &&
-                  `${model.coverage.turnsMissing} ${copy.turnsMissing}`,
-                model.coverage.turnsShort > 0 && `${model.coverage.turnsShort} ${copy.turnsShort}`,
-                model.coverage.unreadableRecords > 0 &&
-                  `${model.coverage.unreadableRecords} ${copy.unreadable}`,
-              ]
-                .filter(Boolean)
-                .join(' · ') || undefined
-            }
-          />
-        )}
-
         {/* Three different silences, kept apart: a read that failed, a filter
             that matches nothing, and a session that did nothing. Only the last
             one is "nothing to trace".
@@ -158,6 +147,31 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
             }
           >
             <VStack gap={2} className="maka-inspector-raw-body">
+              {model.coverage && (
+                <p
+                  className="maka-inspector-coverage-note"
+                  data-maka-contract="session-inspector-coverage"
+                >
+                  <AlertTriangle size={14} aria-hidden="true" />
+                  <span>
+                    {model.coverage.kind === 'absent'
+                      ? copy.coverageAbsent
+                      : copy.coveragePartial}
+                    {[
+                      model.coverage.turnsMissing > 0 &&
+                        `${model.coverage.turnsMissing} ${copy.turnsMissing}`,
+                      model.coverage.turnsShort > 0 &&
+                        `${model.coverage.turnsShort} ${copy.turnsShort}`,
+                      model.coverage.unreadableRecords > 0 &&
+                        `${model.coverage.unreadableRecords} ${copy.unreadable}`,
+                    ]
+                      .filter(Boolean)
+                      .map((part) => ` · ${part}`)
+                      .join('')}
+                  </span>
+                </p>
+              )}
+
               <HStack gap={2} vAlign="center" wrap="wrap">
                 <TextInput
                   size="sm"
@@ -188,6 +202,8 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
                   <TurnRow
                     key={turn.turnId}
                     turn={turn}
+                    locale={locale}
+                    turnLabel={copy.turnLabel}
                     costUnavailable={copy.costUnavailable}
                     failedLabel={copy.turnFailed}
                     recoveredLabel={copy.recovered}
@@ -302,12 +318,24 @@ function formatDateTime(locale: UiLocale, ms: number): string {
   }).format(new Date(ms));
 }
 
+/** A turn's wall-clock stamp: day + minute, short enough for a meta line. */
+function formatTurnTime(locale: UiLocale, ms: number): string {
+  return new Intl.DateTimeFormat(uiLocaleToIntlLocale(locale), {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(ms));
+}
+
 function formatPercent(ratio: number): string {
   return `${(ratio * 100).toFixed(1)}%`;
 }
 
 function TurnRow(props: {
   turn: InspectorTurnRow;
+  locale: UiLocale;
+  turnLabel: (index: number) => string;
   costUnavailable: string;
   failedLabel: string;
   recoveredLabel: string;
@@ -315,15 +343,9 @@ function TurnRow(props: {
   const { turn } = props;
   return (
     <li className="maka-inspector-turn" data-maka-contract="session-inspector-turn">
-      <HStack gap={2} vAlign="center" wrap="wrap">
+      <div className="maka-inspector-turn-head">
         <Text type="label" weight="semibold">
-          {turn.turnId}
-        </Text>
-        <Text type="supporting" color="secondary">
-          {formatDuration(turn.durationMs)}
-        </Text>
-        <Text type="supporting" color="secondary" className="maka-inspector-cost">
-          {formatCost(turn.totals.costUsd, props.costUnavailable)}
+          {props.turnLabel(turn.index)}
         </Text>
         {turn.failed && (
           <Badge
@@ -332,7 +354,11 @@ function TurnRow(props: {
             label={turn.failureCode ? `${props.failedLabel} · ${turn.failureCode}` : props.failedLabel}
           />
         )}
-      </HStack>
+        <Text type="supporting" color="secondary" className="maka-inspector-turn-meta">
+          {formatTurnTime(props.locale, turn.startedAt)} · {formatDuration(turn.durationMs)} ·{' '}
+          {formatCost(turn.totals.costUsd, props.costUnavailable)}
+        </Text>
+      </div>
       <ol className="maka-inspector-steps">
         {turn.steps.map((step) => (
           <StepRow
@@ -347,12 +373,27 @@ function TurnRow(props: {
   );
 }
 
+const STEP_ICONS: Record<InspectorStepRow['kind'], LucideIcon> = {
+  model_call: Sparkles,
+  tool: Terminal,
+  permission: ShieldCheck,
+  compaction: Archive,
+  error: AlertTriangle,
+};
+
 function StepRow(props: {
   step: InspectorStepRow;
   costUnavailable: string;
   recoveredLabel: string;
 }) {
   const { step } = props;
+  const Icon = STEP_ICONS[step.kind];
+  const meta = [
+    step.retries !== undefined ? `×${step.retries + 1}` : undefined,
+    step.durationMs !== undefined ? formatDuration(step.durationMs) : undefined,
+    step.kind === 'model_call' ? formatCost(step.costUsd, props.costUnavailable) : undefined,
+  ].filter(Boolean);
+
   return (
     <li
       className="maka-inspector-step"
@@ -360,10 +401,10 @@ function StepRow(props: {
       data-kind={step.kind}
       data-failed={step.failed || undefined}
     >
-      <Text type="supporting" color="secondary" className="maka-inspector-step-kind">
-        {step.kind}
+      <Icon size={14} aria-hidden="true" className="maka-inspector-step-icon" />
+      <Text type="supporting" weight="medium" className="maka-inspector-step-label">
+        {step.label}
       </Text>
-      <Text type="supporting">{step.label}</Text>
       {step.detail && (
         <Text type="supporting" color="secondary">
           {step.detail}
@@ -374,19 +415,9 @@ function StepRow(props: {
           {props.recoveredLabel}: {step.recovered}
         </Text>
       )}
-      {step.retries !== undefined && (
-        <Text type="supporting" color="secondary" className="maka-inspector-cost">
-          ×{step.retries + 1}
-        </Text>
-      )}
-      {step.durationMs !== undefined && (
-        <Text type="supporting" color="secondary">
-          {formatDuration(step.durationMs)}
-        </Text>
-      )}
-      {step.kind === 'model_call' && (
-        <Text type="supporting" color="secondary" className="maka-inspector-cost">
-          {formatCost(step.costUsd, props.costUnavailable)}
+      {meta.length > 0 && (
+        <Text type="supporting" color="secondary" className="maka-inspector-step-meta">
+          {meta.join(' · ')}
         </Text>
       )}
     </li>

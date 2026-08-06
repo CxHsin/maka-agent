@@ -52,10 +52,10 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
   // the number that named it.
   const failedTurns = trace.turns.filter((turn) => turn.failed).length;
   const hidden = model.hiddenTurns + model.hiddenSteps;
-  const hasOverview =
-    overview.context !== undefined ||
-    overview.cacheHitRate !== undefined ||
-    overview.model !== undefined;
+  // The model names the overview, and it is also the weakest condition for
+  // having one: the window and the cache rate are both read off the same model
+  // calls, so a session with either necessarily has a model to name.
+  const hasOverview = overview.model !== undefined;
 
   return (
     <Section
@@ -204,7 +204,10 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
  *
  * What survived a pass over "who reads this number, and to decide what":
  *
- * - The model leads, because it is the subject the rest is measured on.
+ * - The model TITLES the section, because it is the subject the rest is
+ *   measured on. As a caption under the stats it ranked below the numbers it
+ *   governs and read as an orphan; as a title it is the one line that says
+ *   what this panel is about.
  * - Cost, duration and cache hit rate are the three a reader opens the tab
  *   for, and as figures rather than table rows they also give the column
  *   something to fill.
@@ -234,26 +237,33 @@ function InspectorOverview(props: {
   const formatNumber = numberFormatter(props.locale);
   const context = overview.context;
   const totals = props.model.totals;
+  const modelRef = overview.model;
+  if (!modelRef) return null;
 
   return (
     <VStack gap={4} data-maka-contract="session-inspector-overview">
-      {/* The subject of every figure below it, and the only thing here that is
-          not a measurement: which model produced this session. It leads
-          because a cost, a window size and a cache rate all mean something
-          different depending on what answers to them. */}
-      {overview.model && (
-        <p className="maka-inspector-subject">
-          {providerLabel(overview.model.providerId)} / {overview.model.modelId}
-        </p>
-      )}
-
-      <dl className="maka-inspector-stats" data-maka-contract="session-inspector-stats">
-        <StatCell label={copy.totals.cost} value={formatCost(totals.costUsd, copy.costUnavailable)} />
-        <StatCell label={copy.totals.duration} value={formatDuration(totals.durationMs)} />
-        {overview.cacheHitRate !== undefined && (
-          <StatCell label={copy.overview.cacheHit} value={formatPercent(overview.cacheHitRate)} />
-        )}
-      </dl>
+      {/* The model IS this section's title, not a caption over it: it names
+          what the three figures below are figures OF, and a name that ranks
+          under the numbers it governs reads as an orphan. Same head line as
+          上下文窗口 and 时间轴 — title on the left, the fact that qualifies
+          it on the right — so the panel has one shape repeated three times
+          instead of three shapes. */}
+      <InspectorSection
+        title={modelRef.modelId}
+        readout={providerLabel(modelRef.providerId)}
+        data-maka-contract="session-inspector-model"
+      >
+        <dl className="maka-inspector-stats" data-maka-contract="session-inspector-stats">
+          <StatCell
+            label={copy.totals.cost}
+            value={formatCost(totals.costUsd, copy.costUnavailable)}
+          />
+          <StatCell label={copy.totals.duration} value={formatDuration(totals.durationMs)} />
+          {overview.cacheHitRate !== undefined && (
+            <StatCell label={copy.overview.cacheHit} value={formatPercent(overview.cacheHitRate)} />
+          )}
+        </dl>
+      </InspectorSection>
 
       {context && (
         <InspectorContextSection copy={copy} context={context} formatNumber={formatNumber} />

@@ -342,9 +342,14 @@
 /* Astryx's own heading tier, not a shrunk one. The properties panel in the
    Astryx IDE template is the reference for this whole surface: a level-3
    heading over body-sized facts and room to breathe — an inspector is read,
-   not scanned like a status bar. */
+   not scanned like a status bar.
+
+   A model id can be longer than the line, so this one title wraps rather than
+   pushing its readout off the panel. */
 .maka-inspector-section-title {
   color: var(--foreground);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .maka-inspector-section-readout {
@@ -485,16 +490,6 @@
 /* The figure is the one thing in the row worth full-strength ink. */
 .maka-inspector-grid-value {
   color: var(--foreground);
-  overflow-wrap: anywhere;
-}
-
-/* The subject line: which model this session's figures are about. It reads as
-   a caption over the stats rather than a fact among them, so it stays quiet
-   and sits above the tier it qualifies. */
-.maka-inspector-subject {
-  margin: 0;
-  font: var(--maka-text-body);
-  color: var(--foreground-secondary);
   overflow-wrap: anywhere;
 }
 

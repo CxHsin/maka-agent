@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import { Badge } from '@astryxdesign/core/Badge';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
@@ -6,7 +6,6 @@ import { Collapsible } from '@astryxdesign/core/Collapsible';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { Heading } from '@astryxdesign/core/Heading';
 import { HStack, VStack } from '@astryxdesign/core/Layout';
-import { MetadataList, MetadataListItem } from '@astryxdesign/core/MetadataList';
 import { Section } from '@astryxdesign/core/Section';
 import { Switch } from '@astryxdesign/core/Switch';
 import { Text } from '@astryxdesign/core/Text';
@@ -73,13 +72,13 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
   return (
     <Section
       variant="transparent"
-      padding={3}
+      padding={4}
       className="maka-inspector-panel"
       data-maka-contract="session-inspector"
       aria-label={copy.ariaLabel}
       aria-busy={snapshot.loading || undefined}
     >
-      <VStack gap={2} height="100%">
+      <VStack gap={4} height="100%">
         {snapshot.error && (
           <Banner
             status="error"
@@ -222,7 +221,15 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
  * The glance layer, in the two sections a reader actually asks about: how full
  * the window is right now, and what the session as a whole did. They are not
  * the same measurement — the bar is one call's prompt, the list is every
- * attempt summed — so they are not one undifferentiated list of numbers.
+ * attempt summed — so they are separate sections rather than one
+ * undifferentiated list of numbers.
+ *
+ * Both sections lay their facts out on ONE grid (`FactRow`) at one type size.
+ * Mixing MetadataList's page-sized body type into a 12px instrument panel is
+ * what made this read as noise: two neighbouring sections in two sizes claim a
+ * hierarchy between them that does not exist, and the Astryx list also paints
+ * from the neutral defaults rather than the product palette. Rank here comes
+ * from weight, colour and space — never from a second type size.
  */
 function InspectorOverview(props: {
   copy: InspectorCopy;
@@ -236,65 +243,125 @@ function InspectorOverview(props: {
   const tokens = overview.sessionTokens;
 
   return (
-    <VStack gap={3} data-maka-contract="session-inspector-overview">
+    <VStack gap={4} data-maka-contract="session-inspector-overview">
       {context && (
         <InspectorContextSection copy={copy} context={context} formatNumber={formatNumber} />
       )}
 
-      <VStack gap={1} className="maka-inspector-section">
-        <Heading level={3} className="maka-inspector-section-title">
-          {copy.overview.session}
-        </Heading>
-        <MetadataList className="maka-inspector-facts">
-        {overview.model && (
-          <MetadataListItem label={copy.overview.model}>
-            {providerLabel(overview.model.providerId)} / {overview.model.modelId}
-          </MetadataListItem>
-        )}
-        {tokens?.inputTokens !== undefined && (
-          <MetadataListItem label={copy.overview.input}>
-            {formatNumber(tokens.inputTokens)}
-          </MetadataListItem>
-        )}
-        {tokens?.cacheReadInputTokens !== undefined && (
-          <MetadataListItem label={copy.overview.cacheRead}>
-            {formatNumber(tokens.cacheReadInputTokens)}
-            {tokens.cacheHitRate !== undefined && ` · ${formatPercent(tokens.cacheHitRate)}`}
-          </MetadataListItem>
-        )}
-        {tokens?.outputTokens !== undefined && (
-          <MetadataListItem label={copy.overview.output}>
-            {formatNumber(tokens.outputTokens)}
-            {tokens.reasoningTokens !== undefined &&
-              ` · ${copy.overview.reasoning} ${formatNumber(tokens.reasoningTokens)}`}
-          </MetadataListItem>
-        )}
-        {overview.model && (
-          <MetadataListItem label={props.copy.totals.calls}>
-            {formatNumber(overview.model.callCount)}
-            {props.model.totals.retries > 0 &&
-              ` · ${copy.totals.retries} ${formatNumber(props.model.totals.retries)}`}
-          </MetadataListItem>
-        )}
-        {props.model.totals.compactions > 0 && (
-          <MetadataListItem label={copy.totals.compactions}>
-            {formatNumber(props.model.totals.compactions)}
-          </MetadataListItem>
-        )}
-        <MetadataListItem label={copy.totals.cost}>
-          {formatCost(props.model.totals.costUsd, copy.costUnavailable)}
-        </MetadataListItem>
-        <MetadataListItem label={copy.totals.duration}>
-          {formatDuration(props.model.totals.durationMs)}
-        </MetadataListItem>
-        {overview.lastActivityAt !== undefined && (
-          <MetadataListItem label={copy.overview.lastActivity}>
-            {formatDateTime(props.locale, overview.lastActivityAt)}
-          </MetadataListItem>
-        )}
-        </MetadataList>
-      </VStack>
+      <InspectorSection title={copy.overview.session}>
+        <dl className="maka-inspector-grid">
+          {overview.model && (
+            <FactRow
+              label={copy.overview.model}
+              value={`${providerLabel(overview.model.providerId)} / ${overview.model.modelId}`}
+            />
+          )}
+          {tokens?.inputTokens !== undefined && (
+            <FactRow label={copy.overview.input} value={formatNumber(tokens.inputTokens)} />
+          )}
+          {tokens?.cacheReadInputTokens !== undefined && (
+            <FactRow
+              label={copy.overview.cacheRead}
+              value={formatNumber(tokens.cacheReadInputTokens)}
+              note={
+                tokens.cacheHitRate !== undefined ? formatPercent(tokens.cacheHitRate) : undefined
+              }
+            />
+          )}
+          {tokens?.outputTokens !== undefined && (
+            <FactRow
+              label={copy.overview.output}
+              value={formatNumber(tokens.outputTokens)}
+              note={
+                tokens.reasoningTokens !== undefined
+                  ? `${copy.overview.reasoning} ${formatNumber(tokens.reasoningTokens)}`
+                  : undefined
+              }
+            />
+          )}
+          {overview.model && (
+            <FactRow
+              label={copy.totals.calls}
+              value={formatNumber(overview.model.callCount)}
+              note={
+                props.model.totals.retries > 0
+                  ? `${copy.totals.retries} ${formatNumber(props.model.totals.retries)}`
+                  : undefined
+              }
+            />
+          )}
+          {props.model.totals.compactions > 0 && (
+            <FactRow
+              label={copy.totals.compactions}
+              value={formatNumber(props.model.totals.compactions)}
+            />
+          )}
+          <FactRow
+            label={copy.totals.cost}
+            value={formatCost(props.model.totals.costUsd, copy.costUnavailable)}
+          />
+          <FactRow
+            label={copy.totals.duration}
+            value={formatDuration(props.model.totals.durationMs)}
+          />
+          {overview.lastActivityAt !== undefined && (
+            <FactRow
+              label={copy.overview.lastActivity}
+              value={formatDateTime(props.locale, overview.lastActivityAt)}
+            />
+          )}
+        </dl>
+      </InspectorSection>
     </VStack>
+  );
+}
+
+/** A titled block of the overview; the title is the only heading in it. */
+function InspectorSection(props: {
+  title: string;
+  readout?: ReactNode;
+  level?: 'warning' | 'error';
+  children: ReactNode;
+  'data-maka-contract'?: string;
+}) {
+  return (
+    <VStack
+      gap={2}
+      className="maka-inspector-section"
+      data-maka-contract={props['data-maka-contract']}
+    >
+      <div className="maka-inspector-section-head" data-level={props.level}>
+        <Heading level={3} className="maka-inspector-section-title">
+          {props.title}
+        </Heading>
+        {props.readout !== undefined && (
+          <span className="maka-inspector-section-readout">{props.readout}</span>
+        )}
+      </div>
+      {props.children}
+    </VStack>
+  );
+}
+
+/**
+ * One row of the overview grid: name, figure, and an optional qualifier.
+ *
+ * The third column is why the rows stay one line each — a cache rate, a retry
+ * count or a reasoning split used to be glued onto the figure with a middot,
+ * which made the value column ragged and the qualifier look like part of the
+ * number. Rows without one leave the column empty rather than collapsing it,
+ * so every figure in the section still ends on the same edge.
+ */
+function FactRow(props: { label: string; value: ReactNode; note?: ReactNode; swatch?: ReactNode }) {
+  return (
+    <div className="maka-inspector-grid-row">
+      <dt>
+        {props.swatch}
+        {props.label}
+      </dt>
+      <dd className="maka-inspector-grid-value">{props.value}</dd>
+      <dd className="maka-inspector-grid-note">{props.note}</dd>
+    </div>
   );
 }
 
@@ -319,17 +386,17 @@ function InspectorContextSection(props: {
   const level = context.ratio >= 0.9 ? 'error' : context.ratio >= 0.7 ? 'warning' : undefined;
 
   return (
-    <VStack gap={1} className="maka-inspector-section" data-maka-contract="session-inspector-context">
-      <div className="maka-inspector-section-head" data-level={level}>
-        <Heading level={3} className="maka-inspector-section-title">
-          {copy.overview.context}
-        </Heading>
-        <Text type="supporting" color="secondary" className="maka-inspector-section-readout">
+    <InspectorSection
+      title={copy.overview.context}
+      level={level}
+      data-maka-contract="session-inspector-context"
+      readout={
+        <>
           {formatNumber(context.usedTokens)} / {formatNumber(context.windowTokens)} ·{' '}
           {formatPercent(context.ratio)}
-        </Text>
-      </div>
-
+        </>
+      }
+    >
       <div className="maka-inspector-context-track" data-level={level} aria-hidden="true">
         {context.segments.map((segment) => (
           <span
@@ -343,27 +410,27 @@ function InspectorContextSection(props: {
         ))}
       </div>
 
-      {/* The legend is the accessible copy of the bar, and a three-column one
-          rather than a MetadataList: counts and shares only scan as columns
-          when they are actually aligned in a grid. */}
-      <dl className="maka-inspector-legend">
+      {/* The legend is the accessible copy of the bar, on the same grid as the
+          session facts below — one reading rhythm across the whole overview. */}
+      <dl className="maka-inspector-grid">
         {context.segments.map((segment) => (
-          <div key={segment.kind} className="maka-inspector-legend-row">
-            <dt>
+          <FactRow
+            key={segment.kind}
+            label={copy.overview.segment[segment.kind]}
+            swatch={
               <span
                 className="maka-inspector-context-swatch"
                 data-segment={segment.kind}
                 data-level={level}
                 aria-hidden="true"
               />
-              {copy.overview.segment[segment.kind]}
-            </dt>
-            <dd>{formatNumber(segment.tokens)}</dd>
-            <dd className="maka-inspector-legend-share">{formatPercent(segment.ratio)}</dd>
-          </div>
+            }
+            value={formatNumber(segment.tokens)}
+            note={formatPercent(segment.ratio)}
+          />
         ))}
       </dl>
-    </VStack>
+    </InspectorSection>
   );
 }
 

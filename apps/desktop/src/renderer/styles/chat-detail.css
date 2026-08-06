@@ -44,7 +44,7 @@
    column is, so the box has to outlive it. */
 .maka-workbar-motion {
   flex: 0 0 auto;
-  width: var(--maka-session-workbar-width, 400px);
+  width: var(--maka-session-workbar-width, 480px);
   min-height: 0;
   overflow: hidden;
   /* The canvas gutter between the two plates, and it belongs to this one: it
@@ -90,7 +90,7 @@
 }
 
 .maka-session-workbar {
-  width: var(--maka-session-workbar-width, 400px);
+  width: var(--maka-session-workbar-width, 480px);
   /* Load-bearing during the collapse, not just a resize clamp: it is what keeps
      the column at full width inside a box narrowing to zero. */
   min-width: 320px;
@@ -226,13 +226,18 @@
   gap: var(--space-2);
 }
 
+/* Astryx's own heading tier, not a shrunk one. The properties panel in the
+   Astryx IDE template is the reference for this whole surface: a level-3
+   heading over body-sized facts, one supporting line for what qualifies them,
+   and room to breathe — an inspector is read, not scanned like a status bar. */
 .maka-inspector-section-title {
-  font: var(--maka-text-heading-5);
-  color: var(--foreground-secondary);
+  color: var(--foreground);
 }
 
 .maka-inspector-section-readout {
   margin-left: auto;
+  font: var(--maka-text-supporting);
+  color: var(--muted-foreground);
   font-variant-numeric: tabular-nums;
 }
 
@@ -253,7 +258,7 @@
   --maka-context-fill: var(--accent);
   display: flex;
   gap: var(--border-width-thick);
-  height: var(--space-1-5);
+  height: var(--space-2);
   border-radius: var(--radius-pill);
   overflow: hidden;
 }
@@ -273,8 +278,8 @@
 
 .maka-inspector-context-swatch {
   --maka-context-fill: var(--accent);
-  width: var(--space-1);
-  height: var(--space-1);
+  width: var(--space-1-5);
+  height: var(--space-1-5);
   border-radius: var(--radius-pill);
   flex: 0 0 auto;
 }
@@ -308,51 +313,55 @@
   background: var(--muted);
 }
 
-/* MetadataList's default row rhythm is sized for a page; in a 400px workbar
-   column it puts nine facts on a scroll the legend above does not need. The
-   rows keep their grid and their type, and give up only the standalone
-   row height. */
-/* MetadataList puts its className on the wrapper, so the grid is one level in. */
-.maka-inspector-facts > dl {
-  row-gap: var(--space-1);
-}
+/* The overview's one data grid, shared by the context legend and the session
+   facts: name, figure, qualifier. Three real columns, because figures only
+   scan as a column when they actually end on the same edge, and one grid for
+   both sections, because two neighbouring lists in two different rhythms read
+   as two unrelated widgets.
 
-.maka-inspector-facts dt,
-.maka-inspector-facts dd {
-  min-height: 0;
-}
-
-/* Three real columns — name, count, share — so the numbers line up down the
-   list instead of each row ending wherever its name did. */
-.maka-inspector-legend {
+   Body type and the IDE template's `metadataCompact` rhythm (row space-1,
+   column space-3): the facts are the content of this panel, not its chrome.
+   Only the qualifier column steps down to supporting. */
+.maka-inspector-grid {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: auto 1fr auto;
   column-gap: var(--space-3);
-  row-gap: var(--space-0-5);
+  row-gap: var(--space-1);
   margin: 0;
-  font: var(--maka-text-supporting);
+  font: var(--maka-text-body);
 }
 
-.maka-inspector-legend-row {
+.maka-inspector-grid-row {
   display: contents;
 }
 
-.maka-inspector-legend dt {
+.maka-inspector-grid dt {
   display: flex;
   align-items: center;
-  gap: var(--space-1-5);
+  gap: var(--space-2);
   color: var(--foreground-secondary);
+  white-space: nowrap;
 }
 
-.maka-inspector-legend dd {
+.maka-inspector-grid dd {
   margin: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
+  min-width: 0;
 }
 
-.maka-inspector-legend-share {
+/* The figure is the one thing in the row worth full-strength ink. */
+.maka-inspector-grid-value {
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+
+/* The qualifier — a cache rate, a retry count, a reasoning split — sits in its
+   own column, one step down in size and ink, so it can never be misread as
+   part of the figure it follows. */
+.maka-inspector-grid-note {
+  font: var(--maka-text-supporting);
   color: var(--muted-foreground);
-  min-width: 5ch;
 }
 
 /* The coverage notice, demoted: one quiet line inside the raw record, not a
@@ -376,12 +385,15 @@
   padding-top: var(--space-2);
 }
 
-/* Same disclosure shape as the task ledger's 最近结束 fold: the Astryx
-   Collapsible trigger button carries a static color that cannot follow the
-   theme, so the product span carries its own (task-ledger.css precedent). */
+/* Same disclosure shape as the task ledger's 最近结束 fold, but sized as what
+   it is here: the overview's third section, so it wears the same heading tier
+   as 上下文窗口 and 会话 rather than a smaller one that would rank it below
+   them. The Astryx Collapsible trigger button carries a static color that
+   cannot follow the theme, so the product span carries its own
+   (task-ledger.css precedent). */
 .maka-inspector-raw-trigger {
-  font: var(--maka-text-heading-5);
-  color: var(--foreground-secondary);
+  font: var(--maka-text-heading-3);
+  color: var(--foreground);
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);

@@ -52,9 +52,16 @@
 
    Verified against the live app per the note above, not reasoned about: the
    seams' option rows now report identical computed color, weight, size and
-   padding. */
+   padding.
+
+   The session trace panel is on the list for the same reason, measured the
+   same way: its Astryx pieces (Text, Heading) reported #262626 / #737373
+   beside product-token figures in the very same rows, which is what a dense
+   instrument panel cannot absorb — every value there is meant to be compared
+   with the value beside it. */
 .maka-model-selection-controls,
-.maka-composer-workspace {
+.maka-composer-workspace,
+.maka-inspector-panel {
   --color-background-surface: var(--background);
   --color-background-popover: var(--background-elevated);
   --color-text-primary: var(--foreground);

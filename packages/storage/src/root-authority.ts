@@ -804,7 +804,7 @@ async function acquireStorageRootLock<K extends StorageRootKind, A extends Stora
     active = false;
     closePromise = withAuthorityFailure(
       'lock_failed',
-      'Unable to close the interactive storage root lock',
+      'Unable to close the storage root lock',
       async () => {
         await waitForOperations();
         releaseLock(handle);

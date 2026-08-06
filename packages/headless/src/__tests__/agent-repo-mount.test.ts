@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, test } from 'node:test';
@@ -25,14 +25,27 @@ const AGENTS: readonly HarnessAgentId[] = ['maka', ...COMPETITORS];
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
+/** The repo's own top-level directories: what a container path can start with. */
+const REPO_TOP_LEVEL = new Set(
+  readdirSync(REPO_ROOT, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name),
+);
+
 /**
  * Every repo file an adapter names at a container path.
  *
- * Adapters write one of two forms, and both must be read: the mounted path
- * spelled out in full, and the same path built by joining segments onto the
- * mount root. Matching a bare filename instead would be neither — it resolves
- * against whichever directory the matcher happens to scan, so a read outside
- * that directory looks like no read at all.
+ * Two forms carry a container path, and both must be read: the mounted path
+ * spelled out in full, and the same path built by joining segments onto some
+ * expression for the mount root. Matching a bare filename instead would be
+ * neither — it resolves against whichever directory the matcher happens to
+ * scan, so a read outside that directory looks like no read at all.
+ *
+ * The join form is matched by the chain rather than by what it hangs off,
+ * because what it hangs off varies: `maka_repo` from the environment in one
+ * adapter, a `Path("/opt/maka-agent")` constant in another, and nothing stops a
+ * third from binding its own name. The chain is the part that cannot vary — a
+ * repo path starts at a repo directory.
  */
 function adapterContainerRepoReads(source: string): Set<string> {
   const read = new Set<string>();
@@ -41,8 +54,10 @@ function adapterContainerRepoReads(source: string): Set<string> {
       read.add(literal.slice(CONTAINER_MAKA_REPO.length + 1));
     }
   }
-  for (const [, segments] of source.matchAll(/Path\(maka_repo\)((?:\s*\/\s*"[^"\n]+")+)/g)) {
-    read.add([...segments.matchAll(/"([^"]+)"/g)].map(([, segment]) => segment).join('/'));
+  for (const [, head, rest] of source.matchAll(/\/\s*"([^"\n]+)"((?:\s*\/\s*"[^"\n]+")*)/g)) {
+    if (!REPO_TOP_LEVEL.has(head)) continue;
+    const tail = [...rest.matchAll(/"([^"]+)"/g)].map(([, segment]) => segment);
+    read.add([head, ...tail].join('/'));
   }
   return read;
 }
@@ -207,7 +222,15 @@ describe('agent repo mounts', () => {
         'utf8',
       );
       const mounted = agent === 'maka' ? makaRepoPaths() : competitorRepoFiles(agent);
-      for (const repoFile of adapterContainerRepoReads(source)) {
+      const reads = adapterContainerRepoReads(source);
+      // A reader that matches nothing passes everything. An adapter with files
+      // declared for it is one whose source names them, so an empty read set
+      // here is the reader having stopped reading — the way a regex guard
+      // rots, and the way the form it replaced rotted.
+      if (mounted.length > 0) {
+        assert.ok(reads.size > 0, `no container paths were found in ${adapterModule}.py`);
+      }
+      for (const repoFile of reads) {
         // A file may be mounted directly or inside a mounted directory.
         const covered = mounted.some(
           (repoPath) => repoPath === repoFile || repoFile.startsWith(`${repoPath}/`),
@@ -234,6 +257,13 @@ describe('agent repo mounts', () => {
         ),
       ],
       ['packages/headless/dist/index.js'],
+    );
+    // The same chain hung off a different name for the mount root. Both
+    // spellings are in the adapters today, and reading only the first left the
+    // second — `_CONTAINER_MAKA_REPO / "packages" / …` — unseen.
+    assert.deepEqual(
+      [...adapterContainerRepoReads('_CLI = _CONTAINER_MAKA_REPO / "packages" / "a" / "cli.js"')],
+      ['packages/a/cli.js'],
     );
   });
 

@@ -236,18 +236,25 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
 }
 
 /**
- * The glance layer, in the two sections a reader actually asks about: how full
- * the window is right now, and what the session as a whole did. They are not
- * the same measurement — the bar is one call's prompt, the list is every
- * attempt summed — so they are separate sections rather than one
- * undifferentiated list of numbers.
+ * The glance layer.
  *
- * Both sections lay their facts out on ONE grid (`FactRow`) at one type size.
- * Mixing MetadataList's page-sized body type into a 12px instrument panel is
- * what made this read as noise: two neighbouring sections in two sizes claim a
- * hierarchy between them that does not exist, and the Astryx list also paints
- * from the neutral defaults rather than the product palette. Rank here comes
- * from weight, colour and space — never from a second type size.
+ * What survived a pass over "who reads this number, and to decide what":
+ *
+ * - Cost, duration and cache hit rate lead as headline stats. They are the
+ *   three a reader opens the tab for, and as figures rather than table rows
+ *   they also give the column something to fill.
+ * - The context bar stays, because it is the only thing here that answers a
+ *   question about NOW rather than about the past.
+ * - Input and output collapse into one ratio. Two rows of raw counts were two
+ *   rows nobody compared; as `81,300 / 740` the shape of the session is
+ *   legible at a glance, and the cache figure that used to sit beside them is
+ *   already stated as a rate above and as a band in the bar.
+ * - Retries and compactions report BY EXCEPTION. A session with neither is
+ *   the normal case, and printing `0` twice taught the reader to skip the
+ *   block that also carries the exceptions.
+ * - Model call count and last-activity are gone. The count was a number with
+ *   no decision attached, and the timestamp is already on the session in the
+ *   sidebar and the header.
  */
 function InspectorOverview(props: {
   copy: InspectorCopy;
@@ -259,86 +266,59 @@ function InspectorOverview(props: {
   const formatNumber = numberFormatter(props.locale);
   const context = overview.context;
   const tokens = overview.sessionTokens;
+  const totals = props.model.totals;
 
   return (
     <VStack gap={4} data-maka-contract="session-inspector-overview">
+      <dl className="maka-inspector-stats" data-maka-contract="session-inspector-stats">
+        <StatCell label={copy.totals.cost} value={formatCost(totals.costUsd, copy.costUnavailable)} />
+        <StatCell label={copy.totals.duration} value={formatDuration(totals.durationMs)} />
+        {tokens?.cacheHitRate !== undefined && (
+          <StatCell label={copy.overview.cacheHit} value={formatPercent(tokens.cacheHitRate)} />
+        )}
+      </dl>
+
       {context && (
         <InspectorContextSection copy={copy} context={context} formatNumber={formatNumber} />
       )}
 
-      <InspectorSection title={copy.overview.session}>
-        <dl className="maka-inspector-grid maka-inspector-facts">
-          {overview.model && (
-            <FactRow
-              layout="beside"
-              label={copy.overview.model}
-              value={`${providerLabel(overview.model.providerId)} / ${overview.model.modelId}`}
-            />
-          )}
-          {tokens?.inputTokens !== undefined && (
-            <FactRow layout="beside" label={copy.overview.input} value={formatNumber(tokens.inputTokens)} />
-          )}
-          {tokens?.cacheReadInputTokens !== undefined && (
-            <FactRow
-              layout="beside"
-              label={copy.overview.cacheRead}
-              value={formatNumber(tokens.cacheReadInputTokens)}
-              note={
-                tokens.cacheHitRate !== undefined ? formatPercent(tokens.cacheHitRate) : undefined
-              }
-            />
-          )}
-          {tokens?.outputTokens !== undefined && (
-            <FactRow
-              layout="beside"
-              label={copy.overview.output}
-              value={formatNumber(tokens.outputTokens)}
-              note={
-                tokens.reasoningTokens !== undefined
-                  ? `${copy.overview.reasoning} ${formatNumber(tokens.reasoningTokens)}`
-                  : undefined
-              }
-            />
-          )}
-          {overview.model && (
-            <FactRow
-              layout="beside"
-              label={copy.totals.calls}
-              value={formatNumber(overview.model.callCount)}
-              note={
-                props.model.totals.retries > 0
-                  ? `${copy.totals.retries} ${formatNumber(props.model.totals.retries)}`
-                  : undefined
-              }
-            />
-          )}
-          {props.model.totals.compactions > 0 && (
-            <FactRow
-              layout="beside"
-              label={copy.totals.compactions}
-              value={formatNumber(props.model.totals.compactions)}
-            />
-          )}
-          <FactRow
-              layout="beside"
-            label={copy.totals.cost}
-            value={formatCost(props.model.totals.costUsd, copy.costUnavailable)}
-          />
-          <FactRow
-              layout="beside"
-            label={copy.totals.duration}
-            value={formatDuration(props.model.totals.durationMs)}
-          />
-          {overview.lastActivityAt !== undefined && (
-            <FactRow
-              layout="beside"
-              label={copy.overview.lastActivity}
-              value={formatDateTime(props.locale, overview.lastActivityAt)}
-            />
-          )}
-        </dl>
-      </InspectorSection>
+      {/* What is left after the stats and the bar have said their part: a
+          handful of facts nobody compares with each other. A table gave each
+          one a row and a column it did not need and left the right half of the
+          panel empty; as one wrapped line they take the width they actually
+          occupy. Retries and compactions appear only when they happened — a
+          `0` here would be a fact about nothing. */}
+      <p className="maka-inspector-meta">
+        {[
+          overview.model &&
+            `${providerLabel(overview.model.providerId)} / ${overview.model.modelId}`,
+          tokens?.inputTokens !== undefined &&
+            tokens.outputTokens !== undefined &&
+            `${copy.overview.inputOutput} ${formatNumber(tokens.inputTokens)} / ${formatNumber(tokens.outputTokens)}`,
+          tokens?.reasoningTokens !== undefined &&
+            `${copy.overview.reasoning} ${formatNumber(tokens.reasoningTokens)}`,
+          totals.retries > 0 && `${copy.totals.retries} ${formatNumber(totals.retries)}`,
+          totals.compactions > 0 &&
+            `${copy.totals.compactions} ${formatNumber(totals.compactions)}`,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+      </p>
     </VStack>
+  );
+}
+
+/**
+ * One headline figure. A label small enough to stay out of the way over a
+ * number big enough to be the thing the eye lands on — the inverse of a table
+ * row, and the reason these three do not need a section heading to rank them.
+ */
+function StatCell(props: { label: string; value: ReactNode }) {
+  return (
+    <div className="maka-inspector-stat">
+      <dt>{props.label}</dt>
+      <dd>{props.value}</dd>
+    </div>
   );
 }
 
@@ -370,44 +350,22 @@ function InspectorSection(props: {
 }
 
 /**
- * One row of the overview: name, figure, and an optional qualifier.
+ * One legend row: band, figure, share.
  *
- * Two layouts, because the two sections are asking different things of the
- * reader. Legend figures are the same unit measured against the same window,
- * so they get their own columns and end on a shared edge — that alignment IS
- * the comparison. Session facts are a model name, a token count, a price and a
- * timestamp; lining those up against the far edge only opens a lane of empty
- * space between each label and its value, so they sit right beside their
- * labels and the qualifier trails the figure.
+ * Three columns, and the alignment IS the point here — every figure is the
+ * same unit measured against the same window, so a shared right edge is what
+ * makes them comparable at a glance. Facts that compare with nothing do not
+ * belong on this grid; they are the trailing meta line instead.
  */
-function FactRow(props: {
-  label: string;
-  value: ReactNode;
-  note?: ReactNode;
-  swatch?: ReactNode;
-  /** 'columns' aligns figures on a shared edge; 'beside' hugs the label. */
-  layout?: 'columns' | 'beside';
-}) {
-  const note = props.note !== undefined && (
-    <span className="maka-inspector-grid-note">{props.note}</span>
-  );
+function FactRow(props: { label: string; value: ReactNode; note?: ReactNode; swatch?: ReactNode }) {
   return (
     <div className="maka-inspector-grid-row">
       <dt>
         {props.swatch}
         {props.label}
       </dt>
-      {props.layout === 'beside' ? (
-        <dd className="maka-inspector-grid-value">
-          {props.value}
-          {note}
-        </dd>
-      ) : (
-        <>
-          <dd className="maka-inspector-grid-value">{props.value}</dd>
-          <dd className="maka-inspector-grid-note-cell">{note}</dd>
-        </>
-      )}
+      <dd className="maka-inspector-grid-value">{props.value}</dd>
+      <dd className="maka-inspector-grid-note">{props.note}</dd>
     </div>
   );
 }
@@ -489,14 +447,6 @@ function providerLabel(providerId: string): string {
 function numberFormatter(locale: UiLocale): (value: number) => string {
   const formatter = new Intl.NumberFormat(uiLocaleToIntlLocale(locale));
   return (value) => formatter.format(value);
-}
-
-/** Absolute date-time in the reader's locale, the way Pawwork stamps it. */
-function formatDateTime(locale: UiLocale, ms: number): string {
-  return new Intl.DateTimeFormat(uiLocaleToIntlLocale(locale), {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(ms));
 }
 
 /** A turn's wall-clock stamp: day + minute, short enough for a meta line. */

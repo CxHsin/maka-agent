@@ -101,16 +101,16 @@ export interface DesktopConversationCopy {
         free: string;
       };
       session: string;
+      /** The three figures a reader opens this tab for, as headline stats. */
+      cacheHit: string;
+      /** Input and output totals, read as one ratio rather than two rows. */
+      inputOutput: string;
       /** Names the panel's two views in the segmented control. */
       sections: string;
       overviewTab: string;
       timelineTab: string;
       model: string;
-      input: string;
-      cacheRead: string;
-      output: string;
       reasoning: string;
-      lastActivity: string;
     };
   };
   quoteCompanion: {
@@ -227,15 +227,13 @@ const COPY = {
           free: '空闲',
         },
         session: '会话',
+        cacheHit: '缓存命中率',
+        inputOutput: '输入 / 输出',
         sections: '追踪视图',
         overviewTab: '概览',
         timelineTab: '时间轴',
         model: '模型',
-        input: '输入 token',
-        cacheRead: '缓存读取',
-        output: '输出 token',
         reasoning: '推理',
-        lastActivity: '最后活动',
       },
     },
     quoteCompanion: {
@@ -337,15 +335,13 @@ const COPY = {
           free: 'Free',
         },
         session: 'Session',
+        cacheHit: 'Cache hit rate',
+        inputOutput: 'In / out',
         sections: 'Trace views',
         overviewTab: 'Overview',
         timelineTab: 'Timeline',
         model: 'Model',
-        input: 'Input tokens',
-        cacheRead: 'Cache read',
-        output: 'Output tokens',
         reasoning: 'reasoning',
-        lastActivity: 'Last active',
       },
     },
     quoteCompanion: {

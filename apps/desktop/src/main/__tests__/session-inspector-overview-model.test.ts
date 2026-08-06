@@ -303,16 +303,4 @@ describe('inspector overview model', () => {
     });
   });
 
-  it('marks the session last-active at the latest turn end', () => {
-    const model = deriveInspectorOverviewModel(
-      trace({
-        turns: [
-          turn([], { startedAt: NOW + 10_000, endedAt: NOW + 11_000, turnId: 'turn-2' }),
-          turn([], { startedAt: NOW, endedAt: NOW + 30_000 }),
-        ],
-      }),
-    );
-
-    assert.equal(model.lastActivityAt, NOW + 30_000);
-  });
 });

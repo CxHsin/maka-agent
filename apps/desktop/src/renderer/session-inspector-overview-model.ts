@@ -79,8 +79,6 @@ export interface InspectorOverviewModel {
   sessionTokens?: InspectorTokenStats;
   /** Absent when the session made no recorded model call. */
   model?: InspectorModelRef;
-  /** Last turn's end — when the session was last active. */
-  lastActivityAt?: number;
 }
 
 export function deriveInspectorOverviewModel(trace: SessionTrace | undefined): InspectorOverviewModel {
@@ -108,7 +106,6 @@ export function deriveInspectorOverviewModel(trace: SessionTrace | undefined): I
           },
         }
       : {}),
-    lastActivityAt: trace.turns.reduce((latest, turn) => Math.max(latest, turn.endedAt), 0),
   };
 }
 

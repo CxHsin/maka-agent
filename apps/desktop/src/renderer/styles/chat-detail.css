@@ -351,6 +351,31 @@
   background: var(--muted);
 }
 
+/* The three headline figures, across the column rather than down it.
+   A 480px panel of label-then-value rows leaves its whole right half empty and
+   still reads as cramped, because every row is the same weight; giving the
+   three figures a reader actually came for their own band fills the width with
+   the thing that deserves it and lets everything below stay quiet. */
+.maka-inspector-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.maka-inspector-stat dt {
+  font: var(--maka-text-supporting);
+  color: var(--muted-foreground);
+}
+
+.maka-inspector-stat dd {
+  margin: 0;
+  font: var(--maka-text-heading-1);
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
 /* The overview's data grid, on the IDE template's `metadataCompact` rhythm
    (row space-1, column space-3) at body type: these facts are the content of
    the panel, not its chrome. Only a qualifier steps down to supporting. */
@@ -388,21 +413,13 @@
   overflow-wrap: anywhere;
 }
 
-/* Session facts hug their labels instead of reaching for the far edge. Three
-   columns are right for the legend, where every figure is the same unit
-   against the same window and the shared edge IS the comparison; a model name,
-   a price and a timestamp compare with nothing, so stretching them across a
-   480px column only opens a lane of white space in every row. */
-.maka-inspector-facts {
-  grid-template-columns: minmax(6rem, auto) 1fr;
-}
-
-.maka-inspector-facts dd {
-  text-align: left;
-}
-
-.maka-inspector-facts .maka-inspector-grid-note {
-  margin-left: var(--space-2);
+/* The trailing meta line: one wrapped sentence of facts that compare with
+   nothing, rather than a table that reserves a column for each of them. */
+.maka-inspector-meta {
+  margin: 0;
+  font: var(--maka-text-supporting);
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
 }
 
 /* The qualifier — a cache rate, a retry count, a reasoning split — is a step
@@ -410,10 +427,6 @@
 .maka-inspector-grid-note {
   font: var(--maka-text-supporting);
   color: var(--muted-foreground);
-}
-
-.maka-inspector-grid-note-cell {
-  min-width: 0;
 }
 
 /* The coverage notice, demoted: one quiet line inside the raw record, not a

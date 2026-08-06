@@ -154,7 +154,6 @@ export type AppUpdateStatus =
       currentVersion: string;
       latestVersion: string;
       releaseName?: string;
-      releaseUrl?: string;
       publishedAt?: string;
     }
   | {

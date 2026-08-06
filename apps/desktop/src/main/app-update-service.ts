@@ -18,7 +18,6 @@ export type AppUpdateStatus =
       currentVersion: string;
       latestVersion: string;
       releaseName?: string;
-      releaseUrl?: string;
       publishedAt?: string;
     }
   | {
@@ -75,7 +74,6 @@ interface AppUpdateServiceDeps {
   };
 }
 
-const RELEASES_URL = 'https://github.com/Maka-Agent/maka-agent/releases/latest';
 const FIRST_UPDATE_CHECK_DELAY_MS = 10_000;
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
@@ -118,12 +116,6 @@ function updateInfoReleaseDate(info: UpdateInfo | undefined): string | undefined
   return typeof info?.releaseDate === 'string' ? info.releaseDate : undefined;
 }
 
-function updateInfoReleaseUrl(info: UpdateInfo | undefined): string | undefined {
-  const files = Array.isArray(info?.files) ? info.files : [];
-  const firstUrl = files.find((file) => typeof file.url === 'string')?.url;
-  return firstUrl ? new URL(firstUrl, RELEASES_URL).toString() : RELEASES_URL;
-}
-
 function progressFromInfo(info: ProgressInfo): AppUpdateProgress {
   return {
     percent: Math.max(0, Math.min(100, Number.isFinite(info.percent) ? info.percent : 0)),
@@ -159,7 +151,6 @@ function mockStatus(currentVersion: string, latestVersion: string, state: AppUpd
     currentVersion,
     latestVersion,
     releaseName: `Maka ${latestVersion}`,
-    releaseUrl: RELEASES_URL,
     publishedAt: new Date().toISOString(),
   };
 }
@@ -252,7 +243,6 @@ export function createAppUpdateService(deps: AppUpdateServiceDeps): AppUpdateSer
       currentVersion: deps.currentVersion,
       latestVersion: version,
       releaseName: updateInfoReleaseName(info),
-      releaseUrl: updateInfoReleaseUrl(info),
       publishedAt: updateInfoReleaseDate(info),
     });
   });

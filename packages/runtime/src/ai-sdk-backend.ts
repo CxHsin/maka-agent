@@ -2082,8 +2082,14 @@ export class AiSdkBackend implements AgentBackend {
           // stream without a trailing `finish-step` for the last step.
           await flushStep();
 
-          finishReason = (await result.finishReason.catch(() => 'stop')) ?? 'stop';
-          rawFinishReason = rawFinishReason ?? finishReason;
+          // The settled promise reports only the SDK's unified enum; the stream
+          // events carry what the provider itself said, which is strictly more
+          // specific and is already what telemetry prefers below. Reading the
+          // same value here keeps the turn's outcome and its record from
+          // disagreeing about why the stream ended.
+          finishReason =
+            rawFinishReason ?? (await result.finishReason.catch(() => 'stop')) ?? 'stop';
+          rawFinishReason = finishReason;
           await queue.waitUntilConsumedThroughCurrent();
 
           if (returnedToolCalls.length > 0) {
@@ -2334,7 +2340,22 @@ export class AiSdkBackend implements AgentBackend {
           (this.maxSteps !== undefined && finishReason === 'tool-calls'
             ? 'step_limit'
             : this.mapFinishReason(finishReason));
-        trace.modelStreamCompleted(stopReason);
+        if (stopReason === 'error') {
+          // Reaching a failed terminal without anything having been thrown: the
+          // stream ended quietly on a reason we cannot call a finished turn.
+          // Every other `stopReason: 'error'` here comes out of the catch below
+          // with an error event and a failed trace behind it, and the session's
+          // `lastError` and the request ledger are fed by exactly those. Ending
+          // the turn failed while the telemetry still reads `success` is the
+          // same blindness this branch exists to remove.
+          const err = new Error(`Provider stream ended without finishing (${finishReason})`);
+          streamStatus = 'error';
+          streamErrorClass = this.modelAdapter.classifyError(err);
+          queue.push(this.makeErrorEvent(turnId, err));
+          trace.modelStreamFailed(streamErrorClass, err, priorReplayFailureTrace(priorReplay));
+        } else {
+          trace.modelStreamCompleted(stopReason);
+        }
         queue.push({
           type: 'complete',
           id: this.newId(),

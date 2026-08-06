@@ -459,15 +459,20 @@ export class ModelAdapter {
         return 'error';
       case 'tool-calls':
         return 'end_turn';
-      // The SDK's own two names for "the stream stopped and I cannot say why".
+      // The SDK's own two names for "the stream stopped and nothing named why".
       // An upstream that drops the connection mid-answer lands here: it yields
       // no error part and throws nothing, so these are the only signal that it
       // happened. Calling them `end_turn` asserts the model said its piece —
       // the one thing we know we cannot claim. A benchmark cell recorded
       // `status: completed` on exactly this shape while its agent was still
       // mid-task, caught only because the proxy noticed the terminal SSE event
-      // never arrived. A genuinely new provider reason still falls through to
-      // the tolerant default below; these two are not new, they are unnamed.
+      // never arrived.
+      //
+      // These are reached only when the provider named nothing either: the SDK
+      // buckets every reason it does not recognize into `other` too, and
+      // `translateChunk` forwards the provider's own spelling in that case, so
+      // a genuinely new reason arrives here as itself and takes the tolerant
+      // default below.
       case 'other':
       case 'unknown':
         return 'error';
@@ -568,6 +573,8 @@ interface AiSdkStreamChunk {
   isError?: boolean;
   usage?: AiSdkUsageLike;
   finishReason?: unknown;
+  /** What the provider itself called it, before the SDK bucketed it. */
+  rawFinishReason?: unknown;
   error?: unknown;
   /** Provider-specific metadata; carries the Anthropic reasoning signature. */
   providerMetadata?: unknown;
@@ -589,6 +596,24 @@ interface SdkStreamResult {
     id: string;
     messages?: ModelMessage[];
   }>;
+}
+
+/**
+ * The finish reason to forward, preferring what the provider actually said.
+ *
+ * The SDK splits the reason in two: a closed unified enum, and the provider's
+ * own spelling. Unified is the right thing to forward — `runtime-runner` and
+ * the backend compare against `'tool-calls'`, which is a name only the SDK
+ * uses. Except when unified is `other`, which is not a reason but the SDK
+ * declining to name one; there it hides the only distinction that matters
+ * downstream. `other` with a provider spelling is a model that stopped for a
+ * reason we have no case for — an ordinary finished turn. `other` with nothing
+ * behind it is a stream that died without anyone saying so.
+ */
+function chunkFinishReason(chunk: AiSdkStreamChunk): string | undefined {
+  const unified = rawFinishReasonString(chunk.finishReason);
+  if (unified !== 'other' && unified !== 'unknown') return unified;
+  return rawFinishReasonString(chunk.rawFinishReason) ?? unified;
 }
 
 /**
@@ -703,7 +728,7 @@ function translateChunk(
     // compatibility — handled as a step boundary, not a text carrier.
     case 'finish-step':
     case 'step-finish': {
-      const finishReason = rawFinishReasonString(chunk.finishReason);
+      const finishReason = chunkFinishReason(chunk);
       const usage = normalizeAiSdkUsage(chunk.usage, { rawFinishReason: chunk.finishReason });
       return [
         {
@@ -714,7 +739,7 @@ function translateChunk(
       ];
     }
     case 'finish': {
-      const finishReason = rawFinishReasonString(chunk.finishReason);
+      const finishReason = chunkFinishReason(chunk);
       return [{ kind: 'finish', ...(finishReason ? { finishReason } : {}) }];
     }
     case 'reasoning-start':

@@ -32,6 +32,18 @@ import type { HarnessAgentId } from './harness-agent-registry.js';
 
 export const CONTAINER_MAKA_REPO = '/opt/maka-agent';
 
+/**
+ * Workspaces that never load in the headless container, and so are the only
+ * ones absent below. Exported because the test that cross-checks this list
+ * against the root manifest needs the same exclusion, and two copies of it
+ * drift into a workspace nobody mounts.
+ */
+export const RENDERER_ONLY_WORKSPACES: readonly string[] = [
+  'packages/ui',
+  'packages/cli',
+  'apps/desktop',
+];
+
 /** Workspaces whose build output the in-container Maka runtime resolves. */
 const MAKA_RUNTIME_WORKSPACES: readonly string[] = [
   'packages/code-mode',

@@ -9,6 +9,7 @@ import {
   CONTAINER_MAKA_REPO,
   isOptionalRepoPath,
   makaRepoPaths,
+  RENDERER_ONLY_WORKSPACES,
 } from '../agent-repo-mount.js';
 import { type HarnessAgentId, harnessAgentImportPath } from '../harness-agent-registry.js';
 
@@ -22,11 +23,7 @@ const COMPETITORS: readonly Exclude<HarnessAgentId, 'maka'>[] = [
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
-/**
- * Renderer-only workspaces never load in the headless container; the rest sit
- * in the CLI's import graph directly or through `@maka/*` symlinks.
- */
-const RENDERER_ONLY = new Set(['packages/ui', 'apps/desktop', 'packages/cli']);
+const RENDERER_ONLY = new Set(RENDERER_ONLY_WORKSPACES);
 
 /** The workspaces the container is expected to be able to load. */
 const MAKA_WORKSPACES = (

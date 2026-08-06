@@ -954,6 +954,35 @@
       }
     },
     {
+      "name": "valid-streaming-status",
+      "accepted": true,
+      "overrides": {
+        "status": "streaming",
+        "partial": true
+      }
+    },
+    {
+      "name": "valid-failed-status",
+      "accepted": true,
+      "overrides": {
+        "status": "failed"
+      }
+    },
+    {
+      "name": "valid-aborted-status",
+      "accepted": true,
+      "overrides": {
+        "status": "aborted"
+      }
+    },
+    {
+      "name": "valid-cancelled-status",
+      "accepted": true,
+      "overrides": {
+        "status": "cancelled"
+      }
+    },
+    {
       "name": "invalid-unknown-status",
       "accepted": false,
       "overrides": {

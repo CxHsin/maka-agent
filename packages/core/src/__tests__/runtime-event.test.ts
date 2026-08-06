@@ -25,6 +25,7 @@ import {
   isTerminalRuntimeEventStatus,
   isPartialRuntimeEvent,
   runtimeEventEnvelopeKeys,
+  runtimeEventEnvelopeValueDomains,
   runtimeEventHasModelVisibleContent,
   type RuntimeEvent,
   type RuntimeEventActions,
@@ -82,6 +83,23 @@ test('the shared validation corpus exercises every envelope key', () => {
   ]);
   for (const key of runtimeEventEnvelopeKeys()) {
     assert.ok(exercised.has(key), `no corpus case sets the envelope key ${key}`);
+  }
+});
+
+test('the shared validation corpus exercises every envelope value domain', () => {
+  // The same drift one level down. Python spells these domains out again, so a
+  // member no accepted case carries is a member the exporter may reject while
+  // this side accepts it — and every event that carries it degrades to a
+  // one-line summary, exactly as an unknown key did.
+  const accepted = runtimeEventValidationCorpus.cases.filter((entry) => entry.accepted);
+  for (const [key, domain] of Object.entries(runtimeEventEnvelopeValueDomains())) {
+    const carried = new Set([
+      runtimeEventValidationCorpus.baseEvent[key],
+      ...accepted.map((entry) => entry.overrides[key]),
+    ]);
+    for (const member of domain) {
+      assert.ok(carried.has(member), `no corpus case carries ${key}: ${member}`);
+    }
   }
 });
 

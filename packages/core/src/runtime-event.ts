@@ -28,6 +28,7 @@ import {
   defineObjectShape,
   hasExactShape,
   isFiniteNumber,
+  isOptionalMember,
   isOptionalString,
   isRecord,
   isStringArray,
@@ -102,6 +103,14 @@ export const TERMINAL_RUNTIME_EVENT_STATUSES: readonly RuntimeEventStatus[] = [
 export function isRuntimeEventStatus(value: unknown): value is RuntimeEventStatus {
   return typeof value === 'string' && (RUNTIME_EVENT_STATUSES as readonly string[]).includes(value);
 }
+
+/** Execution surface that produced a fact; absent on legacy ledgers. */
+export const RUNTIME_EVENT_ORIGINS = ['provider', 'code_mode'] as const;
+export type RuntimeEventOrigin = (typeof RUNTIME_EVENT_ORIGINS)[number];
+
+/** Explicit provider-history policy; absent means visible. */
+export const RUNTIME_EVENT_MODEL_VISIBILITIES = ['visible', 'hidden'] as const;
+export type RuntimeEventModelVisibility = (typeof RUNTIME_EVENT_MODEL_VISIBILITIES)[number];
 
 export function isTerminalRuntimeEventStatus(value: unknown): boolean {
   return (
@@ -392,9 +401,9 @@ export interface RuntimeEvent {
   role: RuntimeEventRole;
   author: RuntimeEventAuthor;
   /** Execution surface that produced this fact; absent on legacy ledgers. */
-  origin?: 'provider' | 'code_mode';
+  origin?: RuntimeEventOrigin;
   /** Explicit provider-history policy; absent means visible for legacy compatibility. */
-  modelVisibility?: 'visible' | 'hidden';
+  modelVisibility?: RuntimeEventModelVisibility;
   /** Lifecycle assertion; omitted on ordinary in-flight content events. */
   status?: RuntimeEventStatus;
 
@@ -418,6 +427,24 @@ export interface RuntimeEvent {
  */
 export function runtimeEventEnvelopeKeys(): readonly string[] {
   return [...RUNTIME_EVENT_SHAPE.allowed];
+}
+
+/**
+ * Every value each closed-domain envelope key may hold.
+ *
+ * Pinning the corpus to the key list closed one half of the drift the Harbor
+ * exporter fell through: a key nobody wrote a case for. The other half is a
+ * value nobody wrote a case for — the exporter spells these domains out again
+ * in Python, and a member added here that no case carries would leave the two
+ * disagreeing about what is valid with nothing red. Only the closed domains
+ * appear; `branch` is free text and has nothing to enumerate.
+ */
+export function runtimeEventEnvelopeValueDomains(): Readonly<Record<string, readonly string[]>> {
+  return {
+    origin: RUNTIME_EVENT_ORIGINS,
+    modelVisibility: RUNTIME_EVENT_MODEL_VISIBILITIES,
+    status: RUNTIME_EVENT_STATUSES,
+  };
 }
 
 const RUNTIME_EVENT_SHAPE = defineObjectShape<RuntimeEvent>()(
@@ -579,10 +606,8 @@ export function decodeRuntimeEvent(value: unknown): RuntimeEvent {
     typeof value.partial !== 'boolean' ||
     !isRuntimeEventRole(value.role) ||
     !isRuntimeEventAuthor(value.author) ||
-    (value.origin !== undefined && value.origin !== 'provider' && value.origin !== 'code_mode') ||
-    (value.modelVisibility !== undefined &&
-      value.modelVisibility !== 'visible' &&
-      value.modelVisibility !== 'hidden') ||
+    !isOptionalMember(value.origin, RUNTIME_EVENT_ORIGINS) ||
+    !isOptionalMember(value.modelVisibility, RUNTIME_EVENT_MODEL_VISIBILITIES) ||
     (value.status !== undefined && !isRuntimeEventStatus(value.status)) ||
     (value.content !== undefined && !isRuntimeEventContent(value.content)) ||
     (value.actions !== undefined && !isRuntimeEventActions(value.actions)) ||

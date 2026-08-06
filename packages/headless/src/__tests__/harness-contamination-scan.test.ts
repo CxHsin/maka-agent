@@ -549,7 +549,7 @@ describe('scanRunForContamination', () => {
   // The run declares its grid; the log records what happened. A cell in the
   // first and not the second is a hole the report must name — a run killed at
   // cell three would otherwise certify the three that reached disk.
-  test('names the cells the run declared and never recorded', async () => {
+  test('names the cells the run scheduled and never recorded', async () => {
     await withRun(
       [{ agent: 'maka', taskId: 'cobol-modernization', trajectory: trajectory(['ordinary work']) }],
       async (runRoot) => {
@@ -567,7 +567,7 @@ describe('scanRunForContamination', () => {
           { agent: 'codex', taskId: 'cobol-modernization' },
         ]);
         const markdown = renderContaminationScanReportMarkdown(report);
-        assert.match(markdown, /2 cells the run declared were never recorded/);
+        assert.match(markdown, /2 cells the run scheduled were never recorded/);
         assert.match(markdown, /## Never recorded/);
         assert.match(markdown, /`fix-git` \(maka\)/);
       },

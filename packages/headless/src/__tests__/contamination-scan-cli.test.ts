@@ -316,6 +316,26 @@ describe('run-contamination-scan', () => {
     );
   });
 
+  // A crash during the very first schedule row leaves the file present and
+  // empty. Reading that as "this run scheduled nothing" would make every cell
+  // it went on to grade unaccounted for and still certify the run.
+  test('refuses a schedule that names no cells', async () => {
+    const runRoot = await mkdtemp(join(tmpdir(), 'maka-contamination-torn-'));
+    try {
+      await writeFile(scheduledCellLogPath(runRoot), '', 'utf8');
+      await assert.rejects(
+        execFileAsync(process.execPath, [SCRIPT, '--run-root', runRoot]),
+        (error: { code?: number; stderr?: string }) => {
+          assert.equal(error.code, 2);
+          assert.match(error.stderr ?? '', /names no cells/);
+          return true;
+        },
+      );
+    } finally {
+      await rm(runRoot, { recursive: true, force: true });
+    }
+  });
+
   test('refuses an invocation it cannot act on', async () => {
     await assert.rejects(execFileAsync(process.execPath, [SCRIPT]), (error: { code?: number }) => {
       assert.equal(error.code, 2);

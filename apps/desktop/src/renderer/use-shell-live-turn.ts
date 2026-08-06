@@ -1,6 +1,6 @@
 import type { SessionSummary } from '@maka/core';
 import type { LiveTurnSnapshot } from './live-turn-snapshot.js';
-import { MODEL_CONTINUING_DELAY_MS, MODEL_PROCESSING_DELAY_MS, deriveModelWait, deriveTurnActive, type ModelWaitKind } from './model-wait-state.js';
+import { MODEL_CONTINUING_DELAY_MS, MODEL_PROCESSING_DELAY_MS, RUNNING_STATUS_DELAY_MS, deriveModelWait, deriveTurnActive, type ModelWaitKind } from './model-wait-state.js';
 import { useDelayedFlag } from './use-delayed-flag.js';
 
 /**
@@ -23,6 +23,7 @@ export function useShellLiveTurn(options: {
   hasInFlightLiveTools: boolean;
   hasLiveTurnContent: boolean;
   turnActive: boolean;
+  showRunningStatus: boolean;
   showProcessingIndicator: boolean;
   showContinuingIndicator: boolean;
 } {
@@ -61,6 +62,12 @@ export function useShellLiveTurn(options: {
     modelWaitKind === 'continuing',
     MODEL_CONTINUING_DELAY_MS,
   );
+  // The chat transcript's own running status line. It rides `turnActive`, not
+  // the wait kind: the two above ask "is the model between steps?", which is
+  // the wrong question for a status meant to stay up for the whole turn. Same
+  // rising-edge delay, for the same reason — a turn that finishes inside the
+  // window never flashes it.
+  const showRunningStatus = useDelayedFlag(turnActive, RUNNING_STATUS_DELAY_MS);
 
   return {
     activeStreamingLive,
@@ -68,6 +75,7 @@ export function useShellLiveTurn(options: {
     hasInFlightLiveTools: liveTurn.hasInFlightTools,
     hasLiveTurnContent: liveTurn.hasStreamingText || liveTurn.hasThinkingText || liveTurn.hasLiveTools,
     turnActive,
+    showRunningStatus,
     showProcessingIndicator,
     showContinuingIndicator,
   };

@@ -135,7 +135,7 @@ export function QuoteCompanionPanel(props: {
         <ChatView
           messages={companion.messages}
           liveTurn={companion.liveTurn}
-          processingIndicator={companion.processing}
+          runningStatus={companion.processing}
           activeSession={companion.companionSession}
           emptyOverride={
             <div className="maka-quote-companion-intro">

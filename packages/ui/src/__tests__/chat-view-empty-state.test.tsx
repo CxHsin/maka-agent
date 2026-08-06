@@ -182,13 +182,13 @@ describe('ChatView #642 streaming fallback', () => {
   it('localizes the fallback assistant message aria-label', () => {
     // No liveTurn: a live turn projects into `turns` and takes the localized
     // TurnView path instead. The fallback needs streaming with zero turns —
-    // wait indicators alone — which is exactly the #642 replay window.
+    // the running status alone — which is exactly the #642 replay window.
     const markup = renderToStaticMarkup(
       <LocaleProvider locale="zh">
         <OwnedChatView
           messages={[]}
           activeSession={activeSession}
-          processingIndicator
+          runningStatus
           onNew={() => undefined}
         />
       </LocaleProvider>,

@@ -116,15 +116,18 @@
 .maka-assistant-answer-content { display: flex; width: 100%; min-width: 0; flex-direction: column; gap: 8px; }
 .maka-live-turn-footer-placeholder { height: 32px; margin-top: 2px; }
 .maka-turn-processing,
-.maka-turn-status,
-.maka-turn-continuing {
+.maka-turn-status {
   font: var(--maka-text-body);
- display: flex; align-items: center; padding-block: 2px; color: var(--muted-foreground); }
-.maka-turn-processing,
-.maka-turn-status { gap: 8px; }
-.maka-turn-processing-spinner { flex: 0 0 auto; animation: maka-spin 1s linear infinite; }
-.maka-turn-indicator-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.maka-turn-continuing { opacity: 0.7; animation: maka-stream-fade-in var(--duration-emphasized) var(--ease-out-strong) both; }
+ display: flex; align-items: center; gap: 8px; padding-block: 2px; color: var(--muted-foreground); }
+.maka-turn-indicator-text { display: inline-flex; min-width: 0; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Duration must match `WORKING_PHRASE_FADE_MS` in chat-turn.tsx: the swap is a
+   fade out, then a text change, then a fade in, and the JS timer is what waits
+   out this transition before rewriting the word. */
+.maka-turn-working-phrase { transition: opacity 300ms var(--ease-out-strong); }
+.maka-turn-working-phrase[data-fading="true"] { opacity: 0; }
+.maka-turn-status-separator { color: var(--border-strong); }
+/* Tabular figures so a ticking clock changes glyphs without changing width. */
+.maka-turn-elapsed { font-variant-numeric: tabular-nums; }
 /* #1879: an Astryx `Badge variant="yellow"` now — the warning tone it used to
    draw by hand (hairline + 5% wash) is a variant, and the box comes with it.
    Product CSS keeps only what is layout: it is a block-level note under the
@@ -580,25 +583,34 @@
 .maka-turn-footer {
   margin-top: var(--space-0-5);
   padding: 0;
-  opacity: 0;
-  transition: opacity var(--duration-quick) var(--ease-out-strong);
+  /* The reveal moved off this row and onto the buttons inside it: the row now
+     also carries the settled turn's elapsed time, which must stay readable
+     without hovering — having to hunt for that number is the problem it was
+     added to fix. Carried as a custom property rather than a second opacity
+     rule so the pending state below composes with the reveal instead of
+     out-specifying it. */
+  --maka-turn-footer-action-opacity: 0;
 }
 
 .maka-assistant-answer:hover .maka-turn-footer,
-.maka-turn-footer:focus-within { opacity: 1; }
+.maka-turn-footer:focus-within { --maka-turn-footer-action-opacity: 1; }
 
 .maka-turn-footer-action {
   border: 0;
   border-radius: var(--radius-surface);
   color: var(--muted-foreground);
+  opacity: var(--maka-turn-footer-action-opacity);
+  transition: opacity var(--duration-quick) var(--ease-out-strong);
 }
 
 .maka-turn-footer-action[data-pending="true"] {
   cursor: progress;
-  opacity: 0.78;
+  opacity: calc(var(--maka-turn-footer-action-opacity) * 0.78);
 }
 
-.maka-turn-footer-action[aria-disabled="true"][data-pending="true"] { opacity: 0.78; }
+.maka-turn-footer-action[aria-disabled="true"][data-pending="true"] {
+  opacity: calc(var(--maka-turn-footer-action-opacity) * 0.78);
+}
 .maka-turn-footer-action[data-copy-feedback="copied"] { color: var(--link); }
 .maka-turn-footer-action[data-copy-feedback="failed"] { color: var(--destructive); }
 

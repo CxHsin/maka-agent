@@ -619,6 +619,7 @@ function AppShellContent({
     hasInFlightLiveTools,
     hasLiveTurnContent,
     turnActive,
+    showRunningStatus,
     showProcessingIndicator,
     showContinuingIndicator,
   } = useShellLiveTurn({
@@ -2466,8 +2467,7 @@ function AppShellContent({
                 activeSessionId={activeId}
                 messages={messages}
                 messageLoading={activeMessageLoading}
-                processingIndicator={showProcessingIndicator}
-                continuingIndicator={showContinuingIndicator}
+                runningStatus={showRunningStatus}
                     onStreamingSettled={
                       activeId ? (messageId) => settleAssistantStreaming(activeId, messageId) : undefined
                     }

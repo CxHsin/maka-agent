@@ -22,10 +22,9 @@ import { materializeChat } from './materialize.js';
 import { useTranscriptProjection } from './use-transcript-projection.js';
 import type { LiveTurnProjection } from './live-turn-projection.js';
 import {
-  ModelContinuingIndicator,
   ModelProviderRetryIndicator,
   LocalizedChatMessage,
-  ModelProcessingIndicator,
+  TurnRunningStatus,
   TurnView,
   type ReadAttachmentBytes,
   type TurnFooterActionMeta,
@@ -50,19 +49,16 @@ export function ChatView(props: {
   /** Called once the streaming bubble has displayed the final text and can hand off to history. */
   onStreamingSettled?(messageId?: string): void;
   /**
-   * #646: true while the first-token wait indicator ("正在处理…") should show —
-   * the turn is armed at send with no content event yet. Rendered as a transient
-   * trailing entry of the tail turn, covering only the connect-to-first-token gap.
+   * True while the live turn's running status line (spinner · working phrase ·
+   * elapsed clock) should show, as the trailing entry of the tail turn.
+   *
+   * One flag for the whole turn, replacing the #646 pair that split the wait
+   * into a first-token cue and a mid-turn one and showed neither once the turn
+   * had live content on screen. That split answered "is the model between
+   * steps?"; the question a user actually asks during a five-minute tool run is
+   * "is anything still happening at all?", and nothing on screen answered it.
    */
-  processingIndicator?: boolean;
-  /**
-   * #646: true while the calm mid-turn hint ("继续中…") should show — the turn has
-   * already produced content and is in a step-to-step lull (a tool settled / a
-   * step's text finished) with nothing streaming while the model works on the next
-   * step. Deliberately quieter than the first-token indicator so it never reads as
-   * the live thinking being swallowed.
-   */
-  continuingIndicator?: boolean;
+  runningStatus?: boolean;
   activeSession?: SessionSummary;
   /** Durable Deep Research projection supplied by the host for visible progress and resume state. */
   deepResearchRun?: DeepResearchClientProgress;
@@ -285,8 +281,7 @@ export function ChatView(props: {
   // streaming, but delayed flags can lag one frame past complete; terminal
   // evidence must outrank them so copy/regenerate stay actionable.
   const liveInFlight = !!(props.liveTurn && !props.liveTurn.terminal);
-  const waitIndicators = !!(props.processingIndicator || props.continuingIndicator);
-  const streamingActive = liveInFlight || (!props.liveTurn?.terminal && waitIndicators);
+  const streamingActive = liveInFlight || (!props.liveTurn?.terminal && !!props.runningStatus);
   const tailTurnId = liveInFlight
     ? props.liveTurn!.turnId
     : (streamingActive ? turns[turns.length - 1]?.turnId : undefined);
@@ -636,8 +631,7 @@ export function ChatView(props: {
                         turn.turnId === tailTurnId
                           ? {
                               onStreamingSettled: props.onStreamingSettled,
-                              processingIndicator: props.processingIndicator,
-                              continuingIndicator: props.continuingIndicator,
+                              runningStatus: props.runningStatus,
                               providerRetry: props.liveTurn?.providerRetry,
                             }
                           : undefined
@@ -666,10 +660,9 @@ export function ChatView(props: {
                       {props.liveTurn?.providerRetry ? (
                         <ModelProviderRetryIndicator retry={props.liveTurn.providerRetry} />
                       ) : (
-                        <>
-                          {props.processingIndicator && <ModelProcessingIndicator />}
-                          {props.continuingIndicator && !props.processingIndicator && <ModelContinuingIndicator />}
-                        </>
+                        /* No turn here means no `startedAt`, so this one shows
+                           the working phrase without a clock. */
+                        props.runningStatus && <TurnRunningStatus />
                       )}
                     </div>
                     <div aria-hidden="true" className="maka-live-turn-footer-placeholder" />

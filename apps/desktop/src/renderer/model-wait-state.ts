@@ -23,6 +23,14 @@
 export const MODEL_PROCESSING_DELAY_MS = 200;
 
 /**
+ * Rising-edge delay before the transcript's running status line appears.
+ *
+ * Same no-flash rule as the cue above, but keyed off the turn being active
+ * rather than off a lull, because that line stays up for the whole turn.
+ */
+export const RUNNING_STATUS_DELAY_MS = 200;
+
+/**
  * Rising-edge delay before the mid-turn "继续中…" hint appears. Longer than the
  * first-token delay so a quick hop between two fast steps never flashes it — the
  * hint is only worth showing once a step-to-step lull is visibly stalling.

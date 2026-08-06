@@ -23,6 +23,7 @@
 
 import { uiLocaleToIntlLocale, type UiLocale } from '@maka/core';
 import { getConversationCopy } from './conversation-copy.js';
+import { formatDuration } from './tool-activity/preview-utils.js';
 
 function createAbsoluteTimeFormat(locale: UiLocale): Intl.DateTimeFormat {
   if (typeof Intl === 'undefined' || typeof Intl.DateTimeFormat !== 'function') {
@@ -45,15 +46,19 @@ export function formatAbsoluteTimestamp(ts: number, locale: UiLocale): string {
    knob. Absolute readings now come from that component, not from a local bag of
    `Intl` options. */
 
+/**
+ * A turn's duration, in the same shape tool cards use.
+ *
+ * The rule this enforces has always been written down here ("same shape as
+ * tool-activity's formatDuration —「1 m 0 s」vs「8.2s」read as two different
+ * products"), but it used to be enforced by a hand-kept copy of that function.
+ * The turn status line puts the two side by side — a running turn's clock sits
+ * directly under the tool cards it is waiting on — so the shape is now shared
+ * rather than mirrored. `formatDuration` returns null only for a negative or
+ * absent input, neither of which a duration can be.
+ */
 export function formatTurnDuration(ms: number): string {
-  // Same shape as tool-activity's formatDuration — the turn meta chip
-  // and tool cards sit stacked in one view;「1 m 0 s」vs「8.2s」read as
-  // two different products.
-  if (ms < 1000) return `${ms} ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.round((ms % 60_000) / 1000);
-  return `${m}m ${s}s`;
+  return formatDuration(Math.max(0, ms)) ?? '0 ms';
 }
 
 export function turnAbortMarkerLabel(abortSource: string | undefined, locale: UiLocale): string {

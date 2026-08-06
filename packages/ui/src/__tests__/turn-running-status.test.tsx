@@ -4,7 +4,7 @@ import { createElement, type ReactNode } from 'react';
 import { renderToStaticMarkup as renderReactToStaticMarkup } from 'react-dom/server';
 import { LocaleProvider } from '../locale-context.js';
 import type { TurnViewModel } from '../materialize.js';
-import { TurnView } from '../chat-turn.js';
+import { TurnRunningStatus, TurnView } from '../chat-turn.js';
 import { formatTurnDuration } from '../chat-display-helpers.js';
 import { formatDuration } from '../tool-activity/preview-utils.js';
 import { getConversationCopy } from '../conversation-copy.js';
@@ -66,6 +66,25 @@ describe('live turn running status line', () => {
     }));
 
     assert.doesNotMatch(markup, /maka-turn-elapsed/);
+  });
+
+  it('leaves the spinning to the tool card above it', () => {
+    // A running tool card carries its own spinner a few pixels up. A second one
+    // on this row read as two separate things being waited on — and a spinner
+    // turns at the same rate whether or not anything is happening, which is
+    // exactly what the clock beside it is there to answer.
+    const markup = render(createElement(TurnRunningStatus, { startedAt: 1 }));
+
+    assert.doesNotMatch(markup, /spinner/i);
+  });
+
+  it('keeps a name on the row now that the spinner is not carrying one', () => {
+    // Every visible token here moves on the clock and is hidden from the
+    // accessibility tree; the spinner's label used to be the row's whole
+    // accessible name.
+    const markup = render(createElement(TurnRunningStatus, { startedAt: 1 }));
+
+    assert.match(markup, /aria-label="[^"]+"/);
   });
 
   it('keeps every zh working phrase the same width so the clock never shifts', () => {

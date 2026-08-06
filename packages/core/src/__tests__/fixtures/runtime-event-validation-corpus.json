@@ -978,13 +978,6 @@
       }
     },
     {
-      "name": "valid-host-author",
-      "accepted": true,
-      "overrides": {
-        "author": "host"
-      }
-    },
-    {
       "name": "valid-streaming-status",
       "accepted": true,
       "overrides": {

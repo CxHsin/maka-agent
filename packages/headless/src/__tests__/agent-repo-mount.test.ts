@@ -94,7 +94,19 @@ describe('agent repo mounts', () => {
     // benchmark's own per-task results under docs/eval, and the verifier source
     // under packages/headless/src. The container executes dist, so neither is
     // needed to run — only to look up what this benchmark expects.
-    for (const repoPath of makaRepoPaths()) {
+    //
+    // Read the produced mounts, not the declaration. A declaration that names
+    // no forbidden path still leaks every one of them if the builder mounts the
+    // root anyway, and asserting the list cannot tell those apart.
+    const mounts = buildAgentRepoMounts('maka', '/repo', { pathExists: () => true }) as Array<{
+      target: string;
+    }>;
+    for (const mount of mounts) {
+      assert.notEqual(mount.target, CONTAINER_MAKA_REPO, 'Maka must not receive the repo root');
+    }
+    for (const repoPath of mounts.map((mount) =>
+      mount.target.slice(CONTAINER_MAKA_REPO.length + 1),
+    )) {
       assert.ok(!repoPath.startsWith('docs'), `Maka must not be handed evaluation records`);
       assert.ok(!/(^|\/)src(\/|$)/.test(repoPath), `Maka must not be handed sources (${repoPath})`);
       assert.ok(!/(^|\/)\.git(\/|$)/.test(repoPath), `Maka must not be handed repo history`);
@@ -195,6 +207,30 @@ describe('agent repo mounts', () => {
           `${adapterModule}.py reads ${repoFile}, which ${agent} is not mounted`,
         );
       }
+    }
+  });
+
+  test('declares every repo file the Maka adapter names at a container path', () => {
+    // The same authority check, which the Maka side did not have — and its
+    // absence is why `run-host-cell.mjs` was left out of the declaration while
+    // `install()` probes for it in every cell-mode branch. A missing probe
+    // target aborts the trial before the arm runs at all.
+    //
+    // `maka_agent.py` builds container paths by joining segments onto the mount
+    // root rather than writing them out, so match the join instead of a literal.
+    const source = readFileSync(join(REPO_ROOT, 'packages/headless/harbor/maka_agent.py'), 'utf8');
+    const mounted = new Set(makaRepoPaths());
+    const read = new Set<string>();
+    for (const [, segments] of source.matchAll(/Path\(maka_repo\)((?:\s*\/\s*"[^"\n]+")+)/g)) {
+      read.add([...segments.matchAll(/"([^"]+)"/g)].map(([, segment]) => segment).join('/'));
+    }
+    assert.ok(read.size > 0, 'no container paths were found in maka_agent.py');
+    for (const repoFile of read) {
+      // A file may be mounted directly or inside a mounted directory.
+      const covered = [...mounted].some(
+        (repoPath) => repoPath === repoFile || repoFile.startsWith(`${repoPath}/`),
+      );
+      assert.ok(covered, `maka_agent.py names ${repoFile}, which Maka is not mounted`);
     }
   });
 

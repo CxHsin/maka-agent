@@ -47,7 +47,7 @@ const MAKA_RUNTIME_WORKSPACES: readonly string[] = [
 /**
  * Repo paths the Maka arm executes out of: installed dependencies, workspace
  * manifests so the `@maka/*` symlinks in `node_modules` resolve, each
- * workspace's build output, and the one harbor entrypoint the adapter runs.
+ * workspace's build output, and the harbor entrypoints the adapter names.
  *
  * Sources are deliberately absent. The container runs `dist`, so shipping `src`
  * adds nothing to run and hands over the verifier and the harness manifest —
@@ -64,8 +64,11 @@ const MAKA_REPO_PATHS: readonly string[] = [
     // the container on the first import that needs one.
     `${workspace}/node_modules`,
   ]),
-  // maka_agent.py `_run_cell_path`.
+  // maka_agent.py `_run_cell_path` and `_run_host_cell_path`. Both are probed
+  // by `install()` before either can run, so a missing one aborts the trial
+  // rather than degrading it.
   'packages/headless/harbor/run-cell.mjs',
+  'packages/headless/harbor/run-host-cell.mjs',
 ];
 
 export function makaRepoPaths(): readonly string[] {

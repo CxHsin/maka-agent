@@ -170,6 +170,7 @@ test('opens a same-epoch newer scope without lowering it while migrating an olde
     database
       .prepare(`UPDATE operational_schema_migrations SET version = ? WHERE scope = 'usage'`)
       .run(SQLITE_USAGE_SCHEMA_VERSION + 1);
+    database.exec('ALTER TABLE usage_llm_calls RENAME TO usage_llm_calls_v2');
     database.close();
 
     const reopened = acquireOperationalStateDatabase(root);
@@ -186,6 +187,14 @@ test('opens a same-epoch newer scope without lowering it while migrating an olde
             .get() as { version: number }
         ).version,
         SQLITE_USAGE_SCHEMA_VERSION + 1,
+      );
+      assert.equal(
+        (
+          reopened.database
+            .prepare(`SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'usage_llm_calls'`)
+            .get() as { count: number }
+        ).count,
+        0,
       );
     } finally {
       reopened.close();

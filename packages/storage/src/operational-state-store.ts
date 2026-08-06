@@ -27,7 +27,10 @@ import {
   migrateSqliteArtifactDatabase,
   SQLITE_ARTIFACT_SCHEMA_VERSION,
 } from './sqlite-artifact-schema.js';
-import { migrateSqliteAutomationDatabase } from './sqlite-automation-schema.js';
+import {
+  migrateSqliteAutomationDatabase,
+  SQLITE_AUTOMATION_SCHEMA_VERSION,
+} from './sqlite-automation-schema.js';
 import {
   OPERATIONAL_SCHEMA_MANIFEST,
   OPERATIONAL_STATE_READER_EPOCH,
@@ -142,11 +145,37 @@ class OperationalStateDatabaseOwner {
         ) {
           migrateSqliteSessionMetadataDatabase(this.database, { transaction: 'caller' });
         }
-        migrateSqliteCoreExecutionDatabase(this.database);
-        migrateSqliteWorkflowDatabase(this.database);
-        migrateSqliteUsageDatabase(this.database);
-        migrateSqliteArtifactDatabase(this.database);
-        migrateSqliteAutomationDatabase(this.database);
+        if (
+          shouldMigrateRegisteredScope(
+            compatibility,
+            'core_execution',
+            SQLITE_CORE_EXECUTION_SCHEMA_VERSION,
+          )
+        ) {
+          migrateSqliteCoreExecutionDatabase(this.database);
+        }
+        if (
+          shouldMigrateRegisteredScope(compatibility, 'workflow', SQLITE_WORKFLOW_SCHEMA_VERSION)
+        ) {
+          migrateSqliteWorkflowDatabase(this.database);
+        }
+        if (shouldMigrateRegisteredScope(compatibility, 'usage', SQLITE_USAGE_SCHEMA_VERSION)) {
+          migrateSqliteUsageDatabase(this.database);
+        }
+        if (
+          shouldMigrateRegisteredScope(compatibility, 'artifact', SQLITE_ARTIFACT_SCHEMA_VERSION)
+        ) {
+          migrateSqliteArtifactDatabase(this.database);
+        }
+        if (
+          shouldMigrateRegisteredScope(
+            compatibility,
+            'automation',
+            SQLITE_AUTOMATION_SCHEMA_VERSION,
+          )
+        ) {
+          migrateSqliteAutomationDatabase(this.database);
+        }
         migrateOperationalStateDatabase(this.database, options.now ?? Date.now, 'caller');
         this.database.exec('COMMIT');
       } catch (error) {
@@ -224,12 +253,17 @@ class OperationalStateDatabaseOwner {
   }
 }
 
-interface OperationalSchemaCompatibility {
+interface OperationalSchemaEpochCompatibility {
   allowsNewerScopes: boolean;
+}
+
+interface OperationalSchemaCompatibility extends OperationalSchemaEpochCompatibility {
+  scopeVersions: ReadonlyMap<string, number>;
 }
 
 function assertOperationalSchemaCanMigrate(database: DatabaseSync): OperationalSchemaCompatibility {
   const compatibility = readOperationalSchemaCompatibility(database);
+  const scopeVersions = new Map<string, number>();
   assertSupportedOperationalSchemaVersion(
     'runtime',
     readUserVersion(database),
@@ -245,7 +279,9 @@ function assertOperationalSchemaCanMigrate(database: DatabaseSync): OperationalS
     );
   }
 
-  if (!hasTable(database, 'operational_schema_migrations')) return compatibility;
+  if (!hasTable(database, 'operational_schema_migrations')) {
+    return { ...compatibility, scopeVersions };
+  }
   const rows = database
     .prepare('SELECT scope, version FROM operational_schema_migrations')
     .all() as Array<{ scope?: unknown; version?: unknown }>;
@@ -270,6 +306,7 @@ function assertOperationalSchemaCanMigrate(database: DatabaseSync): OperationalS
           'Maka did not migrate or delete the database. Restore or repair this workspace before opening it.',
       );
     }
+    scopeVersions.set(scope, version);
     assertSupportedOperationalSchemaVersion(
       scope,
       version,
@@ -277,7 +314,20 @@ function assertOperationalSchemaCanMigrate(database: DatabaseSync): OperationalS
       compatibility.allowsNewerScopes,
     );
   }
-  return compatibility;
+  return { ...compatibility, scopeVersions };
+}
+
+function shouldMigrateRegisteredScope(
+  compatibility: OperationalSchemaCompatibility,
+  scope: string,
+  supportedVersion: number,
+): boolean {
+  const observedVersion = compatibility.scopeVersions.get(scope);
+  return (
+    !compatibility.allowsNewerScopes ||
+    observedVersion === undefined ||
+    observedVersion <= supportedVersion
+  );
 }
 
 function assertSupportedOperationalSchemaVersion(
@@ -295,7 +345,7 @@ function assertSupportedOperationalSchemaVersion(
 
 function readOperationalSchemaCompatibility(
   database: DatabaseSync,
-): OperationalSchemaCompatibility {
+): OperationalSchemaEpochCompatibility {
   const minimumReaderEpoch = readMinimumReaderEpoch(database);
   if (minimumReaderEpoch === undefined) return { allowsNewerScopes: false };
   if (minimumReaderEpoch > OPERATIONAL_STATE_READER_EPOCH) {

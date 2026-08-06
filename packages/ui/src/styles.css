@@ -521,16 +521,19 @@
   color: var(--muted-foreground);
   user-select: none;
 }
-/* The marker column: one character wide, so an addition's code starts in the
-   same place as the context line above it. It keeps the line's tint colour —
-   the sign is what the colour is naming — while `.maka-tool-diff-code` hands
-   the code back to syntax colouring. Every row gets the cell, including the
-   markerless ones: a `\ No newline at end of file` that hugged column 0 while
-   the code beside it did not was the same misalignment on a different row. */
+/* The marker column: two character cells, the sign and a blank, so an
+   addition's code starts in the same place as the context line above it and
+   the sign is not crowding the first token. `ch` rather than a px gap because
+   this sits in a monospace body — one more cell keeps the code on the same
+   grid the file itself is written on, where 4px would leave it between two.
+   The column keeps the line's tint colour — the sign is what the colour is
+   naming — while `.maka-tool-diff-code` hands the code back to syntax
+   colouring. Every row gets the cell, including the markerless ones: a
+   `\ No newline at end of file` that hugged column 0 while the code beside it
+   did not was the same misalignment on a different row. */
 .maka-tool-diff-marker {
   display: inline-block;
-  width: 1ch;
-  margin-right: var(--space-1);
+  width: 2ch;
 }
 /* Neutral base under the `astryx-token-*` spans. Without it an added line's
    uncoloured text would stay green and a deleted line's red, which is the

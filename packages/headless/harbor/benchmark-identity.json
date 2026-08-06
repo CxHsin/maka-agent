@@ -1,5 +1,5 @@
 {
-  "$comment": "Benchmark identity. Host-only by construction: this file is never mounted into a graded task container, and nothing under packages/headless/src may embed it.",
+  "$comment": "Benchmark identity. Host-only by construction: no arm mounts this file, and no revision, upstream URL or task-tree fingerprint may appear in packages/headless/dist. Held by harness-ab-manifest.test.ts.",
   "terminalBench21": {
     "upstreamRepositoryUrl": "https://github.com/harbor-framework/terminal-bench-2-1",
     "revision": "d49e28f1e4ddd13d289e85a5f312a66750951932",

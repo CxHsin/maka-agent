@@ -185,7 +185,12 @@ export function resolveHarnessBenchmarkProfile(
 
 export function defaultHarnessBenchmarkTasksRoot(benchmarkProfile) {
   return benchmarkProfile.dataset === 'deep-swe'
-    ? join(homedir(), '.maka/eval/task-sources/deep-swe-6db64a40/tasks')
+    ? // Derived, not spelled: the revision has one authority and a cache path
+      // that drifts from it silently reads the wrong tree.
+      join(
+        homedir(),
+        `.maka/eval/task-sources/deep-swe-${benchmarkProfile.revision.slice(0, 8)}/tasks`,
+      )
     : join(homedir(), '.cache/harbor/tasks');
 }
 

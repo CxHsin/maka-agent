@@ -231,15 +231,24 @@ describe('agent repo mounts', () => {
     }
   });
 
-  test('keeps the benchmark identity out of every competitor container', () => {
-    // run-harness-ab.mjs carries TERMINAL_BENCH_2_1_REVISION and the upstream
-    // repository URL; docs/eval carries earlier per-task results. Neither is a
-    // file any arm needs, and both convert a graded run into retrieval.
-    for (const agent of COMPETITORS) {
-      for (const file of competitorRepoFiles(agent)) {
+  test('keeps the benchmark identity out of every graded container', () => {
+    // harbor/benchmark-identity.json carries each benchmark's revision, task
+    // list and upstream repository URL; docs/eval carries earlier per-task
+    // results. Neither is a file any arm needs, and both convert a graded run
+    // into retrieval.
+    const declarations: Array<readonly [string, readonly string[]]> = [
+      ['maka', makaRepoPaths()],
+      ...COMPETITORS.map((agent) => [agent, competitorRepoFiles(agent)] as const),
+    ];
+    for (const [agent, files] of declarations) {
+      for (const file of files) {
         assert.ok(
           !file.startsWith('docs/'),
           `${agent} must not be handed evaluation records (${file})`,
+        );
+        assert.ok(
+          !file.startsWith('packages/headless/harbor/benchmark-identity'),
+          `${agent} must not be handed the benchmark identity (${file})`,
         );
         assert.notEqual(
           file,

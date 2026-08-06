@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import {
   assertFrozenTaskSet,
   assertFrozenTaskTreeFingerprint,
@@ -10,7 +10,7 @@ import {
   deterministicHarnessTaskOrder,
   HARNESS_MAKA_CONTEXT_BUDGET,
 } from '../harness-ab-manifest.js';
-import { BENCHMARK_IDENTITY, SHIPPED_DIST_DIR } from './benchmark-identity.js';
+import { BENCHMARK_IDENTITY, MOUNTED_DIST_DIR } from './benchmark-identity.js';
 
 const TERMINAL_BENCH_2_1 = BENCHMARK_IDENTITY.terminalBench21;
 const DEEP_SWE_FULL = BENCHMARK_IDENTITY.deepSwe.full113;
@@ -204,27 +204,42 @@ describe('harness A/B manifest', () => {
 
   test('keeps the benchmark identity out of the build output a graded arm mounts', () => {
     // The whole reason this data does not live in `src`. An arm executes this
-    // package's `dist`, so a revision, an upstream URL or a task list compiled
-    // into a shipped module is readable from inside the container being
-    // scored — which is how the #1970 run turned a task into a lookup. The
-    // path-level mount checks in `agent-repo-mount.test.ts` cannot see this:
-    // they inspect declared paths, never what the mounted files contain.
-    const needles = [
+    // package's `dist`, so a revision, an upstream URL or a task-tree
+    // fingerprint compiled into it is readable from inside the container being
+    // scored — which is how the #1970 run turned a task into a lookup at the
+    // pinned revision. The path-level mount checks in `agent-repo-mount.test.ts`
+    // cannot see this: they inspect declared paths, never what the files
+    // contain.
+    //
+    // Two boundaries, because they are two different things. The retrieval keys
+    // — revision, upstream URL, tree fingerprint — must be absent from every
+    // mounted file, compiled tests included. A single task id is not a
+    // retrieval key (the arm is handed its own task id anyway), so those are
+    // held out of the shipped modules, where a complete list could accumulate,
+    // rather than out of test fixtures that name one task each.
+    const retrievalKeys = [
       TERMINAL_BENCH_2_1.revision,
       TERMINAL_BENCH_2_1.upstreamRepositoryUrl,
+      TERMINAL_BENCH_2_1.taskTreeFingerprint,
       BENCHMARK_IDENTITY.deepSwe.revision,
       BENCHMARK_IDENTITY.deepSwe.upstreamRepositoryUrl,
-      ...TERMINAL_BENCH_2_1.taskIds,
-      ...DEEP_SWE_FULL.taskIds,
+      DEEP_SWE_FULL.taskTreeFingerprint,
     ];
-    const shipped = readdirSync(SHIPPED_DIST_DIR, { withFileTypes: true })
+    const taskIds = [...TERMINAL_BENCH_2_1.taskIds, ...DEEP_SWE_FULL.taskIds];
+
+    const compiled = readdirSync(MOUNTED_DIST_DIR, { recursive: true, withFileTypes: true })
       .filter((entry) => entry.isFile() && entry.name.endsWith('.js'))
-      .map((entry) => join(SHIPPED_DIST_DIR, entry.name));
-    assert.ok(shipped.length > 0, 'the build output was not found');
-    for (const file of shipped) {
+      .map((entry) => join(entry.parentPath, entry.name));
+    assert.ok(compiled.length > 0, 'the build output was not found');
+
+    for (const file of compiled) {
       const text = readFileSync(file, 'utf8');
-      for (const needle of needles) {
+      for (const needle of retrievalKeys) {
         assert.ok(!text.includes(needle), `${file} names the benchmark (${needle})`);
+      }
+      if (file.includes(`${sep}__tests__${sep}`)) continue;
+      for (const needle of taskIds) {
+        assert.ok(!text.includes(needle), `${file} names a benchmark task (${needle})`);
       }
     }
   });

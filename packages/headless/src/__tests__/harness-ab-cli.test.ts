@@ -240,9 +240,8 @@ test('harness A/B resumes a run at a different concurrency', async () => {
   // infra-failed cells out of an 89-task sweep therefore meant reproducing the
   // sweep's concurrency number, on pain of not recovering the data at all —
   // while the arms, the model and the task order were identical.
-  const { buildHarnessAbManifest, resolveHarnessAbManifestForRun } = await import(
-    new URL('../../harbor/run-harness-ab.mjs', import.meta.url).href
-  );
+  const { buildHarnessAbManifest, buildHarnessAbRunInput, resolveHarnessAbManifestForRun } =
+    await import(new URL('../../harbor/run-harness-ab.mjs', import.meta.url).href);
   const dir = await mkdtemp(join(tmpdir(), 'maka-harness-ab-resume-pace-'));
   try {
     const manifestPath = join(dir, 'run-manifest.json');
@@ -273,6 +272,23 @@ test('harness A/B resumes a run at a different concurrency', async () => {
     // the pace it was created with.
     assert.equal(resumed.fingerprint, sweep.fingerprint);
     assert.equal(resumed.maxConcurrency, 2);
+
+    // And the pace the operator asked for is the pace that runs. The gate hands
+    // back the run's original manifest, so reading pace from it would let the
+    // resume pass and then silently run at the old pace.
+    const runInput = buildHarnessAbRunInput({
+      runId: 'run',
+      runRoot: dir,
+      resultsJsonlPath: join(dir, 'results.jsonl'),
+      systemPromptPath: join(dir, 'prompt.txt'),
+      manifest: resumed,
+      evaluationTasks: [],
+      arms: [],
+      executionPolicy: { pairConcurrency: 1, armExecution: 'parallel' },
+      retryAdjudicatedInfraRoundIdsOnce: [],
+    });
+    assert.equal(resumed.maxConcurrency, 2);
+    assert.equal(runInput.pairConcurrency, 1);
 
     // Identity itself still holds. A different task set is a different run.
     await assert.rejects(

@@ -1027,6 +1027,41 @@ function withExistingPacing(existing, proposed) {
   return { ...normalized, fingerprint: buildRunManifestFingerprint(normalized) };
 }
 
+/**
+ * The input the cohort runs from: the run's frozen identity, and this
+ * invocation's pacing.
+ *
+ * Which is the point of pulling it out of `runLocked`. `pairConcurrency` comes
+ * from the execution policy and not from `manifest.maxConcurrency`, because the
+ * gate hands back the manifest the run was created with — so reading pace from
+ * it would let a resume pass the gate and then silently run at the old pace,
+ * with nothing to notice.
+ */
+export function buildHarnessAbRunInput({
+  runId,
+  runRoot,
+  resultsJsonlPath,
+  systemPromptPath,
+  manifest,
+  evaluationTasks,
+  arms,
+  executionPolicy,
+  retryAdjudicatedInfraRoundIdsOnce,
+}) {
+  return {
+    runId,
+    runRoot,
+    resultsJsonlPath,
+    systemPromptPath,
+    resumeFingerprint: buildHarnessAbResumeFingerprint(manifest),
+    evaluationTasks,
+    arms,
+    pairConcurrency: executionPolicy.pairConcurrency,
+    armExecution: manifest.metadata.execution.armExecution,
+    retryAdjudicatedInfraRoundIdsOnce,
+  };
+}
+
 export async function resolveHarnessAbManifestForRun({
   manifestPath,
   proposedManifest,
@@ -1359,21 +1394,17 @@ async function runLocked({
           };
         }),
       ];
-      const runInput = {
+      const runInput = buildHarnessAbRunInput({
         runId,
         runRoot,
         resultsJsonlPath,
         systemPromptPath,
-        resumeFingerprint: buildHarnessAbResumeFingerprint(manifest),
+        manifest,
         evaluationTasks,
         arms,
-        // The invocation's own pacing, not the manifest's: the manifest records
-        // the pace the run was created with, and a resume may legitimately ask
-        // for a different one.
-        pairConcurrency: executionPolicy.pairConcurrency,
-        armExecution: manifest.metadata.execution.armExecution,
+        executionPolicy,
         retryAdjudicatedInfraRoundIdsOnce,
-      };
+      });
       const reportOracleEvidence = oracleEvidence
         ? {
             ...(oracleEvidence.resolvedSnapshotFingerprint

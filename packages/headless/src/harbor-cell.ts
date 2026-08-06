@@ -289,7 +289,11 @@ const PI_PROVIDER_ENV_RULES = [
 
 export async function runHarborCell(input: RunHarborCellInput): Promise<RunHarborCellResult> {
   const storage = await openHeadlessStorageForWrite(input.storageRoot);
-  return runHarborCellWithStorage(input, storage);
+  try {
+    return await runHarborCellWithStorage(input, storage);
+  } finally {
+    await storage.close();
+  }
 }
 
 export async function runHarborCellWithStorage(

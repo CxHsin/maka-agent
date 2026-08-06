@@ -215,20 +215,24 @@ async function taskInspectCommand(args: string[]): Promise<number> {
   const storageRoot = resolve(parsed.flags.store);
   return runTaskRunStorageCommand('inspect', storageRoot, async () => {
     const storage = await openHeadlessStorageForRead(storageRoot);
-    const document = await inspectTaskRun(
-      {
-        taskRunStore: storage.taskRunStore,
-        agentRunStore: storage.executionStores.agentRunStore,
-        runtimeEventStore: storage.executionStores.runtimeEventStore,
-      },
-      taskRunId,
-    );
-    if (parsed.bools.json) {
-      process.stdout.write(`${JSON.stringify(document, null, 2)}\n`);
-    } else {
-      process.stdout.write(renderTaskRunInspectTree(document));
+    try {
+      const document = await inspectTaskRun(
+        {
+          taskRunStore: storage.taskRunStore,
+          agentRunStore: storage.executionStores.agentRunStore,
+          runtimeEventStore: storage.executionStores.runtimeEventStore,
+        },
+        taskRunId,
+      );
+      if (parsed.bools.json) {
+        process.stdout.write(`${JSON.stringify(document, null, 2)}\n`);
+      } else {
+        process.stdout.write(renderTaskRunInspectTree(document));
+      }
+      return 0;
+    } finally {
+      await storage.close();
     }
-    return 0;
   });
 }
 
@@ -252,12 +256,16 @@ async function taskExportCommand(args: string[]): Promise<number> {
   const storageRoot = resolve(parsed.flags.store);
   return runTaskRunStorageCommand('export', storageRoot, async () => {
     const storage = await openHeadlessStorageForRead(storageRoot);
-    const projection = await storage.taskRunStore.project(taskRunId);
-    const result = await writeTaskRunExport(resolve(parsed.flags.out), projection, {
-      includeEvents: parsed.bools['include-events'],
-    });
-    console.log(`export: ${result.files.taskRunJson}`);
-    return 0;
+    try {
+      const projection = await storage.taskRunStore.project(taskRunId);
+      const result = await writeTaskRunExport(resolve(parsed.flags.out), projection, {
+        includeEvents: parsed.bools['include-events'],
+      });
+      console.log(`export: ${result.files.taskRunJson}`);
+      return 0;
+    } finally {
+      await storage.close();
+    }
   });
 }
 
@@ -299,38 +307,42 @@ async function aheExportCommand(args: string[]): Promise<number> {
   try {
     const storeRoot = resolve(parsed.flags.store);
     const storage = await openHeadlessStorageForRead(storeRoot);
-    const projections = await Promise.all(
-      parsed.positional.map((taskRunId) => storage.taskRunStore.project(taskRunId)),
-    );
-    const officialResults = await aheOfficialResultsForCli(projections, {
-      storeRoot,
-      harborTrialDir: parsed.flags['harbor-trial-dir']
-        ? resolve(parsed.flags['harbor-trial-dir'])
-        : undefined,
-    });
-    const sessionMessages = await aheSessionMessagesForCli(projections, storage);
-    const agentRunEvidence = await aheAgentRunEvidenceForCli(
-      projections,
-      storage,
-      parsed.bools['include-events'] === true,
-    );
-    const snapshot = await buildMakaAheTargetSnapshot({
-      repoRoot: resolve(parsed.flags.repo),
-      sourceLabel: parsed.flags['source-label'],
-    });
-    const result = await writeMakaAheEvidenceExport(resolve(parsed.flags.out), {
-      snapshot,
-      projections,
-      runId: parsed.flags['run-id'],
-      includeEvents: parsed.bools['include-events'],
-      officialResults,
-      sessionMessages,
-      agentRunEvidence,
-    });
-    console.log(`targetSnapshot: ${result.files.targetSnapshotJson}`);
-    console.log(`harnessResults: ${result.files.harnessResultsJson}`);
-    console.log(`traceIndex: ${result.files.traceIndexJson}`);
-    return 0;
+    try {
+      const projections = await Promise.all(
+        parsed.positional.map((taskRunId) => storage.taskRunStore.project(taskRunId)),
+      );
+      const officialResults = await aheOfficialResultsForCli(projections, {
+        storeRoot,
+        harborTrialDir: parsed.flags['harbor-trial-dir']
+          ? resolve(parsed.flags['harbor-trial-dir'])
+          : undefined,
+      });
+      const sessionMessages = await aheSessionMessagesForCli(projections, storage);
+      const agentRunEvidence = await aheAgentRunEvidenceForCli(
+        projections,
+        storage,
+        parsed.bools['include-events'] === true,
+      );
+      const snapshot = await buildMakaAheTargetSnapshot({
+        repoRoot: resolve(parsed.flags.repo),
+        sourceLabel: parsed.flags['source-label'],
+      });
+      const result = await writeMakaAheEvidenceExport(resolve(parsed.flags.out), {
+        snapshot,
+        projections,
+        runId: parsed.flags['run-id'],
+        includeEvents: parsed.bools['include-events'],
+        officialResults,
+        sessionMessages,
+        agentRunEvidence,
+      });
+      console.log(`targetSnapshot: ${result.files.targetSnapshotJson}`);
+      console.log(`harnessResults: ${result.files.harnessResultsJson}`);
+      console.log(`traceIndex: ${result.files.traceIndexJson}`);
+      return 0;
+    } finally {
+      await storage.close();
+    }
   } catch (error) {
     console.error(`maka eval ahe export: ${(error as Error).message}`);
     return 1;
@@ -471,9 +483,10 @@ async function taskResumeCommand(args: string[]): Promise<number> {
     console.error('usage: maka eval task-run resume <taskRunId> --spec <spec.json> --out <dir>');
     return 1;
   }
+  let storage: Awaited<ReturnType<typeof openHeadlessStorageForWrite>> | undefined;
   try {
     const outDir = resolve(parsed.flags.out);
-    const storage = await openHeadlessStorageForWrite(join(outDir, 'runs'));
+    storage = await openHeadlessStorageForWrite(join(outDir, 'runs'));
     const store = storage.taskRunStore;
     const projection = await store.project(taskRunId);
     if (isTerminalTaskRunStatus(projection.status)) {
@@ -528,11 +541,14 @@ async function taskResumeCommand(args: string[]): Promise<number> {
   } catch (error) {
     console.error(`maka eval task-run resume: ${(error as Error).message}`);
     return 1;
+  } finally {
+    await storage?.close();
   }
 }
 
 async function taskRetryFailedCommand(args: string[]): Promise<number> {
   let parsed: ParsedArgs;
+  let storage: Awaited<ReturnType<typeof openHeadlessStorageForWrite>> | undefined;
   try {
     parsed = parseArgs(args, ['spec', 'out', 'only-taxonomy']);
   } catch (error) {
@@ -553,7 +569,7 @@ async function taskRetryFailedCommand(args: string[]): Promise<number> {
     const spec = await loadSpec(parsed.flags.spec);
     const prior = await readMatrixPriorRecords(resolve(priorPath));
     const outDir = resolve(parsed.flags.out);
-    const storage = await openHeadlessStorageForWrite(join(outDir, 'runs'));
+    storage = await openHeadlessStorageForWrite(join(outDir, 'runs'));
     const onlyTaxonomy = parsed.flags['only-taxonomy']
       ?.split(',')
       .map((value) => value.trim())
@@ -590,6 +606,8 @@ async function taskRetryFailedCommand(args: string[]): Promise<number> {
   } catch (error) {
     console.error(`maka eval task-run retry-failed: ${(error as Error).message}`);
     return 1;
+  } finally {
+    await storage?.close();
   }
 }
 

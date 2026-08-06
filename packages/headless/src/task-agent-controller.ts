@@ -138,7 +138,11 @@ export async function runTaskOnce(
   deps: RunTaskOnceDeps,
 ): Promise<RunTaskOnceResult> {
   const storage = await openHeadlessStorageForWrite(deps.storageRoot);
-  return runTaskOnceWithStorage(config, task, deps, storage);
+  try {
+    return await runTaskOnceWithStorage(config, task, deps, storage);
+  } finally {
+    await storage.close();
+  }
 }
 
 export async function runTaskOnceWithStorage(

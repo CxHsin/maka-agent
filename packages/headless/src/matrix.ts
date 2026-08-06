@@ -23,17 +23,21 @@ export async function runMatrix(
   onResult?: (record: ResultRecord) => void,
 ): Promise<ResultRecord[]> {
   const storage = await openHeadlessStorageForWrite(deps.storageRoot);
-  const records: ResultRecord[] = [];
-  for (const task of spec.tasks) {
-    for (const config of spec.configs) {
-      const record = await runExperimentWithStorage(config, task, deps, storage).catch(
-        (error): ResultRecord => failedRecord(config, task, error),
-      );
-      records.push(record);
-      onResult?.(record);
+  try {
+    const records: ResultRecord[] = [];
+    for (const task of spec.tasks) {
+      for (const config of spec.configs) {
+        const record = await runExperimentWithStorage(config, task, deps, storage).catch(
+          (error): ResultRecord => failedRecord(config, task, error),
+        );
+        records.push(record);
+        onResult?.(record);
+      }
     }
+    return records;
+  } finally {
+    await storage.close();
   }
-  return records;
 }
 
 function failedRecord(config: Config, task: Task, error: unknown): ResultRecord {

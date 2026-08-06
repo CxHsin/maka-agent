@@ -240,7 +240,7 @@ export async function withInspectCommandStores<T>(
         inspectStoresFromExecutionReader(storage.executionStores, storage.taskRunStore),
       );
     } finally {
-      await storage.executionStores.sessionStore.close?.();
+      await storage.close();
     }
   }
 

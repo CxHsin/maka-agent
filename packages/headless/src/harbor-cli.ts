@@ -136,15 +136,20 @@ async function harborRunCommand(args: string[]): Promise<number> {
     return 1;
   }
 
+  let storage: HeadlessStorageWriter | undefined;
   try {
-    const storage = await openHeadlessStorageForWrite(options.storageRoot);
+    storage = await openHeadlessStorageForWrite(options.storageRoot);
     if (options.mode === 'cell') return await runHarborCellMode(options, storage);
     return await runHarborTaskRunMode(options, storage);
   } catch (error) {
     console.error(`maka eval harbor run: ${(error as Error).message}`);
     return 1;
   } finally {
-    await options.providerEnvFetch?.close();
+    try {
+      await storage?.close();
+    } finally {
+      await options.providerEnvFetch?.close();
+    }
   }
 }
 

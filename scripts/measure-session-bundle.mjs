@@ -638,7 +638,7 @@ async function childBootstrap(archivePath) {
         throw new Error('bootstrap created an unrelated session instead of restoring the export');
       }
     } finally {
-      await storage.executionStores.sessionStore.close();
+      await storage.close();
     }
   } finally {
     await rm(destination, { recursive: true, force: true });

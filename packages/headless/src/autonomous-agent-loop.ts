@@ -119,7 +119,11 @@ export async function runAutonomousTask(
   options: RunAutonomousTaskOptions,
 ): Promise<RunAutonomousTaskResult> {
   const storage = await openHeadlessStorageForWrite(options.storageRoot);
-  return runAutonomousTaskWithStorage(config, task, options, storage);
+  try {
+    return await runAutonomousTaskWithStorage(config, task, options, storage);
+  } finally {
+    await storage.close();
+  }
 }
 
 export async function runAutonomousTaskWithStorage(

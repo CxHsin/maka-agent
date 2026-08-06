@@ -102,6 +102,33 @@ export interface InteractiveRootReader {
   close(): Promise<void>;
 }
 
+export interface HeadlessRootCompatibilityLock<A extends StorageRootAccess> {
+  readonly capability: StorageRootCapability<'headless'>;
+  readonly lease: StorageRootLease<'headless', A>;
+  readonly controlDirectory: string;
+  readonly lockPath: string;
+  readonly closed: boolean;
+  close(): Promise<void>;
+}
+
+export interface HeadlessRootMigrationOwner {
+  readonly capability: StorageRootCapability<'headless'>;
+  readonly lease: StorageRootLease<'headless', 'write'>;
+  readonly controlDirectory: string;
+  readonly lockPath: string;
+  readonly closed: boolean;
+  close(): Promise<void>;
+}
+
+type StorageRootLockFor<
+  K extends StorageRootKind,
+  A extends StorageRootAccess,
+> = K extends 'interactive'
+  ? A extends 'write'
+    ? InteractiveRootOwner
+    : InteractiveRootReader
+  : HeadlessRootCompatibilityLock<A>;
+
 interface RootIdentity {
   dev: bigint;
   ino: bigint;
@@ -603,6 +630,27 @@ export async function tryAcquireInteractiveRootReader(
   );
 }
 
+export async function tryAcquireHeadlessRootCompatibilityLock<A extends StorageRootAccess>(
+  capability: StorageRootCapability<'headless'>,
+  access: A,
+): Promise<HeadlessRootCompatibilityLock<A> | undefined> {
+  return withAuthorityFailure(
+    'lock_failed',
+    'Unable to acquire the headless storage root compatibility lock',
+    () => acquireStorageRootLock(capability, access, true),
+  );
+}
+
+export async function tryAcquireHeadlessRootMigrationOwner(
+  capability: StorageRootCapability<'headless'>,
+): Promise<HeadlessRootMigrationOwner | undefined> {
+  return withAuthorityFailure(
+    'lock_failed',
+    'Unable to acquire the headless storage root migration owner lock',
+    () => acquireStorageRootLock(capability, 'write', false),
+  );
+}
+
 export function createHeadlessRootLease<A extends StorageRootAccess>(
   capability: StorageRootCapability<'headless'>,
   access: A,
@@ -688,7 +736,17 @@ async function acquireInteractiveRootLock(
   capability: StorageRootCapability<'interactive'>,
   access: StorageRootAccess,
 ): Promise<InteractiveRootOwner | InteractiveRootReader | undefined> {
-  const capabilityRecord = requireCapability(capability, 'interactive');
+  const lock = await acquireStorageRootLock(capability, access, access === 'read');
+  if (lock) interactiveRootLocks.set(lock, { access });
+  return lock;
+}
+
+async function acquireStorageRootLock<K extends StorageRootKind, A extends StorageRootAccess>(
+  capability: StorageRootCapability<K>,
+  access: A,
+  shared: boolean,
+): Promise<StorageRootLockFor<K, A> | undefined> {
+  const capabilityRecord = requireCapability(capability, capability.kind);
   const { controlDirectory } = await prepareStorageRootControlDirectory(capability);
   const lockPath = join(controlDirectory, 'owner.lock');
   const handle = await open(lockPath, 'a+', 0o600);
@@ -702,7 +760,7 @@ async function acquireInteractiveRootLock(
 
   let granted = false;
   try {
-    granted = tryLock(handle.fd, { shared: access === 'read' });
+    granted = tryLock(handle.fd, { shared });
   } catch (error) {
     await handle.close();
     throw error;
@@ -755,7 +813,7 @@ async function acquireInteractiveRootLock(
     );
     return closePromise;
   };
-  return createInteractiveRootLock(
+  return createStorageRootLock(
     capability,
     capabilityRecord,
     access,
@@ -767,16 +825,16 @@ async function acquireInteractiveRootLock(
   );
 }
 
-function createInteractiveRootLock(
-  capability: StorageRootCapability<'interactive'>,
-  capabilityRecord: CapabilityRecord<'interactive'>,
-  access: StorageRootAccess,
+function createStorageRootLock<K extends StorageRootKind, A extends StorageRootAccess>(
+  capability: StorageRootCapability<K>,
+  capabilityRecord: CapabilityRecord<K>,
+  access: A,
   controlDirectory: string,
   lockPath: string,
   isActive: () => boolean,
   beginOperation: () => () => void,
   close: () => Promise<void>,
-): InteractiveRootOwner | InteractiveRootReader {
+): StorageRootLockFor<K, A> {
   const lock = Object.freeze({
     capability,
     lease: createLease(capabilityRecord, access, isActive, beginOperation),
@@ -786,8 +844,7 @@ function createInteractiveRootLock(
       return !isActive();
     },
     close,
-  }) as InteractiveRootOwner | InteractiveRootReader;
-  interactiveRootLocks.set(lock, { access });
+  }) as StorageRootLockFor<K, A>;
   return lock;
 }
 

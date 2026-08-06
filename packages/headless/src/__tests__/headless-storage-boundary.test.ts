@@ -13,6 +13,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, test } from 'node:test';
 import {
   discoverMarkedStorageRoot,
@@ -20,10 +21,11 @@ import {
   resolveStorageRoot,
   STORAGE_ROOT_MARKER_FILE,
   StorageRootAuthorityError,
+  tryAcquireHeadlessRootMigrationOwner,
 } from '@maka/storage/root-authority';
 import { registerFakeBackend } from '../backends.js';
 import { runHarborCell } from '../harbor-cell.js';
-import { openHeadlessStorageForRead } from '../headless-storage.js';
+import { openHeadlessStorageForRead, openHeadlessStorageForWrite } from '../headless-storage.js';
 import { runTaskOnce } from '../task-agent-controller.js';
 import { inspectTaskRun } from '../task-run-inspect.js';
 import type { Config, Task } from '../contracts.js';
@@ -36,6 +38,79 @@ const fakeConfig: Config = {
 };
 
 describe('Headless storage root boundary', () => {
+  test('holds a shared compatibility lock for the storage lifetime', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'maka-headless-compatibility-lock-'));
+    const storageRoot = join(base, 'storage');
+    try {
+      const storage = await openHeadlessStorageForWrite(storageRoot);
+      const capability = await discoverMarkedStorageRoot({ path: storageRoot });
+      assert.equal(capability.kind, 'headless');
+      assert.equal(await tryAcquireHeadlessRootMigrationOwner(capability), undefined);
+
+      await storage.close();
+      const migrationOwner = await tryAcquireHeadlessRootMigrationOwner(capability);
+      assert.ok(migrationOwner);
+      await migrationOwner.close();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  test('releases internally owned Headless storage when a task run returns', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'maka-headless-task-storage-close-'));
+    const storageRoot = join(base, 'storage');
+    const workspaceDir = join(base, 'workspace');
+    try {
+      await mkdir(workspaceDir);
+      await writeFile(join(workspaceDir, 'proof.txt'), 'present\n');
+      await runTaskOnce(
+        fakeConfig,
+        {
+          id: 'headless-storage-close',
+          instruction: 'Complete the task.',
+          workspaceDir,
+          verification: { command: 'test -f proof.txt', protectedPaths: [] },
+        },
+        { storageRoot, taskRunId: 'task-run-close' },
+      );
+
+      const capability = await discoverMarkedStorageRoot({ path: storageRoot });
+      assert.equal(capability.kind, 'headless');
+      const migrationOwner = await tryAcquireHeadlessRootMigrationOwner(capability);
+      assert.ok(migrationOwner);
+      await migrationOwner.close();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
+  test('releases the compatibility lock when the reader epoch rejects opening', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'maka-headless-epoch-reject-close-'));
+    const storageRoot = join(base, 'storage');
+    try {
+      const initial = await openHeadlessStorageForWrite(storageRoot);
+      await initial.close();
+      const database = new DatabaseSync(join(storageRoot, 'runtime.sqlite'));
+      database.exec(
+        'UPDATE operational_schema_compatibility SET minimum_reader_epoch = 2 WHERE singleton = 1',
+      );
+      database.close();
+
+      await assert.rejects(
+        () => openHeadlessStorageForWrite(storageRoot),
+        /requires reader epoch 2, but this Maka build supports epoch 1/,
+      );
+
+      const capability = await discoverMarkedStorageRoot({ path: storageRoot });
+      assert.equal(capability.kind, 'headless');
+      const migrationOwner = await tryAcquireHeadlessRootMigrationOwner(capability);
+      assert.ok(migrationOwner);
+      await migrationOwner.close();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
+
   test('rejects an Interactive root before Harbor mutates storage, workspace, output, or control state', async () => {
     const base = await mkdtemp(join(tmpdir(), 'maka-headless-root-kind-'));
     const storageRoot = join(base, 'storage');
@@ -112,7 +187,11 @@ describe('Headless storage root boundary', () => {
       assert.deepEqual(await storage.taskRunStore.listTaskRunIds(), ['task-run-1']);
       assert.equal((await storage.taskRunStore.project('task-run-1')).status, 'completed');
       assert.equal((await storage.executionStores.sessionStore.list()).length, 1);
-      assert.deepEqual(await snapshotTree(storageRoot, 'storage'), beforeRead);
+      await storage.close();
+      assert.deepEqual(
+        withoutDirectoryMtime(await snapshotTree(storageRoot, 'storage')),
+        withoutDirectoryMtime(beforeRead),
+      );
     } finally {
       await rm(base, { recursive: true, force: true });
     }
@@ -194,6 +273,12 @@ interface ManifestEntry {
   size?: string;
   mtimeNs?: string;
   contentSha256?: string;
+}
+
+function withoutDirectoryMtime(entries: ManifestEntry[]): ManifestEntry[] {
+  return entries.map(({ mtimeNs, ...entry }) =>
+    entry.type === 'directory' ? entry : { ...entry, mtimeNs },
+  );
 }
 
 async function snapshotManifest(paths: {

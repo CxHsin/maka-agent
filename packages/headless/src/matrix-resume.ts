@@ -149,15 +149,19 @@ export async function readTaskRunStoreRecords(storageRoot: string): Promise<Resu
     if (error instanceof StorageRootAuthorityError && error.code === 'root_not_found') return [];
     throw error;
   }
-  const { taskRunStore } = storage;
-  const records: ResultRecord[] = [];
-  for (const taskRunId of await taskRunStore.listTaskRunIds()) {
-    const projection = await taskRunStore.project(taskRunId);
-    if (!isTerminalTaskRunStatus(projection.status) && projection.status !== 'needs_approval')
-      continue;
-    records.push(resultRecordFromTaskRunProjection(projection));
+  try {
+    const { taskRunStore } = storage;
+    const records: ResultRecord[] = [];
+    for (const taskRunId of await taskRunStore.listTaskRunIds()) {
+      const projection = await taskRunStore.project(taskRunId);
+      if (!isTerminalTaskRunStatus(projection.status) && projection.status !== 'needs_approval')
+        continue;
+      records.push(resultRecordFromTaskRunProjection(projection));
+    }
+    return records;
+  } finally {
+    await storage.close();
   }
-  return records;
 }
 
 function latestRecordsByCell(records: readonly ResultRecord[]): Map<string, ResultRecord> {

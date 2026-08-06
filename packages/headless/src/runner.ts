@@ -100,7 +100,11 @@ export async function runExperiment(
   deps: RunExperimentDeps,
 ): Promise<ResultRecord> {
   const storage = await openHeadlessStorageForWrite(deps.storageRoot);
-  return runExperimentWithStorage(config, task, deps, storage);
+  try {
+    return await runExperimentWithStorage(config, task, deps, storage);
+  } finally {
+    await storage.close();
+  }
 }
 
 export async function runExperimentWithStorage(

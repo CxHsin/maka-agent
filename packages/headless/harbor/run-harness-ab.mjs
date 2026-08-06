@@ -998,21 +998,53 @@ export function buildHarnessAbManifest({
   });
 }
 
+/**
+ * How fast the scheduler was told to go is not which experiment this is.
+ *
+ * The manifest records `maxConcurrency` and `maxConcurrentAttempts`, and a run
+ * id's fingerprint hashes the whole manifest — so an operator resuming a run
+ * at a different pace proposed a different fingerprint and was refused with
+ * "A/B run manifest does not match existing run id". Recovering three
+ * infra-failed cells out of an 89-task sweep meant reproducing the sweep's
+ * concurrency number, on pain of not recovering the data at all, while the
+ * arms, the model, the tasks and their order — everything the comparison is
+ * made of — were identical.
+ *
+ * So the proposed manifest adopts the existing run's pacing before the
+ * fingerprints are compared, the same way the adjudicated-retry path already
+ * adopts its frozen subject and toolchain identity. What the manifest records
+ * stays the pacing the run was created with; this invocation still runs at the
+ * pace it was asked for, which is why the scheduler reads its own policy
+ * rather than the manifest.
+ */
+function withExistingPacing(existing, proposed) {
+  const { fingerprint: _fingerprint, ...body } = proposed;
+  const normalized = {
+    ...body,
+    maxConcurrency: existing.maxConcurrency,
+    maxConcurrentAttempts: existing.maxConcurrentAttempts,
+  };
+  return { ...normalized, fingerprint: buildRunManifestFingerprint(normalized) };
+}
+
 export async function resolveHarnessAbManifestForRun({
   manifestPath,
   proposedManifest,
   retryRoundIds,
   expectedExistingFingerprint,
 }) {
+  const existing = await readAbRunManifest(manifestPath);
   if (!expectedExistingFingerprint) {
-    return ensureAbRunManifest(manifestPath, proposedManifest);
+    return ensureAbRunManifest(
+      manifestPath,
+      existing ? withExistingPacing(existing, proposedManifest) : proposedManifest,
+    );
   }
   if (retryRoundIds.length === 0) {
     throw new Error(
       'MAKA_HARNESS_AB_EXPECTED_EXISTING_MANIFEST_FINGERPRINT requires an explicit adjudicated infra retry',
     );
   }
-  const existing = await readAbRunManifest(manifestPath);
   if (!existing) {
     throw new Error('explicit adjudicated infra retry requires an existing run manifest');
   }
@@ -1023,7 +1055,10 @@ export async function resolveHarnessAbManifestForRun({
   }
   const frozenMakaArm = existing.arms.find((arm) => arm.id === 'maka');
   if (!frozenMakaArm) throw new Error('existing run manifest is missing the Maka arm');
-  const { fingerprint: _proposedFingerprint, ...proposedBody } = proposedManifest;
+  const { fingerprint: _proposedFingerprint, ...proposedBody } = withExistingPacing(
+    existing,
+    proposedManifest,
+  );
   const normalizedBody = {
     ...proposedBody,
     subjectFingerprint: existing.subjectFingerprint,
@@ -1332,7 +1367,10 @@ async function runLocked({
         resumeFingerprint: buildHarnessAbResumeFingerprint(manifest),
         evaluationTasks,
         arms,
-        pairConcurrency: manifest.maxConcurrency,
+        // The invocation's own pacing, not the manifest's: the manifest records
+        // the pace the run was created with, and a resume may legitimately ask
+        // for a different one.
+        pairConcurrency: executionPolicy.pairConcurrency,
         armExecution: manifest.metadata.execution.armExecution,
         retryAdjudicatedInfraRoundIdsOnce,
       };

@@ -233,6 +233,65 @@ test('harness A/B selects one named task only with an explicit run identity', as
   assert.equal(manifest.maxConcurrentAttempts, 1);
 });
 
+test('harness A/B resumes a run at a different concurrency', async () => {
+  // Pacing is not identity, and the layer that decides identity is the manifest
+  // gate: it compares the whole manifest, pacing included, and refuses with
+  // "A/B run manifest does not match existing run id". Recovering three
+  // infra-failed cells out of an 89-task sweep therefore meant reproducing the
+  // sweep's concurrency number, on pain of not recovering the data at all —
+  // while the arms, the model and the task order were identical.
+  const { buildHarnessAbManifest, resolveHarnessAbManifestForRun } = await import(
+    new URL('../../harbor/run-harness-ab.mjs', import.meta.url).href
+  );
+  const dir = await mkdtemp(join(tmpdir(), 'maka-harness-ab-resume-pace-'));
+  try {
+    const manifestPath = join(dir, 'run-manifest.json');
+    const taskIds = ['bn-fit-modify', 'write-compressor'];
+    const base = {
+      subjectFingerprint: 'subject',
+      taskSourceFingerprint: 'tasks',
+      toolchainFingerprint: 'tools',
+      taskIds,
+    };
+    const sweep = buildHarnessAbManifest({ ...base, pairConcurrency: 2 });
+    const recovery = buildHarnessAbManifest({ ...base, pairConcurrency: 1 });
+    assert.notEqual(sweep.fingerprint, recovery.fingerprint);
+
+    const created = await resolveHarnessAbManifestForRun({
+      manifestPath,
+      proposedManifest: sweep,
+      retryRoundIds: [],
+    });
+    assert.equal(created.fingerprint, sweep.fingerprint);
+
+    const resumed = await resolveHarnessAbManifestForRun({
+      manifestPath,
+      proposedManifest: recovery,
+      retryRoundIds: [],
+    });
+    // Same run: the operator gets the run they were resuming, still recording
+    // the pace it was created with.
+    assert.equal(resumed.fingerprint, sweep.fingerprint);
+    assert.equal(resumed.maxConcurrency, 2);
+
+    // Identity itself still holds. A different task set is a different run.
+    await assert.rejects(
+      resolveHarnessAbManifestForRun({
+        manifestPath,
+        proposedManifest: buildHarnessAbManifest({
+          ...base,
+          taskIds: ['bn-fit-modify', 'adaptive-rejection-sampler'],
+          pairConcurrency: 2,
+        }),
+        retryRoundIds: [],
+      }),
+      /A\/B run manifest does not match existing run id/,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('harness A/B selects an explicit task subset in one resumable run', async () => {
   const { resolveHarnessAbRunId, resolveHarnessAbTaskSelection, resolveHarnessComposition } =
     await import(new URL('../../harbor/run-harness-ab.mjs', import.meta.url).href);

@@ -24,6 +24,7 @@ import {
   createOpenAiChatReasoningTransportState,
   type OpenAiChatReasoningTransportState,
 } from './openai-chat-reasoning-transport.js';
+import { createOpenAiResponsesPlaintextReasoningTransport } from './openai-responses-plaintext-reasoning-transport.js';
 import type { OpenAiResponsesTransportState } from './openai-responses-websocket.js';
 import { anthropicV1BaseUrl, googleV1BetaBaseUrl } from './provider-urls.js';
 import { resolveModelRuntime, type ResolvedModelRuntime } from './model-runtime.js';
@@ -130,7 +131,20 @@ export function getAIModel(input: ModelFactoryInput): LanguageModelV4 {
         );
       }
       if (wire === 'openai-responses') {
-        return createOpenAI({ apiKey, baseURL, fetch }).responses(modelId);
+        // Measured against the live API rather than inferred from the wire:
+        // DeepSeek streams reasoning as `response.reasoning_text.delta`, which
+        // the SDK never reads, so its reasoning parts arrive empty. Keep this
+        // to the provider we have evidence for — a Responses wire says nothing
+        // about which reasoning shape a provider speaks, and the others
+        // reaching here have not been measured.
+        const speaksPlaintextReasoning = connection.providerType === 'deepseek';
+        return createOpenAI({
+          apiKey,
+          baseURL,
+          fetch: speaksPlaintextReasoning
+            ? createOpenAiResponsesPlaintextReasoningTransport(fetch ?? globalThis.fetch)
+            : fetch,
+        }).responses(modelId);
       }
       if (reasoningReplay.kind !== 'openai-chat-plaintext') {
         throw new Error('OpenAI-compatible Chat wire requires plaintext reasoning replay');

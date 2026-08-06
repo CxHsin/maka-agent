@@ -524,7 +524,9 @@
 /* The marker column: one character wide, so an addition's code starts in the
    same place as the context line above it. It keeps the line's tint colour —
    the sign is what the colour is naming — while `.maka-tool-diff-code` hands
-   the code back to syntax colouring. */
+   the code back to syntax colouring. Every row gets the cell, including the
+   markerless ones: a `\ No newline at end of file` that hugged column 0 while
+   the code beside it did not was the same misalignment on a different row. */
 .maka-tool-diff-marker {
   display: inline-block;
   width: 1ch;
@@ -533,7 +535,13 @@
 /* Neutral base under the `astryx-token-*` spans. Without it an added line's
    uncoloured text would stay green and a deleted line's red, which is the
    flat single-tint reading the tokens exist to break up; the row's background
-   tint and its marker carry add/del on their own. */
+   tint and its marker carry add/del on their own.
+
+   This is also what brings context lines up from `--foreground-secondary` to
+   full foreground, which is deliberate rather than collateral: once a context
+   line's keywords and strings are syntax-coloured, dimming only the text
+   between them reads as damage, not as de-emphasis. The row's flat background
+   is what says "unchanged" now. */
 .maka-tool-diff-code { color: var(--foreground); }
 .maka-tool-diff-line[data-line="meta"] .maka-tool-diff-code { color: inherit; }
 .maka-tool-diff-line[data-line="add"] { background: oklch(from var(--success) l c h / 0.1); color: var(--success-text); }

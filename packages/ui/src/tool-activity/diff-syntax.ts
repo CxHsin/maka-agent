@@ -8,12 +8,24 @@
  * language, and a diff is neither (its marker column is not code, and its
  * lines are two files interleaved).
  *
- * What Astryx does ship is the tokenizer underneath that component, and it is
- * line-local by construction — `tokenize` runs each line against the language's
- * anchored patterns independently, with line-relative offsets. That is exactly
- * what a diff needs: the rows can be tokenized as one buffer of stripped code
- * and the results still line up row for row, with no pretence that the old and
- * new sides are each a compilable file.
+ * What Astryx does ship is the tokenizer underneath that component, and it
+ * carries no state between lines: `tokenize` returns one token array per line,
+ * each starting from that line's own offset with nothing inherited from the
+ * one above. That is what a diff can use — the rows tokenize as one buffer of
+ * stripped code and the results still line up row for row, with no pretence
+ * that the old and new sides are each a compilable file.
+ *
+ * Stateless is not the same as line-bounded, and the difference is visible.
+ * `tokenizeLine` bounds where a match may *start*, not how far it may run, and
+ * several patterns span newlines — the JS block comment `/\*[\s\S]*?\*\/`, the
+ * HTML `<!-- -->`, Python's triple-quoted strings. A row that opens one gets a
+ * token reaching into the rows below (clamped where it is rendered), and those
+ * rows, having inherited nothing, colour as ordinary code. So the interior of a
+ * multi-line comment reads as code rather than as comment. That is a colour
+ * being wrong, never a character: it is strictly better than the flat tint it
+ * replaced, and fixing it means carrying an "inside a construct" flag across
+ * rows here — a real feature, not a clamp, and not worth it until someone
+ * misreads a diff because of it.
  *
  * The `astryx-token-*` classes the spans carry are Astryx's own span-mode
  * fallback classes, injected by `ensureHighlightStyles()`; the product's
@@ -69,7 +81,8 @@ const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
  *
  * Joining the rows into one buffer is a way to make a single `tokenize` call,
  * not a claim that the buffer is valid source — the tokenizer returns one
- * entry per line and never consults its neighbours.
+ * entry per line and inherits no state from the line above (see the note on
+ * newline-spanning patterns at the top of this file).
  */
 export function diffSyntaxTokens(paths: readonly string[], code: readonly string[]): TokenLine[] {
   if (code.length === 0) return [];

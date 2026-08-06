@@ -86,6 +86,7 @@ export function operationalStateRequiresExclusiveMigration(
   if (!Number.isSafeInteger(targetReaderEpoch) || targetReaderEpoch < 1) {
     throw new Error('Operational target reader epoch must be a positive integer');
   }
+  if (targetReaderEpoch === 1) return false;
   const databasePath = resolve(workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME);
   if (!existsSync(databasePath)) return targetReaderEpoch > 1;
   const Database = loadDatabaseSync();

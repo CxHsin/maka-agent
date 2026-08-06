@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -320,6 +320,16 @@ test('detects when a higher binary epoch requires an exclusive migration', async
     acquireOperationalStateDatabase(root).close();
     assert.equal(operationalStateRequiresExclusiveMigration(root, 1), false);
     assert.equal(operationalStateRequiresExclusiveMigration(root, 2), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('does not inspect an operational database at the baseline reader epoch', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-baseline-epoch-'));
+  try {
+    await writeFile(join(root, 'runtime.sqlite'), 'not a sqlite database');
+    assert.equal(operationalStateRequiresExclusiveMigration(root, 1), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

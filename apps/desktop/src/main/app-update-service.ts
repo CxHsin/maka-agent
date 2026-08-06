@@ -59,13 +59,11 @@ export interface AppUpdateService {
   getStatus(): AppUpdateStatus;
   retryUpdateDownload(): Promise<AppUpdateStatus>;
   installUpdate(input: AppUpdateInstallRequest): Promise<AppUpdateInstallResult>;
-  openUpdateDownload(): Promise<{ ok: true } | { ok: false; reason: 'not_available' | 'open_failed' }>;
 }
 
 interface AppUpdateServiceDeps {
   currentVersion: string;
   isPackaged: boolean;
-  openExternal(url: string): Promise<void>;
   updater?: AppUpdater;
   mockLatestVersion?: string;
   mockState?: 'available' | 'downloading' | 'downloaded';
@@ -397,25 +395,11 @@ export function createAppUpdateService(deps: AppUpdateServiceDeps): AppUpdateSer
     }
   }
 
-  async function openUpdateDownload(): Promise<{ ok: true } | { ok: false; reason: 'not_available' | 'open_failed' }> {
-    const url = status.state === 'available' ? status.releaseUrl ?? RELEASES_URL : RELEASES_URL;
-    if (status.state === 'not-available' || status.state === 'idle' || status.state === 'checking') {
-      return { ok: false, reason: 'not_available' };
-    }
-    try {
-      await deps.openExternal(url);
-      return { ok: true };
-    } catch {
-      return { ok: false, reason: 'open_failed' };
-    }
-  }
-
   return {
     start,
     dispose,
     getStatus: currentStatus,
     retryUpdateDownload,
     installUpdate,
-    openUpdateDownload,
   };
 }

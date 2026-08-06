@@ -659,7 +659,6 @@ export interface MakaBridge {
     updateStatus(): Promise<AppUpdateStatus>;
     retryUpdateDownload(): Promise<AppUpdateStatus>;
     installUpdate(input: AppUpdateInstallRequest): Promise<AppUpdateInstallResult>;
-    openUpdateDownload(): Promise<{ ok: true } | { ok: false; reason: 'not_available' | 'open_failed' }>;
     sessionProjectInfo(sessionId: string): Promise<{
       projectPath: string;
       projectGit: { isGitRepo: boolean; branch?: string };

@@ -679,7 +679,6 @@ const shellRuns = new ShellRunProcessManager({
 const updateService = createAppUpdateService({
   currentVersion: app.getVersion(),
   isPackaged: app.isPackaged,
-  openExternal: (url) => shell.openExternal(url),
   mockLatestVersion: process.env.MAKA_UPDATE_MOCK_VERSION,
   mockState: updateMockState,
   onStatusChange: (status) => safeSendToRenderer('app:updateStatusChanged', status),

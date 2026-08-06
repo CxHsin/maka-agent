@@ -1031,9 +1031,6 @@ const makaBridge = {
     installUpdate(input: AppUpdateInstallRequest): Promise<AppUpdateInstallResult> {
       return ipcRenderer.invoke('app:installUpdate', input);
     },
-    openUpdateDownload(): Promise<{ ok: true } | { ok: false; reason: 'not_available' | 'open_failed' }> {
-      return ipcRenderer.invoke('app:openUpdateDownload');
-    },
     sessionProjectInfo(sessionId: string): Promise<{
       projectPath: string;
       projectGit: { isGitRepo: boolean; branch?: string };

@@ -157,20 +157,18 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
                 >
                   <AlertTriangle size={14} aria-hidden="true" />
                   <span>
-                    {model.coverage.kind === 'absent'
+                    {(model.coverage.kind === 'absent'
                       ? copy.coverageAbsent
-                      : copy.coveragePartial}
-                    {[
-                      model.coverage.turnsMissing > 0 &&
-                        `${model.coverage.turnsMissing} ${copy.turnsMissing}`,
-                      model.coverage.turnsShort > 0 &&
-                        `${model.coverage.turnsShort} ${copy.turnsShort}`,
-                      model.coverage.unreadableRecords > 0 &&
-                        `${model.coverage.unreadableRecords} ${copy.unreadable}`,
-                    ]
-                      .filter(Boolean)
-                      .map((part) => ` · ${part}`)
-                      .join('')}
+                      : copy.coveragePartial)(
+                      [
+                        model.coverage.turnsMissing > 0 &&
+                          copy.turnsMissing(model.coverage.turnsMissing),
+                        model.coverage.turnsShort > 0 &&
+                          copy.turnsShort(model.coverage.turnsShort),
+                        model.coverage.unreadableRecords > 0 &&
+                          copy.unreadable(model.coverage.unreadableRecords),
+                      ].filter((part): part is string => typeof part === 'string'),
+                    )}
                   </span>
                 </p>
               )}

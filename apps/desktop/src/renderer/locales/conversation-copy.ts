@@ -72,11 +72,17 @@ export interface DesktopConversationCopy {
       duration: string;
       cost: string;
     };
-    coveragePartial: string;
-    coverageAbsent: string;
-    unreadable: string;
-    turnsMissing: string;
-    turnsShort: string;
+    /**
+     * The coverage notice, composed with its own breakdown: the separators
+     * belong to the language, not to the layout, so a Chinese sentence gets
+     * `：` and `、` where an English one gets `:` and `,`.
+     */
+    coveragePartial: (parts: readonly string[]) => string;
+    coverageAbsent: (parts: readonly string[]) => string;
+    /** Each states its own count, so English can say "1 turn" and not "1 turns". */
+    unreadable: (count: number) => string;
+    turnsMissing: (count: number) => string;
+    turnsShort: (count: number) => string;
     recovered: string;
     turnFailed: string;
     filterLabel: string;
@@ -156,6 +162,15 @@ export interface DesktopConversationCopy {
   };
 }
 
+/** Trailing breakdown for the coverage notice, in each language's punctuation. */
+function zhDetail(parts: readonly string[]): string {
+  return parts.length > 0 ? `：${parts.join('、')}` : '';
+}
+
+function enDetail(parts: readonly string[]): string {
+  return parts.length > 0 ? `: ${parts.join(', ')}` : '';
+}
+
 const COPY = {
   zh: {
     actions: { stopFailedTitle: '停止失败', stopFailedFallback: '会话操作失败，请稍后重试。', refreshSessionsFailedTitle: '刷新会话列表失败', refreshSessionsFailedFallback: '刷新会话列表失败，请稍后重试。', conversationErrorTitle: '对话出错', conversationErrorFallback: '对话运行失败，请稍后重试。', regenerateStartedTitle: '已发起重新生成', regenerateStartedDescription: '正在生成新的一轮回答', branchCreatedTitle: '已创建分支', branchCreatedDescription: (name) => `新会话 ${name}`, revisionStartedTitle: '已创建修改版草稿', revisionStartedDescription: '原对话仍会保留；修改后发送将在新版本中继续', revisionReadyTitle: '可以修改并重发了', revisionReadyDescription: '已回到该消息之前；编辑后发送即可', revisionUnavailableTitle: '暂时无法编辑这条消息', revisionAttachmentsUnsupported: '包含附件的历史消息暂不支持编辑并重发，请复制文字后新建消息。', revisionTransformedTextUnsupported: '通过显式技能发送的历史消息暂不支持编辑并重发，请复制文字后重新选择技能。', revisionDraftAttachmentConflict: 'Composer 中已有待发送附件，请先发送或移除附件，再编辑历史消息。', revisionCommandUnsupported: '修改消息时不能执行 /compact，请取消修改后再试。', revisionAlreadyActive: '已有一条消息正在修改，请先发送或取消当前修改。', revisionCancelLabel: '取消', revisionBannerTitle: '正在修改已发送消息', revisionBannerDetail: '· 发送后创建新版本', revisionUnchanged: '内容没有变化。如需重新回答，请使用“重新生成”。', operationFailedTitle: '操作失败', operationFailedFallback: '对话操作失败，请稍后重试。', attachmentFailedTitle: '添加附件失败', tryAgain: '请稍后重试。', modelReboundTitle: '已切换到可用模型', modelReboundDescription: (modelId) => `原会话使用的连接已不可用${modelId ? ` · ${modelId}` : ''}`, messageReadFailedTitle: '读取对话失败' },
@@ -186,16 +201,16 @@ const COPY = {
       loadFailed: '追踪读取失败',
       retry: '重试',
       empty: '这个会话还没有可追踪的活动',
-      costUnavailable: '费用不可得',
+      costUnavailable: '费用未知',
       totals: {
         duration: '总耗时',
         cost: '花费',
       },
-      coveragePartial: '部分调用没有记录，下面的数字是下界',
-      coverageAbsent: '该后端不上报逐次调用明细',
-      unreadable: '条记录无法解析',
-      turnsMissing: '轮没有记录',
-      turnsShort: '轮记录数少于步数',
+      coveragePartial: (parts) => `部分调用没有留下记录，下面的数字只少不多${zhDetail(parts)}`,
+      coverageAbsent: (parts) => `这个后端不记录每次调用的明细${zhDetail(parts)}`,
+      unreadable: (count) => `${count} 条记录读不出来`,
+      turnsMissing: (count) => `${count} 轮没有调用记录`,
+      turnsShort: (count) => `${count} 轮的调用记录不全`,
       recovered: '已恢复',
       turnFailed: '本轮失败',
       filterLabel: '筛选追踪',
@@ -208,12 +223,12 @@ const COPY = {
         context: '上下文窗口',
         segment: {
           cacheRead: '缓存命中',
-          fresh: '新增提示',
-          used: '已用提示',
-          free: '空闲',
+          fresh: '缓存未命中',
+          used: '已占用',
+          free: '剩余',
         },
         cacheHit: '缓存命中率',
-          timelineTab: '时间轴',
+        timelineTab: '时间轴',
       },
     },
     quoteCompanion: {
@@ -284,16 +299,18 @@ const COPY = {
       loadFailed: 'Could not read the trace',
       retry: 'Retry',
       empty: 'Nothing to trace in this session yet',
-      costUnavailable: 'cost unavailable',
+      costUnavailable: 'cost unknown',
       totals: {
         duration: 'Duration',
         cost: 'Cost',
       },
-      coveragePartial: 'Some calls have no record; the numbers below are a floor',
-      coverageAbsent: 'This backend does not report per-call detail',
-      unreadable: 'unreadable records',
-      turnsMissing: 'turns with no record',
-      turnsShort: 'turns short of their step count',
+      coveragePartial: (parts) =>
+        `Some calls left no record, so the numbers below only undercount${enDetail(parts)}`,
+      coverageAbsent: (parts) => `This backend does not record per-call detail${enDetail(parts)}`,
+      unreadable: (count) => `${count} record${count === 1 ? '' : 's'} could not be read`,
+      turnsMissing: (count) => `${count} turn${count === 1 ? '' : 's'} with no call record`,
+      turnsShort: (count) =>
+        `${count} turn${count === 1 ? '' : 's'} with an incomplete call record`,
       recovered: 'recovered',
       turnFailed: 'Turn failed',
       filterLabel: 'Filter the trace',
@@ -306,12 +323,12 @@ const COPY = {
         context: 'Context window',
         segment: {
           cacheRead: 'Cache hit',
-          fresh: 'Fresh prompt',
-          used: 'Prompt',
-          free: 'Free',
+          fresh: 'Cache miss',
+          used: 'Used',
+          free: 'Remaining',
         },
         cacheHit: 'Cache hit rate',
-          timelineTab: 'Timeline',
+        timelineTab: 'Timeline',
       },
     },
     quoteCompanion: {

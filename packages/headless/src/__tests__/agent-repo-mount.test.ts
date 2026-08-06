@@ -22,6 +22,17 @@ const COMPETITORS: readonly Exclude<HarnessAgentId, 'maka'>[] = [
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
+/**
+ * Renderer-only workspaces never load in the headless container; the rest sit
+ * in the CLI's import graph directly or through `@maka/*` symlinks.
+ */
+const RENDERER_ONLY = new Set(['packages/ui', 'apps/desktop', 'packages/cli']);
+
+/** The workspaces the container is expected to be able to load. */
+const MAKA_WORKSPACES = (
+  JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as { workspaces: string[] }
+).workspaces.filter((workspace) => !RENDERER_ONLY.has(workspace));
+
 describe('agent repo mounts', () => {
   test('gives Maka its build outputs, not the repo root', () => {
     const mounts = buildAgentRepoMounts('maka', '/repo', { pathExists: () => true }) as Array<{
@@ -47,6 +58,23 @@ describe('agent repo mounts', () => {
     for (const repoPath of makaRepoPaths()) {
       if (isOptionalRepoPath(repoPath)) continue;
       assert.ok(existsSync(join(REPO_ROOT, repoPath)), `Maka declares missing ${repoPath}`);
+    }
+  });
+
+  test('declares every workspace dependency tree npm could not hoist away', () => {
+    // This is the direction that actually broke: `packages/runtime/node_modules`
+    // exists — npm could not hoist `@slack/socket-mode` past a version conflict
+    // — and omitting it resolved fine on the host, then failed in the container
+    // on the first import that needed it. Nothing but a live container run
+    // caught that. The repo already knows the answer, so ask it here.
+    const mounted = new Set(makaRepoPaths());
+    for (const workspace of MAKA_WORKSPACES) {
+      const repoPath = `${workspace}/node_modules`;
+      if (!existsSync(join(REPO_ROOT, repoPath))) continue;
+      assert.ok(
+        mounted.has(repoPath),
+        `${workspace} keeps a private ${repoPath} that is not mounted`,
+      );
     }
   });
 
@@ -83,15 +111,8 @@ describe('agent repo mounts', () => {
     // nothing else checks it against the workspaces that actually ship. A new
     // runtime workspace added without an entry here resolves at build time and
     // fails inside the container partway through a graded run.
-    const rootManifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
-      workspaces: string[];
-    };
     const mounted = new Set(makaRepoPaths());
-    // Renderer-only workspaces never load in the headless container; the rest
-    // sit in the CLI's import graph directly or through `@maka/*` symlinks.
-    const rendererOnly = new Set(['packages/ui', 'apps/desktop', 'packages/cli']);
-    for (const workspace of rootManifest.workspaces) {
-      if (rendererOnly.has(workspace)) continue;
+    for (const workspace of MAKA_WORKSPACES) {
       assert.ok(
         mounted.has(`${workspace}/dist`),
         `${workspace} ships but its dist is not mounted for Maka`,

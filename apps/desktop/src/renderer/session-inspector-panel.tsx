@@ -4,9 +4,9 @@ import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { Collapsible } from '@astryxdesign/core/Collapsible';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
+import { Heading } from '@astryxdesign/core/Heading';
 import { HStack, VStack } from '@astryxdesign/core/Layout';
 import { MetadataList, MetadataListItem } from '@astryxdesign/core/MetadataList';
-import { ProgressBar } from '@astryxdesign/core/ProgressBar';
 import { Section } from '@astryxdesign/core/Section';
 import { Switch } from '@astryxdesign/core/Switch';
 import { Text } from '@astryxdesign/core/Text';
@@ -218,7 +218,12 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
   );
 }
 
-/** The glance layer: context fullness, then the session's facts as one list. */
+/**
+ * The glance layer, in the two sections a reader actually asks about: how full
+ * the window is right now, and what the session as a whole did. They are not
+ * the same measurement — the bar is one call's prompt, the list is every
+ * attempt summed — so they are not one undifferentiated list of numbers.
+ */
 function InspectorOverview(props: {
   copy: InspectorCopy;
   locale: UiLocale;
@@ -233,22 +238,14 @@ function InspectorOverview(props: {
   return (
     <VStack gap={3} data-maka-contract="session-inspector-overview">
       {context && (
-        <VStack gap={1} data-maka-contract="session-inspector-context">
-          <ProgressBar
-            value={context.usedTokens}
-            max={context.windowTokens}
-            label={copy.overview.context}
-            hasValueLabel
-            formatValueLabel={() => formatPercent(context.ratio)}
-            variant={context.ratio >= 0.9 ? 'error' : context.ratio >= 0.7 ? 'warning' : 'accent'}
-          />
-          <Text type="supporting" color="secondary" className="maka-inspector-cost">
-            {formatNumber(context.usedTokens)} / {formatNumber(context.windowTokens)}
-          </Text>
-        </VStack>
+        <InspectorContextSection copy={copy} context={context} formatNumber={formatNumber} />
       )}
 
-      <MetadataList>
+      <VStack gap={1} className="maka-inspector-section">
+        <Heading level={3} className="maka-inspector-section-title">
+          {copy.overview.session}
+        </Heading>
+        <MetadataList className="maka-inspector-facts">
         {overview.model && (
           <MetadataListItem label={copy.overview.model}>
             {providerLabel(overview.model.providerId)} / {overview.model.modelId}
@@ -295,7 +292,77 @@ function InspectorOverview(props: {
             {formatDateTime(props.locale, overview.lastActivityAt)}
           </MetadataListItem>
         )}
-      </MetadataList>
+        </MetadataList>
+      </VStack>
+    </VStack>
+  );
+}
+
+/**
+ * The context window as a band chart rather than a single fill.
+ *
+ * A one-value bar answers "how full", which is the smaller half of the
+ * question; the half a reader acts on is "full of what". Only the split the
+ * ledger actually carries is drawn — cache hit vs fresh prompt — and when the
+ * provider reports no cache figure the prompt stays one band, because an
+ * unreported cache is not a zero cache (#1679).
+ *
+ * The bands are decoration: the same numbers are read from the legend below,
+ * which is why the track is `aria-hidden` and the legend is a real list.
+ */
+function InspectorContextSection(props: {
+  copy: InspectorCopy;
+  context: NonNullable<ReturnType<typeof deriveInspectorOverviewModel>['context']>;
+  formatNumber: (value: number) => string;
+}) {
+  const { context, copy, formatNumber } = props;
+  const level = context.ratio >= 0.9 ? 'error' : context.ratio >= 0.7 ? 'warning' : undefined;
+
+  return (
+    <VStack gap={1} className="maka-inspector-section" data-maka-contract="session-inspector-context">
+      <div className="maka-inspector-section-head" data-level={level}>
+        <Heading level={3} className="maka-inspector-section-title">
+          {copy.overview.context}
+        </Heading>
+        <Text type="supporting" color="secondary" className="maka-inspector-section-readout">
+          {formatNumber(context.usedTokens)} / {formatNumber(context.windowTokens)} ·{' '}
+          {formatPercent(context.ratio)}
+        </Text>
+      </div>
+
+      <div className="maka-inspector-context-track" data-level={level} aria-hidden="true">
+        {context.segments.map((segment) => (
+          <span
+            key={segment.kind}
+            className="maka-inspector-context-band"
+            data-segment={segment.kind}
+            /* Grow-weighted rather than percentage-width so a prompt that
+               overran its window still fills exactly one track. */
+            style={{ flexGrow: segment.tokens }}
+          />
+        ))}
+      </div>
+
+      {/* The legend is the accessible copy of the bar, and a three-column one
+          rather than a MetadataList: counts and shares only scan as columns
+          when they are actually aligned in a grid. */}
+      <dl className="maka-inspector-legend">
+        {context.segments.map((segment) => (
+          <div key={segment.kind} className="maka-inspector-legend-row">
+            <dt>
+              <span
+                className="maka-inspector-context-swatch"
+                data-segment={segment.kind}
+                data-level={level}
+                aria-hidden="true"
+              />
+              {copy.overview.segment[segment.kind]}
+            </dt>
+            <dd>{formatNumber(segment.tokens)}</dd>
+            <dd className="maka-inspector-legend-share">{formatPercent(segment.ratio)}</dd>
+          </div>
+        ))}
+      </dl>
     </VStack>
   );
 }

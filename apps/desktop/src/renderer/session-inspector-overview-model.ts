@@ -33,6 +33,23 @@ export interface InspectorTokenStats {
   cacheHitRate?: number;
 }
 
+/**
+ * One band of the context window.
+ *
+ * `cacheRead` + `fresh` split the prompt by what the provider served from its
+ * cache; `used` is the same prompt left whole because the provider reported no
+ * cache figure — an unsplit bar, not a bar that claims a zero cache hit.
+ * `free` is the headroom left in the window.
+ */
+export type InspectorContextSegmentKind = 'cacheRead' | 'fresh' | 'used' | 'free';
+
+export interface InspectorContextSegment {
+  kind: InspectorContextSegmentKind;
+  tokens: number;
+  /** tokens / windowTokens. */
+  ratio: number;
+}
+
 /** The prompt size of the most recent metered call, against its own ceiling. */
 export interface InspectorContextBudget {
   usedTokens: number;
@@ -40,6 +57,11 @@ export interface InspectorContextBudget {
   windowTokens: number;
   /** usedTokens / windowTokens; the panel clamps for display, not here. */
   ratio: number;
+  /**
+   * The window broken into bands, in reading order and with empty bands
+   * dropped, so the bar and its legend cannot disagree about what is drawn.
+   */
+  segments: readonly InspectorContextSegment[];
 }
 
 /** The model behind the most recent model call. */
@@ -151,10 +173,31 @@ function contextBudget(steps: readonly TraceModelCallStep[]): InspectorContextBu
     undefined,
   );
   if (!latest) return undefined;
+  const usedTokens = latest.inputTokens!;
+  const windowTokens = latest.contextWindow!;
+  // A cache figure larger than the prompt it belongs to is not a fact about
+  // the window, so it is clamped rather than allowed to push `fresh` negative.
+  const cacheRead =
+    latest.cacheReadInputTokens !== undefined
+      ? Math.min(latest.cacheReadInputTokens, usedTokens)
+      : undefined;
+  const prompt: { kind: InspectorContextSegmentKind; tokens: number }[] =
+    cacheRead === undefined
+      ? [{ kind: 'used', tokens: usedTokens }]
+      : [
+          { kind: 'cacheRead', tokens: cacheRead },
+          { kind: 'fresh', tokens: usedTokens - cacheRead },
+        ];
   return {
-    usedTokens: latest.inputTokens!,
-    windowTokens: latest.contextWindow!,
-    ratio: latest.inputTokens! / latest.contextWindow!,
+    usedTokens,
+    windowTokens,
+    ratio: usedTokens / windowTokens,
+    segments: [
+      ...prompt,
+      { kind: 'free' as const, tokens: Math.max(0, windowTokens - usedTokens) },
+    ]
+      .filter((segment) => segment.tokens > 0)
+      .map((segment) => ({ ...segment, ratio: segment.tokens / windowTokens })),
   };
 }
 

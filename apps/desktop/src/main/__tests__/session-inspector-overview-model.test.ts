@@ -109,7 +109,64 @@ describe('inspector overview model', () => {
       }),
     );
 
-    assert.deepEqual(model.context, { usedTokens: 62_000, windowTokens: 200_000, ratio: 0.31 });
+    assert.deepEqual(model.context, {
+      usedTokens: 62_000,
+      windowTokens: 200_000,
+      ratio: 0.31,
+      segments: [
+        { kind: 'cacheRead', tokens: 55_000, ratio: 0.275 },
+        { kind: 'fresh', tokens: 7_000, ratio: 0.035 },
+        { kind: 'free', tokens: 138_000, ratio: 0.69 },
+      ],
+    });
+  });
+
+  it('leaves the prompt one band when the provider reported no cache figure', () => {
+    const model = deriveInspectorOverviewModel(
+      trace({
+        turns: [
+          turn([
+            modelCall({
+              attempts: [
+                attempt({ completedAt: NOW + 1_000, inputTokens: 50_000, contextWindow: 200_000 }),
+              ],
+            }),
+          ]),
+        ],
+      }),
+    );
+
+    // Not a `cacheRead: 0` band: the provider did not report a miss, it
+    // reported nothing, and the bar says exactly that (#1679).
+    assert.deepEqual(model.context?.segments, [
+      { kind: 'used', tokens: 50_000, ratio: 0.25 },
+      { kind: 'free', tokens: 150_000, ratio: 0.75 },
+    ]);
+  });
+
+  it('drops empty bands and never draws negative headroom', () => {
+    const model = deriveInspectorOverviewModel(
+      trace({
+        turns: [
+          turn([
+            modelCall({
+              attempts: [
+                attempt({
+                  completedAt: NOW + 1_000,
+                  inputTokens: 200_000,
+                  cacheReadInputTokens: 200_000,
+                  contextWindow: 200_000,
+                }),
+              ],
+            }),
+          ]),
+        ],
+      }),
+    );
+
+    assert.deepEqual(model.context?.segments, [
+      { kind: 'cacheRead', tokens: 200_000, ratio: 1 },
+    ]);
   });
 
   it('ignores attempts without a window or usage when sizing the context', () => {
@@ -133,7 +190,15 @@ describe('inspector overview model', () => {
       }),
     );
 
-    assert.deepEqual(model.context, { usedTokens: 40_000, windowTokens: 200_000, ratio: 0.2 });
+    assert.deepEqual(model.context, {
+      usedTokens: 40_000,
+      windowTokens: 200_000,
+      ratio: 0.2,
+      segments: [
+        { kind: 'used', tokens: 40_000, ratio: 0.2 },
+        { kind: 'free', tokens: 160_000, ratio: 0.8 },
+      ],
+    });
   });
 
   it('reports no context budget when no call carried both numbers', () => {

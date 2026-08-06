@@ -93,6 +93,14 @@ export interface DesktopConversationCopy {
     /** Summary above the raw timeline. */
     overview: {
       context: string;
+      /** Names the bands of the context bar, in the bar's own order. */
+      segment: {
+        cacheRead: string;
+        fresh: string;
+        used: string;
+        free: string;
+      };
+      session: string;
       model: string;
       input: string;
       cacheRead: string;
@@ -208,7 +216,14 @@ const COPY = {
       hiddenByFilter: '项被筛选隐藏',
       turnLabel: (index) => `第 ${index} 轮`,
       overview: {
-        context: '上下文',
+        context: '上下文窗口',
+        segment: {
+          cacheRead: '缓存命中',
+          fresh: '新增提示',
+          used: '已用提示',
+          free: '空闲',
+        },
+        session: '会话',
         model: '模型',
         input: '输入 token',
         cacheRead: '缓存读取',
@@ -309,7 +324,14 @@ const COPY = {
       hiddenByFilter: 'hidden by the filter',
       turnLabel: (index) => `Turn ${index}`,
       overview: {
-        context: 'Context',
+        context: 'Context window',
+        segment: {
+          cacheRead: 'Cache hit',
+          fresh: 'Fresh prompt',
+          used: 'Prompt',
+          free: 'Free',
+        },
+        session: 'Session',
         model: 'Model',
         input: 'Input tokens',
         cacheRead: 'Cache read',

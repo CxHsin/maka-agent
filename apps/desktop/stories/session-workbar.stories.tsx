@@ -319,6 +319,34 @@ const populatedTrace: SessionTrace = {
   },
 };
 
+/**
+ * The same session with its latest prompt resized, rather than a second copy
+ * of the fixture: what the near-limit story is about is the size of one call,
+ * and a fork would drift from `populatedTrace` on every other axis.
+ */
+const nearLimitTrace: SessionTrace = {
+  ...populatedTrace,
+  turns: populatedTrace.turns.map((turn, index) =>
+    index !== populatedTrace.turns.length - 1
+      ? turn
+      : {
+          ...turn,
+          steps: turn.steps.map((step) =>
+            step.kind !== 'model_call'
+              ? step
+              : {
+                  ...step,
+                  attempts: step.attempts.map((attempt) => ({
+                    ...attempt,
+                    inputTokens: 186_400,
+                    cacheReadInputTokens: 151_800,
+                  })),
+                },
+          ),
+        },
+  ),
+};
+
 const emptyTrace: SessionTrace = {
   schemaVersion: 1,
   sessionId: SESSION_ID,
@@ -449,6 +477,15 @@ export const Files: Story = {
 // raises when records are missing.
 export const Trace: Story = {
   decorators: [bridge({ trace: populatedTrace })],
+  render: () => <Workbar tab="inspector" />,
+};
+
+// Real path: 会话工作栏 → 追踪 on a long session whose latest call sits near the
+// top of its window — the tier the context bands and their legend switch to
+// before a compaction, and the state a reader is most likely to open the tab
+// for. Same session as Trace, sized differently, so the two read side by side.
+export const TraceContextNearLimit: Story = {
+  decorators: [bridge({ trace: nearLimitTrace })],
   render: () => <Workbar tab="inspector" />,
 };
 

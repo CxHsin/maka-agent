@@ -217,8 +217,142 @@
   color: var(--destructive-text);
 }
 
-.maka-inspector-cost {
+/* One overview section: a title line the eye can land on, then its content.
+   The sections are what keep two different measurements apart — one call's
+   prompt above, the whole session's totals below. */
+.maka-inspector-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.maka-inspector-section-title {
+  font: var(--maka-text-heading-5);
+  color: var(--foreground-secondary);
+}
+
+.maka-inspector-section-readout {
+  margin-left: auto;
   font-variant-numeric: tabular-nums;
+}
+
+/* The readout carries the tier too, so a full window is legible from the line
+   that states it rather than only from the colour of the bands below. */
+.maka-inspector-section-head[data-level='warning'] .maka-inspector-section-readout {
+  color: var(--warning-text);
+}
+
+.maka-inspector-section-head[data-level='error'] .maka-inspector-section-readout {
+  color: var(--destructive-text);
+}
+
+/* The context window drawn as bands. Colour is the join between the track and
+   its legend, so both read it from the same `data-segment` rules below and a
+   band can never mean one thing in the bar and another in the list. */
+.maka-inspector-context-track {
+  --maka-context-fill: var(--accent);
+  display: flex;
+  gap: var(--border-width-thick);
+  height: var(--space-1-5);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.maka-inspector-context-track[data-level='warning'] {
+  --maka-context-fill: var(--warning);
+}
+
+.maka-inspector-context-track[data-level='error'] {
+  --maka-context-fill: var(--destructive);
+}
+
+.maka-inspector-context-band {
+  flex-basis: 0;
+  min-width: 2px;
+}
+
+.maka-inspector-context-swatch {
+  --maka-context-fill: var(--accent);
+  width: var(--space-1);
+  height: var(--space-1);
+  border-radius: var(--radius-pill);
+  flex: 0 0 auto;
+}
+
+.maka-inspector-context-swatch[data-level='warning'] {
+  --maka-context-fill: var(--warning);
+}
+
+.maka-inspector-context-swatch[data-level='error'] {
+  --maka-context-fill: var(--destructive);
+}
+
+.maka-inspector-context-band[data-segment='fresh'],
+.maka-inspector-context-band[data-segment='used'],
+.maka-inspector-context-swatch[data-segment='fresh'],
+.maka-inspector-context-swatch[data-segment='used'] {
+  background: var(--maka-context-fill);
+}
+
+/* Cache hit is the same fill at lower weight, not a second hue: it is a part
+   of the prompt, not a rival category. The weight is set where it still reads
+   as filled on the dark canvas — a lighter mix drops below the free band there
+   and inverts what the bar is saying. */
+.maka-inspector-context-band[data-segment='cacheRead'],
+.maka-inspector-context-swatch[data-segment='cacheRead'] {
+  background: color-mix(in oklch, var(--maka-context-fill) 55%, transparent);
+}
+
+.maka-inspector-context-band[data-segment='free'],
+.maka-inspector-context-swatch[data-segment='free'] {
+  background: var(--muted);
+}
+
+/* MetadataList's default row rhythm is sized for a page; in a 400px workbar
+   column it puts nine facts on a scroll the legend above does not need. The
+   rows keep their grid and their type, and give up only the standalone
+   row height. */
+/* MetadataList puts its className on the wrapper, so the grid is one level in. */
+.maka-inspector-facts > dl {
+  row-gap: var(--space-1);
+}
+
+.maka-inspector-facts dt,
+.maka-inspector-facts dd {
+  min-height: 0;
+}
+
+/* Three real columns — name, count, share — so the numbers line up down the
+   list instead of each row ending wherever its name did. */
+.maka-inspector-legend {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  column-gap: var(--space-3);
+  row-gap: var(--space-0-5);
+  margin: 0;
+  font: var(--maka-text-supporting);
+}
+
+.maka-inspector-legend-row {
+  display: contents;
+}
+
+.maka-inspector-legend dt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--foreground-secondary);
+}
+
+.maka-inspector-legend dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.maka-inspector-legend-share {
+  color: var(--muted-foreground);
+  min-width: 5ch;
 }
 
 /* The coverage notice, demoted: one quiet line inside the raw record, not a

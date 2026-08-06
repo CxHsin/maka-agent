@@ -381,6 +381,29 @@ describe('createHarborTaskRunner', () => {
   // list from, so the row has to name the directory this trial's artifacts are
   // actually in — proven by reading one of them back out of the recorded path,
   // not by recomputing the path the same way the runner did.
+  // The row is written where the trial directory is resolved, before any
+  // grading, so a cell that then failed is still in the run's cell list — its
+  // artifacts are exactly the ones worth reading. Moving the append into the
+  // success branch would quietly drop them.
+  test('records a trial that then failed', async () => {
+    await withRun(async ({ jobsDir, repo }) => {
+      const logPath = join(jobsDir, 'trial-cells.jsonl');
+      const runner = createHarborTaskRunner({
+        makaRepoPath: repo,
+        jobsDir,
+        trialCellLogPath: logPath,
+        model: 'deepseek/deepseek-v4-flash',
+        runHarbor: fakeRunner({ cell: null, exitCodeAfterArtifacts: 1 }),
+      });
+
+      await assert.rejects(runner(runInput()));
+
+      const rows = await readTrialCellLog(logPath);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.taskId, 'task-1');
+    });
+  });
+
   test('records the trial it read, in the directory it read it from', async () => {
     await withRun(async ({ jobsDir, repo }) => {
       const logPath = join(jobsDir, 'trial-cells.jsonl');

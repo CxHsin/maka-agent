@@ -69,6 +69,27 @@ describe('benchmark identity', () => {
     assert.equal(new Set(flat.taskIds).size, flat.taskIds.length);
   });
 
+  // The catalog is nested by benchmark and by profile today; a profile list is
+  // the shape it grows into, and a walker that stopped at an array would lose
+  // every needle inside one without the guard noticing, because the families
+  // outside it stay populated.
+  test('walks a catalog whose profiles are held in an array', () => {
+    const flat = flattenBenchmarkIdentity({
+      bench: {
+        profiles: [
+          {
+            upstreamRepositoryUrl: 'https://github.com/example-org/example-bench-2-1',
+            revision: '0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d',
+            taskTreeFingerprint: 'sha256:00001111',
+            taskIds: ['a', 'b'],
+          },
+        ],
+      },
+    });
+    assert.deepEqual(flat.taskIds, ['a', 'b']);
+    assert.equal(flat.revisions.length, 1);
+  });
+
   // The failure this guards is the quiet one: a renamed field turns every cell
   // clean, and a clean report is exactly what a reader wants to see. A partial
   // rename is quieter still, because the families that survived keep the report
@@ -190,6 +211,14 @@ describe('scanTrajectory', () => {
       assert.deepEqual(kinds(['fix-github-actions']), []);
       assert.deepEqual(kinds(['install-windows-3.11.2-beta']), []);
     });
+
+    // The left boundary is the other half of the same judgement, and a right
+    // boundary alone would let every one of these through.
+    test('an id that merely ends with this one is not this one', () => {
+      assert.deepEqual(kinds(['xfix-git']), []);
+      assert.deepEqual(kinds(['prefix.fix-git']), []);
+      assert.deepEqual(kinds(['0fix-git']), []);
+    });
   });
 
   describe('the revision prefix floor', () => {
@@ -282,6 +311,19 @@ describe('scanTrajectory', () => {
       assert.match(result.notAnalyzedReason ?? '', /unrecognized/);
     });
 
+    // `trajectory.json` holding `null` parses, and a scan that walked it would
+    // find no steps, no signals, and file the cell under clean.
+    test('a trajectory that is not an object at all', () => {
+      for (const value of [null, 'a string', 42]) {
+        const result = scanTrajectory({
+          trajectory: value,
+          ownTaskId: 'cobol-modernization',
+          identity,
+        });
+        assert.equal(result.analyzed, false);
+      }
+    });
+
     test('no steps at all', () => {
       const result = scanTrajectory({
         trajectory: { steps: [] },
@@ -326,7 +368,15 @@ describe('scanTrajectory', () => {
   test('the completeness labels are spelled the way the exporter writes them', async () => {
     const agent = await readFile(join(HARBOR_DIR, 'maka_agent.py'), 'utf8');
     const exporter = await readFile(join(HARBOR_DIR, 'maka_trajectory.py'), 'utf8');
-    assert.match(agent, new RegExp(`"${TRAJECTORY_ARTIFACT_KIND_KEY}"`));
+    // Where, not only what. This side reads the label off the trajectory root;
+    // an exporter that moved it into a step would still match a bare spelling
+    // check, and a degraded summary would then be searched as if it were whole
+    // — which is the failure that cost an entire 89-cell run.
+    assert.match(
+      agent,
+      new RegExp(`extra=\\{\\s*"${TRAJECTORY_ARTIFACT_KIND_KEY}":`),
+      'the artifact-kind label is no longer written on the trajectory root',
+    );
     assert.match(exporter, new RegExp(`"${TRAJECTORY_SUMMARY_REASON_KEY}"`));
     assert.match(exporter, new RegExp(`artifact_kind="${TRAJECTORY_ARTIFACT_KIND_FULL}"`));
     assert.match(exporter, new RegExp(`artifact_kind="${TRAJECTORY_ARTIFACT_KIND_SUMMARY}"`));

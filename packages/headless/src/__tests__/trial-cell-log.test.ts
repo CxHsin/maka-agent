@@ -101,6 +101,25 @@ describe('trial cell log', () => {
     });
   });
 
+  // Arms run in parallel by default, so two runners append to one log at once.
+  // A torn row would either lose a cell or fail the read for the whole run.
+  test('survives every arm appending at once', async () => {
+    await withTempDir(async (dir) => {
+      const path = trialCellLogPath(dir);
+      const rows = Array.from({ length: 200 }, (_, index) =>
+        cell({
+          roundId: `maka-r0-task-${index}`,
+          taskId: `task-${index}`,
+          trialDir: `/runs/jobs/run-1/${'d'.repeat(200)}/${index}`,
+        }),
+      );
+      await Promise.all(rows.map((row) => appendTrialCell(path, row)));
+      const read = await readTrialCellLog(path);
+      assert.equal(read.length, rows.length);
+      assert.equal(new Set(read.map((row) => row.taskId)).size, rows.length);
+    });
+  });
+
   // Logging must never be able to fail a graded cell.
   test('swallows a write failure', async () => {
     await withTempDir(async (dir) => {

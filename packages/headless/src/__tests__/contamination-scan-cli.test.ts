@@ -21,11 +21,21 @@ const SCRIPT = join(REPO_ROOT, 'packages/headless/harbor/run-contamination-scan.
  * upstream URL spelled out here would be the leak the scan exists to find, so
  * it is loaded from the same host-only JSON the scan loads it from.
  */
-async function upstreamRepositoryUrl(): Promise<string> {
+async function benchmark(): Promise<{
+  upstreamRepositoryUrl: string;
+  revision: string;
+  taskTreeFingerprint: string;
+}> {
   const catalog = JSON.parse(
     await readFile(join(REPO_ROOT, 'packages/headless/harbor/benchmark-identity.json'), 'utf8'),
-  ) as { terminalBench21: { upstreamRepositoryUrl: string } };
-  return catalog.terminalBench21.upstreamRepositoryUrl;
+  ) as {
+    terminalBench21: {
+      upstreamRepositoryUrl: string;
+      revision: string;
+      taskTreeFingerprint: string;
+    };
+  };
+  return catalog.terminalBench21;
 }
 
 interface Cell {
@@ -89,17 +99,64 @@ describe('run-contamination-scan', () => {
     );
   });
 
-  test('exits non-zero on evidence a cell went and got the benchmark', async () => {
-    const upstream = await upstreamRepositoryUrl();
-    await withRunRoot(
+  // Each retrieval signal separately, through the real exit code. One of them
+  // standing in for the other two would let a change that quietly demotes a
+  // pinned revision to advisory pass everything but a single unit assertion.
+  describe('exits non-zero on evidence a cell went and got the benchmark', () => {
+    for (const [label, evidence] of [
       [
-        { agent: 'maka', taskId: 'cobol-modernization', messages: [`git clone ${upstream}.git`] },
-        { agent: 'codex', taskId: 'fix-git', messages: ['rewrote the reflog by hand'] },
+        'the upstream repository',
+        async () => `git clone ${(await benchmark()).upstreamRepositoryUrl}.git`,
       ],
+      [
+        'the pinned revision',
+        async () => `checked out ${(await benchmark()).revision.slice(0, 12)}`,
+      ],
+      [
+        'the task-tree fingerprint',
+        async () => `tree ${(await benchmark()).taskTreeFingerprint.replace(/^sha256:/, '')}`,
+      ],
+    ] as const) {
+      test(label, async () => {
+        const message = await evidence();
+        await withRunRoot(
+          [
+            { agent: 'maka', taskId: 'cobol-modernization', messages: [message] },
+            { agent: 'codex', taskId: 'fix-git', messages: ['rewrote the reflog by hand'] },
+          ],
+          async (runRoot) => {
+            const { code, report } = await scan(runRoot);
+            assert.equal(code, 1);
+            assert.equal(report.totals.cellsWithRetrievalSignals, 1);
+          },
+        );
+      });
+    }
+  });
+
+  test('writes the report where it was asked to', async () => {
+    await withRunRoot(
+      [{ agent: 'maka', taskId: 'cobol-modernization', messages: ['ran the tests'] }],
       async (runRoot) => {
-        const { code, report } = await scan(runRoot);
-        assert.equal(code, 1);
-        assert.equal(report.totals.cellsWithRetrievalSignals, 1);
+        const markdownPath = join(runRoot, 'report.md');
+        await execFileAsync(process.execPath, [
+          SCRIPT,
+          '--run-root',
+          runRoot,
+          '--markdown',
+          markdownPath,
+        ]);
+        assert.match(await readFile(markdownPath, 'utf8'), /Searched 1 of 1 recorded cells\./);
+      },
+    );
+  });
+
+  test('refuses a flag it does not know', async () => {
+    await assert.rejects(
+      execFileAsync(process.execPath, [SCRIPT, '--run-root', '/tmp', '--depth', '2']),
+      (error: { code?: number }) => {
+        assert.equal(error.code, 2);
+        return true;
       },
     );
   });

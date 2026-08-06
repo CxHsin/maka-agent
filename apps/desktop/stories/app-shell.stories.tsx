@@ -424,8 +424,8 @@ export const UpdateFailed: Story = {
 };
 
 // Real path: an update is waiting while the rail is collapsed to 48px. The row
-// cannot hold two controls side by side there, so it stacks — the reason the
-// footer reads collapse state at all.
+// cannot hold two controls side by side there, so it stacks — off the frame's
+// own `data-sidebar-state`, which is why ShellFrame above has to carry it.
 export const UpdateDownloadedCollapsed: Story = {
   render: () => (
     <ComposedShell sidebarCollapsed updateReminder={{ state: 'downloaded', latestVersion: '0.1.7' }} />

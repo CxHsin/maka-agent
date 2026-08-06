@@ -150,8 +150,12 @@
 }
 
 /* Collapsed the rail is 48px wide and the labels are gone; two controls cannot
-   sit side by side, so the row stacks and the update button keeps its slot. */
-.maka-sidebar-footer-row[data-collapsed="true"] {
+   sit side by side, so the row stacks and the update button keeps its slot.
+   Read off the frame, which is where the shell already writes the rail's
+   collapsed state (app-shell.tsx) and where the hairline rule above reads it
+   from: a second marker on this row would be the same fact written twice, free
+   to disagree with the first. */
+.appFrame[data-sidebar-state="collapsed"] .maka-sidebar-footer-row {
   flex-direction: column;
   align-items: stretch;
 }
@@ -159,6 +163,13 @@
 .maka-sidebar-footer-row-primary {
   flex: 1;
   min-width: 0;
+}
+
+/* Stacked, the row stretches its children to the rail's width so the settings
+   row still fills it. A 28px button stretched to 32 is a pill, not the circle
+   it is expanded, so it opts out and keeps its own width. */
+.appFrame[data-sidebar-state="collapsed"] .maka-sidebar-update-button {
+  align-self: center;
 }
 
 .maka-sidebar-update-button {

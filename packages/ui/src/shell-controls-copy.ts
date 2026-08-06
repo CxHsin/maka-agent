@@ -10,8 +10,6 @@ type ShellControlsCopy = {
     automations: string;
     extensions: string;
     settings: string;
-    retryUpdate: string;
-    restartUpdate: string;
     updateDownloaded(version: string): string;
     updateFailed(version: string): string;
     pendingReminders(count: number): string;
@@ -45,8 +43,6 @@ const SHELL_CONTROLS_COPY_BY_LOCALE = {
       automations: '定时任务',
       extensions: '扩展',
       settings: '设置',
-      retryUpdate: '重试更新',
-      restartUpdate: '重启',
       updateDownloaded: (version: string) => `新版本 ${version} 已下载，重启后安装`,
       updateFailed: (version: string) => `新版本 ${version} 更新失败，点击重试或手动下载`,
       pendingReminders: (count: number) => `定时任务，${count} 个未完成提醒`,
@@ -78,8 +74,6 @@ const SHELL_CONTROLS_COPY_BY_LOCALE = {
       automations: 'Scheduled tasks',
       extensions: 'Extensions',
       settings: 'Settings',
-      retryUpdate: 'Retry update',
-      restartUpdate: 'Restart',
       updateDownloaded: (version: string) => `Update ${version} downloaded. Restart to install.`,
       updateFailed: (version: string) => `Update ${version} failed. Click to retry or download manually.`,
       pendingReminders: (count: number) => `Scheduled tasks, ${count} unfinished ${count === 1 ? 'reminder' : 'reminders'}`,

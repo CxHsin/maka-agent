@@ -5,7 +5,7 @@ import { useUiLocale } from './locale-context.js';
 import { getShellControlsCopy } from './shell-controls-copy.js';
 import { Icon } from '@astryxdesign/core/Icon';
 import { IconButton } from '@astryxdesign/core/IconButton';
-import { SideNavItem, SideNavSection, useSideNavCollapse } from '@astryxdesign/core/SideNav';
+import { SideNavItem, SideNavSection } from '@astryxdesign/core/SideNav';
 import { Tooltip } from '@astryxdesign/core/Tooltip';
 
 export function SessionSidebarNav(props: {
@@ -70,9 +70,9 @@ export function SessionSidebarNav(props: {
  * The updater runs with `autoDownload = true` and `autoInstallOnAppQuit =
  * false` (app-update-service.ts), so discovery and download ask nothing of
  * anyone — the shell drops `available` and `downloading` before they reach
- * here rather than the footer rendering a control for them. That is what the
- * old chip did: it sat in the footer through the entire silent phase showing a
- * progress bar whose own percentage label the bar painted over.
+ * here rather than the footer rendering a control for them. The old chip sat
+ * in the footer through that whole silent phase counting bytes at someone who
+ * had nothing to decide.
  */
 export type SidebarUpdateReminder = {
   state: 'downloaded' | 'error';
@@ -86,12 +86,13 @@ export function SessionSidebarFooter(props: {
 }) {
   const locale = useUiLocale();
   const copy = getShellControlsCopy(locale).navigation;
-  const { isCollapsed } = useSideNavCollapse();
   const reminder = props.updateReminder;
   const updateAction = reminder && props.onOpenUpdate
     ? {
-        label: reminder.state === 'downloaded' ? copy.restartUpdate : copy.retryUpdate,
-        title: reminder.state === 'downloaded'
+        // One sentence, serving as both the tooltip and the accessible name.
+        // The button carries no visible text, so a bare verb ("Restart")
+        // reaches a screen reader without saying restart what, or why now.
+        label: reminder.state === 'downloaded'
           ? copy.updateDownloaded(reminder.latestVersion)
           : copy.updateFailed(reminder.latestVersion),
         // Download, and specifically NOT an up arrow: the composer's send
@@ -123,7 +124,7 @@ export function SessionSidebarFooter(props: {
   // slot under settings instead of being dropped.
   return (
     <SideNavSection title={copy.settings} isHeaderHidden className="maka-session-panel-footer">
-      <div className="maka-sidebar-footer-row" data-collapsed={isCollapsed ? 'true' : 'false'}>
+      <div className="maka-sidebar-footer-row">
         <div className="maka-sidebar-footer-row-primary">
           <SideNavItem
             label={copy.settings}
@@ -133,7 +134,7 @@ export function SessionSidebarFooter(props: {
           />
         </div>
         {updateAction && (
-          <Tooltip content={updateAction.title}>
+          <Tooltip content={updateAction.label}>
             <IconButton
               className="maka-sidebar-update-button"
               label={updateAction.label}

@@ -384,8 +384,6 @@ type ShellCopy = {
     updateActiveTasksCancel: string;
     updateRetryFailedTitle: string;
     updateRetryFailedFallback: string;
-    updateOpenFailedTitle: string;
-    updateOpenManualFallback: string;
     loading: string;
     goToModels: string;
     boundaryUnreadableTitle: string;
@@ -1047,8 +1045,6 @@ const SHELL_COPY_BY_LOCALE = {
       updateActiveTasksCancel: '取消',
       updateRetryFailedTitle: '无法重新下载更新',
       updateRetryFailedFallback: '请稍后重试，或手动下载最新版本。',
-      updateOpenFailedTitle: '无法打开更新',
-      updateOpenManualFallback: '请稍后重试，或前往 GitHub Releases 下载最新版本。',
       loading: '加载中',
       goToModels: '去模型',
       boundaryUnreadableTitle: '暂时读不到这个对话的权限',
@@ -1548,8 +1544,6 @@ const SHELL_COPY_BY_LOCALE = {
       updateActiveTasksCancel: 'Cancel',
       updateRetryFailedTitle: 'Could not retry update download',
       updateRetryFailedFallback: 'Try again later, or download the latest version manually.',
-      updateOpenFailedTitle: 'Could not open update',
-      updateOpenManualFallback: 'Try again later, or download the latest version from GitHub Releases.',
       loading: 'Loading',
       goToModels: 'Go to Models',
       boundaryUnreadableTitle: 'Could not read this conversation’s permissions',

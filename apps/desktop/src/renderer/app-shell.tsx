@@ -105,6 +105,7 @@ import {
 import { modelSetupToastCopy } from './model-connection-errors';
 import type { AppShellCommandListOptions } from './app-shell-command-actions';
 import { AppShellTopbarActions, AppShellWorkspaceTopActions } from './app-shell-chrome-actions';
+import { updateReminderFromStatus } from './app-shell-app-update';
 import { AppShellDetailPanel } from './app-shell-detail-panel';
 import { AppShellOverlays } from './app-shell-overlays';
 import { createAppShellDailyReviewBridge } from './app-shell-daily-review-bridge';
@@ -413,22 +414,13 @@ function AppShellContent({
     };
   }, []);
 
-  // `available` and `downloading` are deliberately absent. The updater sets
-  // `autoDownload = true`, so both phases resolve themselves and there is
-  // nothing for a user to decide; only `downloaded` (which needs a restart,
-  // because `autoInstallOnAppQuit` is false) and `error` do. The footer used
-  // to carry a control through all four, which meant it spent most of its
-  // visible life asking for attention on behalf of a background download.
-  const updateReminder =
-    appUpdateStatus?.state === 'downloaded' ||
-    (appUpdateStatus?.state === 'error' && Boolean(appUpdateStatus.latestVersion))
-    ? {
-        state: appUpdateStatus.state,
-        latestVersion: appUpdateStatus.latestVersion ?? appUpdateStatus.currentVersion,
-      }
-    : undefined;
+  const updateReminder = updateReminderFromStatus(appUpdateStatus);
+  // Dispatches on the reminder, not on the raw status: the footer is this
+  // callback's only caller and it only renders for the two states above, so
+  // reading the status again here would be the same "who needs the user" list
+  // maintained twice.
   const openUpdateDownload = useCallback(() => {
-    if (appUpdateStatus?.state === 'downloaded') {
+    if (updateReminder?.state === 'downloaded') {
       if (updateInstallInFlightRef.current) return;
       updateInstallInFlightRef.current = true;
       void requestDownloadedAppUpdate({
@@ -460,44 +452,23 @@ function AppShellContent({
         });
       return;
     }
-    if (
-      appUpdateStatus?.state === 'available' ||
-      appUpdateStatus?.state === 'downloading' ||
-      appUpdateStatus?.state === 'error'
-    ) {
-      void window.maka.app
-        .retryUpdateDownload()
-        .then((next) => {
-          if (next.state !== 'error') return;
-          toastApi.error(
-            shellCopy.updateRetryFailedTitle,
-            shellCopy.updateRetryFailedFallback,
-          );
-        })
-        .catch((error) => {
-          toastApi.error(
-            shellCopy.updateRetryFailedTitle,
-            localizedShellErrorMessage(error, shellCopy.updateRetryFailedFallback, uiLocale),
-          );
-        });
-      return;
-    }
+    if (!updateReminder) return;
     void window.maka.app
-      .openUpdateDownload()
-      .then((result) => {
-        if (result.ok) return;
+      .retryUpdateDownload()
+      .then((next) => {
+        if (next.state !== 'error') return;
         toastApi.error(
-          shellCopy.updateOpenFailedTitle,
-          shellCopy.updateOpenManualFallback,
+          shellCopy.updateRetryFailedTitle,
+          shellCopy.updateRetryFailedFallback,
         );
       })
       .catch((error) => {
         toastApi.error(
-          shellCopy.updateOpenFailedTitle,
-          localizedShellErrorMessage(error, shellCopy.tryAgainLater, uiLocale),
+          shellCopy.updateRetryFailedTitle,
+          localizedShellErrorMessage(error, shellCopy.updateRetryFailedFallback, uiLocale),
         );
       });
-  }, [appUpdateStatus, shellCopy, toastApi, uiLocale]);
+  }, [updateReminder, shellCopy, toastApi, uiLocale]);
   const moduleHubCopy = getSharedUiCopy(uiLocale).moduleHubs;
   const extensionsHubHeader = {
     title: moduleHubCopy.extensions.title,

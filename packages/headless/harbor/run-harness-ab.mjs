@@ -55,20 +55,13 @@ import {
 import { MAKA_NODE_TOOLCHAIN_FINGERPRINT, prepareMakaNodeToolchain } from '#maka-node-toolchain';
 import { createCodexOAuthHarnessCredentialBinding } from '#codex-oauth-harness';
 import {
-  assertDeepSweFullTaskSet,
-  assertDeepSweFullTaskTreeFingerprint,
-  assertDeepSweSubset30TaskTreeFingerprint,
-  assertTerminalBench21TaskSet,
-  assertTerminalBench21TaskTreeFingerprint,
+  assertFrozenTaskSet,
+  assertFrozenTaskTreeFingerprint,
   buildHarnessAbResumeFingerprint,
   buildHarnessAbRunManifest,
-  DEEP_SWE_FULL_TASK_IDS,
-  DEEP_SWE_REVISION,
-  DEEP_SWE_SUBSET_30_TASK_IDS,
   HARNESS_MAKA_CONTEXT_BUDGET,
-  TERMINAL_BENCH_2_1_REVISION,
-  TERMINAL_BENCH_2_1_TASK_IDS,
 } from '#harness-ab-manifest';
+import { DEEP_SWE, TERMINAL_BENCH_2_1 } from './benchmark-identity.mjs';
 import {
   runHarnessAbComparisonUnlocked,
   runHarnessArmCohortUnlocked,
@@ -143,8 +136,9 @@ export const HARNESS_BENCHMARK_PROFILES = Object.freeze({
     label: 'Terminal-Bench 2.1',
     dataset: 'terminal-bench',
     version: '2.1',
-    revision: TERMINAL_BENCH_2_1_REVISION,
-    taskIds: TERMINAL_BENCH_2_1_TASK_IDS,
+    revision: TERMINAL_BENCH_2_1.revision,
+    taskIds: TERMINAL_BENCH_2_1.taskIds,
+    taskTreeFingerprint: TERMINAL_BENCH_2_1.taskTreeFingerprint,
     executor: 'harbor',
     runIdSlug: 'tbench-2.1-full',
     // The Harbor oracle registry (advisory task-quality evidence) exists only
@@ -156,8 +150,9 @@ export const HARNESS_BENCHMARK_PROFILES = Object.freeze({
     label: 'DeepSWE subset-30',
     dataset: 'deep-swe',
     version: '1.1',
-    revision: DEEP_SWE_REVISION,
-    taskIds: DEEP_SWE_SUBSET_30_TASK_IDS,
+    revision: DEEP_SWE.revision,
+    taskIds: DEEP_SWE.subset30.taskIds,
+    taskTreeFingerprint: DEEP_SWE.subset30.taskTreeFingerprint,
     executor: 'pier',
     runIdSlug: 'deepswe-subset30',
     oracle: false,
@@ -167,8 +162,9 @@ export const HARNESS_BENCHMARK_PROFILES = Object.freeze({
     label: 'DeepSWE full-113',
     dataset: 'deep-swe',
     version: '1.1',
-    revision: DEEP_SWE_REVISION,
-    taskIds: DEEP_SWE_FULL_TASK_IDS,
+    revision: DEEP_SWE.revision,
+    taskIds: DEEP_SWE.full113.taskIds,
+    taskTreeFingerprint: DEEP_SWE.full113.taskTreeFingerprint,
     executor: 'pier',
     runIdSlug: 'deepswe-full',
     oracle: false,
@@ -198,28 +194,28 @@ export function defaultHarnessBenchmarkTasksRoot(benchmarkProfile) {
  * depend on which slice of it a canary run evaluates. */
 export async function resolveFrozenBenchmarkTasks(benchmarkProfile, tasksRoot) {
   const discovered = await discoverCachedHarborTasks(tasksRoot);
-  if (benchmarkProfile.dataset === 'deep-swe') {
-    if (benchmarkProfile.id === 'deep-swe-1.1-full') {
-      // The full profile compares the whole pinned tree: assert the exact
-      // 113-task leaderboard set and fingerprint every discovered task dir.
-      assertDeepSweFullTaskSet(discovered.map((task) => task.id));
-      const fullTreeFingerprint = await fingerprintFixedPromptTaskTree(discovered);
-      assertDeepSweFullTaskTreeFingerprint(fullTreeFingerprint);
-      return { tasks: discovered, taskSourceFingerprint: fullTreeFingerprint };
-    }
-    // The DeepSWE repo tree carries more tasks than the frozen subset; pick
-    // the subset (loud on any missing id) instead of asserting the whole tree.
-    const tasks = selectTasksByIds(discovered, benchmarkProfile.taskIds, {
-      label: benchmarkProfile.label,
-    });
-    const taskSourceFingerprint = await fingerprintFixedPromptTaskTree(tasks);
-    assertDeepSweSubset30TaskTreeFingerprint(taskSourceFingerprint);
-    return { tasks, taskSourceFingerprint };
+  // The DeepSWE repo tree carries more tasks than the frozen subset, so that
+  // one profile picks its tasks (loud on any missing id); every other profile
+  // is the whole pinned tree and asserts the exact set it must be. Both then
+  // fingerprint what they ended up with.
+  const tasks =
+    benchmarkProfile.id === 'deep-swe-1.1'
+      ? selectTasksByIds(discovered, benchmarkProfile.taskIds, { label: benchmarkProfile.label })
+      : discovered;
+  if (tasks === discovered) {
+    assertFrozenTaskSet(
+      benchmarkProfile.label,
+      benchmarkProfile.taskIds,
+      discovered.map((task) => task.id),
+    );
   }
-  assertTerminalBench21TaskSet(discovered.map((task) => task.id));
-  const taskSourceFingerprint = await fingerprintFixedPromptTaskTree(discovered);
-  assertTerminalBench21TaskTreeFingerprint(taskSourceFingerprint);
-  return { tasks: discovered, taskSourceFingerprint };
+  const taskSourceFingerprint = await fingerprintFixedPromptTaskTree(tasks);
+  assertFrozenTaskTreeFingerprint(
+    benchmarkProfile.label,
+    benchmarkProfile.taskTreeFingerprint,
+    taskSourceFingerprint,
+  );
+  return { tasks, taskSourceFingerprint };
 }
 
 /** Compose the run's toolchain identity. The Harbor payload is byte-identical

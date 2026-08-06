@@ -7,8 +7,8 @@
  * out of this tree and needs whole build outputs.
  *
  * The distinction is not tidiness. This repo is not benchmark-neutral cargo:
- * `packages/headless/harbor/run-harness-ab.mjs` carries
- * TERMINAL_BENCH_2_1_REVISION and the upstream repository URL, and `docs/eval`
+ * `packages/headless/harbor/benchmark-identity.json` carries
+ * each benchmark's revision, task list and upstream repository URL, and `docs/eval`
  * carries per-task results from earlier runs. Handing that to an arm being
  * scored turns scoring into retrieval. In the #1970 three-arm run Codex read
  * the pinned revision out of the mount, fetched the task's reference solution

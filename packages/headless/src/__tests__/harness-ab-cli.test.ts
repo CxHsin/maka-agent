@@ -5,7 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { test } from 'node:test';
-import { TERMINAL_BENCH_2_1_TASK_IDS } from '../harness-ab-manifest.js';
+import { BENCHMARK_IDENTITY } from './benchmark-identity.js';
 import { buildHarborJobConfig } from '../harbor-task-runner.js';
 
 const execFileAsync = promisify(execFile);
@@ -1414,7 +1414,7 @@ test('harness A/B CLI rejects modified task contents before reading credentials'
   const dir = await mkdtemp(join(tmpdir(), 'maka-harness-ab-cli-'));
   try {
     const tasksRoot = join(dir, 'tasks');
-    for (const id of TERMINAL_BENCH_2_1_TASK_IDS) {
+    for (const id of BENCHMARK_IDENTITY.terminalBench21.taskIds) {
       const taskDir = join(tasksRoot, `hash-${id}`, id);
       await mkdir(taskDir, { recursive: true });
       await writeFile(join(taskDir, 'task.toml'), '[agent]\ntimeout_sec = 900\n', 'utf8');

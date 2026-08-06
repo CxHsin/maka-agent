@@ -1,4 +1,4 @@
-import { type ReactNode, useMemo } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
@@ -6,10 +6,12 @@ import { Heading } from '@astryxdesign/core/Heading';
 import { VStack } from '@astryxdesign/core/Layout';
 import { Section } from '@astryxdesign/core/Section';
 import { Text } from '@astryxdesign/core/Text';
+import { TextInput } from '@astryxdesign/core/TextInput';
 import { PROVIDER_REGISTRY, uiLocaleToIntlLocale, type UiLocale } from '@maka/core';
 import { useUiLocale } from '@maka/ui';
 import { Activity, AlertTriangle } from '@maka/ui/icons';
 import { getDesktopConversationCopy } from './locales/conversation-copy.js';
+import { applyInspectorFilter, type InspectorFilter } from './session-inspector-filter.js';
 import { deriveInspectorOverviewModel } from './session-inspector-overview-model.js';
 import {
   deriveInspectorPanelModel,
@@ -42,8 +44,14 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
     loadFailed: copy.loadFailed,
     locale,
   });
-  const model = useMemo(() => deriveInspectorPanelModel(snapshot.trace), [snapshot.trace]);
+  const [filter, setFilter] = useState<InspectorFilter>({});
+  const trace = useMemo(() => deriveInspectorPanelModel(snapshot.trace), [snapshot.trace]);
+  const model = useMemo(() => applyInspectorFilter(trace, filter), [trace, filter]);
   const overview = useMemo(() => deriveInspectorOverviewModel(snapshot.trace), [snapshot.trace]);
+  // Counted on the unfiltered trace, so turning the filter on cannot change
+  // the number that named it.
+  const failedTurns = trace.turns.filter((turn) => turn.failed).length;
+  const hidden = model.hiddenTurns + model.hiddenSteps;
   const hasOverview =
     overview.context !== undefined ||
     overview.sessionTokens !== undefined ||
@@ -69,9 +77,9 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
           />
         )}
 
-        {/* Two silences, kept apart: a read that failed (the Banner above) and
-            a session that did nothing. A live region rather than a bare block
-            because the trace arrives after the tab does. */}
+        {/* A session that did nothing, which is not the same silence as a read
+            that failed (the Banner above) or a filter that matches nothing
+            (announced down in the timeline, next to the rows it is about). */}
         <div
           role="status"
           aria-live="polite"
@@ -101,6 +109,49 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
                 <Heading level={3} className="maka-inspector-section-title">
                   {copy.overview.timelineTab}
                 </Heading>
+                {/* The failure count IS the failure filter. A count is a fact
+                    the reader wanted anyway, so it earns its place before it
+                    is asked to be a control, and it costs a word where a
+                    Switch cost a track, a label and a wrapped line. */}
+                {failedTurns > 0 && (
+                  <button
+                    type="button"
+                    className="maka-inspector-failed-filter"
+                    aria-pressed={filter.failedOnly ?? false}
+                    onClick={() => setFilter({ ...filter, failedOnly: !filter.failedOnly })}
+                  >
+                    {copy.filterFailedOnly(failedTurns)}
+                  </button>
+                )}
+                <TextInput
+                  size="sm"
+                  className="maka-inspector-search"
+                  label={copy.filterLabel}
+                  isLabelHidden
+                  hasClear
+                  value={filter.query ?? ''}
+                  placeholder={copy.filterPlaceholder}
+                  onChange={(value) => setFilter({ ...filter, query: value })}
+                />
+              </div>
+
+              {/* What the filter is doing, beside the rows it did it to. A
+                  persistent live region rather than a conditional one: a
+                  container that mounts and unmounts is not announced, and this
+                  message changes as the reader types. */}
+              <div role="status" aria-live="polite" className="maka-inspector-status">
+                {model.filtered && model.turns.length === 0 && (
+                  <EmptyState
+                    isCompact
+                    title={copy.noMatches}
+                    data-maka-contract="session-inspector-no-matches"
+                  />
+                )}
+                {model.filtered && hidden > 0 && model.turns.length > 0 && (
+                  <p className="maka-inspector-meta" data-maka-contract="session-inspector-hidden">
+                    {hidden} {copy.hiddenByFilter}
+                  </p>
+                )}
               </div>
 
               {model.coverage && (
@@ -393,7 +444,7 @@ function TurnRow(props: {
       data-failed={turn.failed || undefined}
     >
       <div className="maka-inspector-turn-head">
-        <Text type="label" weight="semibold" className="maka-inspector-turn-label">
+        <Text type="label" className="maka-inspector-turn-label">
           {props.turnLabel(turn.index)}
         </Text>
         {turn.failed && (

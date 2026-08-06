@@ -237,7 +237,7 @@
 
 .maka-inspector-turn-meta {
   margin-left: auto;
-  font: var(--maka-text-supporting);
+  font: var(--maka-text-body);
   color: var(--muted-foreground);
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -265,12 +265,14 @@
   align-items: baseline;
   gap: var(--space-1) var(--space-2);
   min-width: 0;
-  font: var(--maka-text-supporting);
+  font: var(--maka-text-body);
 }
 
-/* Rank by ink, not by weight: one more weight on a 12px line is a difference
-   the eye has to resolve before it can read, and colour already says which
-   half of the row is the fact. */
+/* Rank by ink, not by weight or size: the whole panel is on three sizes —
+   20px for the figures a reader came for, 16px for the two section titles,
+   14px for every fact — and inside the 14px tier, colour alone says which
+   half of the row is the fact. A 12px tier used to carry six different roles
+   here; six roles at one size is not a rank, it is small print. */
 .maka-inspector-step-label {
   color: var(--foreground-secondary);
 }
@@ -289,7 +291,7 @@
 
 .maka-inspector-step-meta {
   margin-left: auto;
-  font: var(--maka-text-supporting);
+  font: var(--maka-text-body);
   color: var(--muted-foreground);
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -309,17 +311,45 @@
   gap: var(--space-2);
 }
 
+/* The failure count, doing double duty as the filter that isolates them. It
+   is stated in the exception ink it reports on, and pressing it tints the
+   ground rather than adding a second control to the line. */
+.maka-inspector-failed-filter {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-pill);
+  font: var(--maka-text-body);
+  color: var(--destructive-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.maka-inspector-failed-filter[aria-pressed='true'] {
+  background: var(--muted);
+}
+
+/* The query field sits at the far end of the title line and shrinks before it
+   pushes. Its width is left to the component: a `flex-basis` here resolves
+   against the field's own inner axis and squares it off. */
+.maka-inspector-search {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
 /* Astryx's own heading tier, not a shrunk one. The properties panel in the
    Astryx IDE template is the reference for this whole surface: a level-3
-   heading over body-sized facts, one supporting line for what qualifies them,
-   and room to breathe — an inspector is read, not scanned like a status bar. */
+   heading over body-sized facts and room to breathe — an inspector is read,
+   not scanned like a status bar. */
 .maka-inspector-section-title {
   color: var(--foreground);
 }
 
 .maka-inspector-section-readout {
   margin-left: auto;
-  font: var(--maka-text-supporting);
+  font: var(--maka-text-body);
   color: var(--muted-foreground);
   font-variant-numeric: tabular-nums;
 }
@@ -409,7 +439,7 @@
 }
 
 .maka-inspector-stat dt {
-  font: var(--maka-text-supporting);
+  font: var(--maka-text-body);
   color: var(--muted-foreground);
 }
 
@@ -462,7 +492,7 @@
    nothing, rather than a table that reserves a column for each of them. */
 .maka-inspector-meta {
   margin: 0;
-  font: var(--maka-text-supporting);
+  font: var(--maka-text-body);
   color: var(--muted-foreground);
   font-variant-numeric: tabular-nums;
 }
@@ -470,14 +500,14 @@
 /* The qualifier — a cache rate, a retry count, a reasoning split — is a step
    down in size and ink so it cannot be misread as part of the figure. */
 .maka-inspector-grid-note {
-  font: var(--maka-text-supporting);
+  font: var(--maka-text-body);
   color: var(--muted-foreground);
 }
 
 /* The coverage notice, demoted: one quiet line inside the raw record, not a
    banner competing with the overview it comments on. */
 .maka-inspector-coverage-note {
-  font: var(--maka-text-supporting);
+  font: var(--maka-text-body);
   color: var(--warning-text);
   display: flex;
   align-items: baseline;

@@ -482,9 +482,37 @@ function buildFamilyWire(
   level: ThinkingLevel | undefined,
   thinkingOptions: ThinkingOptions | undefined,
 ): SharedV4ProviderOptions {
-  if (!level) return {};
-  const { adapter } = resolveModelRuntime(connection, modelId);
-  const reasoningEffort = level === 'off' ? 'none' : level;
+  const { adapter, wire } = resolveModelRuntime(connection, modelId);
+  const reasoningEffort = level ? (level === 'off' ? 'none' : level) : undefined;
+  // Whatever the adapter kind, a Responses wire is dialled through the native
+  // OpenAI provider (`getAIModel`), so `openai` is the only provider-options
+  // namespace the SDK will read: an openai-compatible provider's own namespace
+  // is silently dropped there — including the effort, so a model asking for
+  // `max` sent no reasoning parameter at all. `store: false` is not a storage
+  // preference, it is the switch that makes the SDK request
+  // `include: ['reasoning.encrypted_content']`, which is the only way a
+  // reasoning chain survives a tool call on this wire. Whether a given provider
+  // honours that request is its own business — DeepSeek accepts it and returns
+  // nothing — but not asking guarantees the answer. That is a property of the
+  // wire, not of a thinking choice, so it holds whether or not a level was
+  // picked.
+  //
+  // The include is gated on the SDK also believing this is a reasoning model,
+  // and it decides that by parsing the model id for an OpenAI naming scheme —
+  // `deepseek-v4-flash` and `grok-4.5` fail that test however they are served.
+  // Our own declared thinking variants are the authority on that question, so
+  // say so with `forceReasoning` rather than letting a name decide.
+  if (wire === 'openai-responses') {
+    const reasons = thinkingVariantsForModel(connection.providerType, modelId).length > 0;
+    return {
+      openai: {
+        store: false,
+        ...(reasons ? { forceReasoning: true } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+      },
+    };
+  }
+  if (!reasoningEffort) return {};
   switch (adapter.kind) {
     case 'openai-compatible':
       return {
@@ -509,13 +537,11 @@ function buildFamilyWire(
       };
     case 'github-copilot': {
       // Copilot routes per account-declared model protocol (mirrors the
-      // getAIModel case), defaulting to its OpenAI-compatible chat wire.
+      // getAIModel case), defaulting to its OpenAI-compatible chat wire. Its
+      // Responses protocol is answered by the wire branch above.
       const copilotProtocol = connection.models?.find((model) => model.id === modelId)?.apiProtocol;
       if (copilotProtocol === 'anthropic-messages') {
         return level !== 'off' ? { anthropic: { effort: level } } : {};
-      }
-      if (copilotProtocol === 'openai-responses') {
-        return { openai: { reasoningEffort } };
       }
       return { 'github-copilot': { reasoningEffort } };
     }

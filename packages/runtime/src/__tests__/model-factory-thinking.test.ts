@@ -230,13 +230,20 @@ describe('buildProviderOptions: thinking level', () => {
       [...thinkingVariantsForModel('deepseek', 'deepseek-v4-flash')],
       ['high', 'max'],
     );
+    // deepseek-v4-flash serves the Responses wire, which the native OpenAI
+    // provider dials: its namespace is `openai`, and the provider's own
+    // namespace would be dropped on the floor. `store: false` and
+    // `forceReasoning` are what earn the encrypted reasoning the next step
+    // replays, so they hold even when no level was picked.
     assert.deepEqual(buildProviderOptions(conn('deepseek'), 'deepseek-v4-flash', 'high'), {
-      deepseek: { reasoningEffort: 'high' },
+      openai: { store: false, forceReasoning: true, reasoningEffort: 'high' },
     });
     assert.deepEqual(buildProviderOptions(conn('deepseek'), 'deepseek-v4-flash', 'max'), {
-      deepseek: { reasoningEffort: 'max' },
+      openai: { store: false, forceReasoning: true, reasoningEffort: 'max' },
     });
-    assert.deepEqual(buildProviderOptions(conn('deepseek'), 'deepseek-v4-flash', 'off'), {});
+    assert.deepEqual(buildProviderOptions(conn('deepseek'), 'deepseek-v4-flash', 'off'), {
+      openai: { store: false, forceReasoning: true },
+    });
     assert.deepEqual([...thinkingVariantsForModel('zai-coding-plan', 'glm-5.1')], []);
     assert.deepEqual([...thinkingVariantsForModel('zai-coding-plan', 'glm-4.5-air')], []);
     // miss model (deepseek-chat non-reasoning) drops level
@@ -246,8 +253,10 @@ describe('buildProviderOptions: thinking level', () => {
   test('family fallback wires per-model override adapters under their SDK namespaces', () => {
     // opencode serves models across several protocols via models.dev package
     // overrides; the family fallback must emit the namespace each SDK consumes.
+    // gpt-5.5 resolves to the Responses wire, so it takes the wire branch and
+    // its encrypted-reasoning terms rather than a bare effort.
     assert.deepEqual(buildProviderOptions(conn('opencode'), 'gpt-5.5', 'high'), {
-      openai: { reasoningEffort: 'high' },
+      openai: { store: false, forceReasoning: true, reasoningEffort: 'high' },
     });
     assert.deepEqual(buildProviderOptions(conn('opencode'), 'claude-fable-5', 'high'), {
       anthropic: { effort: 'high' },
@@ -277,8 +286,10 @@ describe('buildProviderOptions: thinking level', () => {
       ...conn('github-copilot'),
       models: [{ id: 'gpt-5.5', apiProtocol: 'openai-responses' as const }],
     };
+    // The Responses protocol takes the shared wire branch, so Copilot asks for
+    // encrypted reasoning on the same terms every other Responses model does.
     assert.deepEqual(buildProviderOptions(responses, 'gpt-5.5', 'high'), {
-      openai: { reasoningEffort: 'high' },
+      openai: { store: false, forceReasoning: true, reasoningEffort: 'high' },
     });
   });
 
@@ -573,10 +584,16 @@ describe('buildProviderOptions: openai-compatible namespace', () => {
       { 'zai-coding-plan': { reasoningEffort: 'max' } },
     );
   });
-  test('deepseek uses its own raw namespace', () => {
+  test('deepseek uses its own raw namespace on the chat wire, the OpenAI one on Responses', () => {
+    assert.deepEqual(
+      buildProviderOptions(conn('deepseek', 'deepseek'), 'deepseek-v4-pro', 'high'),
+      {
+        deepseek: { reasoningEffort: 'high' },
+      },
+    );
     assert.deepEqual(
       buildProviderOptions(conn('deepseek', 'deepseek'), 'deepseek-v4-flash', 'high'),
-      { deepseek: { reasoningEffort: 'high' } },
+      { openai: { store: false, forceReasoning: true, reasoningEffort: 'high' } },
     );
   });
 });

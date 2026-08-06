@@ -10,6 +10,7 @@ import { runHarnessAbComparison, runHarnessArmCohort } from '../harness-ab-run.j
 import type { HarnessAbArmId } from '../harness-ab-manifest.js';
 import { HarborInfraError } from '../harbor-task-runner.js';
 import { hashHeadlessSystemPrompt } from '../system-prompts.js';
+import { readScheduledCellLog, scheduledCellLogPath } from '../trial-cell-log.js';
 import { tokenSummary } from './helpers/cell-output-fixtures.js';
 
 describe('runHarnessAbComparison', () => {
@@ -133,6 +134,45 @@ describe('runHarnessAbComparison', () => {
         (await readdir(dir)).filter((name) => name.endsWith('.tsv')),
         [],
       );
+      // The grid a later reader bounds this run by: everything either
+      // invocation went to grade, and nothing the benchmark merely contains.
+      assert.deepEqual(
+        (await readScheduledCellLog(scheduledCellLogPath(dir))).map(
+          (cell) => `${cell.taskId}:${cell.agent}`,
+        ),
+        ['a:maka', 'b:maka', 'a:opencode', 'b:opencode', 'c:maka', 'c:opencode'],
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Written where the cohort is handed over to be run, so it names the cells
+  // this run went to grade — not the benchmark's whole task list, of which a
+  // run grades a slice, and not a wider grid an earlier invocation planned and
+  // died before reaching.
+  test('records the grid it is about to grade, and only that', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'maka-harness-ab-schedule-'));
+    try {
+      const promptPath = join(dir, 'empty-system-prompt.txt');
+      await writeFile(promptPath, '', 'utf8');
+      const calls: string[] = [];
+      await runHarnessAbComparison({
+        runId: 'glm-harness-ab',
+        runRoot: dir,
+        resultsJsonlPath: join(dir, 'results.jsonl'),
+        systemPromptPath: promptPath,
+        resumeFingerprint: 'sha256:manifest',
+        evaluationTasks: ['a', 'b'].map((id) => ({ id, path: `/tasks/${id}` })),
+        arms: [harnessArm('maka', calls), harnessArm('opencode', calls)],
+      });
+      assert.deepEqual(
+        (await readScheduledCellLog(scheduledCellLogPath(dir))).map(
+          (cell) => `${cell.taskId}:${cell.agent}`,
+        ),
+        ['a:maka', 'b:maka', 'a:opencode', 'b:opencode'],
+      );
+      assert.deepEqual(new Set(calls), new Set(['a:maka', 'b:maka', 'a:opencode', 'b:opencode']));
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

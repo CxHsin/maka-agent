@@ -17,7 +17,7 @@ import {
 } from '#fixed-prompt-task-source';
 import { createHarborTaskRunner, MAKA_SETTLEMENT_GRACE_SEC } from '#harbor-task-runner';
 import { createPierProviderProxyHub, createPierTaskRunner } from '#pier-task-runner';
-import { appendScheduledCells, scheduledCellLogPath, trialCellLogPath } from '#trial-cell-log';
+import { trialCellLogPath } from '#trial-cell-log';
 import {
   buildHarnessOracleExecutionPolicyFingerprint,
   HARBOR_ORACLE_DOCKER_PLATFORM,
@@ -1295,15 +1295,6 @@ async function runLocked({
     .map((taskId) => tasksById.get(taskId));
   if (evaluationTasks.some((task) => !task))
     throw new Error('manifest contains a task absent from the frozen task source');
-  // The grid, written down where it is decided. The manifest holds the whole
-  // benchmark; this run grades the slice above, and a later reader that took
-  // the manifest for the schedule would call every canary an unfinished run.
-  await appendScheduledCells(
-    scheduledCellLogPath(runRoot),
-    manifest.arms.flatMap((arm) =>
-      evaluationTasks.map((task) => ({ agent: arm.id, taskId: task.id })),
-    ),
-  );
 
   const competitorToolchains = new Map(
     competitorProfiles.map((profile) => [

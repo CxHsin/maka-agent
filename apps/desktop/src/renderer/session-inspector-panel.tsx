@@ -145,7 +145,7 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
                 )}
                 {model.filtered && hidden > 0 && model.turns.length > 0 && (
                   <p className="maka-inspector-meta" data-maka-contract="session-inspector-hidden">
-                    {hidden} {copy.hiddenByFilter}
+                    {copy.hiddenByFilter(hidden)}
                   </p>
                 )}
               </div>
@@ -175,14 +175,7 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
 
               <ol className="maka-inspector-turns">
                 {model.turns.map((turn) => (
-                  <TurnRow
-                    key={turn.turnId}
-                    turn={turn}
-                    turnLabel={copy.turnLabel}
-                    costUnavailable={copy.costUnavailable}
-                    failedLabel={copy.turnFailed}
-                    recoveredLabel={copy.recovered}
-                  />
+                  <TurnRow key={turn.turnId} turn={turn} copy={copy} />
                 ))}
               </ol>
             </VStack>
@@ -408,14 +401,8 @@ function formatPercent(ratio: number): string {
  * out-shouts the turn label it qualifies, and the red dot on the rail has
  * already flagged the row from the margin.
  */
-function TurnRow(props: {
-  turn: InspectorTurnRow;
-  turnLabel: (index: number) => string;
-  costUnavailable: string;
-  failedLabel: string;
-  recoveredLabel: string;
-}) {
-  const { turn } = props;
+function TurnRow(props: { turn: InspectorTurnRow; copy: InspectorCopy }) {
+  const { copy, turn } = props;
   return (
     <li
       className="maka-inspector-turn"
@@ -424,23 +411,25 @@ function TurnRow(props: {
     >
       <div className="maka-inspector-turn-head">
         <Text type="label" className="maka-inspector-turn-label">
-          {props.turnLabel(turn.index)}
+          {copy.turnLabel(turn.index)}
         </Text>
+        {/* One phrase, not a label plus a raw code: `本轮失败 · tool_failed`
+            said the same thing twice, once in engineering vocabulary. */}
         {turn.failed && (
           <span
             className="maka-inspector-turn-failure"
             data-maka-contract="session-inspector-turn-failed"
           >
-            {turn.failureCode ? `${props.failedLabel} · ${turn.failureCode}` : props.failedLabel}
+            {copy.turnFailure(turn.failureCode ?? '')}
           </span>
         )}
         <span className="maka-inspector-turn-meta">
-          {formatDuration(turn.durationMs)} · {formatCost(turn.totals.costUsd, props.costUnavailable)}
+          {formatDuration(turn.durationMs)} · {formatCost(turn.totals.costUsd, copy.costUnavailable)}
         </span>
       </div>
       <ol className="maka-inspector-steps">
         {turn.steps.map((step) => (
-          <StepRow key={step.id} step={step} recoveredLabel={props.recoveredLabel} />
+          <StepRow key={step.id} step={step} copy={copy} />
         ))}
       </ol>
     </li>
@@ -455,13 +444,24 @@ function TurnRow(props: {
  * the level a reader can act on — nobody re-prices a single tool call.
  *
  * A recovery is the one qualifier that changes the reading of the row, so it
- * keeps its own tier; a retry count is left as `×N` on the measurement side,
- * where it is a fact about the attempt rather than about the step.
+ * keeps its own tier; the retry count sits on the measurement side, where it
+ * is a fact about the attempt rather than about the step. It is spelled out
+ * rather than written `×2`, which is the attempts counter's own notation and
+ * asks the reader to work out that one of them was a retry.
  */
-function StepRow(props: { step: InspectorStepRow; recoveredLabel: string }) {
-  const { step } = props;
+function StepRow(props: { step: InspectorStepRow; copy: InspectorCopy }) {
+  const { copy, step } = props;
+  // A row names itself with whatever identity it has: a model, a tool, or —
+  // for a compaction, an error, a permission prompt with no tool — its kind.
+  const label = step.label ?? kindLabel(copy, step.kind);
+  const qualifier =
+    step.callKind !== undefined
+      ? copy.callKind(step.callKind)
+      : step.decision !== undefined
+        ? copy.permissionDecision(step.decision)
+        : step.detail;
   const meta = [
-    step.retries !== undefined ? `×${step.retries + 1}` : undefined,
+    step.retries !== undefined ? copy.retries(step.retries) : undefined,
     step.durationMs !== undefined ? formatDuration(step.durationMs) : undefined,
   ].filter(Boolean);
 
@@ -472,17 +472,26 @@ function StepRow(props: { step: InspectorStepRow; recoveredLabel: string }) {
       data-failed={step.failed || undefined}
     >
       <span className="maka-inspector-step-text">
-        <span className="maka-inspector-step-label">{step.label}</span>
-        {step.detail && <span className="maka-inspector-step-detail">{step.detail}</span>}
+        <span className="maka-inspector-step-label">{label}</span>
+        {qualifier && <span className="maka-inspector-step-detail">{qualifier}</span>}
         {step.recovered && (
-          <span className="maka-inspector-step-recovered">
-            {props.recoveredLabel}: {step.recovered}
-          </span>
+          <span className="maka-inspector-step-recovered">{copy.recoveredAs(step.recovered)}</span>
         )}
       </span>
       {meta.length > 0 && <span className="maka-inspector-step-meta">{meta.join(' · ')}</span>}
     </li>
   );
+}
+
+/**
+ * The name a row falls back to when it has no identifier of its own. A model
+ * call and a tool call always carry one, so they never reach here; the record
+ * has no name for them beyond what they already print.
+ */
+function kindLabel(copy: InspectorCopy, kind: InspectorStepRow['kind']): string {
+  if (kind === 'permission') return copy.stepKind.permission;
+  if (kind === 'compaction') return copy.stepKind.compaction;
+  return copy.stepKind.error;
 }
 
 function formatDuration(ms: number): string {

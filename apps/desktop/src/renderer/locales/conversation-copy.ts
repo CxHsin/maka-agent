@@ -83,14 +83,32 @@ export interface DesktopConversationCopy {
     unreadable: (count: number) => string;
     turnsMissing: (count: number) => string;
     turnsShort: (count: number) => string;
-    recovered: string;
-    turnFailed: string;
+    /**
+     * Names a step whose kind IS its identity — a compaction, an error, a
+     * permission prompt with no tool attached. Rows that carry a real
+     * identifier (a model id, a tool name) print that instead.
+     */
+    stepKind: { permission: string; compaction: string; error: string };
+    /** Why a model was called, when the reason was not the turn itself. */
+    callKind: (kind: string) => string;
+    /** How a permission request was answered. */
+    permissionDecision: (decision: string) => string;
+    /** What a tool that failed was recovered as. */
+    recoveredAs: (disposition: string) => string;
+    /** Attempts beyond the first, in words rather than as `×N`. */
+    retries: (count: number) => string;
+    /**
+     * What ended the turn badly, in words. The trace's codes are engineering
+     * vocabulary (`tool_failed`, `turn_aborted`); this is the sentence a
+     * reader gets, with a plain fallback for a code nobody has named yet.
+     */
+    turnFailure: (code: string) => string;
     filterLabel: string;
     filterPlaceholder: string;
     /** The failure count that doubles as the "only failures" toggle. */
     filterFailedOnly: (count: number) => string;
     noMatches: string;
-    hiddenByFilter: string;
+    hiddenByFilter: (count: number) => string;
     /** Display name of one turn in the raw record: 第 N 轮 / Turn N. */
     turnLabel: (index: number) => string;
     /** Summary above the raw timeline. */
@@ -162,6 +180,51 @@ export interface DesktopConversationCopy {
   };
 }
 
+/**
+ * The trace's own enums, in words.
+ *
+ * Every one of these reaches the panel as a raw identifier — `history_compact`,
+ * `parked`, `tool_failed` — because the projection records facts, not prose.
+ * Turning them into a sentence is a copy decision, so it happens here, once,
+ * and an unmapped value falls through as itself rather than as a blank.
+ */
+const ZH_CALL_KIND: Record<string, string> = {
+  semantic_compact: '语义压缩',
+  history_compact: '历史压缩',
+  goal_evaluation: '目标评估',
+  session_title: '生成会话标题',
+  session_recap: '会话回顾',
+  daily_review: '每日回顾',
+};
+
+const EN_CALL_KIND: Record<string, string> = {
+  semantic_compact: 'Semantic compaction',
+  history_compact: 'History compaction',
+  goal_evaluation: 'Goal evaluation',
+  session_title: 'Session title',
+  session_recap: 'Session recap',
+  daily_review: 'Daily review',
+};
+
+const ZH_PERMISSION_DECISION: Record<string, string> = { allow: '已允许', deny: '已拒绝' };
+const EN_PERMISSION_DECISION: Record<string, string> = { allow: 'Allowed', deny: 'Denied' };
+
+const ZH_RECOVERED: Record<string, string> = { completed: '已完成', parked: '已搁置' };
+
+const ZH_TURN_FAILURE: Record<string, string> = {
+  tool_failed: '工具失败',
+  model_call_failed: '模型调用失败',
+  turn_aborted: '本轮中止',
+  turn_cancelled: '本轮取消',
+};
+
+const EN_TURN_FAILURE: Record<string, string> = {
+  tool_failed: 'Tool failed',
+  model_call_failed: 'Model call failed',
+  turn_aborted: 'Turn aborted',
+  turn_cancelled: 'Turn cancelled',
+};
+
 /** Trailing breakdown for the coverage notice, in each language's punctuation. */
 function zhDetail(parts: readonly string[]): string {
   return parts.length > 0 ? `：${parts.join('、')}` : '';
@@ -211,13 +274,17 @@ const COPY = {
       unreadable: (count) => `${count} 条记录读不出来`,
       turnsMissing: (count) => `${count} 轮没有调用记录`,
       turnsShort: (count) => `${count} 轮的调用记录不全`,
-      recovered: '已恢复',
-      turnFailed: '本轮失败',
+      stepKind: { permission: '权限', compaction: '上下文压缩', error: '错误' },
+      callKind: (kind) => ZH_CALL_KIND[kind] ?? kind,
+      permissionDecision: (decision) => ZH_PERMISSION_DECISION[decision] ?? decision,
+      recoveredAs: (disposition) => `已恢复：${ZH_RECOVERED[disposition] ?? disposition}`,
+      retries: (count) => `重试 ${count} 次`,
+      turnFailure: (code) => ZH_TURN_FAILURE[code] ?? '本轮失败',
       filterLabel: '筛选追踪',
       filterPlaceholder: '按工具、模型或轮次筛选',
       filterFailedOnly: (count) => `${count} 轮失败`,
-      noMatches: '没有匹配的步骤——这个会话本身是有内容的',
-      hiddenByFilter: '项被筛选隐藏',
+      noMatches: '没有匹配的记录',
+      hiddenByFilter: (count) => `已隐藏 ${count} 项`,
       turnLabel: (index) => `第 ${index} 轮`,
       overview: {
         context: '上下文窗口',
@@ -311,13 +378,17 @@ const COPY = {
       turnsMissing: (count) => `${count} turn${count === 1 ? '' : 's'} with no call record`,
       turnsShort: (count) =>
         `${count} turn${count === 1 ? '' : 's'} with an incomplete call record`,
-      recovered: 'recovered',
-      turnFailed: 'Turn failed',
+      stepKind: { permission: 'Permission', compaction: 'Context compaction', error: 'Error' },
+      callKind: (kind) => EN_CALL_KIND[kind] ?? kind,
+      permissionDecision: (decision) => EN_PERMISSION_DECISION[decision] ?? decision,
+      recoveredAs: (disposition) => `recovered as ${disposition}`,
+      retries: (count) => `${count} retr${count === 1 ? 'y' : 'ies'}`,
+      turnFailure: (code) => EN_TURN_FAILURE[code] ?? 'Turn failed',
       filterLabel: 'Filter the trace',
       filterPlaceholder: 'Filter by tool, model or turn',
-      filterFailedOnly: (count) => `${count} failed`,
-      noMatches: 'Nothing matches this filter — the session itself is not empty',
-      hiddenByFilter: 'hidden by the filter',
+      filterFailedOnly: (count) => `${count} failed turn${count === 1 ? '' : 's'}`,
+      noMatches: 'Nothing matches this filter',
+      hiddenByFilter: (count) => `${count} hidden by the filter`,
       turnLabel: (index) => `Turn ${index}`,
       overview: {
         context: 'Context window',

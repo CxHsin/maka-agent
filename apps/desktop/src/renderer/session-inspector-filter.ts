@@ -101,7 +101,7 @@ function matchesStep(step: InspectorStepRow, query: string | undefined): boolean
  * about it. The turn's own id is matched against the turn, where it belongs.
  */
 function stepSearchText(step: InspectorStepRow): string {
-  return [step.kind, step.label, step.detail, step.recovered]
+  return [step.kind, step.label, step.detail, step.callKind, step.decision, step.recovered]
     .filter((part): part is string => typeof part === 'string')
     .join(' ')
     .toLowerCase();

@@ -11,8 +11,18 @@ export interface InspectorStepRow {
   id: string;
   kind: TraceStep['kind'];
   /** Primary label: tool name, model id, or the kind for structural steps. */
-  label: string;
+  /**
+   * The identifier this row is about — a model id, a tool name. Absent when
+   * the row has no identifier of its own and its kind IS the label; naming it
+   * is the panel's job, in the reader's language, not this file's in English.
+   */
+  label?: string;
+  /** Free text the trace already carries in words — an error message. */
   detail?: string;
+  /** Why this call was made, when it was not the turn's own request. */
+  callKind?: string;
+  /** How a permission request was answered. */
+  decision?: string;
   durationMs?: number;
   status?: string;
   /** Retries beyond the first attempt of one logical call. */
@@ -102,7 +112,7 @@ function toStepRow(step: TraceStep, attributedToStepId: string | undefined): Ins
       // 'main' is what almost every call is, so printing it on every row says
       // nothing; a compaction or a title call beside it is the fact worth a
       // second column.
-      ...(step.callKind !== 'main' ? { detail: step.callKind } : {}),
+      ...(step.callKind !== 'main' ? { callKind: step.callKind } : {}),
       durationMs: step.durationMs,
       status: step.status,
       ...(step.attempts.length > 1 ? { retries: step.attempts.length - 1 } : {}),
@@ -125,22 +135,18 @@ function toStepRow(step: TraceStep, attributedToStepId: string | undefined): Ins
     return {
       id: step.id,
       kind: step.kind,
-      label: step.toolName ?? 'permission',
-      detail: step.decision,
+      ...(step.toolName !== undefined ? { label: step.toolName } : {}),
+      decision: step.decision,
       failed: false,
     };
   }
   if (step.kind === 'compaction') {
-    return {
-      id: step.id,
-      kind: step.kind,
-      label: 'compaction',
-      // The checkpoint id is an internal handle; a reader cannot act on it and
-      // it is in the run ledger for anyone who can.
-      failed: false,
-    };
+    // No label and no detail: the kind is the whole fact. The checkpoint id is
+    // an internal handle a reader cannot act on, and it is in the run ledger
+    // for anyone who can.
+    return { id: step.id, kind: step.kind, failed: false };
   }
-  return { id: step.id, kind: step.kind, label: 'error', detail: step.message, failed: true };
+  return { id: step.id, kind: step.kind, detail: step.message, failed: true };
 }
 
 function coverageNotice(trace: SessionTrace): InspectorCoverageNotice | undefined {

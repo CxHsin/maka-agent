@@ -62,7 +62,11 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
       aria-label={copy.ariaLabel}
       aria-busy={snapshot.loading || undefined}
     >
-      <VStack gap={4} height="100%">
+      {/* 24px between blocks against 8px inside one: proximity is the only
+          grouping tool a panel without boxes has, and it used to spend the
+          same 16px on "these are two parts of one block" and "this is a
+          different block". */}
+      <VStack gap={6} height="100%">
         {snapshot.error && (
           <Banner
             status="error"
@@ -101,7 +105,7 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
         {!model.empty && (
           <div className="maka-inspector-raw" data-maka-contract="session-inspector-raw">
             <VStack gap={2} className="maka-inspector-raw-body">
-              <div className="maka-inspector-section-head">
+              <div className="maka-inspector-section-head maka-inspector-timeline-head">
                 <Heading level={3} className="maka-inspector-section-title">
                   {copy.overview.timelineTab}
                 </Heading>
@@ -229,7 +233,7 @@ function InspectorOverview(props: {
   const totals = props.model.totals;
 
   return (
-    <VStack gap={4} data-maka-contract="session-inspector-overview">
+    <VStack gap={6} data-maka-contract="session-inspector-overview">
       {/* The figures open the panel with nothing above them. Every heading
           tried here ranked below the numbers it introduced, because a label
           over a 20px figure is exactly what a StatCell already is — the three
@@ -291,14 +295,15 @@ function InspectorSection(props: {
 }
 
 /**
- * One legend row: band, figure, share.
+ * One legend row: band, figure.
  *
- * Three columns, and the alignment IS the point here — every figure is the
- * same unit measured against the same window, so a shared right edge is what
- * makes them comparable at a glance. Facts that compare with nothing do not
- * belong on this grid; they are the trailing meta line instead.
+ * The share column is gone — the bar IS the share, and the section readout
+ * already states the one share that is not obvious by eye. Two right-aligned
+ * number columns per row was what made this read as a spreadsheet; what is
+ * left is name-left / number-right, the same skeleton as a step row, so the
+ * whole panel scans on one rhythm.
  */
-function FactRow(props: { label: string; value: ReactNode; note?: ReactNode; swatch?: ReactNode }) {
+function FactRow(props: { label: string; value: ReactNode; swatch?: ReactNode }) {
   return (
     <div className="maka-inspector-grid-row">
       <dt>
@@ -306,7 +311,6 @@ function FactRow(props: { label: string; value: ReactNode; note?: ReactNode; swa
         {props.label}
       </dt>
       <dd className="maka-inspector-grid-value">{props.value}</dd>
-      <dd className="maka-inspector-grid-note">{props.note}</dd>
     </div>
   );
 }
@@ -372,7 +376,6 @@ function InspectorContextSection(props: {
               />
             }
             value={formatNumber(segment.tokens)}
-            note={formatPercent(segment.ratio)}
           />
         ))}
       </dl>
@@ -423,8 +426,15 @@ function TurnRow(props: { turn: InspectorTurnRow; copy: InspectorCopy }) {
             {copy.turnFailure(turn.failureCode ?? '')}
           </span>
         )}
+        {/* Two tiers inside the meta, not one: the cost is what a reader
+            compares down the column, the duration is the context around it.
+            One grey for both made the whole right edge of the timeline read
+            as a single texture. */}
         <span className="maka-inspector-turn-meta">
-          {formatDuration(turn.durationMs)} · {formatCost(turn.totals.costUsd, copy.costUnavailable)}
+          {formatDuration(turn.durationMs)} ·{' '}
+          <span className="maka-inspector-turn-cost">
+            {formatCost(turn.totals.costUsd, copy.costUnavailable)}
+          </span>
         </span>
       </div>
       <ol className="maka-inspector-steps">

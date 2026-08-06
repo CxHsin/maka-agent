@@ -178,18 +178,23 @@
   padding-left: var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  /* The head sits one step further from its steps than the steps sit from
+     each other; at the same 4px it read as the first row of its own list. */
+  gap: var(--space-2);
 }
 
-/* The rail, drawn from under the dot to the end of the last step. */
+/* The rail, drawn from under the dot through the gap to the next turn, so the
+   timeline is one line rather than a column of stumps. It is the panel's only
+   strong vertical, which is why it reads from `--border-strong` rather than
+   the 12% wash it used to use. */
 .maka-inspector-turn::before {
   content: '';
   position: absolute;
   left: 3px;
   top: var(--space-3);
-  bottom: var(--space-1);
+  bottom: calc(-1 * var(--space-4));
   width: var(--border-width-hairline);
-  background: var(--foreground-alpha-12);
+  background: var(--border-strong);
 }
 
 .maka-inspector-turn:last-child::before {
@@ -242,6 +247,10 @@
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.maka-inspector-turn-cost {
+  color: var(--foreground-secondary);
 }
 
 .maka-inspector-steps {
@@ -311,6 +320,13 @@
   gap: var(--space-2);
 }
 
+/* Every other section head is text against text, where baselines are the
+   right join. This one holds a boxed input, and a control box baseline-aligned
+   against a 16px title always sits a pixel or two wrong. */
+.maka-inspector-timeline-head {
+  align-items: center;
+}
+
 /* The failure count, doing double duty as the filter that isolates them. It
    is stated in the exception ink it reports on, and pressing it tints the
    ground rather than adding a second control to the line. */
@@ -372,13 +388,19 @@
 /* The context window drawn as bands. Colour is the join between the track and
    its legend, so both read it from the same `data-segment` rules below and a
    band can never mean one thing in the bar and another in the list. */
+/* The free band paints nothing: the track IS the empty window, so the bar
+   reads as a prompt growing into its ceiling rather than as three rival
+   categories, one of which happens to be 90% of the session. The band still
+   occupies its share of the flex, which is what keeps the used bands
+   proportional. No seams either — at 8px tall a 2px gap is a quarter of the
+   bar, and the two prompt bands are already a tone apart. */
 .maka-inspector-context-track {
   --maka-context-fill: var(--accent);
   display: flex;
-  gap: var(--border-width-thick);
   height: var(--space-2);
   border-radius: var(--radius-pill);
   overflow: hidden;
+  background: var(--muted);
 }
 
 .maka-inspector-context-track[data-level='warning'] {
@@ -426,9 +448,15 @@
   background: color-mix(in oklch, var(--maka-context-fill) 55%, transparent);
 }
 
-.maka-inspector-context-band[data-segment='free'],
+.maka-inspector-context-band[data-segment='free'] {
+  background: transparent;
+}
+
+/* A ring, not a filled dot: headroom is the absence of the other two, and a
+   third solid swatch implied a third comparable category. */
 .maka-inspector-context-swatch[data-segment='free'] {
-  background: var(--muted);
+  background: transparent;
+  box-shadow: inset 0 0 0 var(--border-width-hairline) var(--border-strong);
 }
 
 /* The three headline figures, across the column rather than down it.
@@ -446,6 +474,7 @@
 .maka-inspector-stat dt {
   font: var(--maka-text-body);
   color: var(--muted-foreground);
+  margin-bottom: 2px;
 }
 
 .maka-inspector-stat dd {
@@ -461,7 +490,7 @@
    the panel, not its chrome. Only a qualifier steps down to supporting. */
 .maka-inspector-grid {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr;
   column-gap: var(--space-3);
   row-gap: var(--space-1);
   margin: 0;
@@ -502,18 +531,13 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* The qualifier — a cache rate, a retry count, a reasoning split — is a step
-   down in size and ink so it cannot be misread as part of the figure. */
-.maka-inspector-grid-note {
-  font: var(--maka-text-body);
-  color: var(--muted-foreground);
-}
-
-/* The coverage notice, demoted: one quiet line inside the raw record, not a
-   banner competing with the overview it comments on. */
+/* The coverage notice, demoted twice over: it lives inside the record rather
+   than above it, and only its icon carries the exception ink. Two wrapped
+   lines of warning-coloured text out-shouted the failures it merely comments
+   on — the tint belongs on the exception, not on the disclaimer. */
 .maka-inspector-coverage-note {
   font: var(--maka-text-body);
-  color: var(--warning-text);
+  color: var(--muted-foreground);
   display: flex;
   align-items: baseline;
   gap: var(--space-1-5);
@@ -523,15 +547,15 @@
 .maka-inspector-coverage-note > svg {
   align-self: center;
   flex: 0 0 auto;
+  color: var(--warning-text);
 }
 
+/* The seam between "where the session stands" and "what it did" is the 24px
+   the block rhythm already gives it. It used to be a hairline plus two
+   stacked 8px paddings — 32px nobody chose, and a rule doing the job that
+   proximity does better in a panel with no other boxes. */
 .maka-inspector-raw {
-  border-top: var(--border-width-hairline) solid var(--border);
-  padding-top: var(--space-2);
-}
-
-.maka-inspector-raw-body {
-  padding-top: var(--space-2);
+  min-width: 0;
 }
 
 

@@ -70,9 +70,15 @@ test('the shared validation corpus exercises every envelope key', () => {
   // this one. A key no case ever sets is a key the exporter can silently not
   // know about — which is exactly how `origin` and `modelVisibility` came to
   // fail every event of an 89-cell benchmark run.
+  // Only cases the corpus expects to be accepted count. A rejected case carries
+  // a value both sides refuse, so it passes just as well against an exporter
+  // that never learned the key at all — which is the one thing this is here to
+  // catch.
   const exercised = new Set([
     ...Object.keys(runtimeEventValidationCorpus.baseEvent),
-    ...runtimeEventValidationCorpus.cases.flatMap((entry) => Object.keys(entry.overrides)),
+    ...runtimeEventValidationCorpus.cases
+      .filter((entry) => entry.accepted)
+      .flatMap((entry) => Object.keys(entry.overrides)),
   ]);
   for (const key of runtimeEventEnvelopeKeys()) {
     assert.ok(exercised.has(key), `no corpus case sets the envelope key ${key}`);

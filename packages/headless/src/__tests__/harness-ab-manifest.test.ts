@@ -223,12 +223,16 @@ describe('harness A/B manifest', () => {
       TERMINAL_BENCH_2_1.taskTreeFingerprint,
       BENCHMARK_IDENTITY.deepSwe.revision,
       BENCHMARK_IDENTITY.deepSwe.upstreamRepositoryUrl,
+      BENCHMARK_IDENTITY.deepSwe.subset30.taskTreeFingerprint,
       DEEP_SWE_FULL.taskTreeFingerprint,
     ];
     const taskIds = [...TERMINAL_BENCH_2_1.taskIds, ...DEEP_SWE_FULL.taskIds];
 
+    // Every mounted file, not every compiled module: a source map would carry
+    // the whole of `src` in `sourcesContent` and walk straight past a filter
+    // that only knows about `.js`.
     const compiled = readdirSync(MOUNTED_DIST_DIR, { recursive: true, withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.js'))
+      .filter((entry) => entry.isFile())
       .map((entry) => join(entry.parentPath, entry.name));
     assert.ok(compiled.length > 0, 'the build output was not found');
 

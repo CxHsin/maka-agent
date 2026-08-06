@@ -62,8 +62,8 @@ const MAKA_RUNTIME_WORKSPACES: readonly string[] = [
  * workspace's build output, and the harbor entrypoints the adapter names.
  *
  * Sources are deliberately absent. The container runs `dist`, so shipping `src`
- * adds nothing to run and hands over the verifier and the harness manifest —
- * including TERMINAL_BENCH_2_1_REVISION — as readable text.
+ * adds nothing to run and hands over the verifier and the harness manifest as
+ * readable text.
  */
 const MAKA_REPO_PATHS: readonly string[] = [
   'node_modules',

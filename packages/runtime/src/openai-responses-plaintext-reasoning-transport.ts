@@ -12,10 +12,19 @@
  * reasoning in stored sessions comes from.
  *
  * This translates the response side only. Nothing here changes what we send,
- * so it cannot alter a request the provider already accepts. It also only ever
- * fills a gap: a summary the provider populated itself is left alone, so a
- * provider speaking both shapes keeps its own.
+ * so it cannot alter a request the provider already accepts.
+ *
+ * The two channels differ in how much they can defer to the provider. A whole
+ * JSON body shows both fields at once, so that path fills a gap and nothing
+ * more: a summary the provider populated itself is left alone. A stream is read
+ * one line at a time and a plaintext delta carries no evidence about what some
+ * later summary delta will say, so that path translates unconditionally. A
+ * provider that streamed both shapes at the same index would end up with the
+ * two concatenated. None does today — DeepSeek, the only one measured, streams
+ * plaintext alone — and buffering a whole reasoning item to find out would cost
+ * the streaming that is the point of the wire.
  */
+import { responseWithBody } from './http-response.js';
 
 const PLAINTEXT_DELTA = 'response.reasoning_text.delta';
 const SUMMARY_DELTA = 'response.reasoning_summary_text.delta';
@@ -30,14 +39,11 @@ function translateResponse(response: Response): Response {
   if (!response.ok || !response.body) return response;
   const contentType = response.headers.get('content-type') ?? '';
   if (contentType.includes('text/event-stream')) {
-    return new Response(response.body.pipeThrough(translateEventStream()), {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
+    return responseWithBody(response, response.body.pipeThrough(translateEventStream()));
   }
   if (!contentType.includes('application/json')) return response;
-  return new Response(
+  return responseWithBody(
+    response,
     new ReadableStream<Uint8Array>({
       async start(controller) {
         const body = await response.text();
@@ -45,7 +51,6 @@ function translateResponse(response: Response): Response {
         controller.close();
       },
     }),
-    { status: response.status, statusText: response.statusText, headers: response.headers },
   );
 }
 
@@ -68,6 +73,9 @@ function translateEventStream(): TransformStream<Uint8Array, Uint8Array> {
       }
     },
     flush(controller) {
+      // Bytes the decoder is still holding belong to a character split across
+      // the last chunk boundary; without this final decode they are dropped.
+      pending += decoder.decode();
       if (pending) controller.enqueue(encoder.encode(translateEventLine(pending)));
     },
   });

@@ -1,3 +1,5 @@
+import { responseWithBody } from './http-response.js';
+
 export interface OpenAiChatReasoningTransport {
   fetch: typeof globalThis.fetch;
   transformRequestBody: (body: Record<string, unknown>) => Record<string, unknown>;
@@ -225,17 +227,6 @@ function normalizeKimiUsage(usage: Record<string, unknown>): Record<string, unkn
     ...usage,
     prompt_tokens_details: { ...details, cached_tokens: usage.cached_tokens },
   };
-}
-
-function responseWithBody(response: Response, body: BodyInit): Response {
-  const headers = new Headers(response.headers);
-  headers.delete('content-encoding');
-  headers.delete('content-length');
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

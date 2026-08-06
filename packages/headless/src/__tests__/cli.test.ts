@@ -635,8 +635,14 @@ describe('maka-headless CLI', () => {
           inboxItemId: 'inbox-1',
         }),
       ].map((line) => JSON.parse(line) as TaskEvent);
-      const { taskRunStore } = await openHeadlessStorageForWrite(join(outDir, 'runs'));
-      for (const event of initialEvents) await taskRunStore.appendEvent(taskRunId, event);
+      const storage = await openHeadlessStorageForWrite(join(outDir, 'runs'));
+      try {
+        for (const event of initialEvents) {
+          await storage.taskRunStore.appendEvent(taskRunId, event);
+        }
+      } finally {
+        await storage.close();
+      }
 
       const resumed = await runCli([
         'task',

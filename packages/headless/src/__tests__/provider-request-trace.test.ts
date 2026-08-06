@@ -152,10 +152,11 @@ test('exports the Run-header trace failure latch when its sentinel event is miss
     startedAt: 1,
     finishedAt: 4,
   };
+  let storage: Awaited<ReturnType<typeof openHeadlessStorageForWrite>> | undefined;
 
   try {
     await mkdir(outputDir, { recursive: true });
-    const storage = await openHeadlessStorageForWrite(storageRoot);
+    storage = await openHeadlessStorageForWrite(storageRoot);
     const runStore = storage.executionStores.agentRunStore;
     await runStore.createRun(header);
     await runStore.appendEvent(identity.sessionId, identity.runId, {
@@ -221,6 +222,7 @@ test('exports the Run-header trace failure latch when its sentinel event is miss
       /trace write failed evidence/i,
     );
   } finally {
+    await storage?.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -256,10 +258,11 @@ test('exports a torn AgentRun tail as incomplete provider-request evidence', asy
     finishedAt: 4,
   };
   const { capture, attempt } = completeTraceRows(runId);
+  let storage: Awaited<ReturnType<typeof openHeadlessStorageForWrite>> | undefined;
 
   try {
     await mkdir(outputDir, { recursive: true });
-    const storage = await openHeadlessStorageForWrite(storageRoot);
+    storage = await openHeadlessStorageForWrite(storageRoot);
     const runStore = storage.executionStores.agentRunStore;
     await runStore.createRun(header);
     await runStore.appendEvent(identity.sessionId, identity.runId, capture as EmittedAgentRunEvent);
@@ -282,6 +285,7 @@ test('exports a torn AgentRun tail as incomplete provider-request evidence', asy
       /event corrupt evidence/i,
     );
   } finally {
+    await storage?.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -303,10 +307,11 @@ test('also diagnoses missing provider evidence when the only run event is corrup
     startedAt: 1,
     finishedAt: 4,
   };
+  let storage: Awaited<ReturnType<typeof openHeadlessStorageForWrite>> | undefined;
 
   try {
     await mkdir(outputDir, { recursive: true });
-    const storage = await openHeadlessStorageForWrite(storageRoot);
+    storage = await openHeadlessStorageForWrite(storageRoot);
     await storage.executionStores.agentRunStore.createRun({
       ...identity,
       status: 'completed',
@@ -344,6 +349,7 @@ test('also diagnoses missing provider evidence when the only run event is corrup
     );
     assert.equal(exportedEvents[1]?.data?.reason, 'missing_provider_request_evidence');
   } finally {
+    await storage?.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -385,10 +391,11 @@ test('exports missing provider-request evidence for every continuation invocatio
     startedAt: index * 10 + 1,
     finishedAt: index * 10 + 4,
   }));
+  let storage: Awaited<ReturnType<typeof openHeadlessStorageForWrite>> | undefined;
 
   try {
     await mkdir(outputDir, { recursive: true });
-    const storage = await openHeadlessStorageForWrite(storageRoot);
+    storage = await openHeadlessStorageForWrite(storageRoot);
     const runStore = storage.executionStores.agentRunStore;
     for (const [index, identity] of identities.entries()) {
       const timestamp = index * 10 + 1;
@@ -439,6 +446,7 @@ test('exports missing provider-request evidence for every continuation invocatio
       /event corrupt evidence/i,
     );
   } finally {
+    await storage?.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -456,10 +464,11 @@ test('preserves existing run events when exporting a missing-evidence diagnostic
     startedAt: 1,
     finishedAt: 4,
   };
+  let storage: Awaited<ReturnType<typeof openHeadlessStorageForWrite>> | undefined;
 
   try {
     await mkdir(outputDir, { recursive: true });
-    const storage = await openHeadlessStorageForWrite(storageRoot);
+    storage = await openHeadlessStorageForWrite(storageRoot);
     const runStore = storage.executionStores.agentRunStore;
     await runStore.createRun({
       ...identity,
@@ -496,6 +505,7 @@ test('preserves existing run events when exporting a missing-evidence diagnostic
       ['tool_failed', 'event_corrupt'],
     );
   } finally {
+    await storage?.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -518,10 +528,11 @@ for (const backendKind of ['fake', 'pi-agent'] as const) {
       startedAt: 1,
       finishedAt: 4,
     };
+    let storage: Awaited<ReturnType<typeof openHeadlessStorageForWrite>> | undefined;
 
     try {
       await mkdir(outputDir, { recursive: true });
-      const storage = await openHeadlessStorageForWrite(storageRoot);
+      storage = await openHeadlessStorageForWrite(storageRoot);
       await storage.executionStores.agentRunStore.createRun({
         ...identity,
         status: 'completed',
@@ -543,6 +554,7 @@ for (const backendKind of ['fake', 'pi-agent'] as const) {
 
       assert.equal(await readFile(traceEventsPath, 'utf8'), '');
     } finally {
+      await storage?.close();
       await rm(root, { recursive: true, force: true });
     }
   });

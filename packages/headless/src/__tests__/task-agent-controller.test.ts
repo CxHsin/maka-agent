@@ -1229,40 +1229,50 @@ describe('runTaskOnce', () => {
         verification: { command: 'true', protectedPaths: [] },
       };
 
-      const result = await runTaskOnce({ ...fakeConfig, backend: 'ai-sdk' }, task, {
-        storageRoot,
-        registerBackends: (registry) => {
-          registry.register('ai-sdk', (ctx) => {
-            loadTurnRuntimeEvents = ctx.loadTurnRuntimeEvents;
-            return new ReportingBackend({
-              sessionId: ctx.sessionId,
-              header: ctx.header,
-              store: ctx.store,
-            });
-          });
-        },
-        realBackendIsolation: { kind: 'external', label: 'unit isolation' },
-      });
-
-      assert.ok(loadTurnRuntimeEvents);
-      const events = await loadTurnRuntimeEvents(latestInvocation(result).turnId);
-      assert.ok(
-        events.some(
-          (event) =>
-            event.role === 'user' &&
-            event.content?.kind === 'text' &&
-            event.content.text === task.instruction,
-        ),
-      );
-      assert.ok(events.some((event) => event.status === 'completed'));
-      const sessions = createSessionStore(storageRoot);
+      const storage = await openHeadlessStorageForWrite(storageRoot);
       try {
-        assert.deepEqual(await sessions.readExecutionBoundary(result.resultRecord.sessionId), {
-          kind: 'external',
-          revision: 0,
-        });
+        const result = await runTaskOnceWithStorage(
+          { ...fakeConfig, backend: 'ai-sdk' },
+          task,
+          {
+            storageRoot,
+            registerBackends: (registry) => {
+              registry.register('ai-sdk', (ctx) => {
+                loadTurnRuntimeEvents = ctx.loadTurnRuntimeEvents;
+                return new ReportingBackend({
+                  sessionId: ctx.sessionId,
+                  header: ctx.header,
+                  store: ctx.store,
+                });
+              });
+            },
+            realBackendIsolation: { kind: 'external', label: 'unit isolation' },
+          },
+          storage,
+        );
+
+        assert.ok(loadTurnRuntimeEvents);
+        const events = await loadTurnRuntimeEvents(latestInvocation(result).turnId);
+        assert.ok(
+          events.some(
+            (event) =>
+              event.role === 'user' &&
+              event.content?.kind === 'text' &&
+              event.content.text === task.instruction,
+          ),
+        );
+        assert.ok(events.some((event) => event.status === 'completed'));
+        assert.deepEqual(
+          await storage.executionStores.sessionStore.readExecutionBoundary(
+            result.resultRecord.sessionId,
+          ),
+          {
+            kind: 'external',
+            revision: 0,
+          },
+        );
       } finally {
-        await sessions.close?.();
+        await storage.close();
       }
     });
   });
@@ -2670,26 +2680,30 @@ describe('runTaskOnce', () => {
         verification: { command: 'test -f marker.txt', protectedPaths: [] },
       };
       const storage = await openHeadlessStorageForWrite(storageRoot);
-      let backendRegistrationCalled = false;
+      try {
+        let backendRegistrationCalled = false;
 
-      await assert.rejects(
-        () =>
-          runTaskOnceWithStorage(
-            fakeConfig,
-            task,
-            {
-              storageRoot,
-              registerBackends: (registry) => {
-                backendRegistrationCalled = true;
-                registerFakeBackend(registry);
+        await assert.rejects(
+          () =>
+            runTaskOnceWithStorage(
+              fakeConfig,
+              task,
+              {
+                storageRoot,
+                registerBackends: (registry) => {
+                  backendRegistrationCalled = true;
+                  registerFakeBackend(registry);
+                },
               },
-            },
-            { ...storage },
-          ),
-        (error: unknown) =>
-          error instanceof StorageRootAuthorityError && error.code === 'invalid_lease',
-      );
-      assert.equal(backendRegistrationCalled, false);
+              { ...storage },
+            ),
+          (error: unknown) =>
+            error instanceof StorageRootAuthorityError && error.code === 'invalid_lease',
+        );
+        assert.equal(backendRegistrationCalled, false);
+      } finally {
+        await storage.close();
+      }
     });
   });
 

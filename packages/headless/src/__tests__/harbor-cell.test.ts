@@ -3171,7 +3171,11 @@ describe('runHarborCell', () => {
         'synthesis_cache_block',
       ]);
       const outputStorage = await openHeadlessStorageForWrite(outputDir);
-      assert.deepEqual(await outputStorage.artifactStore.list('session-1'), []);
+      try {
+        assert.deepEqual(await outputStorage.artifactStore.list('session-1'), []);
+      } finally {
+        await outputStorage.close();
+      }
     });
   });
 
@@ -5265,8 +5269,9 @@ async function withDirs<T>(
   const workspaceDir = await mkdtemp(join(tmpdir(), 'maka-cell-ws-'));
   const outputDir = await mkdtemp(join(tmpdir(), 'maka-cell-out-'));
   const storageRoot = await mkdtemp(join(tmpdir(), 'maka-cell-store-'));
+  let storage: Awaited<ReturnType<typeof openHeadlessStorageForWrite>> | undefined;
   try {
-    const storage = await openHeadlessStorageForWrite(storageRoot);
+    storage = await openHeadlessStorageForWrite(storageRoot);
     return await fn({
       workspaceDir,
       outputDir,
@@ -5274,6 +5279,7 @@ async function withDirs<T>(
       artifactStore: storage.artifactStore,
     });
   } finally {
+    await storage?.close();
     await rm(workspaceDir, { recursive: true, force: true });
     await rm(outputDir, { recursive: true, force: true });
     await rm(storageRoot, { recursive: true, force: true });

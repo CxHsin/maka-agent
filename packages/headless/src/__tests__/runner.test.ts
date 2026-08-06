@@ -17,8 +17,9 @@ import type { BackendSendInput } from '@maka/core/backend-types';
 import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
 import { createSessionStore, openRuntimeEventReadPersistence } from '@maka/storage';
 import type { Config, Task } from '../contracts.js';
+import { openHeadlessStorageForWrite } from '../headless-storage.js';
 import type { HeadlessBackendContext } from '../isolation.js';
-import { runExperiment } from '../runner.js';
+import { runExperiment, runExperimentWithStorage } from '../runner.js';
 
 const registerFakeBackend = (registry: BackendRegistry): void => {
   registry.register(
@@ -406,32 +407,42 @@ describe('fail-closed (a model-backed backend does not run without isolation)', 
       };
       const contexts: HeadlessBackendContext[] = [];
 
-      const result = await runExperiment(realConfig, task, {
-        storageRoot,
-        registerBackends: registerIsolatedRealBackend(contexts),
-        realBackendIsolation: { kind: 'external', label: 'unit-test isolated backend' },
-      });
-
-      assert.equal(result.status, 'completed');
-      assert.equal(result.passed, true);
-      assert.equal(contexts.length, 1);
-      assert.equal(contexts[0]?.realBackendIsolation?.label, 'unit-test isolated backend');
-      assert.equal(contexts[0]?.config.id, 'real-cfg');
-      assert.equal(contexts[0]?.task.id, 'real-task');
-      assert.equal(typeof contexts[0]?.spawnChildAgent, 'function');
-      assert.equal(typeof contexts[0]?.spawnChildSession, 'function');
-      assert.equal(typeof contexts[0]?.retryChildAgent, 'function');
-      assert.equal(typeof contexts[0]?.listChildAgents, 'function');
-      assert.equal(typeof contexts[0]?.readChildAgentOutput, 'function');
-      assert.ok(Array.isArray((await contexts[0]!.listChildAgents!(result.sessionId)).definitions));
-      const sessions = createSessionStore(storageRoot);
+      const storage = await openHeadlessStorageForWrite(storageRoot);
       try {
-        assert.deepEqual(await sessions.readExecutionBoundary(result.sessionId), {
-          kind: 'external',
-          revision: 0,
-        });
+        const result = await runExperimentWithStorage(
+          realConfig,
+          task,
+          {
+            storageRoot,
+            registerBackends: registerIsolatedRealBackend(contexts),
+            realBackendIsolation: { kind: 'external', label: 'unit-test isolated backend' },
+          },
+          storage,
+        );
+
+        assert.equal(result.status, 'completed');
+        assert.equal(result.passed, true);
+        assert.equal(contexts.length, 1);
+        assert.equal(contexts[0]?.realBackendIsolation?.label, 'unit-test isolated backend');
+        assert.equal(contexts[0]?.config.id, 'real-cfg');
+        assert.equal(contexts[0]?.task.id, 'real-task');
+        assert.equal(typeof contexts[0]?.spawnChildAgent, 'function');
+        assert.equal(typeof contexts[0]?.spawnChildSession, 'function');
+        assert.equal(typeof contexts[0]?.retryChildAgent, 'function');
+        assert.equal(typeof contexts[0]?.listChildAgents, 'function');
+        assert.equal(typeof contexts[0]?.readChildAgentOutput, 'function');
+        assert.ok(
+          Array.isArray((await contexts[0]!.listChildAgents!(result.sessionId)).definitions),
+        );
+        assert.deepEqual(
+          await storage.executionStores.sessionStore.readExecutionBoundary(result.sessionId),
+          {
+            kind: 'external',
+            revision: 0,
+          },
+        );
       } finally {
-        await sessions.close?.();
+        await storage.close();
       }
     });
   });

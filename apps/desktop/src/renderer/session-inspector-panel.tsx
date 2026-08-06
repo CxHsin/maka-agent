@@ -7,7 +7,7 @@ import { VStack } from '@astryxdesign/core/Layout';
 import { Section } from '@astryxdesign/core/Section';
 import { Text } from '@astryxdesign/core/Text';
 import { TextInput } from '@astryxdesign/core/TextInput';
-import { PROVIDER_REGISTRY, uiLocaleToIntlLocale, type UiLocale } from '@maka/core';
+import { uiLocaleToIntlLocale, type UiLocale } from '@maka/core';
 import { useUiLocale } from '@maka/ui';
 import { Activity, AlertTriangle } from '@maka/ui/icons';
 import { getDesktopConversationCopy } from './locales/conversation-copy.js';
@@ -52,10 +52,6 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
   // the number that named it.
   const failedTurns = trace.turns.filter((turn) => turn.failed).length;
   const hidden = model.hiddenTurns + model.hiddenSteps;
-  // The model names the overview, and it is also the weakest condition for
-  // having one: the window and the cache rate are both read off the same model
-  // calls, so a session with either necessarily has a model to name.
-  const hasOverview = overview.model !== undefined;
 
   return (
     <Section
@@ -98,7 +94,7 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
           )}
         </div>
 
-        {!model.empty && hasOverview && (
+        {!model.empty && (
           <InspectorOverview copy={copy} locale={locale} model={model} overview={overview} />
         )}
 
@@ -200,22 +196,25 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
 }
 
 /**
- * The glance layer: the model, then three figures, then the window.
+ * The glance layer: three figures, then the window.
  *
  * What survived a pass over "who reads this number, and to decide what":
  *
- * - The model TITLES the section, because it is the subject the rest is
- *   measured on. As a caption under the stats it ranked below the numbers it
- *   governs and read as an orphan; as a title it is the one line that says
- *   what this panel is about.
  * - Cost, duration and cache hit rate are the three a reader opens the tab
  *   for, and as figures rather than table rows they also give the column
- *   something to fill.
+ *   something to fill. They open the panel with nothing over them: a heading
+ *   above a 20px figure is a caption ranking below what it captions, and a
+ *   StatCell's own label already does that job at the right size.
  * - The context bar stays, because it is the only thing here that answers a
  *   question about NOW rather than about the past.
  *
  * What went, and why nothing was lost:
  *
+ * - The model name. It is not a measurement, it is the session's setup — the
+ *   composer names the model you are about to use, and the timeline below
+ *   names the model each call actually used, per call. A single title picking
+ *   the most recent one repeated that and, in a session that switched models,
+ *   was less true than the rows it sat over.
  * - Token totals and the reasoning split. Cost already prices the tokens, the
  *   bar already sizes the prompt, and the hit rate already reports the cache;
  *   `248,800 / 740` mostly restated how many turns there were. The exact
@@ -237,33 +236,20 @@ function InspectorOverview(props: {
   const formatNumber = numberFormatter(props.locale);
   const context = overview.context;
   const totals = props.model.totals;
-  const modelRef = overview.model;
-  if (!modelRef) return null;
 
   return (
     <VStack gap={4} data-maka-contract="session-inspector-overview">
-      {/* The model IS this section's title, not a caption over it: it names
-          what the three figures below are figures OF, and a name that ranks
-          under the numbers it governs reads as an orphan. Same head line as
-          上下文窗口 and 时间轴 — title on the left, the fact that qualifies
-          it on the right — so the panel has one shape repeated three times
-          instead of three shapes. */}
-      <InspectorSection
-        title={modelRef.modelId}
-        readout={providerLabel(modelRef.providerId)}
-        data-maka-contract="session-inspector-model"
-      >
-        <dl className="maka-inspector-stats" data-maka-contract="session-inspector-stats">
-          <StatCell
-            label={copy.totals.cost}
-            value={formatCost(totals.costUsd, copy.costUnavailable)}
-          />
-          <StatCell label={copy.totals.duration} value={formatDuration(totals.durationMs)} />
-          {overview.cacheHitRate !== undefined && (
-            <StatCell label={copy.overview.cacheHit} value={formatPercent(overview.cacheHitRate)} />
-          )}
-        </dl>
-      </InspectorSection>
+      {/* The figures open the panel with nothing above them. Every heading
+          tried here ranked below the numbers it introduced, because a label
+          over a 20px figure is exactly what a StatCell already is — the three
+          cells label themselves. */}
+      <dl className="maka-inspector-stats" data-maka-contract="session-inspector-stats">
+        <StatCell label={copy.totals.cost} value={formatCost(totals.costUsd, copy.costUnavailable)} />
+        <StatCell label={copy.totals.duration} value={formatDuration(totals.durationMs)} />
+        {overview.cacheHitRate !== undefined && (
+          <StatCell label={copy.overview.cacheHit} value={formatPercent(overview.cacheHitRate)} />
+        )}
+      </dl>
 
       {context && (
         <InspectorContextSection copy={copy} context={context} formatNumber={formatNumber} />
@@ -401,11 +387,6 @@ function InspectorContextSection(props: {
       </dl>
     </InspectorSection>
   );
-}
-
-function providerLabel(providerId: string): string {
-  const entry = (PROVIDER_REGISTRY as Readonly<Record<string, { label?: string }>>)[providerId];
-  return entry?.label ?? providerId;
 }
 
 function numberFormatter(locale: UiLocale): (value: number) => string {

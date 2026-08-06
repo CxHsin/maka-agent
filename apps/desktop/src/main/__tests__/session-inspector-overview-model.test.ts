@@ -267,30 +267,4 @@ describe('inspector overview model', () => {
     assert.equal(model.cacheHitRate, 0.75);
   });
 
-  it('names the model of the most recent call and counts logical calls', () => {
-    const model = deriveInspectorOverviewModel(
-      trace({
-        turns: [
-          turn([
-            modelCall({ attempts: [attempt({ contextWindow: 200_000 })] }),
-            modelCall({
-              id: 'call-2',
-              providerId: 'openai',
-              modelId: 'gpt-5.4',
-              startedAt: NOW + 5_000,
-              endedAt: NOW + 6_000,
-              attempts: [attempt({ attemptId: 'attempt-2', startedAt: NOW + 5_000, completedAt: NOW + 6_000 })],
-            }),
-          ]),
-        ],
-      }),
-    );
-
-    assert.deepEqual(model.model, {
-      providerId: 'openai',
-      modelId: 'gpt-5.4',
-      callCount: 2,
-    });
-  });
-
 });

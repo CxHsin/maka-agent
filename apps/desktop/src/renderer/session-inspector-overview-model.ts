@@ -46,14 +46,6 @@ export interface InspectorContextBudget {
   segments: readonly InspectorContextSegment[];
 }
 
-/** The model behind the most recent model call. */
-export interface InspectorModelRef {
-  providerId: string;
-  modelId: string;
-  /** Logical calls (retries nest inside), session-wide. */
-  callCount: number;
-}
-
 export interface InspectorOverviewModel {
   /** Absent when no completed main call reported both usage and a window. */
   context?: InspectorContextBudget;
@@ -67,8 +59,6 @@ export interface InspectorOverviewModel {
    * the run ledger; three statements of the same tokens is two too many.
    */
   cacheHitRate?: number;
-  /** Absent when the session made no recorded model call. */
-  model?: InspectorModelRef;
 }
 
 export function deriveInspectorOverviewModel(trace: SessionTrace | undefined): InspectorOverviewModel {
@@ -76,26 +66,11 @@ export function deriveInspectorOverviewModel(trace: SessionTrace | undefined): I
 
   const modelSteps = trace.turns.flatMap(modelCallSteps);
   const cacheHitRate = sessionCacheHitRate(modelSteps.flatMap((step) => step.attempts));
-
-  const latestStep = modelSteps.reduce<TraceModelCallStep | undefined>(
-    (latest, step) => (latest === undefined || step.endedAt >= latest.endedAt ? step : latest),
-    undefined,
-  );
-
   const context = contextBudget(modelSteps);
 
   return {
     ...(context ? { context } : {}),
     ...(cacheHitRate !== undefined ? { cacheHitRate } : {}),
-    ...(latestStep
-      ? {
-          model: {
-            providerId: latestStep.providerId,
-            modelId: latestStep.modelId,
-            callCount: modelSteps.length,
-          },
-        }
-      : {}),
   };
 }
 

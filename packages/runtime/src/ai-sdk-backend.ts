@@ -2089,7 +2089,6 @@ export class AiSdkBackend implements AgentBackend {
           // disagreeing about why the stream ended.
           finishReason =
             rawFinishReason ?? (await result.finishReason.catch(() => 'stop')) ?? 'stop';
-          rawFinishReason = finishReason;
           await queue.waitUntilConsumedThroughCurrent();
 
           if (returnedToolCalls.length > 0) {
@@ -2341,14 +2340,21 @@ export class AiSdkBackend implements AgentBackend {
             ? 'step_limit'
             : this.mapFinishReason(finishReason));
         if (stopReason === 'error') {
-          // Reaching a failed terminal without anything having been thrown: the
-          // stream ended quietly on a reason we cannot call a finished turn.
+          // Reaching a failed terminal without anything having been thrown.
           // Every other `stopReason: 'error'` here comes out of the catch below
           // with an error event and a failed trace behind it, and the session's
           // `lastError` and the request ledger are fed by exactly those. Ending
           // the turn failed while the telemetry still reads `success` is the
           // same blindness this branch exists to remove.
-          const err = new Error(`Provider stream ended without finishing (${finishReason})`);
+          //
+          // Two different things arrive here and the message says which: the
+          // provider stopping the stream on its own policy, and a stop nothing
+          // named at all.
+          const err = new Error(
+            finishReason === 'content-filter'
+              ? 'Provider stopped the stream on a content filter'
+              : `Provider stream ended without finishing (${finishReason})`,
+          );
           streamStatus = 'error';
           streamErrorClass = this.modelAdapter.classifyError(err);
           queue.push(this.makeErrorEvent(turnId, err));

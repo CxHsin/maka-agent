@@ -119,15 +119,30 @@
 .maka-turn-status {
   font: var(--maka-text-body);
  display: flex; align-items: center; gap: 8px; padding-block: 2px; color: var(--muted-foreground); }
+/* The live status is the one thing in the turn that is about to happen rather
+   than something that already did, so it gets air the blocks above it do not
+   (they sit on the column's own 8px). Hugging the last tool card read as part
+   of that card. */
+.maka-turn-processing { margin-top: 8px; }
 .maka-turn-indicator-text { display: inline-flex; min-width: 0; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Duration must match `WORKING_PHRASE_FADE_MS` in chat-turn.tsx: the swap is a
    fade out, then a text change, then a fade in, and the JS timer is what waits
    out this transition before rewriting the word. */
-.maka-turn-working-phrase { transition: opacity 300ms var(--ease-out-strong); }
+.maka-turn-working-phrase { font-weight: 500; transition: opacity 300ms var(--ease-out-strong); }
 .maka-turn-working-phrase[data-fading="true"] { opacity: 0; }
 .maka-turn-status-separator { color: var(--border-strong); }
-/* Tabular figures so a ticking clock changes glyphs without changing width. */
-.maka-turn-elapsed { font-variant-numeric: tabular-nums; }
+/* The clock is the one element that outlives the turn it measures: it ticks in
+   the running row, then stays put in the footer row of the settled turn. Both
+   are stated here rather than inherited, because the two hosts disagree — the
+   footer is an Astryx metadata row and would otherwise shrink the number to
+   12px and darken it, so the number that was supposed to settle in place
+   changed size and colour at the exact moment it stopped moving.
+   Tabular figures so a ticking clock changes glyphs without changing width. */
+.maka-turn-elapsed {
+  font: var(--maka-text-body);
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
 /* #1879: an Astryx `Badge variant="yellow"` now — the warning tone it used to
    draw by hand (hairline + 5% wash) is a variant, and the box comes with it.
    Product CSS keeps only what is layout: it is a block-level note under the

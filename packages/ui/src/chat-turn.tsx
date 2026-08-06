@@ -35,7 +35,7 @@ import type { TurnTimelineItem, TurnViewModel } from './materialize.js';
 import { foldTimeline, type FoldedTimelineChild } from './timeline-fold.js';
 import { AttachmentKindIcon } from './attachment-kinds.js';
 import { QuoteRefChip } from './quote-ref-chip.js';
-import { Marker, markerVariants } from './primitives/chat.js';
+import { Marker, markerVariants, TextShimmer } from './primitives/chat.js';
 import { ToolTrow } from './tool-activity.js';
 import { formatBytes } from './tool-activity/preview-utils.js';
 import { useUiLocale } from './locale-context.js';
@@ -814,8 +814,8 @@ const WORKING_PHRASE_FADE_MS = 300;
 const ELAPSED_TICK_MS = 1_000;
 
 /**
- * The live turn's running status line: a working phrase that rotates every 20s,
- * and the elapsed clock.
+ * The live turn's running status line: a working phrase under a travelling
+ * shimmer, rotating every 20s, and the elapsed clock beside it.
  *
  * The elapsed time is what actually carries the message — it is the only part
  * that proves the harness and the model are still moving, and it is why the
@@ -873,17 +873,23 @@ export function TurnRunningStatus(props: { startedAt?: number }) {
 
   return (
     /* No spinner: a running tool card already spins a few pixels above this
-       row, and two of them in one view read as two separate things being
-       waited on. What is left still moves — the phrase every 20s, the seconds
-       every second — and the seconds are the better proof anyway, because a
-       spinner turns at the same rate whether or not anything is happening. */
+       row, and Astryx's own guidance is not to stack two in one view. The
+       motion moved into the text instead — the sweep across the phrase, the
+       phrase itself every 20s, the seconds every second — and the seconds are
+       the better proof anyway, because a spinner turns at the same rate
+       whether or not anything is happening. */
     <div className="maka-turn-processing" role="status" aria-label={copy.processing} ref={rootRef}>
       {/* Every visible token here moves on the clock. Announcing either would
           talk over the answer being streamed beside it, so the row's label is
           its whole accessible name and the text is decoration. */}
       <span className="maka-turn-indicator-text" aria-hidden="true">
+        {/* The sweep is the row's only continuous motion now that the spinner
+            is gone, and it is a truer one: it runs across the words that say
+            what is being waited on, rather than beside them. It rides the
+            phrase and not the clock — a light band travelling over a number
+            that is itself changing reads as glare, not as progress. */}
         <span className="maka-turn-working-phrase" data-fading={phraseFading || undefined}>
-          {phrases[phraseIndex] ?? copy.processing}
+          <TextShimmer>{phrases[phraseIndex] ?? copy.processing}</TextShimmer>
         </span>
         {elapsedMs !== undefined && (
           <>

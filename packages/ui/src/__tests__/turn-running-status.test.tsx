@@ -78,6 +78,17 @@ describe('live turn running status line', () => {
     assert.doesNotMatch(markup, /spinner/i);
   });
 
+  it('runs the shimmer over the phrase and not over the clock', () => {
+    // The sweep is the row's only continuous motion since the spinner left. It
+    // belongs on the words: a light band travelling across a number that is
+    // itself changing reads as glare rather than as progress.
+    const markup = render(createElement(TurnRunningStatus, { startedAt: 1 }));
+    const phrase = /<span class="maka-turn-working-phrase"[^>]*>(.*?)<\/span><\/span>/s.exec(markup)?.[0] ?? '';
+
+    assert.match(phrase, /maka-text-shimmer/);
+    assert.doesNotMatch(markup.replace(phrase, ''), /maka-text-shimmer/);
+  });
+
   it('keeps a name on the row now that the spinner is not carrying one', () => {
     // Every visible token here moves on the clock and is hidden from the
     // accessibility tree; the spinner's label used to be the row's whole

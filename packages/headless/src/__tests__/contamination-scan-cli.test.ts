@@ -286,7 +286,7 @@ describe('run-contamination-scan', () => {
         execFileAsync(process.execPath, [SCRIPT, '--run-root', empty]),
         (error: { code?: number; stderr?: string }) => {
           assert.equal(error.code, 2);
-          assert.match(error.stderr ?? '', /no scheduled-cell log at .*scheduled-cells\.jsonl/);
+          assert.match(error.stderr ?? '', /no schedule recorded at .*scheduled-cells\.jsonl/);
           return true;
         },
       );

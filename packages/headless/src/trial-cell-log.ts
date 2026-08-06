@@ -30,12 +30,14 @@ export function trialCellLogPath(runRoot: string): string {
 
 /**
  * Append one cell. Called once per trial, right after the trial directory is
- * resolved, so a row exists exactly when a trial directory does — including for
- * a cell that then failed, whose artifacts are still worth reading.
+ * resolved, so a row is attempted for every trial directory there is —
+ * including for a cell that then failed, whose artifacts are still worth
+ * reading.
  *
- * Logging is not the run's job: a failure here must not fail a graded cell, so
- * the write is best-effort and reports its own absence by leaving no row. A run
- * that asked for no log passes no path.
+ * Attempted, not guaranteed. Logging is not the run's job: a failure here must
+ * not fail a graded cell, so the write is best-effort and reports its own
+ * absence by leaving no row, which a reader counts as a cell it cannot account
+ * for. A run that asked for no log passes no path.
  */
 export async function appendTrialCell(
   path: string | undefined,

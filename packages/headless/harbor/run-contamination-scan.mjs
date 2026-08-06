@@ -57,7 +57,9 @@ async function expectedCells(runRoot) {
     cells = await readScheduledCellLog(path);
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      throw new Error(`no scheduled-cell log at ${path}: this is not a harness run root`);
+      throw new Error(
+        `no schedule recorded at ${path}: either this is not a harness run root, or the run died before it scheduled`,
+      );
     }
     throw error;
   }

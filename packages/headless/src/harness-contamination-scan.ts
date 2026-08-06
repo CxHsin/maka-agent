@@ -382,7 +382,7 @@ export function renderContaminationScanReportMarkdown(report: ContaminationScanR
     `Searched ${totals.analyzed} of ${totals.cells} recorded cells.`,
     '',
     report.unrecordedCells.length > 0
-      ? `**${report.unrecordedCells.length} cells this run root was scheduled to grade hold no record that it did.** An invocation was killed or abandoned, or its artifacts never reached the log; whatever those cells did is not in this report.`
+      ? `**${report.unrecordedCells.length} ${report.unrecordedCells.length === 1 ? 'cell' : 'cells'} this run root was scheduled to grade hold no record that it did.** Whatever those cells did is not in this report.`
       : 'Recorded means the harness got far enough to resolve a trial directory. A cell that died before that is not counted here or anywhere below.',
     '',
     '| arm | cells | searched |',

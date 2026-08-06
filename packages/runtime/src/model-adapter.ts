@@ -459,6 +459,18 @@ export class ModelAdapter {
         return 'error';
       case 'tool-calls':
         return 'end_turn';
+      // The SDK's own two names for "the stream stopped and I cannot say why".
+      // An upstream that drops the connection mid-answer lands here: it yields
+      // no error part and throws nothing, so these are the only signal that it
+      // happened. Calling them `end_turn` asserts the model said its piece —
+      // the one thing we know we cannot claim. A benchmark cell recorded
+      // `status: completed` on exactly this shape while its agent was still
+      // mid-task, caught only because the proxy noticed the terminal SSE event
+      // never arrived. A genuinely new provider reason still falls through to
+      // the tolerant default below; these two are not new, they are unnamed.
+      case 'other':
+      case 'unknown':
+        return 'error';
       default:
         return 'end_turn';
     }

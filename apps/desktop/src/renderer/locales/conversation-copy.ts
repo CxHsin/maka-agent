@@ -67,12 +67,9 @@ export interface DesktopConversationCopy {
     retry: string;
     empty: string;
     costUnavailable: string;
-    /** Labels for the totals strip; each names the figure beside it. */
+    /** Labels for the two headline figures the trace always states. */
     totals: {
       duration: string;
-      calls: string;
-      retries: string;
-      compactions: string;
       cost: string;
     };
     coveragePartial: string;
@@ -100,15 +97,10 @@ export interface DesktopConversationCopy {
         used: string;
         free: string;
       };
-      session: string;
       /** The three figures a reader opens this tab for, as headline stats. */
       cacheHit: string;
-      /** Input and output totals, read as one ratio rather than two rows. */
-      inputOutput: string;
       /** Heading over the causal record. */
       timelineTab: string;
-      model: string;
-      reasoning: string;
     };
   };
   quoteCompanion: {
@@ -197,9 +189,6 @@ const COPY = {
       costUnavailable: '费用不可得',
       totals: {
         duration: '总耗时',
-        calls: '模型调用',
-        retries: '重试',
-        compactions: '上下文压缩',
         cost: '花费',
       },
       coveragePartial: '部分调用没有记录，下面的数字是下界',
@@ -223,12 +212,8 @@ const COPY = {
           used: '已用提示',
           free: '空闲',
         },
-        session: '会话',
         cacheHit: '缓存命中率',
-        inputOutput: '输入 / 输出',
-        timelineTab: '时间轴',
-        model: '模型',
-        reasoning: '推理',
+          timelineTab: '时间轴',
       },
     },
     quoteCompanion: {
@@ -302,9 +287,6 @@ const COPY = {
       costUnavailable: 'cost unavailable',
       totals: {
         duration: 'Duration',
-        calls: 'Model calls',
-        retries: 'Retries',
-        compactions: 'Compactions',
         cost: 'Cost',
       },
       coveragePartial: 'Some calls have no record; the numbers below are a floor',
@@ -328,12 +310,8 @@ const COPY = {
           used: 'Prompt',
           free: 'Free',
         },
-        session: 'Session',
         cacheHit: 'Cache hit rate',
-        inputOutput: 'In / out',
-        timelineTab: 'Timeline',
-        model: 'Model',
-        reasoning: 'reasoning',
+          timelineTab: 'Timeline',
       },
     },
     quoteCompanion: {

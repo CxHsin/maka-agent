@@ -15,24 +15,6 @@ import type {
  * fabricating zeros (#1625, #1679).
  */
 
-/** Metered token totals over a set of attempts. */
-export interface InspectorTokenStats {
-  /** Physical requests that reported any usage at all. */
-  meteredAttempts: number;
-  /** Prompt tokens, cache hits included — what the provider counted as input. */
-  inputTokens?: number;
-  /** The portion of input served from the provider's prompt cache. */
-  cacheReadInputTokens?: number;
-  outputTokens?: number;
-  /** Reasoning portion of output, when the provider breaks it out. */
-  reasoningTokens?: number;
-  /**
-   * cacheRead / input over attempts that reported input. Absent when no input
-   * was metered at all — a rate over nothing is not zero, it is unknown.
-   */
-  cacheHitRate?: number;
-}
-
 /**
  * One band of the context window.
  *
@@ -75,8 +57,16 @@ export interface InspectorModelRef {
 export interface InspectorOverviewModel {
   /** Absent when no completed main call reported both usage and a window. */
   context?: InspectorContextBudget;
-  /** Absent when no attempt in the session reported usage. */
-  sessionTokens?: InspectorTokenStats;
+  /**
+   * cacheRead / input over the attempts that reported input, session-wide.
+   * Absent when no input was metered at all — a rate over nothing is not
+   * zero, it is unknown.
+   *
+   * The only token figure the panel keeps. The raw totals it used to carry
+   * were priced by `totals.costUsd`, sized by the context bar and audited in
+   * the run ledger; three statements of the same tokens is two too many.
+   */
+  cacheHitRate?: number;
   /** Absent when the session made no recorded model call. */
   model?: InspectorModelRef;
 }
@@ -85,7 +75,7 @@ export function deriveInspectorOverviewModel(trace: SessionTrace | undefined): I
   if (!trace || trace.turns.length === 0) return {};
 
   const modelSteps = trace.turns.flatMap(modelCallSteps);
-  const sessionTokens = tokenStats(modelSteps.flatMap((step) => step.attempts));
+  const cacheHitRate = sessionCacheHitRate(modelSteps.flatMap((step) => step.attempts));
 
   const latestStep = modelSteps.reduce<TraceModelCallStep | undefined>(
     (latest, step) => (latest === undefined || step.endedAt >= latest.endedAt ? step : latest),
@@ -96,7 +86,7 @@ export function deriveInspectorOverviewModel(trace: SessionTrace | undefined): I
 
   return {
     ...(context ? { context } : {}),
-    ...(sessionTokens ? { sessionTokens } : {}),
+    ...(cacheHitRate !== undefined ? { cacheHitRate } : {}),
     ...(latestStep
       ? {
           model: {
@@ -114,39 +104,18 @@ function modelCallSteps(turn: TurnTrace): TraceModelCallStep[] {
 }
 
 /**
- * Every field sums only the attempts that reported it: a provider that never
- * breaks out reasoning leaves the row unknown, not zero, because "did not
- * report" and "reported none" are different facts (#1679 keeps them apart in
- * the ledger, and the panel keeps them apart here).
+ * Summed over the attempts that reported input, and undefined when none did:
+ * a rate over nothing is unknown, not zero, the same way "did not report" and
+ * "reported none" stay apart in the ledger (#1679).
+ *
+ * An input-reported attempt without a cache figure reads as a miss, because
+ * the providers that cache always count the hits.
  */
-function tokenStats(attempts: readonly TraceModelAttempt[]): InspectorTokenStats | undefined {
+function sessionCacheHitRate(attempts: readonly TraceModelAttempt[]): number | undefined {
   const input = attempts.filter((attempt) => attempt.inputTokens !== undefined);
-  const cacheRead = attempts.filter((attempt) => attempt.cacheReadInputTokens !== undefined);
-  const output = attempts.filter((attempt) => attempt.outputTokens !== undefined);
-  const reasoning = attempts.filter((attempt) => attempt.reasoningTokens !== undefined);
-  const metered = new Set([...input, ...cacheRead, ...output, ...reasoning]);
-  if (metered.size === 0) return undefined;
-
   const inputTokens = sum(input, (attempt) => attempt.inputTokens);
-  return {
-    meteredAttempts: metered.size,
-    ...(input.length > 0 ? { inputTokens } : {}),
-    ...(cacheRead.length > 0
-      ? { cacheReadInputTokens: sum(cacheRead, (attempt) => attempt.cacheReadInputTokens) }
-      : {}),
-    ...(output.length > 0 ? { outputTokens: sum(output, (attempt) => attempt.outputTokens) } : {}),
-    ...(reasoning.length > 0
-      ? { reasoningTokens: sum(reasoning, (attempt) => attempt.reasoningTokens) }
-      : {}),
-    // An input-reported attempt without a cache figure reads as a miss: the
-    // providers that cache always count the hits.
-    ...(input.length > 0 && inputTokens > 0
-      ? {
-          cacheHitRate:
-            sum(input, (attempt) => attempt.cacheReadInputTokens) / inputTokens,
-        }
-      : {}),
-  };
+  if (inputTokens === 0) return undefined;
+  return sum(input, (attempt) => attempt.cacheReadInputTokens) / inputTokens;
 }
 
 /**

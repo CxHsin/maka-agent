@@ -488,8 +488,18 @@
   overflow-wrap: anywhere;
 }
 
-/* The trailing meta line: one wrapped sentence of facts that compare with
-   nothing, rather than a table that reserves a column for each of them. */
+/* The subject line: which model this session's figures are about. It reads as
+   a caption over the stats rather than a fact among them, so it stays quiet
+   and sits above the tier it qualifies. */
+.maka-inspector-subject {
+  margin: 0;
+  font: var(--maka-text-body);
+  color: var(--foreground-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* What the filter is currently hiding — the only line left that comments on
+   the view rather than reporting the session. */
 .maka-inspector-meta {
   margin: 0;
   font: var(--maka-text-body);

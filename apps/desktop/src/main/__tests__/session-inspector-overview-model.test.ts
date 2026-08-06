@@ -209,7 +209,7 @@ describe('inspector overview model', () => {
     assert.equal(model.context, undefined);
   });
 
-  it('sums token stats across attempts and derives the cache hit rate', () => {
+  it('derives the cache hit rate across every attempt that reported input', () => {
     const model = deriveInspectorOverviewModel(
       trace({
         turns: [
@@ -237,14 +237,8 @@ describe('inspector overview model', () => {
       }),
     );
 
-    assert.deepEqual(model.sessionTokens, {
-      meteredAttempts: 2,
-      inputTokens: 30_000,
-      cacheReadInputTokens: 15_000,
-      outputTokens: 800,
-      reasoningTokens: 120,
-      cacheHitRate: 0.5,
-    });
+    // 15,000 cached out of 30,000 prompt tokens over the two attempts.
+    assert.equal(model.cacheHitRate, 0.5);
   });
 
   it('leaves the hit rate unknown rather than zero when no input was metered', () => {
@@ -254,12 +248,10 @@ describe('inspector overview model', () => {
       }),
     );
 
-    assert.equal(model.sessionTokens?.cacheHitRate, undefined);
-    assert.equal(model.sessionTokens?.inputTokens, undefined);
-    assert.equal(model.sessionTokens?.outputTokens, 400);
+    assert.equal(model.cacheHitRate, undefined);
   });
 
-  it('keeps an unreported breakdown absent rather than summing it as zero', () => {
+  it('reads an attempt that reported no cache figure as a miss, not as unknown', () => {
     const model = deriveInspectorOverviewModel(
       trace({
         turns: [
@@ -272,9 +264,7 @@ describe('inspector overview model', () => {
       }),
     );
 
-    // The provider never broke reasoning out: the row is unknown, not zero.
-    assert.equal(model.sessionTokens?.reasoningTokens, undefined);
-    assert.equal(model.sessionTokens?.cacheHitRate, 0.75);
+    assert.equal(model.cacheHitRate, 0.75);
   });
 
   it('names the model of the most recent call and counts logical calls', () => {

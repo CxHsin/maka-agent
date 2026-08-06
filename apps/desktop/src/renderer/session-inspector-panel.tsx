@@ -54,7 +54,7 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
   const hidden = model.hiddenTurns + model.hiddenSteps;
   const hasOverview =
     overview.context !== undefined ||
-    overview.sessionTokens !== undefined ||
+    overview.cacheHitRate !== undefined ||
     overview.model !== undefined;
 
   return (
@@ -200,25 +200,29 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
 }
 
 /**
- * The glance layer.
+ * The glance layer: the model, then three figures, then the window.
  *
  * What survived a pass over "who reads this number, and to decide what":
  *
- * - Cost, duration and cache hit rate lead as headline stats. They are the
- *   three a reader opens the tab for, and as figures rather than table rows
- *   they also give the column something to fill.
+ * - The model leads, because it is the subject the rest is measured on.
+ * - Cost, duration and cache hit rate are the three a reader opens the tab
+ *   for, and as figures rather than table rows they also give the column
+ *   something to fill.
  * - The context bar stays, because it is the only thing here that answers a
  *   question about NOW rather than about the past.
- * - Input and output collapse into one ratio. Two rows of raw counts were two
- *   rows nobody compared; as `81,300 / 740` the shape of the session is
- *   legible at a glance, and the cache figure that used to sit beside them is
- *   already stated as a rate above and as a band in the bar.
- * - Retries and compactions report BY EXCEPTION. A session with neither is
- *   the normal case, and printing `0` twice taught the reader to skip the
- *   block that also carries the exceptions.
- * - Model call count and last-activity are gone. The count was a number with
- *   no decision attached, and the timestamp is already on the session in the
- *   sidebar and the header.
+ *
+ * What went, and why nothing was lost:
+ *
+ * - Token totals and the reasoning split. Cost already prices the tokens, the
+ *   bar already sizes the prompt, and the hit rate already reports the cache;
+ *   `248,800 / 740` mostly restated how many turns there were. The exact
+ *   counts live in the run ledger, which is where an audit belongs.
+ * - The retry and compaction counts. Both are EVENTS, and the timeline below
+ *   lists them — a retry as `×2` on the step that retried, a compaction as
+ *   its own step. Counting them again up here was summarising a list that is
+ *   already on screen.
+ * - Model call count and last-activity. The count had no decision attached,
+ *   and the timestamp is already on the session in the sidebar.
  */
 function InspectorOverview(props: {
   copy: InspectorCopy;
@@ -229,45 +233,31 @@ function InspectorOverview(props: {
   const { copy, overview } = props;
   const formatNumber = numberFormatter(props.locale);
   const context = overview.context;
-  const tokens = overview.sessionTokens;
   const totals = props.model.totals;
 
   return (
     <VStack gap={4} data-maka-contract="session-inspector-overview">
+      {/* The subject of every figure below it, and the only thing here that is
+          not a measurement: which model produced this session. It leads
+          because a cost, a window size and a cache rate all mean something
+          different depending on what answers to them. */}
+      {overview.model && (
+        <p className="maka-inspector-subject">
+          {providerLabel(overview.model.providerId)} / {overview.model.modelId}
+        </p>
+      )}
+
       <dl className="maka-inspector-stats" data-maka-contract="session-inspector-stats">
         <StatCell label={copy.totals.cost} value={formatCost(totals.costUsd, copy.costUnavailable)} />
         <StatCell label={copy.totals.duration} value={formatDuration(totals.durationMs)} />
-        {tokens?.cacheHitRate !== undefined && (
-          <StatCell label={copy.overview.cacheHit} value={formatPercent(tokens.cacheHitRate)} />
+        {overview.cacheHitRate !== undefined && (
+          <StatCell label={copy.overview.cacheHit} value={formatPercent(overview.cacheHitRate)} />
         )}
       </dl>
 
       {context && (
         <InspectorContextSection copy={copy} context={context} formatNumber={formatNumber} />
       )}
-
-      {/* What is left after the stats and the bar have said their part: a
-          handful of facts nobody compares with each other. A table gave each
-          one a row and a column it did not need and left the right half of the
-          panel empty; as one wrapped line they take the width they actually
-          occupy. Retries and compactions appear only when they happened — a
-          `0` here would be a fact about nothing. */}
-      <p className="maka-inspector-meta">
-        {[
-          overview.model &&
-            `${providerLabel(overview.model.providerId)} / ${overview.model.modelId}`,
-          tokens?.inputTokens !== undefined &&
-            tokens.outputTokens !== undefined &&
-            `${copy.overview.inputOutput} ${formatNumber(tokens.inputTokens)} / ${formatNumber(tokens.outputTokens)}`,
-          tokens?.reasoningTokens !== undefined &&
-            `${copy.overview.reasoning} ${formatNumber(tokens.reasoningTokens)}`,
-          totals.retries > 0 && `${copy.totals.retries} ${formatNumber(totals.retries)}`,
-          totals.compactions > 0 &&
-            `${copy.totals.compactions} ${formatNumber(totals.compactions)}`,
-        ]
-          .filter(Boolean)
-          .join(' · ')}
-      </p>
     </VStack>
   );
 }

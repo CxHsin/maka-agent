@@ -134,60 +134,6 @@ describe('time-driven motion gate', () => {
   });
 });
 
-describe('settled turn elapsed label', () => {
-  const settled: TurnViewModel = {
-    turnId: 'turn-1',
-    status: 'completed',
-    partialOutputRetained: false,
-    tools: [],
-    notes: [],
-    timeline: [{ kind: 'text', text: 'done', messageId: 'a1' }],
-    startedAt: 1,
-    durationMs: 114_000,
-  };
-
-  it('renders the duration in the footer row', () => {
-    const markup = render(createElement(TurnView, {
-      turn: settled,
-      footerActions: [{ id: 'copy', label: '复制', enabled: true }],
-    }));
-
-    assert.match(markup, /用时 1m 54s/);
-  });
-
-  it('does not put the duration inside a hover-revealed action', () => {
-    // The footer's reveal moved onto `.maka-turn-footer-action`; a duration
-    // carrying that class would fade out with the buttons and stay as hidden
-    // as the tooltip it replaced.
-    const markup = render(createElement(TurnView, {
-      turn: settled,
-      footerActions: [{ id: 'copy', label: '复制', enabled: true }],
-    }));
-    const elapsedTag = /<[^>]*class="[^"]*maka-turn-elapsed[^"]*"[^>]*>/.exec(markup)?.[0] ?? '';
-
-    assert.ok(elapsedTag, 'expected an elapsed element');
-    assert.doesNotMatch(elapsedTag, /maka-turn-footer-action/);
-  });
-
-  it('omits the label on a turn with no recorded duration', () => {
-    const markup = render(createElement(TurnView, {
-      turn: { ...settled, durationMs: undefined },
-      footerActions: [{ id: 'copy', label: '复制', enabled: true }],
-    }));
-
-    assert.doesNotMatch(markup, /maka-turn-elapsed/);
-  });
-
-  it('omits the label on a sub-second turn rather than settling on 0s', () => {
-    const markup = render(createElement(TurnView, {
-      turn: { ...settled, durationMs: 300 },
-      footerActions: [{ id: 'copy', label: '复制', enabled: true }],
-    }));
-
-    assert.doesNotMatch(markup, /maka-turn-elapsed/);
-  });
-});
-
 describe('turn duration formatting', () => {
   it('advances in whole seconds and never below one', () => {
     // A one-second timer drives this number, so anything finer than a second

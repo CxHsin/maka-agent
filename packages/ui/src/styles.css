@@ -131,18 +131,8 @@
 .maka-turn-working-phrase { font-weight: 500; transition: opacity 300ms var(--ease-out-strong); }
 .maka-turn-working-phrase[data-fading="true"] { opacity: 0; }
 .maka-turn-status-separator { color: var(--border-strong); }
-/* The clock is the one element that outlives the turn it measures: it ticks in
-   the running row, then stays put in the footer row of the settled turn. Both
-   are stated here rather than inherited, because the two hosts disagree — the
-   footer is an Astryx metadata row and would otherwise shrink the number to
-   12px and darken it, so the number that was supposed to settle in place
-   changed size and colour at the exact moment it stopped moving.
-   Tabular figures so a ticking clock changes glyphs without changing width. */
-.maka-turn-elapsed {
-  font: var(--maka-text-body);
-  color: var(--muted-foreground);
-  font-variant-numeric: tabular-nums;
-}
+/* Tabular figures so a ticking clock changes glyphs without changing width. */
+.maka-turn-elapsed { font-variant-numeric: tabular-nums; }
 /* #1879: an Astryx `Badge variant="yellow"` now — the warning tone it used to
    draw by hand (hairline + 5% wash) is a variant, and the box comes with it.
    Product CSS keeps only what is layout: it is a block-level note under the
@@ -598,34 +588,25 @@
 .maka-turn-footer {
   margin-top: var(--space-0-5);
   padding: 0;
-  /* The reveal moved off this row and onto the buttons inside it: the row now
-     also carries the settled turn's elapsed time, which must stay readable
-     without hovering — having to hunt for that number is the problem it was
-     added to fix. Carried as a custom property rather than a second opacity
-     rule so the pending state below composes with the reveal instead of
-     out-specifying it. */
-  --maka-turn-footer-action-opacity: 0;
+  opacity: 0;
+  transition: opacity var(--duration-quick) var(--ease-out-strong);
 }
 
 .maka-assistant-answer:hover .maka-turn-footer,
-.maka-turn-footer:focus-within { --maka-turn-footer-action-opacity: 1; }
+.maka-turn-footer:focus-within { opacity: 1; }
 
 .maka-turn-footer-action {
   border: 0;
   border-radius: var(--radius-surface);
   color: var(--muted-foreground);
-  opacity: var(--maka-turn-footer-action-opacity);
-  transition: opacity var(--duration-quick) var(--ease-out-strong);
 }
 
 .maka-turn-footer-action[data-pending="true"] {
   cursor: progress;
-  opacity: calc(var(--maka-turn-footer-action-opacity) * 0.78);
+  opacity: 0.78;
 }
 
-.maka-turn-footer-action[aria-disabled="true"][data-pending="true"] {
-  opacity: calc(var(--maka-turn-footer-action-opacity) * 0.78);
-}
+.maka-turn-footer-action[aria-disabled="true"][data-pending="true"] { opacity: 0.78; }
 .maka-turn-footer-action[data-copy-feedback="copied"] { color: var(--link); }
 .maka-turn-footer-action[data-copy-feedback="failed"] { color: var(--destructive); }
 

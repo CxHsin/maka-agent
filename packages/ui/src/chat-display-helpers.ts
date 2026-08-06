@@ -49,12 +49,15 @@ export function formatAbsoluteTimestamp(ts: number, locale: UiLocale): string {
  * A turn's duration, counted in whole seconds: `0s`, `25s`, `1m 54s`.
  *
  * Deliberately NOT tool-activity's `formatDuration`, which resolves below the
- * second (`450 ms`, `8.2s`). That shape reports a span measured after the fact;
- * this one is read while it advances, one second at a time, and a counter must
- * only show precision its own tick can deliver — a tenths digit driven by a
- * one-second timer moves in visible jumps, and a millisecond reading claims an
- * accuracy the interval never had. Seconds truncate rather than round so the
- * number never runs ahead of the elapsed time it reports.
+ * second (`450 ms`, `8.2s`). That shape reports a span measured after the fact.
+ * A turn's duration is first read while it advances, one second at a time, in
+ * the live status line, and a counter must only show precision its own tick can
+ * deliver — a tenths digit driven by a one-second timer moves in visible jumps,
+ * and a millisecond reading claims an accuracy the interval never had. The
+ * settled turn's meta tooltip uses the same shape rather than a finer one, so a
+ * turn that read `25s` while it ran does not report a differently-rounded
+ * number afterwards. Seconds truncate rather than round so the counter never
+ * runs ahead of the time it reports.
  */
 export function formatTurnDuration(ms: number): string {
   const totalSeconds = Math.floor(Math.max(0, ms) / 1000);

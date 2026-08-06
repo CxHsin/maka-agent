@@ -63,12 +63,11 @@ export interface TurnFooterContext {
    */
   alreadyRegenerated?: boolean;
   /**
-   * Optional one-line summary of the turn's meta (model · cost). When
-   * present, the footer renders an `info` action whose tooltip carries this
-   * text — the home for the meta that has nowhere else to go now that the top
-   * summary row is gone (#546). The duration left this summary once the footer
-   * row started showing it outright. Absent on turns with no meta (fake
-   * backend, not-yet-streamed).
+   * Optional one-line summary of the turn's meta (model · duration ·
+   * cost). When present, the footer renders an `info` action
+   * whose tooltip carries this text — the single home for turn meta
+   * now that the top summary row is gone (#546). Absent on turns with
+   * no meta (fake backend, not-yet-streamed).
    */
   metaSummary?: string;
   /**

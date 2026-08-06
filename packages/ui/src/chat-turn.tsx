@@ -616,7 +616,6 @@ export const TurnView = memo(function TurnView(props: {
                 actions={props.footerActions}
                 onAction={props.onFooterAction ? (actionId) => props.onFooterAction?.(turn.turnId, actionId) : undefined}
                 assistantText={turn.assistant?.text ?? ''}
-                durationMs={turn.durationMs}
               />
             )
           )}
@@ -676,24 +675,6 @@ function TurnFooterActions(props: {
   onAction?: (actionId: TurnFooterActionMeta['id']) => void;
   /** Assistant text used by the inline copy action. */
   assistantText?: string;
-  /**
-   * The finished turn's wall-clock duration, shown where the running status
-   * line's clock was — the same row, the same left edge, so a turn ending
-   * settles the number in place instead of dropping it.
-   *
-   * It leads the metadata row's `footer` slot rather than taking the
-   * `timestamp` one: Astryx separates timestamp from footer with its own "·",
-   * and since the actions beside it are hidden until hover, that separator was
-   * left dangling after the duration with nothing behind it.
-   *
-   * Unlike the actions it does not fade out when the pointer leaves — a
-   * duration you have to go hunting for is the problem this replaced.
-   *
-   * Below a second there is nothing to settle: the clock counts whole seconds,
-   * so a 300ms turn would read「用时 0s」— a number that says less than no
-   * number at all.
-   */
-  durationMs?: number;
 }) {
   const copy = getConversationCopy(useUiLocale()).messages;
   const [copyPhase, setCopyPhase] = useState<ClipboardCopyPhase | null>(null);
@@ -754,9 +735,6 @@ function TurnFooterActions(props: {
       aria-label={copy.answerActionsAriaLabel}
       footer={
         <>
-          {props.durationMs !== undefined && props.durationMs >= 1_000 && (
-            <span className="maka-turn-elapsed">{copy.elapsed(formatTurnDuration(props.durationMs))}</span>
-          )}
           {props.actions.map((action) => {
             // Keep the action label under pending (a11y); do not swap to spinner-only.
             const isPending = action.tooltip === copy.processing;

@@ -271,6 +271,8 @@ function ComposedShell(props: {
    * supplying the relatives, not by hand-writing what the helpers would return.
    */
   relatedSessions?: SessionSummary[];
+  /** Drives the footer's update action; `undefined` is the silent phase. */
+  updateReminder?: SessionListPanelProps['updateReminder'];
 }) {
   const [collapsed, setCollapsed] = useState(props.sidebarCollapsed ?? false);
   const [viewMode, setViewMode] = useState<SessionViewMode>(props.initialViewMode ?? 'conversation');
@@ -358,6 +360,8 @@ function ComposedShell(props: {
             onSelect={noop}
             onSelectSession={noop}
             onOpenSettings={noop}
+            updateReminder={props.updateReminder}
+            onOpenUpdate={noop}
             onNew={noop}
             rowActions={sidebarRowActions}
             projectActions={projectRowActions}
@@ -404,6 +408,28 @@ function ComposedShell(props: {
 // messages (sidebar expanded, composer ready).
 export const DefaultLayout: Story = {
   render: () => <ComposedShell />,
+};
+
+// Real path: the updater finishes downloading in the background (autoDownload
+// is on) → the footer's settings row grows an accent update button. Discovery
+// and download show nothing, so this is the first moment the shell says
+// anything about an update at all.
+export const UpdateDownloaded: Story = {
+  render: () => <ComposedShell updateReminder={{ state: 'downloaded', latestVersion: '0.1.7' }} />,
+};
+
+// Real path: the same download fails → same slot, muted variant, retry.
+export const UpdateFailed: Story = {
+  render: () => <ComposedShell updateReminder={{ state: 'error', latestVersion: '0.1.7' }} />,
+};
+
+// Real path: an update is waiting while the rail is collapsed to 48px. The row
+// cannot hold two controls side by side there, so it stacks — the reason the
+// footer reads collapse state at all.
+export const UpdateDownloadedCollapsed: Story = {
+  render: () => (
+    <ComposedShell sidebarCollapsed updateReminder={{ state: 'downloaded', latestVersion: '0.1.7' }} />
+  ),
 };
 
 // Real path: send a message → the turn is streaming (composer shows the

@@ -136,81 +136,34 @@
   background: transparent;
 }
 
-.maka-session-panel-footer .maka-sidebar-update-button {
-  margin-block-start: var(--space-1);
-}
-
-/* #1879: this rule used to force `height: 34px` onto an Astryx Button. It is a
-   `<Button size="md">` now (session-sidebar-nav.tsx), so the 32px comes from
-   the component's own `--size-element-md` — the same token the 32px nav rows
-   it stacks under already read. Overriding a component's size from product CSS
-   is the drift the control ruler exists to end; declaring no height here is
-   what makes the two agree by derivation instead of by coincidence. */
-.maka-sidebar-update-button {
-  font: var(--maka-text-heading-4);
-  position: relative;
-  min-width: 0;
-  display: inline-grid;
-  grid-template-columns: auto;
+/* Settings and the update action are siblings in one row (SessionSidebarFooter).
+   Everything the old chip needed from product CSS — a pill radius, an accent
+   background, hand-computed hover/pressed/downloading colors, an absolutely
+   positioned progress fill — is gone: it is an Astryx IconButton with
+   `variant="primary"` now, so shape, color and every state come from the
+   component and the theme's accent. What is left here is the one thing no
+   component can know, which is how the two controls share the row. */
+.maka-sidebar-footer-row {
+  display: flex;
   align-items: center;
   gap: var(--space-1);
-  /* Astryx Button reads `--_button-radius` for its own shape (Carousel and
-     Thumbnail set it the same way); declaring `border-radius` here would be a
-     product rule racing the component again. */
-  --_button-radius: var(--radius-pill);
-  padding: 0 var(--space-3);
-  /* `background-color`, not the `background` shorthand — here and in EVERY
-     state rule below. The shorthand also resets `background-image`, which is
-     where Button's ghost variant keeps its hover and pressed overlays, so a
-     single shorthand anywhere in this file cancels the `variant` the component
-     was given. Product CSS is in the last cascade layer, so it wins that reset
-     regardless of specificity; fixing only the base rule left the overlays
-     dead on hover and in both download states, which is where they are most
-     visible. `border: 0` and `box-shadow: none` used to sit here too; both
-     restated what Button already computes. */
-  background-color: var(--control);
-  color: var(--control-foreground);
-  overflow: hidden;
+}
+
+/* Collapsed the rail is 48px wide and the labels are gone; two controls cannot
+   sit side by side, so the row stacks and the update button keeps its slot. */
+.maka-sidebar-footer-row[data-collapsed="true"] {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.maka-sidebar-footer-row-primary {
+  flex: 1;
+  min-width: 0;
+}
+
+.maka-sidebar-update-button {
+  flex: none;
   -webkit-app-region: no-drag;
-  transition:
-    background-color var(--duration-base) var(--ease-out-strong),
-    transform var(--duration-quick) var(--ease-out-strong);
-}
-
-.maka-sidebar-update-button > span:not(.maka-sidebar-update-progress) {
-  position: relative;
-}
-
-.maka-sidebar-update-button[data-update-state="downloading"] {
-  cursor: default;
-  background-color: oklch(from var(--control) calc(l + 0.04) calc(c * 0.68) h);
-  opacity: 1;
-}
-
-.maka-sidebar-update-button[data-update-state="downloaded"] {
-  background-color: var(--control);
-}
-
-.maka-sidebar-update-progress {
-  position: absolute;
-  inset: 0;
-  transform: scaleX(var(--maka-update-progress, 0));
-  transform-origin: left center;
-  background-color: oklch(from var(--control) calc(l - 0.08) c h);
-  transition: transform var(--duration-base) var(--ease-out-strong);
-}
-
-.maka-sidebar-update-button:hover {
-  background-color: oklch(from var(--control) calc(l - 0.04) c h);
-}
-
-.maka-sidebar-update-button:disabled:hover {
-  background-color: oklch(from var(--control) calc(l + 0.04) calc(c * 0.68) h);
-}
-
-.maka-sidebar-update-button:focus-visible {
-  outline: var(--focus-ring-width) solid var(--focus-ring);
-  outline-offset: var(--focus-ring-offset);
 }
 
 .maka-session-row {

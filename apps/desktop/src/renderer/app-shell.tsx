@@ -413,15 +413,18 @@ function AppShellContent({
     };
   }, []);
 
+  // `available` and `downloading` are deliberately absent. The updater sets
+  // `autoDownload = true`, so both phases resolve themselves and there is
+  // nothing for a user to decide; only `downloaded` (which needs a restart,
+  // because `autoInstallOnAppQuit` is false) and `error` do. The footer used
+  // to carry a control through all four, which meant it spent most of its
+  // visible life asking for attention on behalf of a background download.
   const updateReminder =
-    appUpdateStatus?.state === 'available' ||
-    appUpdateStatus?.state === 'downloading' ||
     appUpdateStatus?.state === 'downloaded' ||
     (appUpdateStatus?.state === 'error' && Boolean(appUpdateStatus.latestVersion))
     ? {
         state: appUpdateStatus.state,
         latestVersion: appUpdateStatus.latestVersion ?? appUpdateStatus.currentVersion,
-        progressPercent: appUpdateStatus.state === 'downloading' ? appUpdateStatus.progress.percent : undefined,
       }
     : undefined;
   const openUpdateDownload = useCallback(() => {

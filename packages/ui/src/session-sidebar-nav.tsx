@@ -1,11 +1,12 @@
 import type { PlanReminder } from '@maka/core';
-import type { CSSProperties } from 'react';
-import { Blocks, Settings, SquarePen, Timer } from './icons.js';
+import { AlertCircle, Blocks, CircleArrowUp, Settings, SquarePen, Timer } from './icons.js';
 import type { NavModuleMemory, NavSelection } from './nav-selection.js';
 import { useUiLocale } from './locale-context.js';
 import { getShellControlsCopy } from './shell-controls-copy.js';
-import { Button } from '@astryxdesign/core/Button';
-import { SideNavItem, SideNavSection } from '@astryxdesign/core/SideNav';
+import { Icon } from '@astryxdesign/core/Icon';
+import { IconButton } from '@astryxdesign/core/IconButton';
+import { SideNavItem, SideNavSection, useSideNavCollapse } from '@astryxdesign/core/SideNav';
+import { Tooltip } from '@astryxdesign/core/Tooltip';
 
 export function SessionSidebarNav(props: {
   selection: NavSelection;
@@ -63,10 +64,19 @@ export function SessionSidebarNav(props: {
   );
 }
 
+/**
+ * Only the two states that need the user.
+ *
+ * The updater runs with `autoDownload = true` and `autoInstallOnAppQuit =
+ * false` (app-update-service.ts), so discovery and download ask nothing of
+ * anyone — the shell drops `available` and `downloading` before they reach
+ * here rather than the footer rendering a control for them. That is what the
+ * old chip did: it sat in the footer through the entire silent phase showing a
+ * progress bar whose own percentage label the bar painted over.
+ */
 export type SidebarUpdateReminder = {
-  state: 'available' | 'downloading' | 'downloaded' | 'error';
+  state: 'downloaded' | 'error';
   latestVersion: string;
-  progressPercent?: number;
 };
 
 export function SessionSidebarFooter(props: {
@@ -76,52 +86,58 @@ export function SessionSidebarFooter(props: {
 }) {
   const locale = useUiLocale();
   const copy = getShellControlsCopy(locale).navigation;
-  const updatePercent = Math.round(props.updateReminder?.progressPercent ?? 0);
-  const updateLabel = props.updateReminder?.state === 'downloaded'
-    ? copy.restartUpdate
-    : props.updateReminder?.state === 'error'
-      ? copy.retryUpdate
-    : props.updateReminder?.state === 'downloading'
-      ? `${updatePercent}%`
-      : copy.update;
-  const updateTitle = props.updateReminder?.state === 'downloaded'
-    ? copy.updateDownloaded(props.updateReminder.latestVersion)
-    : props.updateReminder?.state === 'error'
-      ? copy.updateFailed(props.updateReminder.latestVersion)
-    : props.updateReminder?.state === 'downloading'
-      ? copy.downloadingUpdate(updatePercent)
-      : props.updateReminder
-        ? copy.updateAvailable(props.updateReminder.latestVersion)
-        : copy.update;
-  // shell-side-nav footer authority: SideNavSection + SideNavItem, not a
-  // product grid that re-lays out nav chrome beside the update chip.
+  const { isCollapsed } = useSideNavCollapse();
+  const reminder = props.updateReminder;
+  const updateAction = reminder && props.onOpenUpdate
+    ? {
+        label: reminder.state === 'downloaded' ? copy.restartUpdate : copy.retryUpdate,
+        title: reminder.state === 'downloaded'
+          ? copy.updateDownloaded(reminder.latestVersion)
+          : copy.updateFailed(reminder.latestVersion),
+        icon: reminder.state === 'downloaded' ? CircleArrowUp : AlertCircle,
+        onClick: props.onOpenUpdate,
+      }
+    : undefined;
+
+  // Settings and the update action are SIBLINGS in a row, not one nested in
+  // the other: SideNavItem renders `endContent` inside its own <button>, and
+  // an <button> cannot contain a second one. This is the same split-action
+  // shape SideNavItem itself falls back to when a row carries both a primary
+  // action and a collapse toggle ("<div> row with <a> + <button> as siblings"
+  // — SideNavItem.tsx), for exactly this reason.
+  //
+  // Collapsed, the rail is 48px and the label is gone; two controls cannot sit
+  // side by side there, so the row stacks and the update button keeps its own
+  // slot under settings instead of being dropped.
   return (
     <SideNavSection title={copy.settings} isHeaderHidden className="maka-session-panel-footer">
-      <SideNavItem
-        label={copy.settings}
-        icon={Settings}
-        size="md"
-        onClick={props.onOpenSettings}
-      />
-      {props.updateReminder && props.onOpenUpdate && (
-        <Button
-          className="maka-sidebar-update-button"
-          data-update-state={props.updateReminder.state}
-          style={{ '--maka-update-progress': String(Math.max(0, Math.min(100, props.updateReminder.progressPercent ?? 0)) / 100) } as CSSProperties}
-          label={updateTitle}
-          // #1879: was `sm` with a 34px height forced from product CSS. Astryx
-          // sizes Button off --size-element-* (sm 28 / md 32), so `md` IS the
-          // 32px this button wants, and the CSS height is gone rather than
-          // fighting the component's own size token.
-          size="md"
-          variant="ghost"
-          width="100%"
-          onClick={props.onOpenUpdate}
-        >
-          {props.updateReminder.state === 'downloading' && <span className="maka-sidebar-update-progress" aria-hidden="true" />}
-          <span>{updateLabel}</span>
-        </Button>
-      )}
+      <div className="maka-sidebar-footer-row" data-collapsed={isCollapsed ? 'true' : 'false'}>
+        <div className="maka-sidebar-footer-row-primary">
+          <SideNavItem
+            label={copy.settings}
+            icon={Settings}
+            size="md"
+            onClick={props.onOpenSettings}
+          />
+        </div>
+        {updateAction && (
+          <Tooltip content={updateAction.title}>
+            <IconButton
+              className="maka-sidebar-update-button"
+              label={updateAction.label}
+              icon={<Icon icon={updateAction.icon} size="sm" />}
+              // `primary` resolves to the theme's own accent, so the button
+              // follows Catppuccin and Tokyo Night instead of a hard-coded
+              // blue. The previous chip reached for `--control` through
+              // product CSS and had to hand-compute every hover and pressed
+              // state in oklch(); none of that is restated here.
+              variant={reminder?.state === 'error' ? 'secondary' : 'primary'}
+              size="md"
+              onClick={updateAction.onClick}
+            />
+          </Tooltip>
+        )}
+      </div>
     </SideNavSection>
   );
 }

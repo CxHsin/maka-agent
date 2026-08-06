@@ -193,6 +193,16 @@ const RESERVED_SCALE_TOKENS = new Set([
   // dead shell recipes (#1980), but deleting the named curve is what invites
   // the next bare cubic-bezier.
   '--ease-in-out-strong',
+  // Accent lightness ladder — --action (L0.85 chip), --control (L0.65, the
+  // rung tuned for WCAG 1.4.11 non-text 3:1) and --accent-solid (L0.52, the
+  // lowest that clears 1.4.3 for text). The middle rung lost its last
+  // consumer when the sidebar update chip became an Astryx IconButton and
+  // stopped hand-painting an accent background; the ladder, and the contrast
+  // derivation recorded against each rung in maka-tokens.css, only reads as a
+  // series with it present. --control-foreground is its paired foreground,
+  // meaningless apart from it.
+  '--control',
+  '--control-foreground',
 ]);
 
 async function readCssFiles(dir) {

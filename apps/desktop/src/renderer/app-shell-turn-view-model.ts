@@ -2,7 +2,6 @@ import { useRef } from 'react';
 import type { UiLocale } from '@maka/core';
 import {
   deriveTurnLineageMap,
-  formatTurnDuration,
   isSandboxDeniedTool,
   type TurnFooterActionMeta,
   type TurnLineageBadge,
@@ -164,9 +163,12 @@ function deriveTurnPresentationEntry(input: {
   uiLocale: UiLocale;
 }): TurnPresentationEntry {
   const { turn, lineageEntry, pendingForTurn, uiLocale } = input;
+  // Model and cost only: the duration used to ride along here because the
+  // tooltip was the only home turn meta had, and it now sits in the footer row
+  // itself — permanently, without a hover. Repeating it inside the tooltip beside
+  // it just states the same number twice in one glance.
   const metaParts: string[] = [];
   if (turn.modelId) metaParts.push(turn.modelId);
-  if (turn.durationMs && turn.durationMs > 0) metaParts.push(formatTurnDuration(turn.durationMs));
   if (turn.tokens?.costUsd && turn.tokens.costUsd > 0) metaParts.push(`$${turn.tokens.costUsd.toFixed(4)}`);
   const metaSummary = metaParts.length > 0 ? metaParts.join(' · ') : undefined;
   const footerActions = deriveTurnFooterActions({

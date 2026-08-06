@@ -23,7 +23,6 @@
 
 import { uiLocaleToIntlLocale, type UiLocale } from '@maka/core';
 import { getConversationCopy } from './conversation-copy.js';
-import { formatDuration } from './tool-activity/preview-utils.js';
 
 function createAbsoluteTimeFormat(locale: UiLocale): Intl.DateTimeFormat {
   if (typeof Intl === 'undefined' || typeof Intl.DateTimeFormat !== 'function') {
@@ -47,18 +46,20 @@ export function formatAbsoluteTimestamp(ts: number, locale: UiLocale): string {
    `Intl` options. */
 
 /**
- * A turn's duration, in the same shape tool cards use.
+ * A turn's duration, counted in whole seconds: `0s`, `25s`, `1m 54s`.
  *
- * The rule this enforces has always been written down here ("same shape as
- * tool-activity's formatDuration —「1 m 0 s」vs「8.2s」read as two different
- * products"), but it used to be enforced by a hand-kept copy of that function.
- * The turn status line puts the two side by side — a running turn's clock sits
- * directly under the tool cards it is waiting on — so the shape is now shared
- * rather than mirrored. `formatDuration` returns null only for a negative or
- * absent input, neither of which a duration can be.
+ * Deliberately NOT tool-activity's `formatDuration`, which resolves below the
+ * second (`450 ms`, `8.2s`). That shape reports a span measured after the fact;
+ * this one is read while it advances, one second at a time, and a counter must
+ * only show precision its own tick can deliver — a tenths digit driven by a
+ * one-second timer moves in visible jumps, and a millisecond reading claims an
+ * accuracy the interval never had. Seconds truncate rather than round so the
+ * number never runs ahead of the elapsed time it reports.
  */
 export function formatTurnDuration(ms: number): string {
-  return formatDuration(Math.max(0, ms)) ?? '0 ms';
+  const totalSeconds = Math.floor(Math.max(0, ms) / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 }
 
 export function turnAbortMarkerLabel(abortSource: string | undefined, locale: UiLocale): string {

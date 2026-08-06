@@ -158,14 +158,50 @@ describe('settled turn elapsed label', () => {
 
     assert.doesNotMatch(markup, /maka-turn-elapsed/);
   });
+
+  it('omits the label on a sub-second turn rather than settling on 0s', () => {
+    const markup = render(createElement(TurnView, {
+      turn: { ...settled, durationMs: 300 },
+      footerActions: [{ id: 'copy', label: '复制', enabled: true }],
+    }));
+
+    assert.doesNotMatch(markup, /maka-turn-elapsed/);
+  });
 });
 
 describe('turn duration formatting', () => {
-  it('matches the shape tool cards use', () => {
-    // Both sit in one view — a running turn's clock directly under the tool
-    // cards it waits on — so this is one implementation, not two that agree.
-    for (const ms of [0, 450, 1_000, 8_200, 12_000, 59_999, 60_000, 114_000, 3_600_000]) {
-      assert.equal(formatTurnDuration(ms), formatDuration(ms));
-    }
+  it('advances in whole seconds and never below one', () => {
+    // A one-second timer drives this number, so anything finer than a second
+    // is precision the counter cannot deliver: a tenths digit would jump in
+    // tenths-of-ten, and a millisecond reading would claim an accuracy the
+    // interval never had.
+    const cases: Array<[number, string]> = [
+      [0, '0s'],
+      [450, '0s'],
+      [999, '0s'],
+      [1_000, '1s'],
+      [8_200, '8s'],
+      [25_400, '25s'],
+      [59_999, '59s'],
+      [60_000, '1m 0s'],
+      [114_900, '1m 54s'],
+      [3_600_000, '60m 0s'],
+    ];
+    for (const [ms, expected] of cases) assert.equal(formatTurnDuration(ms), expected);
+  });
+
+  it('truncates rather than rounds so the clock never runs ahead', () => {
+    // Rounding would show 26s at 25.6s elapsed — a counter reporting time that
+    // has not passed yet, and one that could reach `1m 60s`.
+    assert.equal(formatTurnDuration(25_600), '25s');
+    assert.equal(formatTurnDuration(119_800), '1m 59s');
+  });
+
+  it('is deliberately coarser than the tool card shape', () => {
+    // Tool cards report a span measured after the fact and may resolve below a
+    // second; this one is read while it advances. Locked so a future de-dup
+    // does not quietly hand the live clock back its milliseconds.
+    assert.equal(formatDuration(450), '450 ms');
+    assert.equal(formatTurnDuration(450), '0s');
   });
 });

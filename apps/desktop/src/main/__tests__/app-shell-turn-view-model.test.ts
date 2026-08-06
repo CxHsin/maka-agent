@@ -188,6 +188,24 @@ describe('AppShell turn presentation sandbox denial', () => {
   });
 });
 
+describe('turn meta tooltip', () => {
+  const timed: StoredMessage[] = [
+    { type: 'user', id: 'user-1', turnId: 'turn-1', ts: 0, text: 'run it' },
+    { type: 'assistant', id: 'assistant-1', turnId: 'turn-1', ts: 25_400, text: 'done', modelId: 'model-1' },
+    { type: 'turn_state', id: 'state-1', turnId: 'turn-1', ts: 25_400, status: 'completed', partialOutputRetained: false },
+  ];
+
+  it('leaves the duration to the footer row instead of repeating it', () => {
+    // The tooltip was the duration's only home while the footer showed nothing;
+    // now「用时 25s」sits permanently in that same row, and a tooltip on the
+    // button beside it would state the number a second time in one glance.
+    const info = derive(timed).footerActionsByTurn['turn-1']?.find((action) => action.id === 'info');
+
+    assert.ok(info, 'expected an info action for a turn with meta');
+    assert.equal(info.tooltip, 'model-1');
+  });
+});
+
 /**
  * A memoized `TurnView` compares every prop, not just `turn`. These props are
  * derived from the turns the transcript projection produced, so a turn the

@@ -689,6 +689,10 @@ function TurnFooterActions(props: {
    *
    * Unlike the actions it does not fade out when the pointer leaves — a
    * duration you have to go hunting for is the problem this replaced.
+   *
+   * Below a second there is nothing to settle: the clock counts whole seconds,
+   * so a 300ms turn would read「用时 0s」— a number that says less than no
+   * number at all.
    */
   durationMs?: number;
 }) {
@@ -751,7 +755,7 @@ function TurnFooterActions(props: {
       aria-label={copy.answerActionsAriaLabel}
       footer={
         <>
-          {props.durationMs !== undefined && props.durationMs > 0 && (
+          {props.durationMs !== undefined && props.durationMs >= 1_000 && (
             <span className="maka-turn-elapsed">{copy.elapsed(formatTurnDuration(props.durationMs))}</span>
           )}
           {props.actions.map((action) => {

@@ -7,6 +7,7 @@ import { describe, test } from 'node:test';
 import { tokenSummary } from './helpers/cell-output-fixtures.js';
 import { type HarborAgentEntry, harborAgentPhaseSec } from './helpers/harbor-agent-phase.js';
 import { competitorRepoFiles } from '../agent-repo-mount.js';
+import { readTrialCellLog } from '../trial-cell-log.js';
 import type { HarborCellExecutionIdentity, HarborCellOutput } from '../cell-output.js';
 import {
   FixedPromptBudgetExhaustedError,
@@ -376,6 +377,41 @@ async function budgetExhaustedWalEvent(input: {
 }
 
 describe('createHarborTaskRunner', () => {
+  // The cell log is what every later reader of a finished run takes its cell
+  // list from, so the row has to name the directory this trial's artifacts are
+  // actually in — proven by reading one of them back out of the recorded path,
+  // not by recomputing the path the same way the runner did.
+  test('records the trial it read, in the directory it read it from', async () => {
+    await withRun(async ({ jobsDir, repo }) => {
+      const logPath = join(jobsDir, 'trial-cells.jsonl');
+      const runner = createHarborTaskRunner({
+        makaRepoPath: repo,
+        jobsDir,
+        trialCellLogPath: logPath,
+        agent: 'codex',
+        agentVersion: CODEX_TOOLCHAIN_SPEC.codex.version,
+        codexToolchainPath: join(repo, 'codex'),
+        model: 'deepseek/deepseek-v4-flash',
+        runHarbor: fakeRunner({ reward: '1\n' }),
+      });
+      await runner(runInput());
+
+      const rows = await readTrialCellLog(logPath);
+      assert.equal(rows.length, 1);
+      assert.deepEqual(
+        { runId: rows[0]?.runId, roundId: rows[0]?.roundId, taskId: rows[0]?.taskId },
+        { runId: 'run-1', roundId: 'round-1', taskId: 'task-1' },
+      );
+      assert.equal(rows[0]?.agent, 'codex');
+      assert.equal(
+        JSON.parse(
+          await readFile(join(rows[0]!.trialDir, 'agent', 'maka-cell-output.json'), 'utf8'),
+        ).status,
+        'completed',
+      );
+    });
+  });
+
   test('parses reward + cell output and rewrites runtime events to the host path', async () => {
     await withRun(async ({ jobsDir, repo, keyFile }) => {
       const runner = createHarborTaskRunner({

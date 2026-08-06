@@ -17,6 +17,7 @@ import {
 } from '#fixed-prompt-task-source';
 import { createHarborTaskRunner, MAKA_SETTLEMENT_GRACE_SEC } from '#harbor-task-runner';
 import { createPierProviderProxyHub, createPierTaskRunner } from '#pier-task-runner';
+import { trialCellLogPath } from '#trial-cell-log';
 import {
   buildHarnessOracleExecutionPolicyFingerprint,
   HARBOR_ORACLE_DOCKER_PLATFORM,
@@ -1338,6 +1339,10 @@ async function runLocked({
       const runnerOptions = {
         makaRepoPath,
         jobsDir,
+        // One row per finished trial, so a later reader — the contamination
+        // scan — takes the run's cells from the run instead of rebuilding them
+        // out of the tree.
+        trialCellLogPath: trialCellLogPath(runRoot),
         model: execution.modelSpec,
         provider: execution.provider,
         reasoningEffort: execution.reasoningEffort,

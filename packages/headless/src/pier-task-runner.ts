@@ -65,6 +65,7 @@ import {
   MAKA_NODE_TOOLCHAIN_FINGERPRINT,
 } from './maka-node-toolchain.js';
 import { buildAgentRepoMounts, CONTAINER_MAKA_REPO } from './agent-repo-mount.js';
+import { appendTrialCell } from './trial-cell-log.js';
 import {
   summarizeProviderTelemetry,
   startProviderAuthProxy,
@@ -158,6 +159,12 @@ export interface PierTaskRunnerOptions {
   agentVersion?: string;
   /** Base directory under which each task gets an isolated per-task job dir. */
   jobsDir: string;
+  /**
+   * Where to append one row per finished trial, recording which arm ran which
+   * task in which directory. Readers of a finished run take the run's cells
+   * from this file rather than re-deriving them from the tree.
+   */
+  trialCellLogPath?: string;
   /** MAKA_MODEL / pier `-m`, e.g. "k3" or "deepseek/deepseek-v4-flash". */
   model: string;
   /** MAKA_PROVIDER, e.g. "kimi-coding-plan". */
@@ -488,6 +495,13 @@ export function createPierTaskRunner(options: PierTaskRunnerOptions): TaskRunner
           tail(result.stderr || result.stdout),
         );
       }
+      await appendTrialCell(options.trialCellLogPath, {
+        runId: input.runId,
+        roundId: input.roundId,
+        taskId: input.task.id,
+        agent: options.agent ?? 'maka',
+        trialDir,
+      });
 
       // A populated `exception_info` records how the agent phase ended, NOT
       // whether the trial was graded: pier's trial.py records the exception and

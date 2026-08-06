@@ -93,6 +93,7 @@ import {
 } from './reasonix-toolchain.js';
 
 import { agentPhaseTimeoutSec, settlementGraceSec } from './maka-settlement.js';
+import { appendTrialCell } from './trial-cell-log.js';
 
 export { MAKA_SETTLEMENT_GRACE_SEC } from './maka-settlement.js';
 
@@ -297,6 +298,12 @@ export interface HarborTaskRunnerOptions {
   aptMirrorComposePath?: string;
   /** Base directory under which each task gets an isolated per-task job dir. */
   jobsDir: string;
+  /**
+   * Where to append one row per finished trial, recording which arm ran which
+   * task in which directory. Readers of a finished run take the run's cells
+   * from this file rather than re-deriving them from the tree.
+   */
+  trialCellLogPath?: string;
   /** MAKA_MODEL, e.g. "deepseek/deepseek-v4-flash". */
   model: string;
   /** MAKA_PROVIDER, e.g. "deepseek". */
@@ -492,6 +499,13 @@ export function createHarborTaskRunner(options: HarborTaskRunnerOptions): TaskRu
           tail(result.stderr || result.stdout),
         );
       }
+      await appendTrialCell(options.trialCellLogPath, {
+        runId: input.runId,
+        roundId: input.roundId,
+        taskId: input.task.id,
+        agent: options.agent ?? 'maka',
+        trialDir,
+      });
       const cellOutputPath = join(trialDir, TRIAL_CELL_OUTPUT);
       const rewardPath = join(trialDir, TRIAL_REWARD);
       const resultPath = join(trialDir, TRIAL_RESULT);

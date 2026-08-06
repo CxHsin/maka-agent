@@ -18,6 +18,7 @@ import { competitorRepoFiles } from '../agent-repo-mount.js';
 import { CODEX_TOOLCHAIN_FINGERPRINT, CODEX_TOOLCHAIN_SPEC } from '../codex-toolchain.js';
 import { OPENCODE_TOOLCHAIN_FINGERPRINT, OPENCODE_TOOLCHAIN_SPEC } from '../opencode-toolchain.js';
 import { findTrialDir, MAKA_SETTLEMENT_GRACE_SEC } from '../harbor-task-runner.js';
+import { readTrialCellLog } from '../trial-cell-log.js';
 import { MAKA_NODE_TOOLCHAIN_FINGERPRINT } from '../maka-node-toolchain.js';
 import type { ProviderRequestTelemetry } from '../provider-auth-proxy.js';
 import {
@@ -289,6 +290,39 @@ test('buildPierRunArgs emits the pier CLI contract for the Maka arm', () => {
   assert.ok(args.includes('MAKA_MODEL=k3'));
   // No provider secret and no env-file were requested.
   assert.ok(!args.includes('--env-file'));
+});
+
+// Same contract as the Harbor runner: the row names the directory this trial's
+// artifacts are actually in, proven by reading one back out of it.
+test('createPierTaskRunner records the trial it read', async () => {
+  await withDirs(async ({ jobsDir, repo }) => {
+    const logPath = join(jobsDir, 'trial-cells.jsonl');
+    const runner = createPierTaskRunner(
+      baseOptions({
+        jobsDir,
+        makaRepoPath: repo,
+        agent: 'maka',
+        makaNodeToolchainPath: '/toolchains/maka-node',
+        trialCellLogPath: logPath,
+        runPier: fakePier({ reward: 1 }),
+      }),
+    );
+
+    await runner(runInput());
+
+    const rows = await readTrialCellLog(logPath);
+    assert.equal(rows.length, 1);
+    assert.deepEqual(
+      { runId: rows[0]?.runId, roundId: rows[0]?.roundId, taskId: rows[0]?.taskId },
+      { runId: 'run-1', roundId: 'round-1', taskId: 'dasel' },
+    );
+    assert.equal(rows[0]?.agent, 'maka');
+    assert.equal(
+      JSON.parse(await readFile(join(rows[0]!.trialDir, 'agent', 'maka-cell-output.json'), 'utf8'))
+        .status,
+      'completed',
+    );
+  });
 });
 
 test('createPierTaskRunner gives Maka a controller-owned settlement tail', async () => {

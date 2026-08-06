@@ -288,44 +288,60 @@ export function ToolCallDetail({ item }: { item: ToolActivityItem }) {
 export function ToolTrow({ items }: { items: ToolActivityItem[] }) {
   const locale = useUiLocale();
   if (items.length === 0) return null;
-  const calls: ChatToolCallItem[] = items.map((item) => {
-    const diffStats =
-      item.result?.kind === 'file_diff' ? diffRowStats(item.result.diff) : undefined;
-    return {
-      key: item.toolUseId,
-      // The name is what a person reads to tell one call from the next, and for
-      // Computer Use the display name is "Maka Computer" — a noun, identical on
-      // every row of a ten-call turn. A label derived from the call's own
-      // arguments says what happened instead.
-      name: computerActionLabel(item, locale) ?? resolveToolDisplayName(item, locale),
-      status: astryxToolStatus(item),
-      target: item.intent ? formatToolIntent(item.intent) : undefined,
-      duration: formatDuration(item.durationMs) ?? undefined,
-      errorMessage: toolCallErrorMessage(item, locale),
-      stats: outcomeWord(item, locale),
-      ...(diffStats ?? {}),
-      resultDetail: (
-        <ToolDetailReveal>
-          <ToolCallDetail item={item} />
-        </ToolDetailReveal>
-      ),
-    };
-  });
+  const calls: ChatToolCallItem[] = items.map((item) => ({
+    key: item.toolUseId,
+    // The name is what a person reads to tell one call from the next, and for
+    // Computer Use the display name is "Maka Computer" — a noun, identical on
+    // every row of a ten-call turn. A label derived from the call's own
+    // arguments says what happened instead.
+    name: computerActionLabel(item, locale) ?? resolveToolDisplayName(item, locale),
+    status: astryxToolStatus(item),
+    target: item.intent ? formatToolIntent(item.intent) : undefined,
+    duration: formatDuration(item.durationMs) ?? undefined,
+    errorMessage: toolCallErrorMessage(item, locale),
+    stats: outcomeWord(item, locale),
+    ...diffStats(itemDiffs(item)),
+    resultDetail: (
+      <ToolDetailReveal>
+        <ToolCallDetail item={item} />
+      </ToolDetailReveal>
+    ),
+  }));
 
   // No defaultIsExpanded: opening a group is the reader's move. Seeding it open
   // from in-flight status latches, since the prop is uncontrolled and the
   // timeline key is stable (see timelineEntryKey). Cost: the collapsed header
   // projects the last call, which can settle before a parallel sibling.
-  return <ChatToolCalls calls={calls} />;
+  //
+  // A group's own +/- is the whole turn's, not the last call's: a run of five
+  // Edits collapses to one line, and "what did this turn change" is the
+  // question that line has to answer. Per-call counts stay on the rows inside.
+  return <ChatToolCalls calls={calls} {...diffStats(items.flatMap(itemDiffs))} />;
 }
 
-/** Green `+N` / red `-N` on the row, from the shared structural parse; zero counts stay unpainted. */
-function diffRowStats(diff: string): { additions?: number; deletions?: number } {
-  const { additions, deletions } = countDiffLineStats(diff);
+/**
+ * Green `+N` / red `-N`, from the shared structural parse. One diff for a row,
+ * every diff in the run for the collapsed group header. Zero stays unpainted,
+ * so a run that changed no file leaves the header as it was rather than
+ * wearing a "0 changes" badge.
+ */
+function diffStats(diffs: string[]): { additions?: number; deletions?: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const diff of diffs) {
+    const stats = countDiffLineStats(diff);
+    additions += stats.additions;
+    deletions += stats.deletions;
+  }
   return {
     ...(additions > 0 ? { additions } : {}),
     ...(deletions > 0 ? { deletions } : {}),
   };
+}
+
+/** The diff a tool call produced, if it produced one. */
+function itemDiffs(item: ToolActivityItem): string[] {
+  return item.result?.kind === 'file_diff' ? [item.result.diff] : [];
 }
 
 function astryxToolStatus(item: ToolActivityItem): ChatToolCallItem['status'] {

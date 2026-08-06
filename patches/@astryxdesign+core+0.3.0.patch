@@ -70,6 +70,58 @@ index ea27cd5..6daf0d8 100644
    const defaultScrollButton = /*#__PURE__*/_jsx(ChatLayoutScrollButton, {
      isVisible: scroll.isScrolledUp || newMsgs.hasNewMessages,
      label: newMsgs.hasNewMessages ? t('@astryx.chatLayout.newMessages') : undefined,
+diff --git a/node_modules/@astryxdesign/core/dist/Chat/ChatToolCalls.d.ts b/node_modules/@astryxdesign/core/dist/Chat/ChatToolCalls.d.ts
+index 7bece68..5440901 100644
+--- a/node_modules/@astryxdesign/core/dist/Chat/ChatToolCalls.d.ts
++++ b/node_modules/@astryxdesign/core/dist/Chat/ChatToolCalls.d.ts
+@@ -52,6 +52,15 @@ export interface ChatToolCallsProps extends BaseProps<HTMLDivElement> {
+     calls: ChatToolCallItem[];
+     /** Custom summary label for groups. Auto-generated from count if omitted. */
+     label?: string;
++    /**
++     * Group-level lines added, rendered in green on the COLLAPSED header. The
++     * header projects the latest call's name and target only, so a group's
++     * per-call `additions` are invisible until it is expanded; this is the
++     * slot for a summary across the whole group.
++     */
++    additions?: number;
++    /** Group-level lines removed, rendered in red on the collapsed header. */
++    deletions?: number;
+     /** Whether the group is expanded. Uncontrolled by default. */
+     isExpanded?: boolean;
+     /** Default expanded state. @default true for ≤3 calls, false for >3. */
+diff --git a/node_modules/@astryxdesign/core/dist/Chat/ChatToolCalls.js b/node_modules/@astryxdesign/core/dist/Chat/ChatToolCalls.js
+index 791909e..d976dfd 100644
+--- a/node_modules/@astryxdesign/core/dist/Chat/ChatToolCalls.js
++++ b/node_modules/@astryxdesign/core/dist/Chat/ChatToolCalls.js
+@@ -260,6 +260,8 @@ export function ChatToolCalls(props) {
+   const {
+     calls,
+     label: _customLabel,
++    additions: groupAdditions,
++    deletions: groupDeletions,
+     isExpanded: controlledExpanded,
+     defaultIsExpanded,
+     onExpandedChange,
+@@ -378,7 +380,17 @@ export function ChatToolCalls(props) {
+           className: "x3nfvp2 x6s0dn4 x1lsbc85 x141an7d x1ltkj2j x9ynric xnbbluu x2lah0s"
+         },
+         children: !isExpanded && /*#__PURE__*/_jsxs(_Fragment, {
+-          children: [/*#__PURE__*/_jsx(Icon, {
++          children: [groupAdditions != null && /*#__PURE__*/_jsxs("span", {
++            ...{
++              className: "xtjic6"
++            },
++            children: ["+", groupAdditions]
++          }), groupDeletions != null && /*#__PURE__*/_jsxs("span", {
++            ...{
++              className: "xjt36v0"
++            },
++            children: ["-", groupDeletions]
++          }), /*#__PURE__*/_jsx(Icon, {
+             icon: "wrench",
+             size: "xsm",
+             color: "inherit"
 diff --git a/node_modules/@astryxdesign/core/dist/Chat/useChatNewMessages.js b/node_modules/@astryxdesign/core/dist/Chat/useChatNewMessages.js
 index 8c509bc..f108f3b 100644
 --- a/node_modules/@astryxdesign/core/dist/Chat/useChatNewMessages.js

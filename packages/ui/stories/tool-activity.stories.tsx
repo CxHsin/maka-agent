@@ -164,3 +164,16 @@ export const ContiguousGroup: Story = {
     </Board>
   ),
 };
+
+// Real path: several edits in one turn, which is the shape a coding turn takes
+// most often and the one where the counts used to disappear — the collapsed
+// header projected the last call and dropped every per-row `+N`/`-N` with it.
+// The header now carries the run's total; expand it to see the rows it sums.
+export const ContiguousDiffGroup: Story = {
+  args: { items: editWriteDiffItems },
+  render: (args) => (
+    <Board width={860}>
+      <ToolTrow items={args.items} />
+    </Board>
+  ),
+};

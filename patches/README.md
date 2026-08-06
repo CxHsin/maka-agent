@@ -102,3 +102,11 @@ The patch explicitly forwards `aria-label` to the root list. That is narrower th
 Only `dist/List/List.js` is patched because package exports resolve there and Maka does not compile Astryx `src/` or load its UMD bundle. The source and map remain upstream copies, so debugger locations inside these two lines do not describe the patched runtime exactly.
 
 **Delete it when `packages/ui/src/__tests__/astryx-list-accessible-name.test.tsx` passes without the patch.** Reinstall an unpatched `@astryxdesign/core` and run `npm --workspace @maka/ui test`; the guard renders the public `List` interface and asserts that its root carries the caller-provided accessible name.
+
+## `@astryxdesign/core`: a collapsed tool group must still say what it changed
+
+A contiguous run of tool calls is one group, and a group collapses by default. The collapsed header projects the latest call's status icon, name and `target` alone — `additions`, `deletions`, `duration` and `stats` are all dropped — so the commonest shape, several edits in one turn, is the one that shows no counts. Nothing reaches that header from the product side; the `label` prop it accepts is destructured and never used.
+
+The patch adds group-level `additions` / `deletions` and renders them beside the wrench count on the collapsed header. `ToolTrow` passes the run's total; the per-call counts stay on the rows inside.
+
+**Delete it when `packages/ui/src/__tests__/tool-trow-stability.test.tsx` passes without the patch** — its grouped-diff case asserts the summed `+N` / `-N` on a collapsed run.

@@ -76,16 +76,16 @@ export async function main(argv = process.argv.slice(2)) {
   const markdown = renderContaminationScanReportMarkdown(report);
   if (args.markdown) await writeFile(args.markdown, markdown);
   else process.stdout.write(markdown);
-  // Four things make this non-zero, and each is something a person has to act
-  // on: a cell that went and got something, a cell the run declared and never
-  // recorded, a trajectory that could not be searched, and a run in which
-  // nothing at all was read.
+  // Three things make this non-zero, and each is something a person has to act
+  // on: a cell that went and got something, a cell the run scheduled and never
+  // recorded, and a trajectory that could not be searched.
   //
-  // The last is the one worth spelling out. A zero exit is read as "no
-  // contamination", so a run whose output never landed — cells declared, none
-  // searched — must not return it: that would be a verdict on no evidence, the
-  // thing this whole tool exists to refuse. Zero means cells were searched and
-  // came back clean.
+  // Together they say what a zero exit means: every cell the run scheduled was
+  // recorded, and every recorded cell was searched and came back clean. A zero
+  // exit is read as "no contamination", so it must never be a verdict on
+  // evidence that does not exist. `analyzed === 0` is the backstop for that,
+  // and while `expectedCells` refuses an empty grid nothing can reach it
+  // without one of the three above firing first.
   //
   // What is deliberately *not* here: task-id mentions on their own, which a
   // model can produce from what it already knew. An alarm that fires on every

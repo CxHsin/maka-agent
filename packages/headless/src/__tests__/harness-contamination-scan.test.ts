@@ -567,7 +567,7 @@ describe('scanRunForContamination', () => {
           { agent: 'codex', taskId: 'cobol-modernization' },
         ]);
         const markdown = renderContaminationScanReportMarkdown(report);
-        assert.match(markdown, /2 cells the run scheduled were never recorded/);
+        assert.match(markdown, /2 cells this run root was scheduled to grade hold no record/);
         assert.match(markdown, /## Never recorded/);
         assert.match(markdown, /`fix-git` \(maka\)/);
       },

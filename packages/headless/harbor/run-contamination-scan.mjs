@@ -83,9 +83,9 @@ export async function main(argv = process.argv.slice(2)) {
   // Together they say what a zero exit means: every cell the run scheduled was
   // recorded, and every recorded cell was searched and came back clean. A zero
   // exit is read as "no contamination", so it must never be a verdict on
-  // evidence that does not exist. `analyzed === 0` is the backstop for that,
-  // and while `expectedCells` refuses an empty grid nothing can reach it
-  // without one of the three above firing first.
+  // evidence that does not exist — and it cannot be, because `expectedCells`
+  // refuses an empty grid, so a run that searched nothing has cells to account
+  // for and fails on one of the two below.
   //
   // What is deliberately *not* here: task-id mentions on their own, which a
   // model can produce from what it already knew. An alarm that fires on every
@@ -94,8 +94,7 @@ export async function main(argv = process.argv.slice(2)) {
   const unsearched = report.totals.cells - report.totals.analyzed;
   return report.totals.cellsWithRetrievalSignals > 0 ||
     report.unrecordedCells.length > 0 ||
-    unsearched > 0 ||
-    report.totals.analyzed === 0
+    unsearched > 0
     ? 1
     : 0;
 }

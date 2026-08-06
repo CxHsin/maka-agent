@@ -61,6 +61,12 @@ test('exports one Session as filtered SQLite', async () => {
     } finally {
       database.close();
     }
+    const bundledSessions = createSessionStore(destinationRoot);
+    try {
+      assert.equal((await bundledSessions.readHeaderSnapshot(selected.id)).id, selected.id);
+    } finally {
+      await bundledSessions.close?.();
+    }
   } finally {
     await rm(base, { recursive: true, force: true });
   }

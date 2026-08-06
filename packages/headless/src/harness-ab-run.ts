@@ -144,9 +144,9 @@ async function executeHarnessArmCohort(input: RunHarnessArmCohortInput): Promise
   }
   // Build the candidates with the same helper the cohort writes with. Spelling
   // the id out here instead let the two drift: `buildAbRoundId` normalizes `.`
-  // to `-`, so a retry naming `install-windows-3.11` was rejected as unknown —
-  // and because the check throws rather than skips, one dotted task took the
-  // whole retry batch down with it.
+  // to `-`, so a retry naming a task whose id carries a dot was rejected as
+  // unknown — and because the check throws rather than skips, one dotted task
+  // took the whole retry batch down with it.
   const validRoundIds = new Set(
     input.evaluationTasks.flatMap((task) =>
       input.arms.map((arm) => buildAbRoundId(undefined, arm.id, 0, task.id)),

@@ -24,6 +24,7 @@ import {
   isTerminalRuntimeEvent,
   isTerminalRuntimeEventStatus,
   isPartialRuntimeEvent,
+  runtimeEventEnvelopeKeys,
   runtimeEventHasModelVisibleContent,
   type RuntimeEvent,
   type RuntimeEventActions,
@@ -62,6 +63,21 @@ const runtimeEventValidationCorpus = JSON.parse(
     'utf8',
   ),
 ) as RuntimeEventValidationCorpus;
+
+test('the shared validation corpus exercises every envelope key', () => {
+  // The corpus is what the Python exporter in `packages/headless/harbor`
+  // validates against, and it is the only thing tying that re-implementation to
+  // this one. A key no case ever sets is a key the exporter can silently not
+  // know about — which is exactly how `origin` and `modelVisibility` came to
+  // fail every event of an 89-cell benchmark run.
+  const exercised = new Set([
+    ...Object.keys(runtimeEventValidationCorpus.baseEvent),
+    ...runtimeEventValidationCorpus.cases.flatMap((entry) => Object.keys(entry.overrides)),
+  ]);
+  for (const key of runtimeEventEnvelopeKeys()) {
+    assert.ok(exercised.has(key), `no corpus case sets the envelope key ${key}`);
+  }
+});
 
 test('Core decoder matches the shared RuntimeEvent validation corpus', () => {
   for (const entry of runtimeEventValidationCorpus.cases) {

@@ -889,6 +889,76 @@
           }
         }
       }
+    },
+    {
+      "name": "valid-provider-origin",
+      "accepted": true,
+      "overrides": {
+        "origin": "provider"
+      }
+    },
+    {
+      "name": "valid-code-mode-origin",
+      "accepted": true,
+      "overrides": {
+        "origin": "code_mode"
+      }
+    },
+    {
+      "name": "invalid-unknown-origin",
+      "accepted": false,
+      "overrides": {
+        "origin": "harness"
+      }
+    },
+    {
+      "name": "valid-visible-model-visibility",
+      "accepted": true,
+      "overrides": {
+        "modelVisibility": "visible"
+      }
+    },
+    {
+      "name": "valid-hidden-model-visibility",
+      "accepted": true,
+      "overrides": {
+        "modelVisibility": "hidden"
+      }
+    },
+    {
+      "name": "invalid-non-string-model-visibility",
+      "accepted": false,
+      "overrides": {
+        "modelVisibility": 7
+      }
+    },
+    {
+      "name": "valid-branch",
+      "accepted": true,
+      "overrides": {
+        "branch": "lane-1"
+      }
+    },
+    {
+      "name": "invalid-non-string-branch",
+      "accepted": false,
+      "overrides": {
+        "branch": 3
+      }
+    },
+    {
+      "name": "valid-terminal-status",
+      "accepted": true,
+      "overrides": {
+        "status": "completed"
+      }
+    },
+    {
+      "name": "invalid-unknown-status",
+      "accepted": false,
+      "overrides": {
+        "status": "finished"
+      }
     }
   ]
 }

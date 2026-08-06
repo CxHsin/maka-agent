@@ -403,6 +403,23 @@ export interface RuntimeEvent {
   refs?: RuntimeEventRefs;
 }
 
+/**
+ * Every key a RuntimeEvent envelope may carry. TypeScript forces this list to
+ * cover the interface, so it moves whenever the interface does — which makes it
+ * the thing anything re-implementing the envelope check must be pinned to.
+ *
+ * The Harbor trajectory exporter re-implements it in Python and drifted: it
+ * never learned `origin` or `modelVisibility`, so once the runtime started
+ * emitting them every event failed the check and all 89 cells of a benchmark
+ * run exported a one-line summary instead of a trajectory. The shared
+ * validation corpus was supposed to catch that and could not — it exercised
+ * the keys someone thought to write cases for, and those two were never among
+ * them. `runtime-event.test.ts` now holds the corpus to this list.
+ */
+export function runtimeEventEnvelopeKeys(): readonly string[] {
+  return [...RUNTIME_EVENT_SHAPE.allowed];
+}
+
 const RUNTIME_EVENT_SHAPE = defineObjectShape<RuntimeEvent>()(
   ['id', 'invocationId', 'runId', 'sessionId', 'turnId', 'ts', 'partial', 'role', 'author'],
   ['branch', 'origin', 'modelVisibility', 'status', 'content', 'actions', 'refs'],

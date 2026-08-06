@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { acquireOperationalStateDatabase } from '../operational-state-store.js';
 
 test('keeps the frozen epoch-one reader and writer compatible with the current database', async () => {
@@ -46,7 +47,10 @@ test('keeps the frozen epoch-one reader and writer compatible with the current d
 function runEpochOneProbe(databasePath: string): Promise<void> {
   const child = spawn(
     process.execPath,
-    [new URL('./fixtures/operational-epoch-1-probe.js', import.meta.url).pathname, databasePath],
+    [
+      fileURLToPath(new URL('./fixtures/operational-epoch-1-probe.js', import.meta.url)),
+      databasePath,
+    ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
   let stderr = '';

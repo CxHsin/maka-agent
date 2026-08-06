@@ -25,9 +25,12 @@ function conn(providerType: LlmConnection['providerType'], slug = 'test'): LlmCo
  * Every Responses wire is dialled through `createOpenAI(...).responses(...)` in
  * `getAIModel`, whatever the adapter kind is — the native OpenAI provider is the
  * only one that speaks it. Its provider-options namespace is `openai`, and the
- * SDK reads no other one: `parseProviderOptions` only falls back to `openai`
- * when the model's own namespace differs, which it never does here. Options
- * filed under a compatible provider's own namespace are silently dropped.
+ * SDK reads no other one: the Responses model picks its namespace by asking
+ * whether its own provider name contains `azure`, and only that Azure case ever
+ * retries under `openai`. `parseProviderOptions` itself reads the one namespace
+ * it is handed and nothing else, so options filed under a compatible provider's
+ * own namespace are not dropped by a fallback that missed — they are never
+ * looked at.
  */
 function openAiNamespace(options: Record<string, unknown>): Record<string, unknown> | undefined {
   const inner = options.openai;

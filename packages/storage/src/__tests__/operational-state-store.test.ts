@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import type { SessionHeader } from '@maka/core';
-import { acquireOperationalStateDatabase } from '../operational-state-store.js';
+import {
+  acquireOperationalStateDatabase,
+  operationalStateRequiresExclusiveMigration,
+} from '../operational-state-store.js';
 import { SQLITE_RUNTIME_SCHEMA_VERSION } from '../sqlite-runtime-schema.js';
 import { SQLITE_SESSION_METADATA_SCHEMA_VERSION } from '../sqlite-session-metadata-schema.js';
 import { SQLITE_USAGE_SCHEMA_VERSION } from '../sqlite-usage-schema.js';
@@ -105,6 +108,50 @@ test('migrates older operational state without losing sessions or messages', asy
       ]);
     } finally {
       reopened.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rolls back every scope migration when registry publication fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-atomic-migration-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  try {
+    acquireOperationalStateDatabase(root).close();
+    const database = new DatabaseSync(databasePath);
+    rewindRuntimeSchema(database);
+    database
+      .prepare(`UPDATE operational_schema_migrations SET version = ? WHERE scope = 'runtime'`)
+      .run(SQLITE_RUNTIME_SCHEMA_VERSION - 1);
+    database.exec(`
+      CREATE TRIGGER reject_runtime_registry_upgrade
+      BEFORE UPDATE OF version ON operational_schema_migrations
+      WHEN OLD.scope = 'runtime' AND NEW.version > OLD.version
+      BEGIN
+        SELECT RAISE(ABORT, 'registry publication failed');
+      END;
+    `);
+    database.close();
+
+    assert.throws(() => acquireOperationalStateDatabase(root), /registry publication failed/);
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      assert.equal(
+        (preserved.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+        SQLITE_RUNTIME_SCHEMA_VERSION - 1,
+      );
+      assert.equal(
+        (
+          preserved
+            .prepare(`SELECT version FROM operational_schema_migrations WHERE scope = 'runtime'`)
+            .get() as { version: number }
+        ).version,
+        SQLITE_RUNTIME_SCHEMA_VERSION - 1,
+      );
+    } finally {
+      preserved.close();
     }
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -262,6 +309,17 @@ test('rejects a higher reader epoch before migrating any scope', async () => {
     } finally {
       preserved.close();
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('detects when a higher binary epoch requires an exclusive migration', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-exclusive-migration-'));
+  try {
+    acquireOperationalStateDatabase(root).close();
+    assert.equal(operationalStateRequiresExclusiveMigration(root, 1), false);
+    assert.equal(operationalStateRequiresExclusiveMigration(root, 2), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -79,6 +79,28 @@ export function acquireOperationalStateDatabase(
   return owner.acquire();
 }
 
+export function operationalStateRequiresExclusiveMigration(
+  workspaceRoot: string,
+  targetReaderEpoch = OPERATIONAL_STATE_READER_EPOCH,
+): boolean {
+  if (!Number.isSafeInteger(targetReaderEpoch) || targetReaderEpoch < 1) {
+    throw new Error('Operational target reader epoch must be a positive integer');
+  }
+  const databasePath = resolve(workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME);
+  if (!existsSync(databasePath)) return targetReaderEpoch > 1;
+  const Database = loadDatabaseSync();
+  const database = new Database(databasePath, { readOnly: true });
+  try {
+    configureSqliteRuntimeLockWait(database);
+    const minimumReaderEpoch = readMinimumReaderEpoch(database);
+    return minimumReaderEpoch === undefined
+      ? targetReaderEpoch > 1
+      : minimumReaderEpoch < targetReaderEpoch;
+  } finally {
+    database.close();
+  }
+}
+
 class OperationalStateDatabaseOwner {
   readonly database: DatabaseSync;
   private references = 0;
@@ -98,28 +120,38 @@ class OperationalStateDatabaseOwner {
       configureSqliteRuntimeLockWait(this.database);
       // Reject every unsupported authority before the first migration commits,
       // so a newer later scope cannot leave an older earlier scope half-upgraded.
-      const compatibility = assertOperationalSchemaCanMigrate(this.database);
+      assertOperationalSchemaCanMigrate(this.database);
       configureSqliteRuntimeDatabase(this.database);
-      if (
-        !compatibility.allowsNewerScopes ||
-        readUserVersion(this.database) <= SQLITE_RUNTIME_SCHEMA_VERSION
-      ) {
-        migrateSqliteRuntimeDatabase(this.database);
+      this.database.exec('BEGIN IMMEDIATE');
+      try {
+        // Recheck under the write lock: another process may have migrated after
+        // the optimistic preflight and before this transaction was admitted.
+        const compatibility = assertOperationalSchemaCanMigrate(this.database);
+        if (
+          !compatibility.allowsNewerScopes ||
+          readUserVersion(this.database) <= SQLITE_RUNTIME_SCHEMA_VERSION
+        ) {
+          migrateSqliteRuntimeDatabase(this.database, { transaction: 'caller' });
+        }
+        if (
+          !compatibility.allowsNewerScopes ||
+          !hasTable(this.database, 'session_metadata_schema') ||
+          readSqliteSessionMetadataSchemaVersion(this.database) <=
+            SQLITE_SESSION_METADATA_SCHEMA_VERSION
+        ) {
+          migrateSqliteSessionMetadataDatabase(this.database, { transaction: 'caller' });
+        }
+        migrateSqliteCoreExecutionDatabase(this.database);
+        migrateSqliteWorkflowDatabase(this.database);
+        migrateSqliteUsageDatabase(this.database);
+        migrateSqliteArtifactDatabase(this.database);
+        migrateSqliteAutomationDatabase(this.database);
+        migrateOperationalStateDatabase(this.database, options.now ?? Date.now, 'caller');
+        this.database.exec('COMMIT');
+      } catch (error) {
+        rollback(this.database);
+        throw error;
       }
-      if (
-        !compatibility.allowsNewerScopes ||
-        !hasTable(this.database, 'session_metadata_schema') ||
-        readSqliteSessionMetadataSchemaVersion(this.database) <=
-          SQLITE_SESSION_METADATA_SCHEMA_VERSION
-      ) {
-        migrateSqliteSessionMetadataDatabase(this.database);
-      }
-      migrateSqliteCoreExecutionDatabase(this.database);
-      migrateSqliteWorkflowDatabase(this.database);
-      migrateSqliteUsageDatabase(this.database);
-      migrateSqliteArtifactDatabase(this.database);
-      migrateSqliteAutomationDatabase(this.database);
-      migrateOperationalStateDatabase(this.database, options.now ?? Date.now);
     } catch (error) {
       this.database.close();
       this.closed = true;
@@ -263,9 +295,19 @@ function assertSupportedOperationalSchemaVersion(
 function readOperationalSchemaCompatibility(
   database: DatabaseSync,
 ): OperationalSchemaCompatibility {
-  if (!hasTable(database, 'operational_schema_compatibility')) {
-    return { allowsNewerScopes: false };
+  const minimumReaderEpoch = readMinimumReaderEpoch(database);
+  if (minimumReaderEpoch === undefined) return { allowsNewerScopes: false };
+  if (minimumReaderEpoch > OPERATIONAL_STATE_READER_EPOCH) {
+    throw new Error(
+      `Operational state requires reader epoch ${minimumReaderEpoch}, but this Maka build supports epoch ${OPERATIONAL_STATE_READER_EPOCH}; ` +
+        'Maka did not migrate or delete the database. Upgrade Maka to open this workspace.',
+    );
   }
+  return { allowsNewerScopes: true };
+}
+
+function readMinimumReaderEpoch(database: DatabaseSync): number | undefined {
+  if (!hasTable(database, 'operational_schema_compatibility')) return undefined;
   const rows = database
     .prepare(`
       SELECT singleton, minimum_reader_epoch AS minimumReaderEpoch
@@ -285,13 +327,7 @@ function readOperationalSchemaCompatibility(
         'Maka did not migrate or delete the database. Restore or repair this workspace before opening it.',
     );
   }
-  if (row.minimumReaderEpoch > OPERATIONAL_STATE_READER_EPOCH) {
-    throw new Error(
-      `Operational state requires reader epoch ${row.minimumReaderEpoch}, but this Maka build supports epoch ${OPERATIONAL_STATE_READER_EPOCH}; ` +
-        'Maka did not migrate or delete the database. Upgrade Maka to open this workspace.',
-    );
-  }
-  return { allowsNewerScopes: true };
+  return row.minimumReaderEpoch;
 }
 
 function hasTable(database: DatabaseSync, name: string): boolean {
@@ -305,8 +341,13 @@ function hasTable(database: DatabaseSync, name: string): boolean {
   return table?.present === 1;
 }
 
-function migrateOperationalStateDatabase(db: DatabaseSync, now: () => number): void {
-  db.exec('BEGIN IMMEDIATE');
+function migrateOperationalStateDatabase(
+  db: DatabaseSync,
+  now: () => number,
+  transaction: 'self' | 'caller' = 'self',
+): void {
+  const ownsTransaction = transaction === 'self';
+  if (ownsTransaction) db.exec('BEGIN IMMEDIATE');
   try {
     db.exec(`
       CREATE TABLE IF NOT EXISTS operational_schema_compatibility (
@@ -315,7 +356,11 @@ function migrateOperationalStateDatabase(db: DatabaseSync, now: () => number): v
       );
       INSERT INTO operational_schema_compatibility(singleton, minimum_reader_epoch)
       VALUES (1, ${OPERATIONAL_STATE_READER_EPOCH})
-      ON CONFLICT(singleton) DO NOTHING;
+      ON CONFLICT(singleton) DO UPDATE SET
+        minimum_reader_epoch = MAX(
+          operational_schema_compatibility.minimum_reader_epoch,
+          excluded.minimum_reader_epoch
+        );
 
       CREATE TABLE IF NOT EXISTS operational_schema_migrations (
         scope TEXT PRIMARY KEY,
@@ -327,9 +372,9 @@ function migrateOperationalStateDatabase(db: DatabaseSync, now: () => number): v
     for (const [scope, version] of OPERATIONAL_SCHEMA_VERSIONS) {
       registerSchema(db, scope, version, appliedAt);
     }
-    db.exec('COMMIT');
+    if (ownsTransaction) db.exec('COMMIT');
   } catch (error) {
-    rollback(db);
+    if (ownsTransaction) rollback(db);
     throw error;
   }
 }

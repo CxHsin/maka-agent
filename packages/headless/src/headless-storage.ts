@@ -3,6 +3,10 @@ import {
   type HeadlessArtifactStoreWriter,
 } from '@maka/storage/artifact-stores';
 import {
+  acquireOperationalStateDatabase,
+  operationalStateRequiresExclusiveMigration,
+} from '@maka/storage';
+import {
   authenticateExecutionStoresReader,
   authenticateExecutionStoresWriter,
   openHeadlessExecutionStoresForRead,
@@ -15,6 +19,7 @@ import {
   resolveStorageRoot,
   StorageRootAuthorityError,
   tryAcquireHeadlessRootCompatibilityLock,
+  tryAcquireHeadlessRootMigrationOwner,
   type DiscoveredStorageRootCapability,
   type HeadlessRootCompatibilityLock,
   type StorageRootCapability,
@@ -52,6 +57,7 @@ export async function openHeadlessStorageForWrite(
   storageRoot: string,
 ): Promise<HeadlessStorageWriter> {
   const capability = await resolveStorageRoot({ path: storageRoot, kind: 'headless' });
+  await applyRequiredExclusiveMigration(capability);
   const lock = await requireCompatibilityLock(capability, 'write');
   const lease = lock.lease;
   let executionStores: ExecutionStoresWriter<'headless'> | undefined;
@@ -91,6 +97,7 @@ export async function openHeadlessStorageForRead(
     typeof source === 'string'
       ? requireHeadlessCapability(await discoverMarkedStorageRoot({ path: source }))
       : source;
+  await applyRequiredExclusiveMigration(capability);
   const lock = await requireCompatibilityLock(capability, 'read');
   const lease = lock.lease;
   let executionStores: ExecutionStoresReader<'headless'> | undefined;
@@ -118,6 +125,25 @@ export async function openHeadlessStorageForRead(
   Object.freeze(storage);
   headlessStorageReaders.add(storage);
   return storage;
+}
+
+async function applyRequiredExclusiveMigration(
+  capability: StorageRootCapability<'headless'>,
+): Promise<void> {
+  if (!operationalStateRequiresExclusiveMigration(capability.canonicalPath)) return;
+  const owner = await tryAcquireHeadlessRootMigrationOwner(capability);
+  if (!owner) {
+    throw new StorageRootAuthorityError(
+      'lock_failed',
+      'Headless storage requires an operational schema migration; close older processes before retrying',
+    );
+  }
+  try {
+    if (!operationalStateRequiresExclusiveMigration(capability.canonicalPath)) return;
+    acquireOperationalStateDatabase(capability.canonicalPath).close();
+  } finally {
+    await owner.close();
+  }
 }
 
 async function requireCompatibilityLock<A extends 'read' | 'write'>(

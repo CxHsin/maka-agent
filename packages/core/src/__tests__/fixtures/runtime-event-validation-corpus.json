@@ -954,6 +954,37 @@
       }
     },
     {
+      "name": "valid-user-role",
+      "accepted": true,
+      "overrides": {
+        "role": "user",
+        "author": "user"
+      }
+    },
+    {
+      "name": "valid-tool-role",
+      "accepted": true,
+      "overrides": {
+        "role": "tool",
+        "author": "tool"
+      }
+    },
+    {
+      "name": "valid-system-role",
+      "accepted": true,
+      "overrides": {
+        "role": "system",
+        "author": "system"
+      }
+    },
+    {
+      "name": "valid-host-author",
+      "accepted": true,
+      "overrides": {
+        "author": "host"
+      }
+    },
+    {
       "name": "valid-streaming-status",
       "accepted": true,
       "overrides": {

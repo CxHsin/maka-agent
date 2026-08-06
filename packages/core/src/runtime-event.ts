@@ -441,6 +441,8 @@ export function runtimeEventEnvelopeKeys(): readonly string[] {
  */
 export function runtimeEventEnvelopeValueDomains(): Readonly<Record<string, readonly string[]>> {
   return {
+    role: RUNTIME_EVENT_ROLES,
+    author: RUNTIME_EVENT_AUTHORS,
     origin: RUNTIME_EVENT_ORIGINS,
     modelVisibility: RUNTIME_EVENT_MODEL_VISIBILITIES,
     status: RUNTIME_EVENT_STATUSES,

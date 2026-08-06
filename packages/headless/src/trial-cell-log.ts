@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, truncate } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 /**
@@ -44,10 +44,34 @@ export async function appendTrialCell(
   if (!path) return;
   try {
     await mkdir(dirname(path), { recursive: true });
+    await truncateTornTail(path);
     await appendFile(path, `${JSON.stringify(record)}\n`, 'utf8');
   } catch {
     // Intentionally swallowed: see above.
   }
+}
+
+/**
+ * Drop a row a crash cut off mid-write, before appending after it.
+ *
+ * Without this, a run resumed after a crash appends past the stump and buries
+ * it in the middle of the file, where it is indistinguishable from corruption
+ * and takes the whole scan down with it. The WAL beside this one does exactly
+ * this for the same reason. Each row lands in a single append-mode write, so
+ * the file is only ever missing a trailing newline because a process died, not
+ * because one is in flight.
+ */
+async function truncateTornTail(path: string): Promise<void> {
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (text.length === 0 || text.endsWith('\n')) return;
+  const lastNewline = text.lastIndexOf('\n');
+  await truncate(path, lastNewline < 0 ? 0 : lastNewline + 1);
 }
 
 /**
@@ -60,14 +84,27 @@ export async function appendTrialCell(
  * now holds the later attempt's artifacts. Reading the rows one-to-one would
  * count one cell twice and let an attempt the harness itself superseded — whose
  * artifacts no longer exist — decide the verdict for the attempt that was
- * graded. The last row for a cell is the one that ran.
+ * graded. The last row for a cell is the one that ran, which holds because the
+ * run lock makes this file single-writer and a cell's attempts are serial: the
+ * retry is a later invocation, and an attempt orphaned by a crash is admitted
+ * as a failure rather than re-run. Nothing here would detect rows arriving out
+ * of order, so a caller that writes this log without the run lock would get a
+ * silently wrong attempt.
+ *
+ * A crash mid-append leaves a row without its newline. That is a truncated
+ * write, not a corrupt log, and it is dropped the way the WAL beside it drops
+ * one — a run resumed after a crash must still be scannable. A malformed row
+ * anywhere else is real corruption and refuses.
  */
 export async function readTrialCellLog(path: string): Promise<TrialCellRecord[]> {
   const text = await readFile(path, 'utf8');
-  const attempts = text
-    .split('\n')
-    .filter((line) => line.trim().length > 0)
-    .map((line, index) => {
+  const lines = text.split('\n');
+  const torn = lines.length > 0 && lines[lines.length - 1] !== '';
+  const attempts = lines
+    .slice(0, torn ? -1 : undefined)
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => line.trim().length > 0)
+    .map(({ line, index }) => {
       let parsed: unknown;
       try {
         parsed = JSON.parse(line);
@@ -76,6 +113,9 @@ export async function readTrialCellLog(path: string): Promise<TrialCellRecord[]>
       }
       return assertTrialCellRecord(parsed, `${path}: line ${index + 1}`);
     });
+  // Keyed on the run too, though one log only ever belongs to one run — the
+  // run root is named after it. An extra component that is constant can only
+  // ever keep two cells apart that were never the same cell.
   const byCell = new Map<string, TrialCellRecord>();
   for (const attempt of attempts) {
     byCell.set(JSON.stringify([attempt.runId, attempt.roundId, attempt.taskId]), attempt);

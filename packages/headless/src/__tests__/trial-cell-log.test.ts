@@ -120,6 +120,37 @@ describe('trial cell log', () => {
     });
   });
 
+  // A crash mid-append leaves a row without its newline. Appending past it
+  // would bury the stump in the middle of the file, where it is corruption and
+  // takes the whole scan down — so a run resumed after a crash would be
+  // unscannable, which is when its evidence matters most.
+  test('drops a row a crash cut off, and stays readable after the resume', async () => {
+    await withTempDir(async (dir) => {
+      const path = trialCellLogPath(dir);
+      await appendTrialCell(path, cell());
+      await writeFile(path, `${JSON.stringify(cell({ taskId: 'task-2' })).slice(0, 40)}`, {
+        flag: 'a',
+      });
+      await appendTrialCell(path, cell({ roundId: 'maka-r0-task-3', taskId: 'task-3' }));
+      assert.deepEqual(
+        (await readTrialCellLog(path)).map((row) => row.taskId),
+        ['task-1', 'task-3'],
+      );
+    });
+  });
+
+  test('reads a log whose last row a crash cut off', async () => {
+    await withTempDir(async (dir) => {
+      const path = trialCellLogPath(dir);
+      await appendTrialCell(path, cell());
+      await writeFile(path, JSON.stringify(cell({ taskId: 'task-2' })).slice(0, 40), { flag: 'a' });
+      assert.deepEqual(
+        (await readTrialCellLog(path)).map((row) => row.taskId),
+        ['task-1'],
+      );
+    });
+  });
+
   // Logging must never be able to fail a graded cell.
   test('swallows a write failure', async () => {
     await withTempDir(async (dir) => {

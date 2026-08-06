@@ -206,6 +206,25 @@ describe('run-contamination-scan', () => {
     );
   });
 
+  // Not a verdict and not a stack trace: a run root with no cell log is either
+  // a run that recorded nothing or the wrong directory, and the two cannot be
+  // told apart from here.
+  test('says what is missing when a run root has no cell log', async () => {
+    const empty = await mkdtemp(join(tmpdir(), 'maka-contamination-empty-'));
+    try {
+      await assert.rejects(
+        execFileAsync(process.execPath, [SCRIPT, '--run-root', empty]),
+        (error: { code?: number; stderr?: string }) => {
+          assert.equal(error.code, 2);
+          assert.match(error.stderr ?? '', /no cell log at .*trial-cells\.jsonl/);
+          return true;
+        },
+      );
+    } finally {
+      await rm(empty, { recursive: true, force: true });
+    }
+  });
+
   test('refuses an invocation it cannot act on', async () => {
     await assert.rejects(execFileAsync(process.execPath, [SCRIPT]), (error: { code?: number }) => {
       assert.equal(error.code, 2);

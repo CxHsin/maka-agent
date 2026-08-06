@@ -43,10 +43,25 @@ function parseArgs(argv) {
 
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
-  const report = await scanRunForContamination({
-    trialCellLogPath: trialCellLogPath(args['run-root']),
-    identity: flattenBenchmarkIdentity(BENCHMARK_IDENTITY),
-  });
+  const logPath = trialCellLogPath(args['run-root']);
+  let report;
+  try {
+    report = await scanRunForContamination({
+      trialCellLogPath: logPath,
+      identity: flattenBenchmarkIdentity(BENCHMARK_IDENTITY),
+    });
+  } catch (error) {
+    // No log at all is not "this run is clean" and not a crash to read a stack
+    // trace out of. It is either a run whose every cell died before a trial
+    // directory existed, or a run root that never wrote one — and the two are
+    // not distinguishable from here, so say what is missing and stop.
+    if (error?.code === 'ENOENT') {
+      throw new Error(
+        `no cell log at ${logPath}: this run recorded no trial, or is not a harness run root`,
+      );
+    }
+    throw error;
+  }
   if (args.json) await writeFile(args.json, `${JSON.stringify(report, null, 2)}\n`);
   const markdown = renderContaminationScanReportMarkdown(report);
   if (args.markdown) await writeFile(args.markdown, markdown);

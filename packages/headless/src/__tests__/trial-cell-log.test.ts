@@ -3,7 +3,14 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { appendTrialCell, readTrialCellLog, trialCellLogPath } from '../trial-cell-log.js';
+import {
+  appendScheduledCells,
+  appendTrialCell,
+  readScheduledCellLog,
+  readTrialCellLog,
+  scheduledCellLogPath,
+  trialCellLogPath,
+} from '../trial-cell-log.js';
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), 'maka-trial-cell-log-'));
@@ -158,6 +165,71 @@ describe('trial cell log', () => {
       await writeFile(blocker, 'not a directory\n', 'utf8');
       await appendTrialCell(join(blocker, 'trial-cells.jsonl'), cell());
       assert.equal(await readFile(blocker, 'utf8'), 'not a directory\n');
+    });
+  });
+});
+
+describe('scheduled cell log', () => {
+  // A canary continued at full width schedules twice against one run root, and
+  // the run is expected to hold every cell either invocation put on the board.
+  test('takes the union of every invocation that scheduled against the run', async () => {
+    await withTempDir(async (dir) => {
+      const path = scheduledCellLogPath(dir);
+      await appendScheduledCells(path, [
+        { agent: 'maka', taskId: 'task-1' },
+        { agent: 'codex', taskId: 'task-1' },
+      ]);
+      await appendScheduledCells(path, [
+        { agent: 'maka', taskId: 'task-1' },
+        { agent: 'maka', taskId: 'task-2' },
+        { agent: 'codex', taskId: 'task-1' },
+        { agent: 'codex', taskId: 'task-2' },
+      ]);
+      assert.deepEqual(
+        (await readScheduledCellLog(path)).map((cell) => `${cell.agent}/${cell.taskId}`),
+        ['maka/task-1', 'codex/task-1', 'maka/task-2', 'codex/task-2'],
+      );
+    });
+  });
+
+  // Nothing has been graded yet when this is written, so refusing costs the run
+  // nothing — and a run whose grid was never recorded is one no later reader
+  // can bound.
+  test('refuses to record a run that scheduled nothing', async () => {
+    await withTempDir(async (dir) => {
+      await assert.rejects(
+        appendScheduledCells(scheduledCellLogPath(dir), []),
+        /schedules at least one cell/,
+      );
+    });
+  });
+
+  test('reports its own absence rather than an empty grid', async () => {
+    await withTempDir(async (dir) => {
+      await assert.rejects(readScheduledCellLog(scheduledCellLogPath(dir)), {
+        code: 'ENOENT',
+      });
+    });
+  });
+
+  test('drops a row a crash cut off, and stays readable after the resume', async () => {
+    await withTempDir(async (dir) => {
+      const path = scheduledCellLogPath(dir);
+      await appendScheduledCells(path, [{ agent: 'maka', taskId: 'task-1' }]);
+      await writeFile(path, '{"agent":"maka","taskI', { flag: 'a' });
+      await appendScheduledCells(path, [{ agent: 'maka', taskId: 'task-2' }]);
+      assert.deepEqual(
+        (await readScheduledCellLog(path)).map((cell) => cell.taskId),
+        ['task-1', 'task-2'],
+      );
+    });
+  });
+
+  test('refuses a row that names no agent', async () => {
+    await withTempDir(async (dir) => {
+      const path = scheduledCellLogPath(dir);
+      await writeFile(path, `${JSON.stringify({ taskId: 'task-1' })}\n`, 'utf8');
+      await assert.rejects(readScheduledCellLog(path), /line 1 is missing agent/);
     });
   });
 });

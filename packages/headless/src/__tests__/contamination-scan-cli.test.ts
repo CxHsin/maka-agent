@@ -7,7 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, test } from 'node:test';
 import type { ContaminationScanReport } from '../harness-contamination-scan.js';
-import { appendTrialCell, trialCellLogPath } from '../trial-cell-log.js';
+import {
+  appendScheduledCells,
+  appendTrialCell,
+  scheduledCellLogPath,
+  trialCellLogPath,
+} from '../trial-cell-log.js';
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -46,19 +51,23 @@ interface Cell {
 }
 
 /**
- * A run root the way the harness leaves one: the manifest it declared, and the
- * cells it recorded. The manifest comes from the harness's own builder, and the
- * arms come back out of it, so a test cannot agree with the scan about a grid
- * neither shares with the run.
+ * A run root the way the harness leaves one: the grid it scheduled, and the
+ * cells it recorded. The arm ids come from the harness's own manifest builder,
+ * so a test cannot agree with the scan about a composition neither shares with
+ * the run.
  *
- * Every arm/task pair the manifest declares gets a recorded cell unless the
- * caller asks for it to be missing. A cell the caller did not describe is an
- * ordinary clean one: the background a finding needs to stand out against.
+ * Every scheduled arm/task pair gets a recorded cell unless the caller asks
+ * for it to be missing. A cell the caller did not describe is an ordinary
+ * clean one: the background a finding needs to stand out against.
  */
 async function withRunRoot<T>(
   cells: Cell[],
   fn: (runRoot: string, armIds: string[]) => Promise<T>,
-  options: { unrecorded?: (agent: string, taskId: string) => boolean } = {},
+  options: {
+    unrecorded?: (agent: string, taskId: string) => boolean;
+    /** Tasks the frozen manifest names that this run did not put on its schedule. */
+    unscheduledManifestTaskIds?: string[];
+  } = {},
 ): Promise<T> {
   const runRoot = await mkdtemp(join(tmpdir(), 'maka-contamination-cli-'));
   try {
@@ -68,14 +77,19 @@ async function withRunRoot<T>(
       buildHarnessAbManifest: (input: Record<string, unknown>) => { arms: { id: string }[] };
     };
     const taskIds = [...new Set(cells.map((cell) => cell.taskId))];
+    const manifestTaskIds = [...taskIds, ...(options.unscheduledManifestTaskIds ?? [])];
     const manifest = buildHarnessAbManifest({
       subjectFingerprint: 'subject',
       taskSourceFingerprint: 'tasks',
       toolchainFingerprint: 'tools',
-      ...(taskIds.length > 0 ? { taskIds } : {}),
+      ...(manifestTaskIds.length > 0 ? { taskIds: manifestTaskIds } : {}),
     });
     await writeFile(join(runRoot, 'harness-ab-manifest.json'), JSON.stringify(manifest), 'utf8');
     const armIds = manifest.arms.map((arm) => arm.id);
+    await appendScheduledCells(
+      scheduledCellLogPath(runRoot),
+      armIds.flatMap((agent) => taskIds.map((taskId) => ({ agent, taskId }))),
+    );
     const grid = armIds.flatMap((agent) =>
       taskIds.map((taskId) => {
         const described = cells.find((cell) => cell.agent === agent && cell.taskId === taskId);
@@ -262,9 +276,9 @@ describe('run-contamination-scan', () => {
     );
   });
 
-  // Not a verdict and not a stack trace: a run root with no cell log is either
-  // a run that recorded nothing or the wrong directory, and the two cannot be
-  // told apart from here.
+  // Not a verdict and not a stack trace: a run root with no scheduled-cell log
+  // is either the wrong directory or a run that died before it scheduled, and
+  // the two cannot be told apart from here.
   test('says what is missing when a run root is not one', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'maka-contamination-empty-'));
     try {
@@ -272,13 +286,34 @@ describe('run-contamination-scan', () => {
         execFileAsync(process.execPath, [SCRIPT, '--run-root', empty]),
         (error: { code?: number; stderr?: string }) => {
           assert.equal(error.code, 2);
-          assert.match(error.stderr ?? '', /no run manifest at .*harness-ab-manifest\.json/);
+          assert.match(error.stderr ?? '', /no scheduled-cell log at .*scheduled-cells\.jsonl/);
           return true;
         },
       );
     } finally {
       await rm(empty, { recursive: true, force: true });
     }
+  });
+
+  // A canary grades five of the benchmark's tasks and finishes. The frozen
+  // manifest beside it still names all of them — it is the same file the full
+  // run resumes against — so a scan that took the manifest for the schedule
+  // would call every complete canary an unfinished run.
+  test('passes a run that graded a slice of the benchmark and finished', async () => {
+    await withRunRoot(
+      [{ agent: 'maka', taskId: 'cobol-modernization', messages: ['ran the tests, 12 passed'] }],
+      async (runRoot, armIds) => {
+        const manifest = JSON.parse(
+          await readFile(join(runRoot, 'harness-ab-manifest.json'), 'utf8'),
+        ) as { evaluationTaskIds: string[] };
+        assert.ok(manifest.evaluationTaskIds.length > 1, 'manifest must over-declare the schedule');
+        const { code, report } = await scan(runRoot);
+        assert.equal(code, 0);
+        assert.deepEqual(report.unrecordedCells, []);
+        assert.equal(report.totals.analyzed, armIds.length);
+      },
+      { unscheduledManifestTaskIds: ['fix-git', 'raman-fitting'] },
+    );
   });
 
   test('refuses an invocation it cannot act on', async () => {

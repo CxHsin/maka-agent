@@ -16,15 +16,14 @@
  */
 
 import { realpathSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import {
   flattenBenchmarkIdentity,
   renderContaminationScanReportMarkdown,
   scanRunForContamination,
 } from '#harness-contamination-scan';
-import { trialCellLogPath } from '#trial-cell-log';
+import { readScheduledCellLog, scheduledCellLogPath, trialCellLogPath } from '#trial-cell-log';
 import { BENCHMARK_IDENTITY } from './benchmark-identity.mjs';
 
 function parseArgs(argv) {
@@ -43,38 +42,27 @@ function parseArgs(argv) {
 }
 
 /**
- * The grid the run declared it would grade, read from its own manifest.
+ * The grid the run put on its schedule, read from the run's own record of it.
  *
  * Whether the cell log holds the whole run is a fact about the run, and the
- * run wrote it down: every arm crossed with every evaluation task. Without it
- * a run killed at cell three certifies the three cells that reached disk.
+ * run wrote it down as it scheduled. Without it a run killed at cell three
+ * certifies the three cells that reached disk. Deriving it instead from the
+ * frozen manifest would be a guess: that file holds the benchmark's whole task
+ * list, of which a run grades a slice.
  */
 async function expectedCells(runRoot) {
-  const path = join(runRoot, 'harness-ab-manifest.json');
-  let manifest;
+  const path = scheduledCellLogPath(runRoot);
+  let cells;
   try {
-    manifest = JSON.parse(await readFile(path, 'utf8'));
+    cells = await readScheduledCellLog(path);
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      throw new Error(`no run manifest at ${path}: this is not a harness run root`);
+      throw new Error(`no scheduled-cell log at ${path}: this is not a harness run root`);
     }
     throw error;
   }
-  const armIds = (manifest.arms ?? []).map((arm) => arm?.id);
-  const taskIds = manifest.evaluationTaskIds;
-  if (armIds.length === 0 || armIds.some((id) => typeof id !== 'string')) {
-    throw new Error(`${path} declares no arm ids`);
-  }
-  if (!Array.isArray(taskIds) || taskIds.length === 0) {
-    throw new Error(`${path} declares no evaluation task ids`);
-  }
-  // One cell per arm per task holds only while the harness schedules a single
-  // rep. A manifest that says otherwise is a grid this cannot describe, and
-  // guessing at it would under-count the run it is meant to bound.
-  if (manifest.reps !== undefined && manifest.reps !== 1) {
-    throw new Error(`${path} declares reps=${manifest.reps}; this scan assumes one rep per cell`);
-  }
-  return armIds.flatMap((agent) => taskIds.map((taskId) => ({ agent, taskId })));
+  if (cells.length === 0) throw new Error(`${path} names no cells`);
+  return cells;
 }
 
 export async function main(argv = process.argv.slice(2)) {

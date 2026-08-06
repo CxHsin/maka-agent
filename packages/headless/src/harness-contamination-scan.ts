@@ -308,9 +308,10 @@ export async function scanRunForContamination(input: {
   trialCellLogPath: string;
   identity: BenchmarkIdentity;
   /**
-   * The grid the run declared: one entry per arm per evaluation task. Supplied
-   * by the caller from the run's own manifest, because whether the log holds
-   * the whole run is a fact about the run, not about the log.
+   * The grid the run scheduled: one entry per arm per evaluation task.
+   * Supplied by the caller from the run's own record of what it scheduled,
+   * because whether the log holds the whole run is a fact about the run, not
+   * about the log.
    */
   expectedCells?: readonly { agent: string; taskId: string }[];
 }): Promise<ContaminationScanReport> {

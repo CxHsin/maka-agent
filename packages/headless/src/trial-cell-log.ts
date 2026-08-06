@@ -107,21 +107,9 @@ export async function readTrialCellLog(path: string): Promise<TrialCellRecord[]>
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
-  const lines = text.split('\n');
-  const torn = lines.length > 0 && lines[lines.length - 1] !== '';
-  const attempts = lines
-    .slice(0, torn ? -1 : undefined)
-    .map((line, index) => ({ line, index }))
-    .filter(({ line }) => line.trim().length > 0)
-    .map(({ line, index }) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch (error) {
-        throw new Error(`${path}: line ${index + 1} is not JSON: ${(error as Error).message}`);
-      }
-      return assertTrialCellRecord(parsed, `${path}: line ${index + 1}`);
-    });
+  const attempts = parseRows(path, text).map(({ value, where }) =>
+    assertTrialCellRecord(value, where),
+  );
   // Keyed on the run too, though one log only ever belongs to one run — the
   // run root is named after it. An extra component that is constant can only
   // ever keep two cells apart that were never the same cell.
@@ -130,6 +118,30 @@ export async function readTrialCellLog(path: string): Promise<TrialCellRecord[]>
     byCell.set(JSON.stringify([attempt.runId, attempt.roundId, attempt.taskId]), attempt);
   }
   return [...byCell.values()];
+}
+
+/**
+ * The rows of one of this file's logs, minus the one a crash cut off.
+ *
+ * A row without its trailing newline is a truncated write, not a corrupt log,
+ * and it is dropped the way the WAL beside these drops one — a run resumed
+ * after a crash must still be readable. A malformed row anywhere else is real
+ * corruption and refuses.
+ */
+function parseRows(path: string, text: string): { value: unknown; where: string }[] {
+  const lines = text.split('\n');
+  const torn = lines.length > 0 && lines[lines.length - 1] !== '';
+  return lines
+    .slice(0, torn ? -1 : undefined)
+    .map((line, index) => ({ line, where: `${path}: line ${index + 1}` }))
+    .filter(({ line }) => line.trim().length > 0)
+    .map(({ line, where }) => {
+      try {
+        return { value: JSON.parse(line) as unknown, where };
+      } catch (error) {
+        throw new Error(`${where} is not JSON: ${(error as Error).message}`);
+      }
+    });
 }
 
 function assertTrialCellRecord(value: unknown, where: string): TrialCellRecord {
@@ -147,4 +159,69 @@ function assertTrialCellRecord(value: unknown, where: string): TrialCellRecord {
     agent: record.agent as string,
     trialDir: record.trialDir as string,
   };
+}
+
+/** One cell the harness put on the schedule: an arm crossed with a task. */
+export interface ScheduledCellRecord {
+  agent: string;
+  taskId: string;
+}
+
+const SCHEDULED_CELL_LOG_FILENAME = 'scheduled-cells.jsonl';
+
+export function scheduledCellLogPath(runRoot: string): string {
+  return join(runRoot, SCHEDULED_CELL_LOG_FILENAME);
+}
+
+/**
+ * Write down the grid, at the moment the harness decides what it is.
+ *
+ * Which cells a run grades is not derivable from anything it leaves behind.
+ * The frozen manifest carries the benchmark's whole task list, while a run
+ * grades `limit` of them — and the same frozen manifest legitimately serves a
+ * canary and the full run that resumes it, so no field in it could hold the
+ * answer for both. Only the scheduler knows, and only while it is scheduling.
+ *
+ * Unlike a finished cell, this is not best-effort. It is written before any
+ * cell is graded, so refusing here costs a run nothing, and a run whose grid
+ * was never recorded is one no later reader can bound.
+ *
+ * Resuming appends the new invocation's grid to the previous one and the
+ * reader takes the union, so a canary continued at full width is expected to
+ * hold every cell either invocation scheduled.
+ */
+export async function appendScheduledCells(
+  path: string,
+  cells: readonly ScheduledCellRecord[],
+): Promise<void> {
+  if (cells.length === 0) throw new Error(`${path}: a run schedules at least one cell`);
+  await mkdir(dirname(path), { recursive: true });
+  await truncateTornTail(path);
+  await appendFile(
+    path,
+    cells.map((cell) => `${JSON.stringify({ agent: cell.agent, taskId: cell.taskId })}\n`).join(''),
+    'utf8',
+  );
+}
+
+/** Every cell this run ever scheduled, each named once. */
+export async function readScheduledCellLog(path: string): Promise<ScheduledCellRecord[]> {
+  const text = await readFile(path, 'utf8');
+  const byCell = new Map<string, ScheduledCellRecord>();
+  for (const { value, where } of parseRows(path, text)) {
+    const cell = assertScheduledCellRecord(value, where);
+    byCell.set(JSON.stringify([cell.agent, cell.taskId]), cell);
+  }
+  return [...byCell.values()];
+}
+
+function assertScheduledCellRecord(value: unknown, where: string): ScheduledCellRecord {
+  if (!value || typeof value !== 'object') throw new Error(`${where} is not an object`);
+  const record = value as Record<string, unknown>;
+  for (const field of ['agent', 'taskId'] as const) {
+    if (typeof record[field] !== 'string' || record[field] === '') {
+      throw new Error(`${where} is missing ${field}`);
+    }
+  }
+  return { agent: record.agent as string, taskId: record.taskId as string };
 }

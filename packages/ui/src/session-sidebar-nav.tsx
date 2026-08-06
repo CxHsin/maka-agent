@@ -1,5 +1,5 @@
 import type { PlanReminder } from '@maka/core';
-import { AlertCircle, ArrowUp, Blocks, Settings, SquarePen, Timer } from './icons.js';
+import { AlertCircle, Blocks, Download, Settings, SquarePen, Timer } from './icons.js';
 import type { NavModuleMemory, NavSelection } from './nav-selection.js';
 import { useUiLocale } from './locale-context.js';
 import { getShellControlsCopy } from './shell-controls-copy.js';
@@ -94,11 +94,19 @@ export function SessionSidebarFooter(props: {
         title: reminder.state === 'downloaded'
           ? copy.updateDownloaded(reminder.latestVersion)
           : copy.updateFailed(reminder.latestVersion),
-        // A bare arrow, not CircleArrowUp: the button is a circle, so a ringed
-        // glyph draws a second concentric one and the two blur together at
-        // 16px. The alert glyph keeps its ring — it has no round container to
-        // borrow, and the ring is what makes it read as a warning.
-        icon: reminder.state === 'downloaded' ? ArrowUp : AlertCircle,
+        // Download, and specifically NOT an up arrow: the composer's send
+        // button is already an accent circle carrying a 16px ArrowUp
+        // (composer.tsx), so an arrow here — in either direction — is the same
+        // control drawn twice for two unrelated actions. The tray line under
+        // this glyph is structure the send button has no counterpart for, so
+        // the two stay apart without relying on the viewer comparing them.
+        //
+        // It reads as "download" even though the bytes are already on disk.
+        // That matches what a user is deciding, which is whether to take the
+        // new version; when the download finished is our bookkeeping, and the
+        // downward arrow is the convention every app store made for exactly
+        // this moment.
+        icon: reminder.state === 'downloaded' ? Download : AlertCircle,
         onClick: props.onOpenUpdate,
       }
     : undefined;

@@ -1,15 +1,10 @@
 import { type ReactNode, useMemo, useState } from 'react';
-import { Badge } from '@astryxdesign/core/Badge';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { Heading } from '@astryxdesign/core/Heading';
-import { HStack, VStack } from '@astryxdesign/core/Layout';
+import { VStack } from '@astryxdesign/core/Layout';
 import { Section } from '@astryxdesign/core/Section';
-import {
-  SegmentedControl,
-  SegmentedControlItem,
-} from '@astryxdesign/core/SegmentedControl';
 import { Switch } from '@astryxdesign/core/Switch';
 import { Text } from '@astryxdesign/core/Text';
 import { TextInput } from '@astryxdesign/core/TextInput';
@@ -40,11 +35,12 @@ import { useSessionTrace } from './use-session-trace.js';
 type InspectorCopy = ReturnType<typeof getDesktopConversationCopy>['inspector'];
 
 /**
- * Per-session trace (#1625), in the two views a reader actually opens it for:
- * 概览 answers where the session stands — how full the context is, what the
- * tokens and cache did, what it cost — and 时间轴 answers what happened, turn
- * by turn. A session with no metered overview opens straight on the timeline,
- * because then there is only one view to be in.
+ * Per-session trace (#1625), read top to bottom rather than through a
+ * switcher: the overview answers where the session stands — how full the
+ * context is, what the tokens and cache did, what it cost — and the timeline
+ * under it answers what happened, turn by turn. They are the same question at
+ * two zoom levels, so a reader wants one after the other, not one instead of
+ * the other; a session with no metered overview simply starts at the timeline.
  *
  * Read-only. Every judgement it makes lives in `deriveInspectorOverviewModel`
  * and `deriveInspectorPanelModel`; this file lays the result out — in the
@@ -61,13 +57,13 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
     locale,
   });
   const [filter, setFilter] = useState<InspectorFilter>({});
-  const [view, setView] = useState<'overview' | 'timeline'>('overview');
   const model = useMemo(
     () => applyInspectorFilter(deriveInspectorPanelModel(snapshot.trace), filter),
     [snapshot.trace, filter],
   );
   const overview = useMemo(() => deriveInspectorOverviewModel(snapshot.trace), [snapshot.trace]);
   const hidden = model.hiddenTurns + model.hiddenSteps;
+  const hasFailure = model.turns.some((turn) => turn.failed);
   const hasOverview =
     overview.context !== undefined ||
     overview.sessionTokens !== undefined ||
@@ -133,37 +129,42 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
           )}
         </div>
 
-        {/* Two views, not one scroll: the overview answers "where does this
-            session stand" and the timeline answers "what happened", and a
-            reader is only ever asking one of them. Stacking them meant the
-            timeline always opened below nine facts it has nothing to do with,
-            and the fold that used to hide it made its own heading compete with
-            the section headings above it. Same shape as the Astryx IDE
-            template's properties panel, which segments Properties / History
-            for the same reason. */}
         {!model.empty && hasOverview && (
-          <SegmentedControl
-            size="sm"
-            layout="fill"
-            label={copy.overview.sections}
-            value={view}
-            onChange={(next) => setView(next === 'timeline' ? 'timeline' : 'overview')}
-          >
-            <SegmentedControlItem value="overview" label={copy.overview.overviewTab} />
-            <SegmentedControlItem
-              value="timeline"
-              label={`${copy.overview.timelineTab} · ${model.turns.length}`}
-            />
-          </SegmentedControl>
-        )}
-
-        {!model.empty && hasOverview && view === 'overview' && (
           <InspectorOverview copy={copy} locale={locale} model={model} overview={overview} />
         )}
 
-        {!model.empty && (!hasOverview || view === 'timeline') && (
+        {!model.empty && (
           <div className="maka-inspector-raw" data-maka-contract="session-inspector-raw">
-            <VStack gap={3} className="maka-inspector-raw-body">
+            <VStack gap={2} className="maka-inspector-raw-body">
+              <div className="maka-inspector-section-head">
+                <Heading level={3} className="maka-inspector-section-title">
+                  {copy.overview.timelineTab}
+                </Heading>
+                {/* The filter is the timeline's own control, so it sits on the
+                    timeline's own heading line rather than taking a band of
+                    its own above the turns. 仅失败 appears only when there is
+                    a failure to isolate — the same by-exception rule the
+                    overview follows. */}
+                <div className="maka-inspector-timeline-controls">
+                  {hasFailure && (
+                    <Switch
+                      label={copy.filterFailedOnly}
+                      value={filter.failedOnly ?? false}
+                      onChange={(checked) => setFilter({ ...filter, failedOnly: checked })}
+                    />
+                  )}
+                  <TextInput
+                    size="sm"
+                    label={copy.filterLabel}
+                    isLabelHidden
+                    hasClear
+                    value={filter.query ?? ''}
+                    placeholder={copy.filterPlaceholder}
+                    onChange={(value) => setFilter({ ...filter, query: value })}
+                  />
+                </div>
+              </div>
+
               {model.coverage && (
                 <p
                   className="maka-inspector-coverage-note"
@@ -188,31 +189,6 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
                   </span>
                 </p>
               )}
-
-              <HStack gap={2} vAlign="center" wrap="wrap">
-                <TextInput
-                  size="sm"
-                  label={copy.filterLabel}
-                  isLabelHidden
-                  hasClear
-                  value={filter.query ?? ''}
-                  placeholder={copy.filterPlaceholder}
-                  onChange={(value) => setFilter({ ...filter, query: value })}
-                />
-                <Switch
-                  label={copy.filterFailedOnly}
-                  value={filter.failedOnly ?? false}
-                  onChange={(checked) => setFilter({ ...filter, failedOnly: checked })}
-                />
-                {model.filtered && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    label={copy.filterClear}
-                    onClick={() => setFilter({})}
-                  />
-                )}
-              </HStack>
 
               <ol className="maka-inspector-turns">
                 {model.turns.map((turn) => (
@@ -449,11 +425,15 @@ function numberFormatter(locale: UiLocale): (value: number) => string {
   return (value) => formatter.format(value);
 }
 
-/** A turn's wall-clock stamp: day + minute, short enough for a meta line. */
+/**
+ * A turn's wall-clock stamp, to the minute.
+ *
+ * The date is a fact about the session, not about the turn, and it is already
+ * on the session in the sidebar; repeating `8/4` down every row of a timeline
+ * whose turns are minutes apart is the noise that made this column unreadable.
+ */
 function formatTurnTime(locale: UiLocale, ms: number): string {
   return new Intl.DateTimeFormat(uiLocaleToIntlLocale(locale), {
-    month: 'numeric',
-    day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(ms));
@@ -463,6 +443,18 @@ function formatPercent(ratio: number): string {
   return `${(ratio * 100).toFixed(1)}%`;
 }
 
+/**
+ * One turn, ranked.
+ *
+ * Three tiers and no fourth: which turn this is and whether it failed carry
+ * full ink on the head line; what it cost in time and money trails the same
+ * line in supporting grey because nobody reads it until the head line has
+ * already caught them; the steps below are the detail you descend into.
+ *
+ * The failure is stated as red text rather than a filled Badge — a solid chip
+ * out-shouts the turn label it qualifies, and the red dot on the rail has
+ * already flagged the row from the margin.
+ */
 function TurnRow(props: {
   turn: InspectorTurnRow;
   locale: UiLocale;
@@ -479,29 +471,25 @@ function TurnRow(props: {
       data-failed={turn.failed || undefined}
     >
       <div className="maka-inspector-turn-head">
-        <Text type="label" weight="semibold">
+        <Text type="label" weight="semibold" className="maka-inspector-turn-label">
           {props.turnLabel(turn.index)}
         </Text>
         {turn.failed && (
-          <Badge
-            variant="error"
+          <span
+            className="maka-inspector-turn-failure"
             data-maka-contract="session-inspector-turn-failed"
-            label={turn.failureCode ? `${props.failedLabel} · ${turn.failureCode}` : props.failedLabel}
-          />
+          >
+            {turn.failureCode ? `${props.failedLabel} · ${turn.failureCode}` : props.failedLabel}
+          </span>
         )}
-        <Text type="supporting" color="secondary" className="maka-inspector-turn-meta">
+        <span className="maka-inspector-turn-meta">
           {formatTurnTime(props.locale, turn.startedAt)} · {formatDuration(turn.durationMs)} ·{' '}
           {formatCost(turn.totals.costUsd, props.costUnavailable)}
-        </Text>
+        </span>
       </div>
       <ol className="maka-inspector-steps">
         {turn.steps.map((step) => (
-          <StepRow
-            key={step.id}
-            step={step}
-            costUnavailable={props.costUnavailable}
-            recoveredLabel={props.recoveredLabel}
-          />
+          <StepRow key={step.id} step={step} recoveredLabel={props.recoveredLabel} />
         ))}
       </ol>
     </li>
@@ -516,17 +504,23 @@ const STEP_ICONS: Record<InspectorStepRow['kind'], LucideIcon> = {
   error: AlertTriangle,
 };
 
-function StepRow(props: {
-  step: InspectorStepRow;
-  costUnavailable: string;
-  recoveredLabel: string;
-}) {
+/**
+ * One step: what it was, then what qualifies it, then how long it took.
+ *
+ * The step's own cost is gone. It was the fourth number on a 12px line whose
+ * first three already said more, and the turn above states the same money at
+ * the level a reader can act on — nobody re-prices a single tool call.
+ *
+ * A recovery is the one qualifier that changes the reading of the row, so it
+ * keeps its own tier; a retry count is left as `×N` on the measurement side,
+ * where it is a fact about the attempt rather than about the step.
+ */
+function StepRow(props: { step: InspectorStepRow; recoveredLabel: string }) {
   const { step } = props;
   const Icon = STEP_ICONS[step.kind];
   const meta = [
     step.retries !== undefined ? `×${step.retries + 1}` : undefined,
     step.durationMs !== undefined ? formatDuration(step.durationMs) : undefined,
-    step.kind === 'model_call' ? formatCost(step.costUsd, props.costUnavailable) : undefined,
   ].filter(Boolean);
 
   return (
@@ -537,24 +531,16 @@ function StepRow(props: {
       data-failed={step.failed || undefined}
     >
       <Icon size={14} aria-hidden="true" className="maka-inspector-step-icon" />
-      <Text type="supporting" weight="medium" className="maka-inspector-step-label">
-        {step.label}
-      </Text>
-      {step.detail && (
-        <Text type="supporting" color="secondary">
-          {step.detail}
-        </Text>
-      )}
-      {step.recovered && (
-        <Text type="supporting" color="secondary">
-          {props.recoveredLabel}: {step.recovered}
-        </Text>
-      )}
-      {meta.length > 0 && (
-        <Text type="supporting" color="secondary" className="maka-inspector-step-meta">
-          {meta.join(' · ')}
-        </Text>
-      )}
+      <span className="maka-inspector-step-text">
+        <span className="maka-inspector-step-label">{step.label}</span>
+        {step.detail && <span className="maka-inspector-step-detail">{step.detail}</span>}
+        {step.recovered && (
+          <span className="maka-inspector-step-recovered">
+            {props.recoveredLabel}: {step.recovered}
+          </span>
+        )}
+      </span>
+      {meta.length > 0 && <span className="maka-inspector-step-meta">{meta.join(' · ')}</span>}
     </li>
   );
 }

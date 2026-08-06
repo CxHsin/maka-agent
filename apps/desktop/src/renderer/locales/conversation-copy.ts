@@ -85,7 +85,6 @@ export interface DesktopConversationCopy {
     filterLabel: string;
     filterPlaceholder: string;
     filterFailedOnly: string;
-    filterClear: string;
     noMatches: string;
     hiddenByFilter: string;
     /** Display name of one turn in the raw record: 第 N 轮 / Turn N. */
@@ -105,9 +104,7 @@ export interface DesktopConversationCopy {
       cacheHit: string;
       /** Input and output totals, read as one ratio rather than two rows. */
       inputOutput: string;
-      /** Names the panel's two views in the segmented control. */
-      sections: string;
-      overviewTab: string;
+      /** Heading over the causal record. */
       timelineTab: string;
       model: string;
       reasoning: string;
@@ -214,7 +211,6 @@ const COPY = {
       filterLabel: '筛选追踪',
       filterPlaceholder: '按工具、模型或轮次筛选',
       filterFailedOnly: '仅失败',
-      filterClear: '清除筛选',
       noMatches: '没有匹配的步骤——这个会话本身是有内容的',
       hiddenByFilter: '项被筛选隐藏',
       turnLabel: (index) => `第 ${index} 轮`,
@@ -229,8 +225,6 @@ const COPY = {
         session: '会话',
         cacheHit: '缓存命中率',
         inputOutput: '输入 / 输出',
-        sections: '追踪视图',
-        overviewTab: '概览',
         timelineTab: '时间轴',
         model: '模型',
         reasoning: '推理',
@@ -322,7 +316,6 @@ const COPY = {
       filterLabel: 'Filter the trace',
       filterPlaceholder: 'Filter by tool, model or turn',
       filterFailedOnly: 'Failed only',
-      filterClear: 'Clear filter',
       noMatches: 'Nothing matches this filter — the session itself is not empty',
       hiddenByFilter: 'hidden by the filter',
       turnLabel: (index) => `Turn ${index}`,
@@ -337,8 +330,6 @@ const COPY = {
         session: 'Session',
         cacheHit: 'Cache hit rate',
         inputOutput: 'In / out',
-        sections: 'Trace views',
-        overviewTab: 'Overview',
         timelineTab: 'Timeline',
         model: 'Model',
         reasoning: 'reasoning',

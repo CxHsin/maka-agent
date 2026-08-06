@@ -164,7 +164,7 @@
 }
 
 .maka-inspector-turns {
-  gap: var(--space-3);
+  gap: var(--space-4);
 }
 
 /* A causal record drawn as a timeline rather than as hairline-separated
@@ -220,21 +220,43 @@
   background: var(--destructive);
 }
 
+/* Three tiers on the head line and nothing else: the turn, the exception, the
+   measurement. Failure is red text at the label's own size — a filled chip
+   out-shouted the label it qualifies, and the rail's dot has already flagged
+   the row from the margin. */
+.maka-inspector-turn-label {
+  flex: 0 0 auto;
+}
+
+.maka-inspector-turn-failure {
+  font: var(--maka-text-label);
+  font-weight: 500;
+  color: var(--destructive-text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .maka-inspector-turn-meta {
   margin-left: auto;
+  font: var(--maka-text-supporting);
+  color: var(--muted-foreground);
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .maka-inspector-steps {
-  gap: var(--space-0-5);
+  gap: var(--space-1);
 }
 
+/* A step is one line with a left half that says what happened and a right half
+   that says how long — the two things a reader compares down the column. Both
+   halves stay at supporting size: the steps are the turn's detail, and letting
+   them match the head line is what made the timeline read as a wall of text. */
 .maka-inspector-step {
   display: flex;
   align-items: baseline;
-  gap: var(--space-1-5);
+  gap: var(--space-2);
 }
 
 .maka-inspector-step-icon {
@@ -243,16 +265,63 @@
   color: var(--muted-foreground);
 }
 
+.maka-inspector-step-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+  font: var(--maka-text-supporting);
+}
+
+.maka-inspector-step-label {
+  font-weight: 500;
+  color: var(--foreground-secondary);
+}
+
+.maka-inspector-step-detail {
+  color: var(--muted-foreground);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A recovery is not trivia about the step, it is the reason the run survived,
+   so it carries the exception tint rather than the qualifier grey. */
+.maka-inspector-step-recovered {
+  color: var(--warning-text);
+}
+
 .maka-inspector-step-meta {
   margin-left: auto;
+  font: var(--maka-text-supporting);
+  color: var(--muted-foreground);
   text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.maka-inspector-step[data-failed='true'],
+.maka-inspector-step[data-failed='true'] .maka-inspector-step-label,
 .maka-inspector-step[data-failed='true'] .maka-inspector-step-icon {
   color: var(--destructive-text);
+}
+
+/* The filter rides the timeline's own heading line; the input takes what the
+   heading leaves, so a wider panel gets a wider field rather than a gap. */
+.maka-inspector-timeline-controls {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 0 1 16rem;
+  white-space: nowrap;
+}
+
+/* The toggle keeps its natural width — a two-character label broken across
+   two lines is not a saving — and the query field absorbs the rest. */
+.maka-inspector-timeline-controls > *:last-child {
+  flex: 1 1 6rem;
+  min-width: 0;
 }
 
 /* One overview section: a title line the eye can land on, then its content.

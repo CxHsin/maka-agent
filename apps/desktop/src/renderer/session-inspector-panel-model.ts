@@ -14,12 +14,6 @@ export interface InspectorStepRow {
   label: string;
   detail?: string;
   durationMs?: number;
-  /**
-   * Absent when nothing priced this step. The panel renders "cost unavailable"
-   * rather than `$0`, because a call nobody could price and a free call are
-   * different facts.
-   */
-  costUsd?: number;
   status?: string;
   /** Retries beyond the first attempt of one logical call. */
   retries?: number;
@@ -107,9 +101,11 @@ function toStepRow(step: TraceStep, attributedToStepId: string | undefined): Ins
       id: step.id,
       kind: step.kind,
       label: step.modelId,
-      detail: step.callKind,
+      // 'main' is what almost every call is, so printing it on every row says
+      // nothing; a compaction or a title call beside it is the fact worth a
+      // second column.
+      ...(step.callKind !== 'main' ? { detail: step.callKind } : {}),
       durationMs: step.durationMs,
-      ...(step.costUsd !== undefined ? { costUsd: step.costUsd } : {}),
       status: step.status,
       ...(step.attempts.length > 1 ? { retries: step.attempts.length - 1 } : {}),
       failed,
@@ -141,7 +137,8 @@ function toStepRow(step: TraceStep, attributedToStepId: string | undefined): Ins
       id: step.id,
       kind: step.kind,
       label: 'compaction',
-      ...(step.checkpointId !== undefined ? { detail: step.checkpointId } : {}),
+      // The checkpoint id is an internal handle; a reader cannot act on it and
+      // it is in the run ledger for anyone who can.
       failed: false,
     };
   }

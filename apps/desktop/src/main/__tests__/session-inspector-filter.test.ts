@@ -140,7 +140,7 @@ describe('inspector filter', () => {
     // Totals answer "what did this session cost". Recomputing them per filter
     // would produce a number that is true of nothing.
     const totals: TraceTotals = { ...emptyTraceTotals(), modelAttempts: 4, costUsd: 0.2 };
-    const source = model([turn({ steps: [step({ costUsd: 0.05 })] })], totals);
+    const source = model([turn()], totals);
 
     const result = applyInspectorFilter(source, { query: 'no-such-thing' });
     assert.deepEqual(result.totals, totals);

@@ -107,7 +107,6 @@ describe('inspector panel model', () => {
 
     const step = model.turns[0]?.steps[0];
     assert.equal(step?.label, 'claude-test');
-    assert.equal(step?.costUsd, undefined, 'no price is not a zero price');
     assert.equal(step?.retries, undefined, 'a single attempt is not a retry');
   });
 

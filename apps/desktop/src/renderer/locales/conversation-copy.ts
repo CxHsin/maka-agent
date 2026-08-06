@@ -1,4 +1,4 @@
-import type { ChatConfigurationReason, UiCatalog, UiLocale } from '@maka/core';
+import type { ChatConfigurationReason, ModelCallKind, UiCatalog, UiLocale } from '@maka/core';
 
 export interface DesktopConversationCopy {
   actions: {
@@ -185,10 +185,16 @@ export interface DesktopConversationCopy {
  *
  * Every one of these reaches the panel as a raw identifier — `history_compact`,
  * `parked`, `tool_failed` — because the projection records facts, not prose.
- * Turning them into a sentence is a copy decision, so it happens here, once,
- * and an unmapped value falls through as itself rather than as a blank.
+ * Turning them into a sentence is a copy decision, so it happens here, once.
+ *
+ * The call-kind tables are typed against the core union, so a kind added to the
+ * runtime fails this file at compile time instead of reaching a Chinese panel
+ * as `daily_review`. The runtime fallthrough stays for data written by an older
+ * schema, which the type system cannot reach.
  */
-const ZH_CALL_KIND: Record<string, string> = {
+type CallKindCopy = Record<Exclude<ModelCallKind, 'main'>, string>;
+
+const ZH_CALL_KIND: CallKindCopy = {
   semantic_compact: '语义压缩',
   history_compact: '历史压缩',
   goal_evaluation: '目标评估',
@@ -197,7 +203,7 @@ const ZH_CALL_KIND: Record<string, string> = {
   daily_review: '每日回顾',
 };
 
-const EN_CALL_KIND: Record<string, string> = {
+const EN_CALL_KIND: CallKindCopy = {
   semantic_compact: 'Semantic compaction',
   history_compact: 'History compaction',
   goal_evaluation: 'Goal evaluation',
@@ -211,11 +217,16 @@ const EN_PERMISSION_DECISION: Record<string, string> = { allow: 'Allowed', deny:
 
 const ZH_RECOVERED: Record<string, string> = { completed: '已完成', parked: '已搁置' };
 
+// `turn_failed` and `error` are the codes the projection falls back to when it
+// cannot attribute the failure to a step; both reach this panel, so both are
+// named rather than left to the generic wording.
 const ZH_TURN_FAILURE: Record<string, string> = {
   tool_failed: '工具失败',
   model_call_failed: '模型调用失败',
   turn_aborted: '本轮中止',
   turn_cancelled: '本轮取消',
+  turn_failed: '本轮失败',
+  error: '运行出错',
 };
 
 const EN_TURN_FAILURE: Record<string, string> = {
@@ -223,6 +234,8 @@ const EN_TURN_FAILURE: Record<string, string> = {
   model_call_failed: 'Model call failed',
   turn_aborted: 'Turn aborted',
   turn_cancelled: 'Turn cancelled',
+  turn_failed: 'Turn failed',
+  error: 'Run error',
 };
 
 /** Trailing breakdown for the coverage notice, in each language's punctuation. */
@@ -275,7 +288,7 @@ const COPY = {
       turnsMissing: (count) => `${count} 轮没有调用记录`,
       turnsShort: (count) => `${count} 轮的调用记录不全`,
       stepKind: { permission: '权限', compaction: '上下文压缩', error: '错误' },
-      callKind: (kind) => ZH_CALL_KIND[kind] ?? kind,
+      callKind: (kind) => ZH_CALL_KIND[kind as keyof CallKindCopy] ?? kind,
       permissionDecision: (decision) => ZH_PERMISSION_DECISION[decision] ?? decision,
       recoveredAs: (disposition) => `已恢复：${ZH_RECOVERED[disposition] ?? disposition}`,
       retries: (count) => `重试 ${count} 次`,
@@ -379,7 +392,7 @@ const COPY = {
       turnsShort: (count) =>
         `${count} turn${count === 1 ? '' : 's'} with an incomplete call record`,
       stepKind: { permission: 'Permission', compaction: 'Context compaction', error: 'Error' },
-      callKind: (kind) => EN_CALL_KIND[kind] ?? kind,
+      callKind: (kind) => EN_CALL_KIND[kind as keyof CallKindCopy] ?? kind,
       permissionDecision: (decision) => EN_PERMISSION_DECISION[decision] ?? decision,
       recoveredAs: (disposition) => `recovered as ${disposition}`,
       retries: (count) => `${count} retr${count === 1 ? 'y' : 'ies'}`,
@@ -445,4 +458,21 @@ const COPY = {
 
 export function getDesktopConversationCopy(locale: UiLocale): DesktopConversationCopy {
   return COPY[locale];
+}
+
+export type InspectorCopy = DesktopConversationCopy['inspector'];
+
+/**
+ * The name a step falls back to when it has no identifier of its own. A model
+ * call and a tool call always carry one, so they never reach here.
+ *
+ * It lives beside the words rather than in the panel because the filter needs
+ * the same string: what the reader searches has to be what the reader sees, and
+ * that correspondence breaks the moment two places decide the wording.
+ */
+export function inspectorStepKindLabel(copy: InspectorCopy, kind: string): string {
+  if (kind === 'permission') return copy.stepKind.permission;
+  if (kind === 'compaction') return copy.stepKind.compaction;
+  if (kind === 'error') return copy.stepKind.error;
+  return kind;
 }

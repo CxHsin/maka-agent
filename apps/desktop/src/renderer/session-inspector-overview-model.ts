@@ -28,8 +28,6 @@ export type InspectorContextSegmentKind = 'cacheRead' | 'fresh' | 'used' | 'free
 export interface InspectorContextSegment {
   kind: InspectorContextSegmentKind;
   tokens: number;
-  /** tokens / windowTokens. */
-  ratio: number;
 }
 
 /** The prompt size of the most recent metered call, against its own ceiling. */
@@ -85,12 +83,17 @@ function modelCallSteps(turn: TurnTrace): TraceModelCallStep[] {
  *
  * An input-reported attempt without a cache figure reads as a miss, because
  * the providers that cache always count the hits.
+ *
+ * Each attempt's cache read is clamped to its own prompt, the same way the
+ * context bar clamps it: a provider can report more cache than prompt — the
+ * runtime's Google mapping guards against exactly that — and a share of a
+ * prompt over 100% is not a fact, it is corruption wearing a percent sign.
  */
 function sessionCacheHitRate(attempts: readonly TraceModelAttempt[]): number | undefined {
   const input = attempts.filter((attempt) => attempt.inputTokens !== undefined);
   const inputTokens = sum(input, (attempt) => attempt.inputTokens);
   if (inputTokens === 0) return undefined;
-  return sum(input, (attempt) => attempt.cacheReadInputTokens) / inputTokens;
+  return sum(input, (attempt) => Math.min(attempt.cacheReadInputTokens ?? 0, attempt.inputTokens!)) / inputTokens;
 }
 
 /**
@@ -136,9 +139,7 @@ function contextBudget(steps: readonly TraceModelCallStep[]): InspectorContextBu
     segments: [
       ...prompt,
       { kind: 'free' as const, tokens: Math.max(0, windowTokens - usedTokens) },
-    ]
-      .filter((segment) => segment.tokens > 0)
-      .map((segment) => ({ ...segment, ratio: segment.tokens / windowTokens })),
+    ].filter((segment) => segment.tokens > 0),
   };
 }
 

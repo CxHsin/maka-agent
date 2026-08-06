@@ -8,9 +8,14 @@ import { Section } from '@astryxdesign/core/Section';
 import { Text } from '@astryxdesign/core/Text';
 import { TextInput } from '@astryxdesign/core/TextInput';
 import { uiLocaleToIntlLocale, type UiLocale } from '@maka/core';
+import type { TraceTotals } from '@maka/core/session-trace';
 import { useUiLocale } from '@maka/ui';
 import { Activity, AlertTriangle } from '@maka/ui/icons';
-import { getDesktopConversationCopy } from './locales/conversation-copy.js';
+import {
+  getDesktopConversationCopy,
+  type InspectorCopy,
+  inspectorStepKindLabel,
+} from './locales/conversation-copy.js';
 import { applyInspectorFilter, type InspectorFilter } from './session-inspector-filter.js';
 import { deriveInspectorOverviewModel } from './session-inspector-overview-model.js';
 import {
@@ -20,7 +25,6 @@ import {
 } from './session-inspector-panel-model.js';
 import { useSessionTrace } from './use-session-trace.js';
 
-type InspectorCopy = ReturnType<typeof getDesktopConversationCopy>['inspector'];
 
 /**
  * Per-session trace (#1625), read top to bottom rather than through a
@@ -46,7 +50,7 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
   });
   const [filter, setFilter] = useState<InspectorFilter>({});
   const trace = useMemo(() => deriveInspectorPanelModel(snapshot.trace), [snapshot.trace]);
-  const model = useMemo(() => applyInspectorFilter(trace, filter), [trace, filter]);
+  const model = useMemo(() => applyInspectorFilter(trace, filter, copy), [trace, filter, copy]);
   const overview = useMemo(() => deriveInspectorOverviewModel(snapshot.trace), [snapshot.trace]);
   // Counted on the unfiltered trace, so turning the filter on cannot change
   // the number that named it.
@@ -99,12 +103,12 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
         </div>
 
         {!model.empty && (
-          <InspectorOverview copy={copy} locale={locale} model={model} overview={overview} />
+          <InspectorOverview copy={copy} locale={locale} totals={model.totals} overview={overview} />
         )}
 
         {!model.empty && (
           <div className="maka-inspector-raw" data-maka-contract="session-inspector-raw">
-            <VStack gap={2} className="maka-inspector-raw-body">
+            <VStack gap={2}>
               <div className="maka-inspector-section-head maka-inspector-timeline-head">
                 <Heading level={3} className="maka-inspector-section-title">
                   {copy.overview.timelineTab}
@@ -224,13 +228,12 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
 function InspectorOverview(props: {
   copy: InspectorCopy;
   locale: UiLocale;
-  model: ReturnType<typeof deriveInspectorPanelModel>;
+  totals: TraceTotals;
   overview: ReturnType<typeof deriveInspectorOverviewModel>;
 }) {
-  const { copy, overview } = props;
+  const { copy, overview, totals } = props;
   const formatNumber = numberFormatter(props.locale);
   const context = overview.context;
-  const totals = props.model.totals;
 
   return (
     <VStack gap={6} data-maka-contract="session-inspector-overview">
@@ -264,33 +267,6 @@ function StatCell(props: { label: string; value: ReactNode }) {
       <dt>{props.label}</dt>
       <dd>{props.value}</dd>
     </div>
-  );
-}
-
-/** A titled block of the overview; the title is the only heading in it. */
-function InspectorSection(props: {
-  title: string;
-  readout?: ReactNode;
-  level?: 'warning' | 'error';
-  children: ReactNode;
-  'data-maka-contract'?: string;
-}) {
-  return (
-    <VStack
-      gap={2}
-      className="maka-inspector-section"
-      data-maka-contract={props['data-maka-contract']}
-    >
-      <div className="maka-inspector-section-head" data-level={props.level}>
-        <Heading level={3} className="maka-inspector-section-title">
-          {props.title}
-        </Heading>
-        {props.readout !== undefined && (
-          <span className="maka-inspector-section-readout">{props.readout}</span>
-        )}
-      </div>
-      {props.children}
-    </VStack>
   );
 }
 
@@ -336,17 +312,17 @@ function InspectorContextSection(props: {
   const level = context.ratio >= 0.9 ? 'error' : context.ratio >= 0.7 ? 'warning' : undefined;
 
   return (
-    <InspectorSection
-      title={copy.overview.context}
-      level={level}
-      data-maka-contract="session-inspector-context"
-      readout={
-        <>
+    <VStack gap={2} data-maka-contract="session-inspector-context">
+      <div className="maka-inspector-section-head" data-level={level}>
+        <Heading level={3} className="maka-inspector-section-title">
+          {copy.overview.context}
+        </Heading>
+        <span className="maka-inspector-section-readout">
           {formatNumber(context.usedTokens)} / {formatNumber(context.windowTokens)} ·{' '}
           {formatPercent(context.ratio)}
-        </>
-      }
-    >
+        </span>
+      </div>
+
       <div className="maka-inspector-context-track" data-level={level} aria-hidden="true">
         {context.segments.map((segment) => (
           <span
@@ -379,7 +355,7 @@ function InspectorContextSection(props: {
           />
         ))}
       </dl>
-    </InspectorSection>
+    </VStack>
   );
 }
 
@@ -463,7 +439,7 @@ function StepRow(props: { step: InspectorStepRow; copy: InspectorCopy }) {
   const { copy, step } = props;
   // A row names itself with whatever identity it has: a model, a tool, or —
   // for a compaction, an error, a permission prompt with no tool — its kind.
-  const label = step.label ?? kindLabel(copy, step.kind);
+  const label = step.label ?? inspectorStepKindLabel(copy, step.kind);
   const qualifier =
     step.callKind !== undefined
       ? copy.callKind(step.callKind)
@@ -491,17 +467,6 @@ function StepRow(props: { step: InspectorStepRow; copy: InspectorCopy }) {
       {meta.length > 0 && <span className="maka-inspector-step-meta">{meta.join(' · ')}</span>}
     </li>
   );
-}
-
-/**
- * The name a row falls back to when it has no identifier of its own. A model
- * call and a tool call always carry one, so they never reach here; the record
- * has no name for them beyond what they already print.
- */
-function kindLabel(copy: InspectorCopy, kind: InspectorStepRow['kind']): string {
-  if (kind === 'permission') return copy.stepKind.permission;
-  if (kind === 'compaction') return copy.stepKind.compaction;
-  return copy.stepKind.error;
 }
 
 function formatDuration(ms: number): string {

@@ -114,9 +114,9 @@ describe('inspector overview model', () => {
       windowTokens: 200_000,
       ratio: 0.31,
       segments: [
-        { kind: 'cacheRead', tokens: 55_000, ratio: 0.275 },
-        { kind: 'fresh', tokens: 7_000, ratio: 0.035 },
-        { kind: 'free', tokens: 138_000, ratio: 0.69 },
+        { kind: 'cacheRead', tokens: 55_000 },
+        { kind: 'fresh', tokens: 7_000 },
+        { kind: 'free', tokens: 138_000 },
       ],
     });
   });
@@ -139,8 +139,8 @@ describe('inspector overview model', () => {
     // Not a `cacheRead: 0` band: the provider did not report a miss, it
     // reported nothing, and the bar says exactly that (#1679).
     assert.deepEqual(model.context?.segments, [
-      { kind: 'used', tokens: 50_000, ratio: 0.25 },
-      { kind: 'free', tokens: 150_000, ratio: 0.75 },
+      { kind: 'used', tokens: 50_000 },
+      { kind: 'free', tokens: 150_000 },
     ]);
   });
 
@@ -165,7 +165,7 @@ describe('inspector overview model', () => {
     );
 
     assert.deepEqual(model.context?.segments, [
-      { kind: 'cacheRead', tokens: 200_000, ratio: 1 },
+      { kind: 'cacheRead', tokens: 200_000 },
     ]);
   });
 
@@ -195,8 +195,8 @@ describe('inspector overview model', () => {
       windowTokens: 200_000,
       ratio: 0.2,
       segments: [
-        { kind: 'used', tokens: 40_000, ratio: 0.2 },
-        { kind: 'free', tokens: 160_000, ratio: 0.8 },
+        { kind: 'used', tokens: 40_000 },
+        { kind: 'free', tokens: 160_000 },
       ],
     });
   });
@@ -267,4 +267,31 @@ describe('inspector overview model', () => {
     assert.equal(model.cacheHitRate, 0.75);
   });
 
+
+  it('clamps a cache figure larger than the prompt it belongs to', () => {
+    // The runtime's own Google mapping guards against `cacheRead > input`, so
+    // the pair reaches this model. A share of a prompt over 100% is not a fact.
+    const model = deriveInspectorOverviewModel(
+      trace({
+        turns: [
+          turn([modelCall({ attempts: [attempt({ inputTokens: 100, cacheReadInputTokens: 120, contextWindow: 1_000 })] })]),
+        ],
+      }),
+    );
+
+    assert.equal(model.cacheHitRate, 1, 'the bar clamps this; the headline must agree');
+    assert.equal(model.context?.segments.find((segment) => segment.kind === 'fresh'), undefined);
+    assert.equal(model.context?.segments.find((segment) => segment.kind === 'cacheRead')?.tokens, 100);
+  });
+
+  it('drops the free band when the prompt overran its own window', () => {
+    const model = deriveInspectorOverviewModel(
+      trace({
+        turns: [turn([modelCall({ attempts: [attempt({ inputTokens: 1_200, contextWindow: 1_000 })] })])],
+      }),
+    );
+
+    assert.equal(model.context?.segments.some((segment) => segment.kind === 'free'), false, 'headroom is never negative');
+    assert.ok((model.context?.ratio ?? 0) > 1, 'the overrun itself is not hidden');
+  });
 });

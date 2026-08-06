@@ -10,7 +10,6 @@ import { emptyTraceTotals, type SessionTrace, type TraceStep, type TraceTotals }
 export interface InspectorStepRow {
   id: string;
   kind: TraceStep['kind'];
-  /** Primary label: tool name, model id, or the kind for structural steps. */
   /**
    * The identifier this row is about — a model id, a tool name. Absent when
    * the row has no identifier of its own and its kind IS the label; naming it
@@ -24,7 +23,6 @@ export interface InspectorStepRow {
   /** How a permission request was answered. */
   decision?: string;
   durationMs?: number;
-  status?: string;
   /** Retries beyond the first attempt of one logical call. */
   retries?: number;
   /**
@@ -43,9 +41,6 @@ export interface InspectorTurnRow {
   totals: TraceTotals;
   failed: boolean;
   failureCode?: string;
-  failureMessage?: string;
-  /** The step the failure is attributed to, when the trace named one. */
-  attributedToStepId?: string;
   steps: InspectorStepRow[];
 }
 
@@ -78,10 +73,6 @@ export function deriveInspectorPanelModel(trace: SessionTrace | undefined): Insp
     totals: turn.totals,
     failed: turn.failure !== undefined,
     ...(turn.failure?.code !== undefined ? { failureCode: turn.failure.code } : {}),
-    ...(turn.failure?.message !== undefined ? { failureMessage: turn.failure.message } : {}),
-    ...(turn.failure?.attributedToStepId !== undefined
-      ? { attributedToStepId: turn.failure.attributedToStepId }
-      : {}),
     steps: turn.steps.map((step) => toStepRow(step, turn.failure?.attributedToStepId)),
   }));
 
@@ -114,7 +105,6 @@ function toStepRow(step: TraceStep, attributedToStepId: string | undefined): Ins
       // second column.
       ...(step.callKind !== 'main' ? { callKind: step.callKind } : {}),
       durationMs: step.durationMs,
-      status: step.status,
       ...(step.attempts.length > 1 ? { retries: step.attempts.length - 1 } : {}),
       failed,
     };
@@ -127,7 +117,6 @@ function toStepRow(step: TraceStep, attributedToStepId: string | undefined): Ins
       // The recovery that happened, never the policy every dispatch declares.
       ...(step.recovered ? { recovered: step.recovered.disposition } : {}),
       ...(step.durationMs !== undefined ? { durationMs: step.durationMs } : {}),
-      status: step.status,
       failed,
     };
   }

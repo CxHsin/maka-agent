@@ -37,12 +37,14 @@ function openAiNamespace(options: Record<string, unknown>): Record<string, unkno
 }
 
 describe('responses wire contract', () => {
-  test('every Responses model asks for encrypted reasoning it can replay', () => {
+  test('every Responses model asks for encrypted reasoning', () => {
     // `store: false` is not a privacy preference here, it is the switch that
-    // makes the SDK add `include: ['reasoning.encrypted_content']`. Without it
-    // the provider returns reasoning items carrying an id and nothing else, so
-    // every replayed step hands the model an empty shell and the reasoning
-    // chain never survives a tool call.
+    // makes the SDK add `include: ['reasoning.encrypted_content']` and drop
+    // reasoning items that came back without one. Asking is the only way a
+    // provider that speaks that contract can hand back a replayable chain;
+    // for one that does not, the drop stops us shipping empty husks. This
+    // asserts we ask — not that any given provider answers, and not that
+    // encrypted content is the only dialect a provider may carry reasoning in.
     const gaps: string[] = [];
     for (const providerType of Object.keys(PROVIDER_REGISTRY) as LlmConnection['providerType'][]) {
       if (PROVIDER_REGISTRY[providerType].runtimeAdapter?.kind === 'unavailable') continue;

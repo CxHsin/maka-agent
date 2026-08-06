@@ -488,14 +488,20 @@ function buildFamilyWire(
   // OpenAI provider (`getAIModel`), so `openai` is the only provider-options
   // namespace the SDK will read: an openai-compatible provider's own namespace
   // is silently dropped there — including the effort, so a model asking for
-  // `max` sent no reasoning parameter at all. `store: false` is not a storage
-  // preference, it is the switch that makes the SDK request
-  // `include: ['reasoning.encrypted_content']`, which is the only way a
-  // reasoning chain survives a tool call on this wire. Whether a given provider
-  // honours that request is its own business — DeepSeek accepts it and returns
-  // nothing — but not asking guarantees the answer. That is a property of the
-  // wire, not of a thinking choice, so it holds whether or not a level was
-  // picked.
+  // `max` sent no reasoning parameter at all.
+  //
+  // `store: false` is not a storage preference, it is the switch that makes the
+  // SDK ask for `include: ['reasoning.encrypted_content']` and, on the request
+  // side, drop any reasoning item that came back without one. Both halves are
+  // what we want here: a provider that speaks the encrypted-content contract
+  // gets a replayable chain, and one that does not stops shipping empty husks
+  // it could never replay. Which of the two a given provider is remains its own
+  // business, and this says nothing about how it carries reasoning otherwise —
+  // DeepSeek returns plaintext in `content[].reasoning_text` and consumes it in
+  // the same shape, a dialect the SDK neither reads nor writes. Bridging that
+  // is a transport's job, not this function's. Either way `store` is a property
+  // of the wire rather than of a thinking choice, so it holds whether or not a
+  // level was picked.
   //
   // The include is gated on the SDK also believing this is a reasoning model,
   // and it decides that by parsing the model id for an OpenAI naming scheme —

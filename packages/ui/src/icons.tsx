@@ -38,7 +38,6 @@ export {
   ChevronLeft,
   ChevronRight,
   ChevronRightIcon,
-  CircleArrowUp,
   CircleCheckBig,
   CircleGauge,
   Clipboard,

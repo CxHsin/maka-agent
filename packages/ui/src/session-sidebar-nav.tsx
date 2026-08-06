@@ -1,5 +1,5 @@
 import type { PlanReminder } from '@maka/core';
-import { AlertCircle, Blocks, CircleArrowUp, Settings, SquarePen, Timer } from './icons.js';
+import { AlertCircle, ArrowUp, Blocks, Settings, SquarePen, Timer } from './icons.js';
 import type { NavModuleMemory, NavSelection } from './nav-selection.js';
 import { useUiLocale } from './locale-context.js';
 import { getShellControlsCopy } from './shell-controls-copy.js';
@@ -94,7 +94,11 @@ export function SessionSidebarFooter(props: {
         title: reminder.state === 'downloaded'
           ? copy.updateDownloaded(reminder.latestVersion)
           : copy.updateFailed(reminder.latestVersion),
-        icon: reminder.state === 'downloaded' ? CircleArrowUp : AlertCircle,
+        // A bare arrow, not CircleArrowUp: the button is a circle, so a ringed
+        // glyph draws a second concentric one and the two blur together at
+        // 16px. The alert glyph keeps its ring — it has no round container to
+        // borrow, and the ring is what makes it read as a warning.
+        icon: reminder.state === 'downloaded' ? ArrowUp : AlertCircle,
         onClick: props.onOpenUpdate,
       }
     : undefined;
@@ -132,7 +136,11 @@ export function SessionSidebarFooter(props: {
               // product CSS and had to hand-compute every hover and pressed
               // state in oklch(); none of that is restated here.
               variant={reminder?.state === 'error' ? 'secondary' : 'primary'}
-              size="md"
+              // `sm` (28px) against the settings row's 32px: a filled button
+              // at the row's own height fills it edge to edge and competes
+              // with it. Two pixels of air on each side is what makes it read
+              // as something ON the row rather than a second row.
+              size="sm"
               onClick={updateAction.onClick}
             />
           </Tooltip>

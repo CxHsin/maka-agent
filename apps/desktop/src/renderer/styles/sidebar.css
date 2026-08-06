@@ -163,6 +163,12 @@
 
 .maka-sidebar-update-button {
   flex: none;
+  /* Astryx has no shape prop — `isIconOnly` is documented as rendering a
+     SQUARE button — but Button reads `--_button-radius` for its own geometry,
+     which is how Carousel and Thumbnail reshape it too. Setting that variable
+     asks the component to be round; declaring `border-radius` here would race
+     it instead. On a 28px square this resolves to a true circle. */
+  --_button-radius: var(--radius-pill);
   -webkit-app-region: no-drag;
 }
 

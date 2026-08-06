@@ -1233,7 +1233,7 @@ export class AiSdkBackend implements AgentBackend {
     let lastStepInputTokens: number | undefined;
     let streamStatus: LlmCallRecord['status'] = 'success';
     let streamErrorClass: string | undefined;
-    let rawFinishReason: string | undefined;
+    let streamedFinishReason: string | undefined;
     let runtimeSteps = 0;
     let requestShapeForTelemetry: RequestShapeDiagnostic | undefined;
     let promptSegmentsForTelemetry: PromptSegmentEstimate[] = [];
@@ -1835,7 +1835,7 @@ export class AiSdkBackend implements AgentBackend {
                   }
                 }
                 if (event.kind === 'finish' || event.kind === 'step-finish') {
-                  rawFinishReason = event.finishReason ?? rawFinishReason;
+                  streamedFinishReason = event.finishReason ?? streamedFinishReason;
                 }
                 if (event.kind === 'text-start') {
                   stepTextPartStartOffset = stepText.length;
@@ -2088,7 +2088,7 @@ export class AiSdkBackend implements AgentBackend {
           // same value here keeps the turn's outcome and its record from
           // disagreeing about why the stream ended.
           finishReason =
-            rawFinishReason ?? (await result.finishReason.catch(() => 'stop')) ?? 'stop';
+            streamedFinishReason ?? (await result.finishReason.catch(() => 'stop')) ?? 'stop';
           await queue.waitUntilConsumedThroughCurrent();
 
           if (returnedToolCalls.length > 0) {

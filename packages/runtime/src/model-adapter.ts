@@ -468,11 +468,13 @@ export class ModelAdapter {
       // mid-task, caught only because the proxy noticed the terminal SSE event
       // never arrived.
       //
-      // These are reached only when the provider named nothing either: the SDK
-      // buckets every reason it does not recognize into `other` too, and
+      // These are reached when nothing else named the stop: the SDK buckets
+      // every reason it does not recognize into `other` too, and
       // `translateChunk` forwards the provider's own spelling in that case, so
       // a genuinely new reason arrives here as itself and takes the tolerant
-      // default below.
+      // default below. A provider spelling its reason `other` is
+      // indistinguishable from the bucket and lands here; the ambiguity is
+      // real and this resolves it toward the safe answer.
       case 'other':
       case 'unknown':
         return 'error';
@@ -729,7 +731,9 @@ function translateChunk(
     case 'finish-step':
     case 'step-finish': {
       const finishReason = chunkFinishReason(chunk);
-      const usage = normalizeAiSdkUsage(chunk.usage, { rawFinishReason: chunk.finishReason });
+      // The same value the turn's outcome is decided from, so the record and
+      // the outcome cannot name different reasons for the same stream.
+      const usage = normalizeAiSdkUsage(chunk.usage, { rawFinishReason: finishReason });
       return [
         {
           kind: 'step-finish',

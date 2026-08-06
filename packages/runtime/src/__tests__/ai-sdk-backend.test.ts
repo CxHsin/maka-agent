@@ -7237,6 +7237,57 @@ describe('AiSdkBackend usage telemetry', () => {
     );
   });
 
+  test('says which failed terminal a content filter is', async () => {
+    // A named provider terminal, not a stream nobody closed. It reaches the
+    // same failed outcome and so must carry the same error event — on main it
+    // ended the turn failed while `lastError` stayed empty — but calling it
+    // "ended without finishing" would describe the wrong thing.
+    const durable = durableTurnHarness('turn-filtered', 'analyse the image');
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 'text-1' },
+            { type: 'text-delta', id: 'text-1', delta: 'I cannot' },
+            { type: 'text-end', id: 'text-1' },
+            {
+              type: 'finish',
+              finishReason: { unified: 'content-filter' as const, raw: 'content_filter' },
+              usage: emptyUsage(),
+            },
+          ],
+          initialDelayInMs: null,
+          chunkDelayInMs: null,
+        }),
+      }),
+    });
+    const backend = createTestAiSdkBackend({
+      sessionId: 'session-1',
+      header: header(),
+      appendMessage: async () => {},
+      connection: connection(),
+      apiKey: 'sk-test',
+      modelId: 'mock-model-id',
+      modelFactory: () => model,
+      tools: [],
+      loadTurnRuntimeEvents: durable.loadTurnRuntimeEvents,
+      newId: idGenerator(),
+      now: monotonicClock(),
+    });
+
+    const events = await drainDurably(backend.send(durable.input()), durable);
+    const complete = events.find(
+      (event): event is Extract<SessionEvent, { type: 'complete' }> => event.type === 'complete',
+    );
+    const error = events.find(
+      (event): event is Extract<SessionEvent, { type: 'error' }> => event.type === 'error',
+    );
+
+    assert.equal(complete?.stopReason, 'error');
+    assert.ok(error, 'a failed terminal must be accompanied by an error event');
+  });
+
   test('keeps a turn the provider named its own reason for', async () => {
     // The SDK's `other` is not a reason, it is the SDK declining to name one:
     // an unrecognized `finish_reason` from an OpenAI-compatible provider —

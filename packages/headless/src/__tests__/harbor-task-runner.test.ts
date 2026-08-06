@@ -602,7 +602,11 @@ describe('createHarborTaskRunner', () => {
       assert.equal(env.MAKA_TRIAL_CACHE_READ_USD_PER_1M, '0.0029');
       assert.equal(env.MAKA_TRIAL_PRICING_SOURCE, 'v4-flash');
       const mounts = (config.environment as { mounts: Array<Record<string, unknown>> }).mounts;
-      assert.ok(mounts.some((m) => m.target === '/opt/maka-agent' && m.read_only === true));
+      assert.ok(
+        mounts.some(
+          (m) => m.target === '/opt/maka-agent/packages/headless/dist' && m.read_only === true,
+        ),
+      );
       assert.equal(
         mounts.some((m) => m.target === '/run/secrets/deepseek-key' || m.source === keyFile),
         false,
@@ -2932,11 +2936,23 @@ describe('buildHarborJobConfig', () => {
         }
       ).mounts;
 
-    // Maka executes out of the tree, so it still gets the tree.
-    assert.ok(forAgent('maka').some((mount) => mount.target === '/opt/maka-agent'));
+    // Maka executes out of this repo, but out of its build outputs — not the
+    // root. In the #2245 run a root mount let it read docs/eval and the
+    // verifier source, so it now gets the same declared-list treatment.
+    const makaRepoMounts = forAgent('maka').filter((mount) =>
+      String(mount.target).startsWith('/opt/maka-agent'),
+    );
+    assert.ok(
+      makaRepoMounts.every((mount) => mount.target !== '/opt/maka-agent'),
+      'maka must not receive the repo root',
+    );
+    assert.ok(
+      makaRepoMounts.some((mount) => mount.target === '/opt/maka-agent/packages/headless/dist'),
+      'maka must receive the build output it executes',
+    );
 
     // A competitor gets the files it named and no directory to walk. Reverting
-    // to the shared tree mount re-opens the path Codex used in the #1970 run:
+    // to a shared tree mount re-opens the path Codex used in the #1970 run:
     // read the pinned benchmark revision, fetch the task's reference solution.
     for (const agent of ['codex', 'claude-code'] as const) {
       const repoMounts = forAgent(agent).filter((mount) =>

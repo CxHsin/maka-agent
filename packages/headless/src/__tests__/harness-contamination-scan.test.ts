@@ -1,0 +1,428 @@
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, test } from 'node:test';
+import { promisify } from 'node:util';
+import {
+  flattenBenchmarkIdentity,
+  isRetrievalSignal,
+  MIN_REVISION_PREFIX,
+  renderContaminationScanReportMarkdown,
+  scanRunForContamination,
+  scanTrajectory,
+  TRAJECTORY_ARTIFACT_KIND_FULL,
+  TRAJECTORY_ARTIFACT_KIND_KEY,
+  TRAJECTORY_ARTIFACT_KIND_SUMMARY,
+  TRAJECTORY_SUMMARY_REASON_KEY,
+  type BenchmarkIdentity,
+  type ContaminationSignalKind,
+} from '../harness-contamination-scan.js';
+import { appendTrialCell, trialCellLogPath } from '../trial-cell-log.js';
+
+const execFileAsync = promisify(execFile);
+const HARBOR_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'harbor');
+
+const identity: BenchmarkIdentity = {
+  upstreamRepositoryUrls: ['https://github.com/example-org/example-bench-2-1'],
+  revisions: ['0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d'],
+  taskTreeFingerprints: ['sha256:0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff'],
+  taskIds: ['cobol-modernization', 'fix-git', 'install-windows-3.11'],
+};
+
+function trajectory(messages: string[], extra?: Record<string, unknown>): unknown {
+  return {
+    steps: messages.map((message, index) => ({ step_id: index + 1, source: 'agent', message })),
+    ...(extra ? { extra } : {}),
+  };
+}
+
+function kinds(messages: string[], ownTaskId = 'cobol-modernization'): ContaminationSignalKind[] {
+  const result = scanTrajectory({ trajectory: trajectory(messages), ownTaskId, identity });
+  assert.equal(result.analyzed, true);
+  return result.signals.map((signal) => signal.kind);
+}
+
+describe('benchmark identity', () => {
+  test('flattens every profile the catalog carries into one set of needles', async () => {
+    const catalog = JSON.parse(
+      await readFile(join(HARBOR_DIR, 'benchmark-identity.json'), 'utf8'),
+    ) as Record<string, { upstreamRepositoryUrl: string }>;
+    const flat = flattenBenchmarkIdentity(catalog);
+
+    assert.deepEqual(
+      [...flat.upstreamRepositoryUrls].sort(),
+      [
+        catalog.deepSwe!.upstreamRepositoryUrl,
+        catalog.terminalBench21!.upstreamRepositoryUrl,
+      ].sort(),
+    );
+    // Terminal-Bench's tree plus DeepSWE's two subsets: a scan that took one
+    // profile's fingerprint would go looking for two thirds of the evidence.
+    assert.equal(flat.taskTreeFingerprints.length, 3);
+    assert.equal(flat.revisions.length, 2);
+    // Both benchmarks' task lists, deduplicated across the overlapping subsets.
+    assert.ok(flat.taskIds.includes('cobol-modernization'));
+    assert.ok(flat.taskIds.includes('dasel-html-document-format'));
+    assert.equal(new Set(flat.taskIds).size, flat.taskIds.length);
+  });
+
+  // The failure this guards is the quiet one: a renamed field turns every cell
+  // clean, and a clean report is exactly what a reader wants to see.
+  test('refuses a catalog that carries no needles', () => {
+    assert.throws(
+      () => flattenBenchmarkIdentity({ terminalBench21: { revision: 'abc' } }),
+      /no upstream repository or task ids/,
+    );
+  });
+});
+
+describe('scanTrajectory', () => {
+  test('finds nothing in a cell that solved its own task', () => {
+    assert.deepEqual(
+      kinds([
+        'Reading /app/task.md and porting the COBOL payroll routine.',
+        'Running the test suite: 12 passed.',
+      ]),
+      [],
+    );
+  });
+
+  test('finds each of the four signals', () => {
+    assert.deepEqual(kinds(['git clone https://github.com/example-org/example-bench-2-1']), [
+      'upstream_repository',
+    ]);
+    assert.deepEqual(kinds(['checked out 0a1b2c3d4e5']), ['pinned_revision']);
+    assert.deepEqual(
+      kinds(['tree hash sha256:0000111122223333444455556666777788889999aaaabbbbccccddddeeeeffff']),
+      ['task_tree_fingerprint'],
+    );
+    assert.deepEqual(kinds(['the suite also has fix-git']), ['foreign_task_id']);
+  });
+
+  // A cell that names its own task is describing its work, not reaching.
+  test("does not count the cell's own task id as foreign", () => {
+    assert.deepEqual(kinds(['solving cobol-modernization']), []);
+  });
+
+  test('reports the step and the surrounding text so a reviewer can go read it', () => {
+    const result = scanTrajectory({
+      trajectory: trajectory([
+        'first step',
+        'then: git clone https://github.com/example-org/example-bench-2-1.git /tmp/tb',
+      ]),
+      ownTaskId: 'cobol-modernization',
+      identity,
+    });
+    assert.equal(result.signals[0]?.stepId, 2);
+    assert.equal(result.signals[0]?.match, 'example-org/example-bench-2-1');
+    assert.match(result.signals[0]?.excerpt ?? '', /git clone/);
+  });
+
+  describe('the repository is matched by the name a rewritten host cannot drop', () => {
+    // Each of these reaches the same repository while dropping or replacing the
+    // host, which is why the pair rather than the URL is what is searched for.
+    for (const [label, text] of [
+      ['the .git spelling', 'git clone https://github.com/example-org/example-bench-2-1.git'],
+      ['ssh', 'git clone git@github.com:example-org/example-bench-2-1.git'],
+      ['a raw host', 'curl https://raw.githubusercontent.com/example-org/example-bench-2-1/main/x'],
+      ['an ip', 'curl http://140.82.121.4/example-org/example-bench-2-1/archive/main.tar.gz'],
+      ['a mirror', 'git clone https://gitee.com/mirrors/example-org/example-bench-2-1'],
+    ] as const) {
+      test(label, () => {
+        assert.deepEqual(kinds([text]), ['upstream_repository']);
+      });
+    }
+
+    test('does not read a longer name as this one', () => {
+      assert.deepEqual(kinds(['github.com/example-org/example-bench-2-1-extras']), []);
+      assert.deepEqual(kinds(['github.com/not-example-org/example-bench-2-1']), []);
+    });
+  });
+
+  describe('a task id is matched at its own boundaries', () => {
+    test('a dotted task id is found where it is named', () => {
+      assert.deepEqual(kinds(['see install-windows-3.11 for the trick']), ['foreign_task_id']);
+    });
+
+    // The dot at the end of a sentence belongs to the sentence.
+    test('a task id ending a sentence is found', () => {
+      assert.deepEqual(kinds(['the other one is fix-git.']), ['foreign_task_id']);
+    });
+
+    test('a longer id containing this one is not this one', () => {
+      assert.deepEqual(kinds(['fix-github-actions']), []);
+      assert.deepEqual(kinds(['install-windows-3.11.2-beta']), []);
+    });
+  });
+
+  describe('the revision prefix floor', () => {
+    test('matches what git itself would have shown the cell', () => {
+      assert.deepEqual(kinds([`rev ${identity.revisions[0]!.slice(0, MIN_REVISION_PREFIX)}`]), [
+        'pinned_revision',
+      ]);
+      assert.deepEqual(
+        kinds([`rev ${identity.revisions[0]!.slice(0, MIN_REVISION_PREFIX - 1)}`]),
+        [],
+      );
+    });
+
+    // The floor is not a taste: it is what `git rev-parse --short` abbreviates
+    // to in a small repository, measured rather than remembered, because
+    // `core.abbrev=auto` grows with object count and this repository is far
+    // past the smallest case a cell could be looking at.
+    test('is no longer than git abbreviates to in a fresh repository', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'maka-git-abbrev-'));
+      try {
+        await execFileAsync('git', ['init', '--quiet', dir]);
+        await writeFile(join(dir, 'probe.txt'), 'contamination scan abbreviation probe\n', 'utf8');
+        const { stdout: oid } = await execFileAsync('git', ['hash-object', '-w', 'probe.txt'], {
+          cwd: dir,
+        });
+        const { stdout: short } = await execFileAsync('git', ['rev-parse', '--short', oid.trim()], {
+          cwd: dir,
+        });
+        assert.ok(
+          MIN_REVISION_PREFIX <= short.trim().length,
+          `git abbreviates to ${short.trim().length}; the floor is ${MIN_REVISION_PREFIX}`,
+        );
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test('searches every string a step carries, not a chosen field', () => {
+    const result = scanTrajectory({
+      trajectory: {
+        steps: [
+          {
+            step_id: 1,
+            source: 'agent',
+            action: {
+              command: ['bash', '-lc', 'git clone git@github.com:example-org/example-bench-2-1'],
+            },
+            extra: { nested: { deeper: ['and again fix-git'] } },
+          },
+        ],
+      },
+      ownTaskId: 'cobol-modernization',
+      identity,
+    });
+    assert.deepEqual(result.signals.map((signal) => signal.kind).sort(), [
+      'foreign_task_id',
+      'upstream_repository',
+    ]);
+  });
+
+  test('separates evidence of reaching from evidence of knowing', () => {
+    assert.equal(isRetrievalSignal('upstream_repository'), true);
+    assert.equal(isRetrievalSignal('pinned_revision'), true);
+    assert.equal(isRetrievalSignal('task_tree_fingerprint'), true);
+    assert.equal(isRetrievalSignal('foreign_task_id'), false);
+  });
+
+  describe('a trajectory that cannot answer the question refuses instead of passing', () => {
+    test('a degraded summary', () => {
+      const result = scanTrajectory({
+        trajectory: trajectory(['Maka trajectory summary: invocation finished'], {
+          [TRAJECTORY_ARTIFACT_KIND_KEY]: TRAJECTORY_ARTIFACT_KIND_SUMMARY,
+          [TRAJECTORY_SUMMARY_REASON_KEY]: 'runtime_event_schema_invalid',
+        }),
+        ownTaskId: 'cobol-modernization',
+        identity,
+      });
+      assert.equal(result.analyzed, false);
+      assert.match(result.notAnalyzedReason ?? '', /runtime_event_schema_invalid/);
+    });
+
+    test('a label this side does not recognize', () => {
+      const result = scanTrajectory({
+        trajectory: trajectory(['step'], { [TRAJECTORY_ARTIFACT_KIND_KEY]: 'partial' }),
+        ownTaskId: 'cobol-modernization',
+        identity,
+      });
+      assert.equal(result.analyzed, false);
+      assert.match(result.notAnalyzedReason ?? '', /unrecognized/);
+    });
+
+    test('no steps at all', () => {
+      const result = scanTrajectory({
+        trajectory: { steps: [] },
+        ownTaskId: 'cobol-modernization',
+        identity,
+      });
+      assert.equal(result.analyzed, false);
+    });
+
+    // Every other arm's trajectory comes from an upstream Harbor agent that has
+    // no degraded mode and writes no label. Demanding one would file every
+    // competitor cell under "broken export".
+    test('but an unlabelled upstream trajectory is ordinary ATIF', () => {
+      const result = scanTrajectory({
+        trajectory: trajectory(['git clone https://github.com/example-org/example-bench-2-1']),
+        ownTaskId: 'cobol-modernization',
+        identity,
+      });
+      assert.equal(result.analyzed, true);
+      assert.deepEqual(
+        result.signals.map((signal) => signal.kind),
+        ['upstream_repository'],
+      );
+    });
+
+    test('and a full label is searched', () => {
+      const result = scanTrajectory({
+        trajectory: trajectory(['ordinary work'], {
+          [TRAJECTORY_ARTIFACT_KIND_KEY]: TRAJECTORY_ARTIFACT_KIND_FULL,
+        }),
+        ownTaskId: 'cobol-modernization',
+        identity,
+      });
+      assert.equal(result.analyzed, true);
+    });
+  });
+
+  // The labels are Python's; this side only reads them. If the exporter renames
+  // one, an unlabelled Maka trajectory would be searched as ordinary ATIF and a
+  // degraded export would be reported clean — so the spelling is pinned here
+  // rather than re-derived at runtime.
+  test('the completeness labels are spelled the way the exporter writes them', async () => {
+    const agent = await readFile(join(HARBOR_DIR, 'maka_agent.py'), 'utf8');
+    const exporter = await readFile(join(HARBOR_DIR, 'maka_trajectory.py'), 'utf8');
+    assert.match(agent, new RegExp(`"${TRAJECTORY_ARTIFACT_KIND_KEY}"`));
+    assert.match(exporter, new RegExp(`"${TRAJECTORY_SUMMARY_REASON_KEY}"`));
+    assert.match(exporter, new RegExp(`artifact_kind="${TRAJECTORY_ARTIFACT_KIND_FULL}"`));
+    assert.match(exporter, new RegExp(`artifact_kind="${TRAJECTORY_ARTIFACT_KIND_SUMMARY}"`));
+  });
+});
+
+describe('scanRunForContamination', () => {
+  async function withRun<T>(
+    cells: Array<{ agent: string; taskId: string; trajectory?: unknown }>,
+    fn: (runRoot: string) => Promise<T>,
+  ): Promise<T> {
+    const runRoot = await mkdtemp(join(tmpdir(), 'maka-contamination-run-'));
+    try {
+      for (const [index, cell] of cells.entries()) {
+        const trialDir = join(runRoot, 'jobs', `${cell.agent}-r0-${index}`, 'trial');
+        await mkdir(join(trialDir, 'agent'), { recursive: true });
+        if (cell.trajectory !== undefined) {
+          await writeFile(
+            join(trialDir, 'agent', 'trajectory.json'),
+            JSON.stringify(cell.trajectory),
+            'utf8',
+          );
+        }
+        await appendTrialCell(trialCellLogPath(runRoot), {
+          runId: 'run-1',
+          roundId: `${cell.agent}-r0-${cell.taskId}`,
+          taskId: cell.taskId,
+          agent: cell.agent,
+          trialDir,
+        });
+      }
+      return await fn(runRoot);
+    } finally {
+      await rm(runRoot, { recursive: true, force: true });
+    }
+  }
+
+  test('reads the run the harness wrote down, one trajectory per row', async () => {
+    await withRun(
+      [
+        { agent: 'maka', taskId: 'cobol-modernization', trajectory: trajectory(['ordinary work']) },
+        {
+          agent: 'codex',
+          taskId: 'fix-git',
+          trajectory: trajectory(['git clone git@github.com:example-org/example-bench-2-1']),
+        },
+      ],
+      async (runRoot) => {
+        const report = await scanRunForContamination({
+          trialCellLogPath: trialCellLogPath(runRoot),
+          identity,
+        });
+        assert.deepEqual(report.totals, {
+          cells: 2,
+          analyzed: 2,
+          cellsWithRetrievalSignals: 1,
+          cellsWithAdvisorySignalsOnly: 0,
+        });
+        assert.deepEqual(report.coverageByAgent, {
+          maka: { cells: 1, analyzed: 1 },
+          codex: { cells: 1, analyzed: 1 },
+        });
+        assert.equal(report.cells[1]?.agent, 'codex');
+        assert.match(report.cells[1]?.trajectoryPath ?? '', /agent\/trajectory\.json$/);
+      },
+    );
+  });
+
+  // The failure mode that looks most like success: an arm whose export never
+  // landed reports no signals, and no signals reads as clean.
+  test('counts a cell with no trajectory as unsearched, not as clean', async () => {
+    await withRun(
+      [
+        { agent: 'maka', taskId: 'cobol-modernization' },
+        { agent: 'codex', taskId: 'fix-git', trajectory: trajectory(['ordinary work']) },
+      ],
+      async (runRoot) => {
+        const report = await scanRunForContamination({
+          trialCellLogPath: trialCellLogPath(runRoot),
+          identity,
+        });
+        assert.equal(report.totals.analyzed, 1);
+        assert.equal(report.coverageByAgent.maka?.analyzed, 0);
+        assert.match(report.cells[0]?.notAnalyzedReason ?? '', /unreadable/);
+      },
+    );
+  });
+
+  test('counts a task-id mention on its own as advisory', async () => {
+    await withRun(
+      [
+        {
+          agent: 'maka',
+          taskId: 'cobol-modernization',
+          trajectory: trajectory(['this suite also contains fix-git, I recall']),
+        },
+      ],
+      async (runRoot) => {
+        const report = await scanRunForContamination({
+          trialCellLogPath: trialCellLogPath(runRoot),
+          identity,
+        });
+        assert.equal(report.totals.cellsWithRetrievalSignals, 0);
+        assert.equal(report.totals.cellsWithAdvisorySignalsOnly, 1);
+      },
+    );
+  });
+
+  test('renders what was searched before what was found', async () => {
+    await withRun(
+      [
+        {
+          agent: 'maka',
+          taskId: 'cobol-modernization',
+          trajectory: trajectory(['git clone https://github.com/example-org/example-bench-2-1']),
+        },
+        { agent: 'codex', taskId: 'fix-git' },
+      ],
+      async (runRoot) => {
+        const markdown = renderContaminationScanReportMarkdown(
+          await scanRunForContamination({
+            trialCellLogPath: trialCellLogPath(runRoot),
+            identity,
+          }),
+        );
+        assert.match(markdown, /Searched 1\/2 cells\./);
+        assert.match(markdown, /\| codex \| 1 \| 0 \|/);
+        assert.match(markdown, /## Not searched/);
+        assert.match(markdown, /\*\*upstream_repository\*\*/);
+      },
+    );
+  });
+});

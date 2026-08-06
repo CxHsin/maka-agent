@@ -1,29 +1,15 @@
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useMemo } from 'react';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { Heading } from '@astryxdesign/core/Heading';
 import { VStack } from '@astryxdesign/core/Layout';
 import { Section } from '@astryxdesign/core/Section';
-import { Switch } from '@astryxdesign/core/Switch';
 import { Text } from '@astryxdesign/core/Text';
-import { TextInput } from '@astryxdesign/core/TextInput';
 import { PROVIDER_REGISTRY, uiLocaleToIntlLocale, type UiLocale } from '@maka/core';
 import { useUiLocale } from '@maka/ui';
-import {
-  Activity,
-  AlertTriangle,
-  Archive,
-  ShieldCheck,
-  Sparkles,
-  Terminal,
-  type LucideIcon,
-} from '@maka/ui/icons';
+import { Activity, AlertTriangle } from '@maka/ui/icons';
 import { getDesktopConversationCopy } from './locales/conversation-copy.js';
-import {
-  applyInspectorFilter,
-  type InspectorFilter,
-} from './session-inspector-filter.js';
 import { deriveInspectorOverviewModel } from './session-inspector-overview-model.js';
 import {
   deriveInspectorPanelModel,
@@ -56,14 +42,8 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
     loadFailed: copy.loadFailed,
     locale,
   });
-  const [filter, setFilter] = useState<InspectorFilter>({});
-  const model = useMemo(
-    () => applyInspectorFilter(deriveInspectorPanelModel(snapshot.trace), filter),
-    [snapshot.trace, filter],
-  );
+  const model = useMemo(() => deriveInspectorPanelModel(snapshot.trace), [snapshot.trace]);
   const overview = useMemo(() => deriveInspectorOverviewModel(snapshot.trace), [snapshot.trace]);
-  const hidden = model.hiddenTurns + model.hiddenSteps;
-  const hasFailure = model.turns.some((turn) => turn.failed);
   const hasOverview =
     overview.context !== undefined ||
     overview.sessionTokens !== undefined ||
@@ -89,19 +69,16 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
           />
         )}
 
-        {/* Three different silences, kept apart: a read that failed, a filter
-            that matches nothing, and a session that did nothing. Only the last
-            one is "nothing to trace".
-            One persistent live region rather than three conditional ones: a
-            container that mounts and unmounts is not announced, and these
-            messages change as the reader types. */}
+        {/* Two silences, kept apart: a read that failed (the Banner above) and
+            a session that did nothing. A live region rather than a bare block
+            because the trace arrives after the tab does. */}
         <div
           role="status"
           aria-live="polite"
           className="maka-inspector-status"
           /* With nothing to trace the region IS the panel, so it takes the
              leftover height and centres its empty state the way every other
-             workbar tab does. Carrying a hint beside a timeline, it hugs. */
+             workbar tab does. */
           data-empty={model.empty || undefined}
         >
           {model.empty && !snapshot.loading && !snapshot.error && (
@@ -110,22 +87,6 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
               title={copy.empty}
               icon={<Activity size={20} aria-hidden="true" />}
             />
-          )}
-          {!model.empty && model.turns.length === 0 && model.filtered && (
-            <EmptyState
-              isCompact
-              title={copy.noMatches}
-              data-maka-contract="session-inspector-no-matches"
-            />
-          )}
-          {!model.empty && model.filtered && hidden > 0 && model.turns.length > 0 && (
-            <Text
-              type="supporting"
-              color="secondary"
-              data-maka-contract="session-inspector-hidden"
-            >
-              {hidden} {copy.hiddenByFilter}
-            </Text>
           )}
         </div>
 
@@ -140,29 +101,6 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
                 <Heading level={3} className="maka-inspector-section-title">
                   {copy.overview.timelineTab}
                 </Heading>
-                {/* The filter is the timeline's own control, so it sits on the
-                    timeline's own heading line rather than taking a band of
-                    its own above the turns. 仅失败 appears only when there is
-                    a failure to isolate — the same by-exception rule the
-                    overview follows. */}
-                <div className="maka-inspector-timeline-controls">
-                  {hasFailure && (
-                    <Switch
-                      label={copy.filterFailedOnly}
-                      value={filter.failedOnly ?? false}
-                      onChange={(checked) => setFilter({ ...filter, failedOnly: checked })}
-                    />
-                  )}
-                  <TextInput
-                    size="sm"
-                    label={copy.filterLabel}
-                    isLabelHidden
-                    hasClear
-                    value={filter.query ?? ''}
-                    placeholder={copy.filterPlaceholder}
-                    onChange={(value) => setFilter({ ...filter, query: value })}
-                  />
-                </div>
               </div>
 
               {model.coverage && (
@@ -195,7 +133,6 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
                   <TurnRow
                     key={turn.turnId}
                     turn={turn}
-                    locale={locale}
                     turnLabel={copy.turnLabel}
                     costUnavailable={copy.costUnavailable}
                     failedLabel={copy.turnFailed}
@@ -425,20 +362,6 @@ function numberFormatter(locale: UiLocale): (value: number) => string {
   return (value) => formatter.format(value);
 }
 
-/**
- * A turn's wall-clock stamp, to the minute.
- *
- * The date is a fact about the session, not about the turn, and it is already
- * on the session in the sidebar; repeating `8/4` down every row of a timeline
- * whose turns are minutes apart is the noise that made this column unreadable.
- */
-function formatTurnTime(locale: UiLocale, ms: number): string {
-  return new Intl.DateTimeFormat(uiLocaleToIntlLocale(locale), {
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(ms));
-}
-
 function formatPercent(ratio: number): string {
   return `${(ratio * 100).toFixed(1)}%`;
 }
@@ -457,7 +380,6 @@ function formatPercent(ratio: number): string {
  */
 function TurnRow(props: {
   turn: InspectorTurnRow;
-  locale: UiLocale;
   turnLabel: (index: number) => string;
   costUnavailable: string;
   failedLabel: string;
@@ -483,8 +405,7 @@ function TurnRow(props: {
           </span>
         )}
         <span className="maka-inspector-turn-meta">
-          {formatTurnTime(props.locale, turn.startedAt)} · {formatDuration(turn.durationMs)} ·{' '}
-          {formatCost(turn.totals.costUsd, props.costUnavailable)}
+          {formatDuration(turn.durationMs)} · {formatCost(turn.totals.costUsd, props.costUnavailable)}
         </span>
       </div>
       <ol className="maka-inspector-steps">
@@ -495,14 +416,6 @@ function TurnRow(props: {
     </li>
   );
 }
-
-const STEP_ICONS: Record<InspectorStepRow['kind'], LucideIcon> = {
-  model_call: Sparkles,
-  tool: Terminal,
-  permission: ShieldCheck,
-  compaction: Archive,
-  error: AlertTriangle,
-};
 
 /**
  * One step: what it was, then what qualifies it, then how long it took.
@@ -517,7 +430,6 @@ const STEP_ICONS: Record<InspectorStepRow['kind'], LucideIcon> = {
  */
 function StepRow(props: { step: InspectorStepRow; recoveredLabel: string }) {
   const { step } = props;
-  const Icon = STEP_ICONS[step.kind];
   const meta = [
     step.retries !== undefined ? `×${step.retries + 1}` : undefined,
     step.durationMs !== undefined ? formatDuration(step.durationMs) : undefined,
@@ -527,10 +439,8 @@ function StepRow(props: { step: InspectorStepRow; recoveredLabel: string }) {
     <li
       className="maka-inspector-step"
       data-maka-contract="session-inspector-step"
-      data-kind={step.kind}
       data-failed={step.failed || undefined}
     >
-      <Icon size={14} aria-hidden="true" className="maka-inspector-step-icon" />
       <span className="maka-inspector-step-text">
         <span className="maka-inspector-step-label">{step.label}</span>
         {step.detail && <span className="maka-inspector-step-detail">{step.detail}</span>}

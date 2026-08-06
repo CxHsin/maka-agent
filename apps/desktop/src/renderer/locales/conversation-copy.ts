@@ -82,11 +82,6 @@ export interface DesktopConversationCopy {
     turnsShort: string;
     recovered: string;
     turnFailed: string;
-    filterLabel: string;
-    filterPlaceholder: string;
-    filterFailedOnly: string;
-    noMatches: string;
-    hiddenByFilter: string;
     /** Display name of one turn in the raw record: 第 N 轮 / Turn N. */
     turnLabel: (index: number) => string;
     /** Summary above the raw timeline. */
@@ -208,11 +203,6 @@ const COPY = {
       turnsShort: '轮记录数少于步数',
       recovered: '已恢复',
       turnFailed: '本轮失败',
-      filterLabel: '筛选追踪',
-      filterPlaceholder: '按工具、模型或轮次筛选',
-      filterFailedOnly: '仅失败',
-      noMatches: '没有匹配的步骤——这个会话本身是有内容的',
-      hiddenByFilter: '项被筛选隐藏',
       turnLabel: (index) => `第 ${index} 轮`,
       overview: {
         context: '上下文窗口',
@@ -313,11 +303,6 @@ const COPY = {
       turnsShort: 'turns short of their step count',
       recovered: 'recovered',
       turnFailed: 'Turn failed',
-      filterLabel: 'Filter the trace',
-      filterPlaceholder: 'Filter by tool, model or turn',
-      filterFailedOnly: 'Failed only',
-      noMatches: 'Nothing matches this filter — the session itself is not empty',
-      hiddenByFilter: 'hidden by the filter',
       turnLabel: (index) => `Turn ${index}`,
       overview: {
         context: 'Context window',

@@ -29,7 +29,6 @@ export interface InspectorTurnRow {
   turnId: string;
   /** 1-based position in the session's turn order — the display name. */
   index: number;
-  startedAt: number;
   durationMs: number;
   totals: TraceTotals;
   failed: boolean;
@@ -65,7 +64,6 @@ export function deriveInspectorPanelModel(trace: SessionTrace | undefined): Insp
   const turns = trace.turns.map<InspectorTurnRow>((turn, index) => ({
     turnId: turn.turnId,
     index: index + 1,
-    startedAt: turn.startedAt,
     durationMs: turn.durationMs,
     totals: turn.totals,
     failed: turn.failure !== undefined,

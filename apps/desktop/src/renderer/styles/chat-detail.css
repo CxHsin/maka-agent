@@ -131,8 +131,8 @@
 
 /* Session trace (#1625): a read-only causal timeline in the workbar.
 
-   Banner, EmptyState, MetadataList, Badge and Text carry everything they can;
-   this rule set is the timeline's own geometry. It used to reach for a
+   Banner, EmptyState, Heading and Text carry everything they can; this rule
+   set is the timeline's own geometry. It used to reach for a
    `--maka-space-*` / `--maka-color-*` vocabulary that the token sheet never
    declared, so every value here silently resolved to its hard-coded fallback
    and the panel drifted off the product scale. */
@@ -230,7 +230,6 @@
 
 .maka-inspector-turn-failure {
   font: var(--maka-text-label);
-  font-weight: 500;
   color: var(--destructive-text);
   min-width: 0;
   overflow-wrap: anywhere;
@@ -250,19 +249,14 @@
 }
 
 /* A step is one line with a left half that says what happened and a right half
-   that says how long — the two things a reader compares down the column. Both
-   halves stay at supporting size: the steps are the turn's detail, and letting
-   them match the head line is what made the timeline read as a wall of text. */
+   that says how long — the two things a reader compares down the column.
+   No icon: the five glyphs this row used to carry each restated a word that
+   was already printed beside them (`read`, `compaction`, `error`), so they
+   bought nothing and cost the eye a column of noise. */
 .maka-inspector-step {
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
-}
-
-.maka-inspector-step-icon {
-  align-self: center;
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
 }
 
 .maka-inspector-step-text {
@@ -274,8 +268,10 @@
   font: var(--maka-text-supporting);
 }
 
+/* Rank by ink, not by weight: one more weight on a 12px line is a difference
+   the eye has to resolve before it can read, and colour already says which
+   half of the row is the fact. */
 .maka-inspector-step-label {
-  font-weight: 500;
   color: var(--foreground-secondary);
 }
 
@@ -300,28 +296,8 @@
   white-space: nowrap;
 }
 
-.maka-inspector-step[data-failed='true'] .maka-inspector-step-label,
-.maka-inspector-step[data-failed='true'] .maka-inspector-step-icon {
+.maka-inspector-step[data-failed='true'] .maka-inspector-step-label {
   color: var(--destructive-text);
-}
-
-/* The filter rides the timeline's own heading line; the input takes what the
-   heading leaves, so a wider panel gets a wider field rather than a gap. */
-.maka-inspector-timeline-controls {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  flex: 0 1 16rem;
-  white-space: nowrap;
-}
-
-/* The toggle keeps its natural width — a two-character label broken across
-   two lines is not a saving — and the query field absorbs the rest. */
-.maka-inspector-timeline-controls > *:last-child {
-  flex: 1 1 6rem;
-  min-width: 0;
 }
 
 /* One overview section: a title line the eye can land on, then its content.

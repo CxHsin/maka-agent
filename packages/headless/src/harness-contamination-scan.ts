@@ -185,6 +185,9 @@ const EXCERPT_RADIUS = 80;
  * to read them, and `harness-contamination-scan.test.ts` pins the spelling
  * against that file so the two cannot drift apart in silence.
  */
+/** The one agent whose exporter can degrade, and which therefore must label. */
+export const LABELLING_AGENT = 'maka';
+
 export const TRAJECTORY_ARTIFACT_KIND_KEY = 'maka_artifact_kind';
 export const TRAJECTORY_SUMMARY_REASON_KEY = 'maka_summary_reason';
 export const TRAJECTORY_ARTIFACT_KIND_FULL = 'full';
@@ -200,11 +203,15 @@ export const TRAJECTORY_ARTIFACT_KIND_SUMMARY = 'summary';
  * that says `summary`, or that carries a label this file does not recognize,
  * refuses.
  *
- * An absent label is ordinary ATIF: every other arm's trajectory comes from an
- * upstream Harbor agent that has no degraded mode and writes no such label.
- * Demanding a label they were never going to carry would file every competitor
- * cell under "broken export", and an alarm that fires on every run is not an
- * alarm.
+ * An absent label is ordinary ATIF for every other arm: their trajectories come
+ * from upstream Harbor agents that have no degraded mode and write no such
+ * label. Demanding a label they were never going to carry would file every
+ * competitor cell under "broken export", and an alarm that fires on every run
+ * is not an alarm.
+ *
+ * But absent on a Maka trajectory is not ordinary — Maka always labels — so it
+ * refuses too. The trajectory says whose it is, so this asks it rather than
+ * assuming the exporter's behaviour has not changed since this was written.
  */
 function notAnalyzableReason(
   trajectory: Record<string, unknown>,
@@ -224,6 +231,9 @@ function notAnalyzableReason(
   }
   if (kind !== undefined && kind !== TRAJECTORY_ARTIFACT_KIND_FULL) {
     return `trajectory carries an unrecognized ${TRAJECTORY_ARTIFACT_KIND_KEY}: ${JSON.stringify(kind)}`;
+  }
+  if (kind === undefined && trajectoryAgentName(trajectory) === LABELLING_AGENT) {
+    return `${LABELLING_AGENT} trajectory carries no ${TRAJECTORY_ARTIFACT_KIND_KEY}`;
   }
   if (steps.length === 0) return 'trajectory carries no steps';
   return undefined;
@@ -432,6 +442,13 @@ export function renderContaminationScanReportMarkdown(report: ContaminationScanR
  * encoded, or built from parts across steps. That is unbounded and this makes
  * no claim on it; the signals here are for references that appear verbatim.
  */
+function trajectoryAgentName(trajectory: Record<string, unknown>): string | undefined {
+  const agent = trajectory.agent;
+  if (!agent || typeof agent !== 'object') return undefined;
+  const name = (agent as Record<string, unknown>).name;
+  return typeof name === 'string' ? name : undefined;
+}
+
 function cellKey(agent: string, taskId: string): string {
   return JSON.stringify([agent, taskId]);
 }

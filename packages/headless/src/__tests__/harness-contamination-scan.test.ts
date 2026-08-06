@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import {
   flattenBenchmarkIdentity,
   isRetrievalSignal,
+  LABELLING_AGENT,
   MIN_REVISION_PREFIX,
   renderContaminationScanReportMarkdown,
   scanRunForContamination,
@@ -338,7 +339,10 @@ describe('scanTrajectory', () => {
     // competitor cell under "broken export".
     test('but an unlabelled upstream trajectory is ordinary ATIF', () => {
       const result = scanTrajectory({
-        trajectory: trajectory(['git clone https://github.com/example-org/example-bench-2-1']),
+        trajectory: {
+          agent: { name: 'codex' },
+          ...(trajectory(['git clone https://github.com/example-org/example-bench-2-1']) as object),
+        },
         ownTaskId: 'cobol-modernization',
         identity,
       });
@@ -347,6 +351,23 @@ describe('scanTrajectory', () => {
         result.signals.map((signal) => signal.kind),
         ['upstream_repository'],
       );
+    });
+
+    // Maka always labels, so an unlabelled Maka trajectory is a label that went
+    // missing, not an ordinary export. Read as ordinary ATIF it would come back
+    // clean: the degraded shape carries two steps and no tool calls, so there
+    // is nothing in it to match.
+    test('an unlabelled trajectory from the arm that labels', () => {
+      const result = scanTrajectory({
+        trajectory: {
+          agent: { name: LABELLING_AGENT },
+          ...(trajectory(['Maka invocation completed']) as object),
+        },
+        ownTaskId: 'cobol-modernization',
+        identity,
+      });
+      assert.equal(result.analyzed, false);
+      assert.match(result.notAnalyzedReason ?? '', /carries no maka_artifact_kind/);
     });
 
     test('and a full label is searched', () => {

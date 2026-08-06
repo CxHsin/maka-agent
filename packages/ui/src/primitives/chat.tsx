@@ -87,49 +87,6 @@ export function Marker({
 }
 
 /**
- * `TextShimmer` — a running "sweep of light" across short label text
- * (streaming UI rework). Used for the turn's processing indicator while a turn
- * is still working.
- *
- * Two overlaid layers on the same grid cell: an opaque `base` (keeps the text
- * readable at all times, and is all a snapshot / reduced-motion user sees) and
- * a `sweep` layer whose animated linear-gradient is clipped to the glyph shape
- * (`background-clip: text` + transparent fill) so a light band travels across
- * the letters. The band motion is the one declaration that can't be a leaf
- * literal — it rides the governed `@keyframes maka-text-shimmer` in
- * maka-tokens.css plus the literal
- * utilities here.
- *
- * `active={false}` (or reduced-motion) renders just the base text — callers
- * pass `active` false for settled/snap states so the sweep never runs in a
- * deterministic capture. Kept INTERNAL (off the package barrel, imported by
- * relative path) — its only consumers live in `@maka/ui`.
- */
-export function TextShimmer({
-  children,
-  active = true,
-  className,
-}: {
-  children: React.ReactNode;
-  active?: boolean;
-  className?: string;
-}): React.ReactElement {
-  if (!active) {
-    return <span className={cn("maka-text-shimmer-static", className)}>{children}</span>;
-  }
-  return (
-    <span data-slot="text-shimmer" className={cn("maka-text-shimmer", className)}>
-      {/* Base: opaque, muted, always readable. */}
-      <span className="maka-text-shimmer-base">{children}</span>
-      {/* Sweep: a clipped light band that travels across the glyphs. */}
-      <span aria-hidden="true" className="maka-text-shimmer-sweep">
-        {children}
-      </span>
-    </span>
-  );
-}
-
-/**
  * Tool-result preview surfaces (issue #332, PR4).
  *
  * Retires the bespoke `OverlayPreview` family shell CSS — the shared

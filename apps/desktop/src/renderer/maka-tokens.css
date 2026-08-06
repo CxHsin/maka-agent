@@ -1358,18 +1358,12 @@ html[data-os="darwin"].dark {
    ANIMATIONS
 ============================================================================= */
 
-/* Governance-level keyframe for the `TextShimmer` primitive (streaming UI
-   rework). A named `@keyframes` is a global rule, not an element property, so
-   it lives here in the shared motion home, with the
-   shimmer's other declarations in the primitive stylesheet. Sweeps a clipped light band left→right
-   across the glyph shape by translating `background-position`; the two-layer
-   primitive keeps an opaque base underneath so the text stays readable. Frozen
-   by the global reduced-motion / e2e-fixture rules in base.css and the
-   primitive's own `motion-reduce:` guards. */
-@keyframes maka-text-shimmer {
-  from { background-position: 150% 0; }
-  to   { background-position: -150% 0; }
-}
+/* `maka-text-shimmer` and the `TextShimmer` primitive it drove are gone. The
+   sweep-across-glyphs idiom is Astryx's: its `ChatReasoning` shimmers its own
+   streaming label off `x1ofn8cw-B` above, and that atom is the one this repo
+   copies from lab.css. A second, faster sweep on the turn's status line put two
+   of them a few pixels apart at different speeds, which read as two things
+   competing rather than one turn working. */
 
 /* Shared short opacity entrance used by continuing and tool-settle cues. */
 @keyframes maka-stream-fade-in {

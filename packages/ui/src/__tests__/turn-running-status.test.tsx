@@ -68,25 +68,14 @@ describe('live turn running status line', () => {
     assert.doesNotMatch(markup, /maka-turn-elapsed/);
   });
 
-  it('leaves the spinning to the tool card above it', () => {
-    // A running tool card carries its own spinner a few pixels up. A second one
-    // on this row read as two separate things being waited on — and a spinner
-    // turns at the same rate whether or not anything is happening, which is
-    // exactly what the clock beside it is there to answer.
+  it('runs no animation of its own', () => {
+    // Both idioms above this row are already spoken for: a running tool card
+    // spins, and Astryx's `ChatReasoning` shimmers its label while reasoning
+    // streams. A second spinner or a second sweep put two of them a few pixels
+    // apart, at different speeds. What moves here is the content itself.
     const markup = render(createElement(TurnRunningStatus, { startedAt: 1 }));
 
-    assert.doesNotMatch(markup, /spinner/i);
-  });
-
-  it('runs the shimmer over the phrase and not over the clock', () => {
-    // The sweep is the row's only continuous motion since the spinner left. It
-    // belongs on the words: a light band travelling across a number that is
-    // itself changing reads as glare rather than as progress.
-    const markup = render(createElement(TurnRunningStatus, { startedAt: 1 }));
-    const phrase = /<span class="maka-turn-working-phrase"[^>]*>(.*?)<\/span><\/span>/s.exec(markup)?.[0] ?? '';
-
-    assert.match(phrase, /maka-text-shimmer/);
-    assert.doesNotMatch(markup.replace(phrase, ''), /maka-text-shimmer/);
+    assert.doesNotMatch(markup, /spinner|shimmer/i);
   });
 
   it('keeps a name on the row now that the spinner is not carrying one', () => {

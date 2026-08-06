@@ -629,25 +629,6 @@
 .maka-turn-footer-action[data-copy-feedback="copied"] { color: var(--link); }
 .maka-turn-footer-action[data-copy-feedback="failed"] { color: var(--destructive); }
 
-.maka-text-shimmer-static { display: inline-block; }
-.maka-text-shimmer { position: relative; display: inline-grid; }
-.maka-text-shimmer-base,
-.maka-text-shimmer-sweep { grid-area: 1 / 1; }
-.maka-text-shimmer-base { color: var(--muted-foreground); }
-.maka-text-shimmer-sweep {
-  background: linear-gradient(100deg, transparent 30%, oklch(from var(--foreground) l c h / 0.95) 50%, transparent 70%);
-  background-clip: text;
-  background-position: 150% 0;
-  background-size: 200% 100%;
-  color: transparent;
-  -webkit-text-fill-color: transparent;
-  animation: maka-text-shimmer 1.8s linear infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .maka-text-shimmer-sweep { opacity: 0; animation: none; }
-}
-
-
 .maka-overlay-preview {
   font: var(--maka-text-supporting);
   max-height: 180px;

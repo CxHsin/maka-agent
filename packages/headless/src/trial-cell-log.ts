@@ -1,5 +1,5 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /**
  * What the harness knew about one finished cell, written down while it still
@@ -25,7 +25,7 @@ export interface TrialCellRecord {
 const TRIAL_CELL_LOG_FILENAME = 'trial-cells.jsonl';
 
 export function trialCellLogPath(runRoot: string): string {
-  return `${runRoot}/${TRIAL_CELL_LOG_FILENAME}`;
+  return join(runRoot, TRIAL_CELL_LOG_FILENAME);
 }
 
 /**

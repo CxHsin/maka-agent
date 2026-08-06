@@ -1,6 +1,7 @@
 import { PROVIDER_DEFAULTS, type ModelInfo, type ProviderType } from '@maka/core/llm-connections';
 import { type ModelRuntimeWire, resolveModelRuntime } from '@maka/runtime/model-runtime';
 import type { ProviderAuthProxyMode, ProviderUsageProtocol } from './provider-auth-proxy.js';
+import { selectedModelApiProtocol } from './provider-env.js';
 
 export type HarnessAgentId =
   | 'maka'
@@ -121,7 +122,15 @@ function makaRuntimeWire(
   apiProtocol?: string,
 ): ModelRuntimeWire | null {
   if (!providerDefinition(provider)) return null;
-  const advertised = modelApiProtocol(apiProtocol);
+  // The connection the runtime will actually build, not one this side invents:
+  // an advertised protocol only reaches the model entry for the providers whose
+  // connections carry it, and `selectedModelApiProtocol` is where that is
+  // decided. Honouring it here where the runtime drops it would resolve a wire
+  // nothing dials — the wrong-number failure this whole path exists to remove.
+  const advertised = selectedModelApiProtocol(
+    provider as ProviderType,
+    modelApiProtocol(apiProtocol),
+  );
   return resolveModelRuntime(
     {
       providerType: provider as ProviderType,

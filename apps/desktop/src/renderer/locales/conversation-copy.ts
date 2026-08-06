@@ -101,13 +101,16 @@ export interface DesktopConversationCopy {
         free: string;
       };
       session: string;
+      /** Names the panel's two views in the segmented control. */
+      sections: string;
+      overviewTab: string;
+      timelineTab: string;
       model: string;
       input: string;
       cacheRead: string;
       output: string;
       reasoning: string;
       lastActivity: string;
-      raw: string;
     };
   };
   quoteCompanion: {
@@ -224,13 +227,15 @@ const COPY = {
           free: '空闲',
         },
         session: '会话',
+        sections: '追踪视图',
+        overviewTab: '概览',
+        timelineTab: '时间轴',
         model: '模型',
         input: '输入 token',
         cacheRead: '缓存读取',
         output: '输出 token',
         reasoning: '推理',
         lastActivity: '最后活动',
-        raw: '原始记录',
       },
     },
     quoteCompanion: {
@@ -332,13 +337,15 @@ const COPY = {
           free: 'Free',
         },
         session: 'Session',
+        sections: 'Trace views',
+        overviewTab: 'Overview',
+        timelineTab: 'Timeline',
         model: 'Model',
         input: 'Input tokens',
         cacheRead: 'Cache read',
         output: 'Output tokens',
         reasoning: 'reasoning',
         lastActivity: 'Last active',
-        raw: 'Raw trace',
       },
     },
     quoteCompanion: {

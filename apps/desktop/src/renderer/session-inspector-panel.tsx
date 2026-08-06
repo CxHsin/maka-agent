@@ -2,11 +2,14 @@ import { type ReactNode, useMemo, useState } from 'react';
 import { Badge } from '@astryxdesign/core/Badge';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
-import { Collapsible } from '@astryxdesign/core/Collapsible';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { Heading } from '@astryxdesign/core/Heading';
 import { HStack, VStack } from '@astryxdesign/core/Layout';
 import { Section } from '@astryxdesign/core/Section';
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from '@astryxdesign/core/SegmentedControl';
 import { Switch } from '@astryxdesign/core/Switch';
 import { Text } from '@astryxdesign/core/Text';
 import { TextInput } from '@astryxdesign/core/TextInput';
@@ -37,11 +40,11 @@ import { useSessionTrace } from './use-session-trace.js';
 type InspectorCopy = ReturnType<typeof getDesktopConversationCopy>['inspector'];
 
 /**
- * Per-session trace (#1625), led by what the session cost and where its
- * context stands, with the causal timeline folded underneath as the raw
- * record. The overview answers the glance questions — how full is the
- * context, what did the tokens and cache do, which model — and the timeline
- * stays one disclosure away for "what exactly happened".
+ * Per-session trace (#1625), in the two views a reader actually opens it for:
+ * 概览 answers where the session stands — how full the context is, what the
+ * tokens and cache did, what it cost — and 时间轴 answers what happened, turn
+ * by turn. A session with no metered overview opens straight on the timeline,
+ * because then there is only one view to be in.
  *
  * Read-only. Every judgement it makes lives in `deriveInspectorOverviewModel`
  * and `deriveInspectorPanelModel`; this file lays the result out — in the
@@ -58,6 +61,7 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
     locale,
   });
   const [filter, setFilter] = useState<InspectorFilter>({});
+  const [view, setView] = useState<'overview' | 'timeline'>('overview');
   const model = useMemo(
     () => applyInspectorFilter(deriveInspectorPanelModel(snapshot.trace), filter),
     [snapshot.trace, filter],
@@ -129,23 +133,37 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
           )}
         </div>
 
+        {/* Two views, not one scroll: the overview answers "where does this
+            session stand" and the timeline answers "what happened", and a
+            reader is only ever asking one of them. Stacking them meant the
+            timeline always opened below nine facts it has nothing to do with,
+            and the fold that used to hide it made its own heading compete with
+            the section headings above it. Same shape as the Astryx IDE
+            template's properties panel, which segments Properties / History
+            for the same reason. */}
         {!model.empty && hasOverview && (
+          <SegmentedControl
+            size="sm"
+            layout="fill"
+            label={copy.overview.sections}
+            value={view}
+            onChange={(next) => setView(next === 'timeline' ? 'timeline' : 'overview')}
+          >
+            <SegmentedControlItem value="overview" label={copy.overview.overviewTab} />
+            <SegmentedControlItem
+              value="timeline"
+              label={`${copy.overview.timelineTab} · ${model.turns.length}`}
+            />
+          </SegmentedControl>
+        )}
+
+        {!model.empty && hasOverview && view === 'overview' && (
           <InspectorOverview copy={copy} locale={locale} model={model} overview={overview} />
         )}
 
-        {!model.empty && (
-          <Collapsible
-            className="maka-inspector-raw"
-            data-maka-contract="session-inspector-raw"
-            defaultIsOpen={!hasOverview}
-            trigger={
-              <span className="maka-inspector-raw-trigger">
-                <span>{copy.overview.raw}</span>
-                <Badge variant="neutral" label={model.turns.length} />
-              </span>
-            }
-          >
-            <VStack gap={2} className="maka-inspector-raw-body">
+        {!model.empty && (!hasOverview || view === 'timeline') && (
+          <div className="maka-inspector-raw" data-maka-contract="session-inspector-raw">
+            <VStack gap={3} className="maka-inspector-raw-body">
               {model.coverage && (
                 <p
                   className="maka-inspector-coverage-note"
@@ -210,7 +228,7 @@ export function SessionInspectorPanel(props: { sessionId: string; active: boolea
                 ))}
               </ol>
             </VStack>
-          </Collapsible>
+          </div>
         )}
       </VStack>
     </Section>
@@ -249,18 +267,20 @@ function InspectorOverview(props: {
       )}
 
       <InspectorSection title={copy.overview.session}>
-        <dl className="maka-inspector-grid">
+        <dl className="maka-inspector-grid maka-inspector-facts">
           {overview.model && (
             <FactRow
+              layout="beside"
               label={copy.overview.model}
               value={`${providerLabel(overview.model.providerId)} / ${overview.model.modelId}`}
             />
           )}
           {tokens?.inputTokens !== undefined && (
-            <FactRow label={copy.overview.input} value={formatNumber(tokens.inputTokens)} />
+            <FactRow layout="beside" label={copy.overview.input} value={formatNumber(tokens.inputTokens)} />
           )}
           {tokens?.cacheReadInputTokens !== undefined && (
             <FactRow
+              layout="beside"
               label={copy.overview.cacheRead}
               value={formatNumber(tokens.cacheReadInputTokens)}
               note={
@@ -270,6 +290,7 @@ function InspectorOverview(props: {
           )}
           {tokens?.outputTokens !== undefined && (
             <FactRow
+              layout="beside"
               label={copy.overview.output}
               value={formatNumber(tokens.outputTokens)}
               note={
@@ -281,6 +302,7 @@ function InspectorOverview(props: {
           )}
           {overview.model && (
             <FactRow
+              layout="beside"
               label={copy.totals.calls}
               value={formatNumber(overview.model.callCount)}
               note={
@@ -292,20 +314,24 @@ function InspectorOverview(props: {
           )}
           {props.model.totals.compactions > 0 && (
             <FactRow
+              layout="beside"
               label={copy.totals.compactions}
               value={formatNumber(props.model.totals.compactions)}
             />
           )}
           <FactRow
+              layout="beside"
             label={copy.totals.cost}
             value={formatCost(props.model.totals.costUsd, copy.costUnavailable)}
           />
           <FactRow
+              layout="beside"
             label={copy.totals.duration}
             value={formatDuration(props.model.totals.durationMs)}
           />
           {overview.lastActivityAt !== undefined && (
             <FactRow
+              layout="beside"
               label={copy.overview.lastActivity}
               value={formatDateTime(props.locale, overview.lastActivityAt)}
             />
@@ -344,23 +370,44 @@ function InspectorSection(props: {
 }
 
 /**
- * One row of the overview grid: name, figure, and an optional qualifier.
+ * One row of the overview: name, figure, and an optional qualifier.
  *
- * The third column is why the rows stay one line each — a cache rate, a retry
- * count or a reasoning split used to be glued onto the figure with a middot,
- * which made the value column ragged and the qualifier look like part of the
- * number. Rows without one leave the column empty rather than collapsing it,
- * so every figure in the section still ends on the same edge.
+ * Two layouts, because the two sections are asking different things of the
+ * reader. Legend figures are the same unit measured against the same window,
+ * so they get their own columns and end on a shared edge — that alignment IS
+ * the comparison. Session facts are a model name, a token count, a price and a
+ * timestamp; lining those up against the far edge only opens a lane of empty
+ * space between each label and its value, so they sit right beside their
+ * labels and the qualifier trails the figure.
  */
-function FactRow(props: { label: string; value: ReactNode; note?: ReactNode; swatch?: ReactNode }) {
+function FactRow(props: {
+  label: string;
+  value: ReactNode;
+  note?: ReactNode;
+  swatch?: ReactNode;
+  /** 'columns' aligns figures on a shared edge; 'beside' hugs the label. */
+  layout?: 'columns' | 'beside';
+}) {
+  const note = props.note !== undefined && (
+    <span className="maka-inspector-grid-note">{props.note}</span>
+  );
   return (
     <div className="maka-inspector-grid-row">
       <dt>
         {props.swatch}
         {props.label}
       </dt>
-      <dd className="maka-inspector-grid-value">{props.value}</dd>
-      <dd className="maka-inspector-grid-note">{props.note}</dd>
+      {props.layout === 'beside' ? (
+        <dd className="maka-inspector-grid-value">
+          {props.value}
+          {note}
+        </dd>
+      ) : (
+        <>
+          <dd className="maka-inspector-grid-value">{props.value}</dd>
+          <dd className="maka-inspector-grid-note-cell">{note}</dd>
+        </>
+      )}
     </div>
   );
 }
@@ -476,7 +523,11 @@ function TurnRow(props: {
 }) {
   const { turn } = props;
   return (
-    <li className="maka-inspector-turn" data-maka-contract="session-inspector-turn">
+    <li
+      className="maka-inspector-turn"
+      data-maka-contract="session-inspector-turn"
+      data-failed={turn.failed || undefined}
+    >
       <div className="maka-inspector-turn-head">
         <Text type="label" weight="semibold">
           {props.turnLabel(turn.index)}

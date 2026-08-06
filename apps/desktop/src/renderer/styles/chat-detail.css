@@ -164,29 +164,67 @@
 }
 
 .maka-inspector-turns {
-  gap: 0;
+  gap: var(--space-3);
 }
 
-/* One turn is one block: a hairline above, a header line that names it the
-   way a reader counts turns (第 N 轮, never the uuid), and hanging steps. */
+/* A causal record drawn as a timeline rather than as hairline-separated
+   blocks: a rule between turns says "these are different rows", where what a
+   reader needs is "these happened in this order, and these steps belong to
+   that turn". The dot marks the turn, the line carries its steps, and the
+   turn's own totals close it — the same startContent-dot shape the Astryx IDE
+   template's History list uses. */
 .maka-inspector-turn {
-  border-top: var(--border-width-hairline) solid var(--border);
-  padding-block: var(--space-2);
+  position: relative;
+  padding-left: var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+}
+
+/* The rail, drawn from under the dot to the end of the last step. */
+.maka-inspector-turn::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: var(--space-3);
+  bottom: var(--space-1);
+  width: var(--border-width-hairline);
+  background: var(--foreground-alpha-12);
+}
+
+.maka-inspector-turn:last-child::before {
+  bottom: var(--space-2);
 }
 
 .maka-inspector-turn-head {
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
+  position: relative;
+}
+
+/* The node. Positioned off the head's own text box so it stays on the first
+   line however the header wraps. */
+.maka-inspector-turn-head::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--space-4));
+  top: calc(0.5lh - 3px);
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--foreground-secondary);
+}
+
+.maka-inspector-turn[data-failed='true'] .maka-inspector-turn-head::before {
+  background: var(--destructive);
 }
 
 .maka-inspector-turn-meta {
   margin-left: auto;
   text-align: right;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .maka-inspector-steps {
@@ -313,15 +351,9 @@
   background: var(--muted);
 }
 
-/* The overview's one data grid, shared by the context legend and the session
-   facts: name, figure, qualifier. Three real columns, because figures only
-   scan as a column when they actually end on the same edge, and one grid for
-   both sections, because two neighbouring lists in two different rhythms read
-   as two unrelated widgets.
-
-   Body type and the IDE template's `metadataCompact` rhythm (row space-1,
-   column space-3): the facts are the content of this panel, not its chrome.
-   Only the qualifier column steps down to supporting. */
+/* The overview's data grid, on the IDE template's `metadataCompact` rhythm
+   (row space-1, column space-3) at body type: these facts are the content of
+   the panel, not its chrome. Only a qualifier steps down to supporting. */
 .maka-inspector-grid {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -356,12 +388,32 @@
   overflow-wrap: anywhere;
 }
 
-/* The qualifier — a cache rate, a retry count, a reasoning split — sits in its
-   own column, one step down in size and ink, so it can never be misread as
-   part of the figure it follows. */
+/* Session facts hug their labels instead of reaching for the far edge. Three
+   columns are right for the legend, where every figure is the same unit
+   against the same window and the shared edge IS the comparison; a model name,
+   a price and a timestamp compare with nothing, so stretching them across a
+   480px column only opens a lane of white space in every row. */
+.maka-inspector-facts {
+  grid-template-columns: minmax(6rem, auto) 1fr;
+}
+
+.maka-inspector-facts dd {
+  text-align: left;
+}
+
+.maka-inspector-facts .maka-inspector-grid-note {
+  margin-left: var(--space-2);
+}
+
+/* The qualifier — a cache rate, a retry count, a reasoning split — is a step
+   down in size and ink so it cannot be misread as part of the figure. */
 .maka-inspector-grid-note {
   font: var(--maka-text-supporting);
   color: var(--muted-foreground);
+}
+
+.maka-inspector-grid-note-cell {
+  min-width: 0;
 }
 
 /* The coverage notice, demoted: one quiet line inside the raw record, not a
@@ -383,20 +435,6 @@
 .maka-inspector-raw {
   border-top: var(--border-width-hairline) solid var(--border);
   padding-top: var(--space-2);
-}
-
-/* Same disclosure shape as the task ledger's 最近结束 fold, but sized as what
-   it is here: the overview's third section, so it wears the same heading tier
-   as 上下文窗口 and 会话 rather than a smaller one that would rank it below
-   them. The Astryx Collapsible trigger button carries a static color that
-   cannot follow the theme, so the product span carries its own
-   (task-ledger.css precedent). */
-.maka-inspector-raw-trigger {
-  font: var(--maka-text-heading-3);
-  color: var(--foreground);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
 }
 
 .maka-inspector-raw-body {

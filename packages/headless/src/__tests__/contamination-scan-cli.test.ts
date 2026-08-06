@@ -41,13 +41,49 @@ async function benchmark(): Promise<{
 interface Cell {
   agent: string;
   taskId: string;
+  /** Absent means the cell recorded a row but never exported a trajectory. */
   messages?: string[];
 }
 
-async function withRunRoot<T>(cells: Cell[], fn: (runRoot: string) => Promise<T>): Promise<T> {
+/**
+ * A run root the way the harness leaves one: the manifest it declared, and the
+ * cells it recorded. The manifest comes from the harness's own builder, and the
+ * arms come back out of it, so a test cannot agree with the scan about a grid
+ * neither shares with the run.
+ *
+ * Every arm/task pair the manifest declares gets a recorded cell unless the
+ * caller asks for it to be missing. A cell the caller did not describe is an
+ * ordinary clean one: the background a finding needs to stand out against.
+ */
+async function withRunRoot<T>(
+  cells: Cell[],
+  fn: (runRoot: string, armIds: string[]) => Promise<T>,
+  options: { unrecorded?: (agent: string, taskId: string) => boolean } = {},
+): Promise<T> {
   const runRoot = await mkdtemp(join(tmpdir(), 'maka-contamination-cli-'));
   try {
-    for (const [index, cell] of cells.entries()) {
+    const { buildHarnessAbManifest } = (await import(
+      new URL('../../harbor/run-harness-ab.mjs', import.meta.url).href
+    )) as {
+      buildHarnessAbManifest: (input: Record<string, unknown>) => { arms: { id: string }[] };
+    };
+    const taskIds = [...new Set(cells.map((cell) => cell.taskId))];
+    const manifest = buildHarnessAbManifest({
+      subjectFingerprint: 'subject',
+      taskSourceFingerprint: 'tasks',
+      toolchainFingerprint: 'tools',
+      ...(taskIds.length > 0 ? { taskIds } : {}),
+    });
+    await writeFile(join(runRoot, 'harness-ab-manifest.json'), JSON.stringify(manifest), 'utf8');
+    const armIds = manifest.arms.map((arm) => arm.id);
+    const grid = armIds.flatMap((agent) =>
+      taskIds.map((taskId) => {
+        const described = cells.find((cell) => cell.agent === agent && cell.taskId === taskId);
+        return described ?? { agent, taskId, messages: ['ran the tests, 12 passed'] };
+      }),
+    );
+    for (const [index, cell] of grid.entries()) {
+      if (options.unrecorded?.(cell.agent, cell.taskId)) continue;
       const trialDir = join(runRoot, 'jobs', `${cell.agent}-${index}`, 'trial');
       await mkdir(join(trialDir, 'agent'), { recursive: true });
       if (cell.messages) {
@@ -67,7 +103,7 @@ async function withRunRoot<T>(cells: Cell[], fn: (runRoot: string) => Promise<T>
         trialDir,
       });
     }
-    return await fn(runRoot);
+    return await fn(runRoot, armIds);
   } finally {
     await rm(runRoot, { recursive: true, force: true });
   }
@@ -87,14 +123,12 @@ async function scan(runRoot: string): Promise<{ code: number; report: Contaminat
 describe('run-contamination-scan', () => {
   test('exits zero only after actually searching cells and finding nothing', async () => {
     await withRunRoot(
-      [
-        { agent: 'maka', taskId: 'cobol-modernization', messages: ['ran the tests, 12 passed'] },
-        { agent: 'codex', taskId: 'fix-git', messages: ['rewrote the reflog by hand'] },
-      ],
-      async (runRoot) => {
+      [{ agent: 'maka', taskId: 'cobol-modernization', messages: ['ran the tests, 12 passed'] }],
+      async (runRoot, armIds) => {
         const { code, report } = await scan(runRoot);
         assert.equal(code, 0);
-        assert.equal(report.totals.analyzed, 2);
+        assert.equal(report.totals.analyzed, armIds.length);
+        assert.deepEqual(report.unrecordedCells, []);
       },
     );
   });
@@ -120,10 +154,7 @@ describe('run-contamination-scan', () => {
       test(label, async () => {
         const message = await evidence();
         await withRunRoot(
-          [
-            { agent: 'maka', taskId: 'cobol-modernization', messages: [message] },
-            { agent: 'codex', taskId: 'fix-git', messages: ['rewrote the reflog by hand'] },
-          ],
+          [{ agent: 'maka', taskId: 'cobol-modernization', messages: [message] }],
           async (runRoot) => {
             const { code, report } = await scan(runRoot);
             assert.equal(code, 1);
@@ -137,7 +168,7 @@ describe('run-contamination-scan', () => {
   test('writes the report where it was asked to', async () => {
     await withRunRoot(
       [{ agent: 'maka', taskId: 'cobol-modernization', messages: ['ran the tests'] }],
-      async (runRoot) => {
+      async (runRoot, armIds) => {
         const markdownPath = join(runRoot, 'report.md');
         await execFileAsync(process.execPath, [
           SCRIPT,
@@ -146,7 +177,10 @@ describe('run-contamination-scan', () => {
           '--markdown',
           markdownPath,
         ]);
-        assert.match(await readFile(markdownPath, 'utf8'), /Searched 1 of 1 recorded cells\./);
+        assert.match(
+          await readFile(markdownPath, 'utf8'),
+          new RegExp(`Searched ${armIds.length} of ${armIds.length} recorded cells\\.`),
+        );
       },
     );
   });
@@ -164,27 +198,49 @@ describe('run-contamination-scan', () => {
   // A cell whose trajectory never landed was not searched, and a zero exit here
   // would be a verdict on evidence that does not exist.
   test('exits non-zero when a declared cell could not be searched', async () => {
+    await withRunRoot([{ agent: 'maka', taskId: 'cobol-modernization' }], async (runRoot) => {
+      const { code, report } = await scan(runRoot);
+      assert.equal(code, 1);
+      assert.equal(report.coverageByAgent.maka?.analyzed, 0);
+      assert.deepEqual(report.unrecordedCells, []);
+    });
+  });
+
+  // Every cell the run declared is missing. Nothing was searched, and the
+  // report says so rather than certifying the empty set.
+  test('exits non-zero on a run in which nothing was read at all', async () => {
     await withRunRoot(
-      [
-        { agent: 'maka', taskId: 'cobol-modernization' },
-        { agent: 'codex', taskId: 'fix-git', messages: ['rewrote the reflog by hand'] },
-      ],
-      async (runRoot) => {
+      [{ agent: 'maka', taskId: 'cobol-modernization', messages: ['ran the tests'] }],
+      async (runRoot, armIds) => {
         const { code, report } = await scan(runRoot);
         assert.equal(code, 1);
-        assert.equal(report.totals.analyzed, 1);
-        assert.equal(report.coverageByAgent.maka?.analyzed, 0);
+        assert.equal(report.totals.cells, 0);
+        assert.equal(report.unrecordedCells.length, armIds.length);
       },
+      { unrecorded: () => true },
     );
   });
 
-  test('exits non-zero on a run in which nothing was read at all', async () => {
-    await withRunRoot([], async (runRoot) => {
-      await writeFile(trialCellLogPath(runRoot), '', 'utf8');
-      const { code, report } = await scan(runRoot);
-      assert.equal(code, 1);
-      assert.equal(report.totals.cells, 0);
-    });
+  // Every recorded cell was searched and came back clean, so nothing but the
+  // missing cells stands between this run and a zero exit. A run killed part
+  // way through looks exactly like this.
+  test('exits non-zero when the run declared cells it never recorded', async () => {
+    await withRunRoot(
+      [{ agent: 'maka', taskId: 'cobol-modernization', messages: ['ran the tests, 12 passed'] }],
+      async (runRoot, armIds) => {
+        const { code, report } = await scan(runRoot);
+        assert.equal(code, 1);
+        assert.equal(report.totals.cells, report.totals.analyzed);
+        assert.equal(report.totals.cellsWithRetrievalSignals, 0);
+        assert.deepEqual(
+          report.unrecordedCells,
+          armIds
+            .filter((armId) => armId !== 'maka')
+            .map((agent) => ({ agent, taskId: 'cobol-modernization' })),
+        );
+      },
+      { unrecorded: (agent) => agent !== 'maka' },
+    );
   });
 
   // A model can name this suite's tasks from what it read years ago. An alarm
@@ -209,14 +265,14 @@ describe('run-contamination-scan', () => {
   // Not a verdict and not a stack trace: a run root with no cell log is either
   // a run that recorded nothing or the wrong directory, and the two cannot be
   // told apart from here.
-  test('says what is missing when a run root has no cell log', async () => {
+  test('says what is missing when a run root is not one', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'maka-contamination-empty-'));
     try {
       await assert.rejects(
         execFileAsync(process.execPath, [SCRIPT, '--run-root', empty]),
         (error: { code?: number; stderr?: string }) => {
           assert.equal(error.code, 2);
-          assert.match(error.stderr ?? '', /no cell log at .*trial-cells\.jsonl/);
+          assert.match(error.stderr ?? '', /no run manifest at .*harness-ab-manifest\.json/);
           return true;
         },
       );

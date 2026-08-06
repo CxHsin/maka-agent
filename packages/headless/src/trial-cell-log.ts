@@ -97,7 +97,16 @@ async function truncateTornTail(path: string): Promise<void> {
  * anywhere else is real corruption and refuses.
  */
 export async function readTrialCellLog(path: string): Promise<TrialCellRecord[]> {
-  const text = await readFile(path, 'utf8');
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    // No log is no cells, which is a true and useful answer: a run that died
+    // before its first trial directory recorded nothing. Whether the directory
+    // is a run at all is a different question, and not this file's to answer.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
   const lines = text.split('\n');
   const torn = lines.length > 0 && lines[lines.length - 1] !== '';
   const attempts = lines

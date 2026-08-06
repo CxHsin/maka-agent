@@ -16,7 +16,8 @@
  */
 
 import { realpathSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   flattenBenchmarkIdentity,
@@ -41,34 +42,56 @@ function parseArgs(argv) {
   return args;
 }
 
-export async function main(argv = process.argv.slice(2)) {
-  const args = parseArgs(argv);
-  const logPath = trialCellLogPath(args['run-root']);
-  let report;
+/**
+ * The grid the run declared it would grade, read from its own manifest.
+ *
+ * Whether the cell log holds the whole run is a fact about the run, and the
+ * run wrote it down: every arm crossed with every evaluation task. Without it
+ * a run killed at cell three certifies the three cells that reached disk.
+ */
+async function expectedCells(runRoot) {
+  const path = join(runRoot, 'harness-ab-manifest.json');
+  let manifest;
   try {
-    report = await scanRunForContamination({
-      trialCellLogPath: logPath,
-      identity: flattenBenchmarkIdentity(BENCHMARK_IDENTITY),
-    });
+    manifest = JSON.parse(await readFile(path, 'utf8'));
   } catch (error) {
-    // No log at all is not "this run is clean" and not a crash to read a stack
-    // trace out of. It is either a run whose every cell died before a trial
-    // directory existed, or a run root that never wrote one — and the two are
-    // not distinguishable from here, so say what is missing and stop.
     if (error?.code === 'ENOENT') {
-      throw new Error(
-        `no cell log at ${logPath}: this run recorded no trial, or is not a harness run root`,
-      );
+      throw new Error(`no run manifest at ${path}: this is not a harness run root`);
     }
     throw error;
   }
+  const armIds = (manifest.arms ?? []).map((arm) => arm?.id);
+  const taskIds = manifest.evaluationTaskIds;
+  if (armIds.length === 0 || armIds.some((id) => typeof id !== 'string')) {
+    throw new Error(`${path} declares no arm ids`);
+  }
+  if (!Array.isArray(taskIds) || taskIds.length === 0) {
+    throw new Error(`${path} declares no evaluation task ids`);
+  }
+  // One cell per arm per task holds only while the harness schedules a single
+  // rep. A manifest that says otherwise is a grid this cannot describe, and
+  // guessing at it would under-count the run it is meant to bound.
+  if (manifest.reps !== undefined && manifest.reps !== 1) {
+    throw new Error(`${path} declares reps=${manifest.reps}; this scan assumes one rep per cell`);
+  }
+  return armIds.flatMap((agent) => taskIds.map((taskId) => ({ agent, taskId })));
+}
+
+export async function main(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv);
+  const report = await scanRunForContamination({
+    trialCellLogPath: trialCellLogPath(args['run-root']),
+    identity: flattenBenchmarkIdentity(BENCHMARK_IDENTITY),
+    expectedCells: await expectedCells(args['run-root']),
+  });
   if (args.json) await writeFile(args.json, `${JSON.stringify(report, null, 2)}\n`);
   const markdown = renderContaminationScanReportMarkdown(report);
   if (args.markdown) await writeFile(args.markdown, markdown);
   else process.stdout.write(markdown);
-  // Three things make this non-zero, and each is something a person has to act
-  // on: a cell that went and got something, a trajectory that could not be
-  // searched, and a run in which nothing at all was read.
+  // Four things make this non-zero, and each is something a person has to act
+  // on: a cell that went and got something, a cell the run declared and never
+  // recorded, a trajectory that could not be searched, and a run in which
+  // nothing at all was read.
   //
   // The last is the one worth spelling out. A zero exit is read as "no
   // contamination", so a run whose output never landed — cells declared, none
@@ -82,6 +105,7 @@ export async function main(argv = process.argv.slice(2)) {
   // that needs judgement rather than action belongs.
   const unsearched = report.totals.cells - report.totals.analyzed;
   return report.totals.cellsWithRetrievalSignals > 0 ||
+    report.unrecordedCells.length > 0 ||
     unsearched > 0 ||
     report.totals.analyzed === 0
     ? 1

@@ -89,6 +89,14 @@ export interface CellContaminationReport extends TrialCellRecord {
 
 export interface ContaminationScanReport {
   cells: CellContaminationReport[];
+  /**
+   * Cells the run declared it would grade and never recorded.
+   *
+   * A run killed part-way through, or one whose best-effort log write failed,
+   * leaves artifacts the scan never looks at. Counting only what was recorded
+   * would certify the surviving fraction and call it the run.
+   */
+  unrecordedCells: { agent: string; taskId: string }[];
   /** Coverage per arm, because a whole arm exporting nothing is the failure
    * mode that looks most like success. */
   coverageByAgent: Record<string, { cells: number; analyzed: number }>;
@@ -289,6 +297,12 @@ export function scanTrajectory(input: {
 export async function scanRunForContamination(input: {
   trialCellLogPath: string;
   identity: BenchmarkIdentity;
+  /**
+   * The grid the run declared: one entry per arm per evaluation task. Supplied
+   * by the caller from the run's own manifest, because whether the log holds
+   * the whole run is a fact about the run, not about the log.
+   */
+  expectedCells?: readonly { agent: string; taskId: string }[];
 }): Promise<ContaminationScanReport> {
   const readTrajectory = (path: string) => readFile(path, 'utf8');
   const records = await readTrialCellLog(input.trialCellLogPath);
@@ -319,8 +333,13 @@ export async function scanRunForContamination(input: {
     bucket.cells += 1;
     if (cell.analyzed) bucket.analyzed += 1;
   }
+  const recorded = new Set(cells.map((cell) => cellKey(cell.agent, cell.taskId)));
+  const unrecordedCells = (input.expectedCells ?? []).filter(
+    (expected) => !recorded.has(cellKey(expected.agent, expected.taskId)),
+  );
   return {
     cells,
+    unrecordedCells: unrecordedCells.map((expected) => ({ ...expected })),
     coverageByAgent,
     totals: {
       cells: cells.length,
@@ -351,7 +370,9 @@ export function renderContaminationScanReportMarkdown(report: ContaminationScanR
     '',
     `Searched ${totals.analyzed} of ${totals.cells} recorded cells.`,
     '',
-    'Recorded means the harness got far enough to resolve a trial directory. A cell that died before that is not counted here or anywhere below.',
+    report.unrecordedCells.length > 0
+      ? `**${report.unrecordedCells.length} cells the run declared were never recorded.** The run did not finish, or its artifacts never reached the log; whatever those cells did is not in this report.`
+      : 'Recorded means the harness got far enough to resolve a trial directory. A cell that died before that is not counted here or anywhere below.',
     '',
     '| arm | cells | searched |',
     '| --- | --- | --- |',
@@ -361,6 +382,13 @@ export function renderContaminationScanReportMarkdown(report: ContaminationScanR
     '',
     `Retrieval evidence: ${totals.cellsWithRetrievalSignals} cells. Task-id mentions only: ${totals.cellsWithAdvisorySignalsOnly} cells.`,
   ];
+
+  if (report.unrecordedCells.length > 0) {
+    lines.push('', '## Never recorded', '');
+    for (const cell of report.unrecordedCells) {
+      lines.push(`- \`${cell.taskId}\` (${cell.agent})`);
+    }
+  }
 
   const unsearched = report.cells.filter((cell) => !cell.analyzed);
   if (unsearched.length > 0) {
@@ -404,6 +432,10 @@ export function renderContaminationScanReportMarkdown(report: ContaminationScanR
  * encoded, or built from parts across steps. That is unbounded and this makes
  * no claim on it; the signals here are for references that appear verbatim.
  */
+function cellKey(agent: string, taskId: string): string {
+  return JSON.stringify([agent, taskId]);
+}
+
 function repositoryPattern(upstreamRepositoryUrl: string): RegExp {
   const withoutScheme = upstreamRepositoryUrl
     .replace(/^[a-z]+:\/\//i, '')

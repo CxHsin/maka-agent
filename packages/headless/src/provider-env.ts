@@ -258,7 +258,7 @@ function connectionFromEnv(
   };
 }
 
-function modelApiProtocolFromEnv(value: string | undefined): ModelInfo['apiProtocol'] {
+export function modelApiProtocolFromEnv(value: string | undefined): ModelInfo['apiProtocol'] {
   if (value === 'openai-chat' || value === 'openai-responses' || value === 'anthropic-messages')
     return value;
   return undefined;

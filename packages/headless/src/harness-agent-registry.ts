@@ -1,7 +1,7 @@
 import { PROVIDER_DEFAULTS, type ModelInfo, type ProviderType } from '@maka/core/llm-connections';
 import { type ModelRuntimeWire, resolveModelRuntime } from '@maka/runtime/model-runtime';
 import type { ProviderAuthProxyMode, ProviderUsageProtocol } from './provider-auth-proxy.js';
-import { selectedModelApiProtocol } from './provider-env.js';
+import { modelApiProtocolFromEnv, selectedModelApiProtocol } from './provider-env.js';
 
 export type HarnessAgentId =
   | 'maka'
@@ -129,7 +129,7 @@ function makaRuntimeWire(
   // nothing dials — the wrong-number failure this whole path exists to remove.
   const advertised = selectedModelApiProtocol(
     provider as ProviderType,
-    modelApiProtocol(apiProtocol),
+    modelApiProtocolFromEnv(apiProtocol),
   );
   return resolveModelRuntime(
     {
@@ -138,12 +138,6 @@ function makaRuntimeWire(
     },
     modelId,
   ).wire;
-}
-
-function modelApiProtocol(value: string | undefined): ModelInfo['apiProtocol'] {
-  return value === 'openai-chat' || value === 'openai-responses' || value === 'anthropic-messages'
-    ? value
-    : undefined;
 }
 
 function usageProtocolForWire(wire: ModelRuntimeWire): ProviderUsageProtocol | undefined {

@@ -149,6 +149,19 @@ test('the Maka arm measures the wire its own runtime resolves, not the adapter k
     providerProxyUsageProtocol('reasonix', 'deepseek', undefined, 'deepseek-v4-flash'),
     'openai-chat-sse',
   );
+  // The catalog spelling resolves to the same wire as the one the runtime dials.
+  // `resolveModelRuntime` does not recognize the prefixed id, so a caller that
+  // forwarded it raw would silently get the Chat guess back — this fix's own
+  // API re-entering the bug it exists to close.
+  assert.equal(
+    providerProxyUsageProtocol('maka', 'deepseek', undefined, 'deepseek/deepseek-v4-flash'),
+    'openai-responses-sse',
+  );
+  // And a caller with no model id at all gets an error, not the guess.
+  assert.throws(
+    () => providerProxyUsageProtocol('maka', 'deepseek'),
+    /the maka arm requires a model id/,
+  );
 });
 
 interface FakeOptions {

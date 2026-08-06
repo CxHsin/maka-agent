@@ -915,12 +915,7 @@ async function pierProviderRuntime(
       : { apiKeyFile: options.apiKeyFile! }),
     clientAuthMode: providerProxyClientAuthMode(agent, provider, apiProtocol),
     upstreamAuthMode: providerProxyUpstreamAuthMode(agent, provider, apiProtocol),
-    usageProtocol: providerProxyUsageProtocol(
-      agent,
-      provider,
-      apiProtocol,
-      modelIdForProvider(options.model, provider),
-    ),
+    usageProtocol: providerProxyUsageProtocol(agent, provider, apiProtocol, options.model),
   };
   const proxy =
     options.providerProxyHub && proxyPort !== undefined

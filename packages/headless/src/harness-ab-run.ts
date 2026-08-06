@@ -152,10 +152,12 @@ async function executeHarnessArmCohort(input: RunHarnessArmCohortInput): Promise
       input.arms.map((arm) => buildAbRoundId(undefined, arm.id, 0, task.id)),
     ),
   );
-  for (const roundId of retryRoundIds) {
-    if (!validRoundIds.has(roundId)) {
-      throw new Error(`adjudicated infra retry names unknown round ${roundId}`);
-    }
+  // Report every unknown id at once. An operator recovering a sweep hands over
+  // a batch of them, and failing on the first turns one typo into as many
+  // round-trips as there are mistakes.
+  const unknownRoundIds = [...retryRoundIds].filter((roundId) => !validRoundIds.has(roundId));
+  if (unknownRoundIds.length > 0) {
+    throw new Error(`adjudicated infra retry names unknown round ${unknownRoundIds.join(', ')}`);
   }
   const preexistingEventIds = new Set(
     (await readFixedPromptWal(input.resultsJsonlPath))

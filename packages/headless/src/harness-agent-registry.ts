@@ -69,6 +69,16 @@ export function providerProxyUpstreamAuthMode(
     : 'bearer';
 }
 
+/**
+ * The model id as the provider itself spells it, with the catalog's `provider/`
+ * prefix removed. This is what the runtime dials with, so it is also the only
+ * spelling any provider-facing decision may be made on.
+ */
+export function modelIdForProvider(model: string, provider: string): string {
+  const prefix = `${provider}/`;
+  return model.startsWith(prefix) ? model.slice(prefix.length) : model;
+}
+
 export function providerProxyUsageProtocol(
   agent: HarnessAgentId,
   provider: string,
@@ -87,8 +97,18 @@ export function providerProxyUsageProtocol(
   // Responses, a proxy still parsing Chat SSE never saw `[DONE]`, recorded
   // every request `interrupted` with no usage, and the runner threw each
   // graded cell away as an infra failure.
-  const wire = agent === 'maka' && modelId ? makaRuntimeWire(provider, modelId, apiProtocol) : null;
-  if (wire) return usageProtocolForWire(wire);
+  //
+  // Which model is not optional information for the Maka arm: without it there
+  // is nothing to ask the runtime and the answer silently degrades back to the
+  // guess. Say so rather than returning a plausible wrong number. The id is
+  // normalized here so a caller passing the catalog spelling cannot resolve a
+  // different wire than the one the runtime dials — `resolveModelRuntime`
+  // does not recognize `deepseek/deepseek-v4-flash` and falls back to Chat.
+  if (agent === 'maka') {
+    if (!modelId) throw new Error('providerProxyUsageProtocol: the maka arm requires a model id');
+    const wire = makaRuntimeWire(provider, modelIdForProvider(modelId, provider), apiProtocol);
+    if (wire) return usageProtocolForWire(wire);
+  }
   const definition = providerDefinition(provider);
   if (definition?.runtimeAdapter.kind === 'anthropic') return 'anthropic-sse';
   if (definition?.runtimeAdapter.kind === 'openai-compatible') return 'openai-chat-sse';

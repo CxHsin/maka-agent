@@ -256,6 +256,16 @@ describe('runHarnessAbComparison', () => {
         retryAdjudicatedInfraRoundIdsOnce: ['ab-maka-r0-install-windows-3-11'],
       });
       assert.equal(failingAttempts, 3);
+
+      // An operator recovering a sweep hands over a batch of ids. Naming only
+      // the first offender makes fixing a list of typos one round-trip each.
+      await assert.rejects(
+        runHarnessAbComparison({
+          ...input,
+          retryAdjudicatedInfraRoundIdsOnce: ['ab-maka-r0-nope', 'ab-maka-r0-also-nope'],
+        }),
+        /unknown round ab-maka-r0-nope, ab-maka-r0-also-nope/,
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

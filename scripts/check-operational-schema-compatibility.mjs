@@ -11,7 +11,13 @@ const manifestPath = 'packages/storage/src/operational-schema-manifest.ts';
 const probePattern =
   /^packages\/storage\/src\/__tests__\/fixtures\/operational-epoch-(\d+)-probe\.ts$/;
 
-export function validateOperationalProbeChanges({ baseEpoch, currentEpoch, changes }) {
+export function validateOperationalProbeChanges({
+  baseEpoch,
+  currentEpoch,
+  baseBreakingChanges = 0,
+  currentBreakingChanges = 0,
+  changes,
+}) {
   if (!Number.isSafeInteger(baseEpoch) || baseEpoch < 0) throw new Error('invalid base epoch');
   if (!Number.isSafeInteger(currentEpoch) || currentEpoch < 1) {
     throw new Error('invalid current epoch');
@@ -20,6 +26,15 @@ export function validateOperationalProbeChanges({ baseEpoch, currentEpoch, chang
     throw new Error(
       `Operational reader epoch cannot decrease from ${baseEpoch} to ${currentEpoch}`,
     );
+  }
+  if (baseEpoch > 0 && currentEpoch > baseEpoch + 1) {
+    throw new Error(`Operational reader epoch must advance one step after ${baseEpoch}`);
+  }
+  if (currentBreakingChanges > baseBreakingChanges && currentEpoch === baseEpoch) {
+    throw new Error('A new breaking operational schema declaration must raise the reader epoch');
+  }
+  if (baseEpoch > 0 && currentEpoch > baseEpoch && currentBreakingChanges === baseBreakingChanges) {
+    throw new Error('An operational reader epoch increase requires a new breaking declaration');
   }
 
   const addedEpochs = new Set();
@@ -62,6 +77,10 @@ function parseEpoch(source, label) {
   return Number(match[1]);
 }
 
+function countBreakingChanges(source) {
+  return source?.match(/compatibility:\s*'breaking'/g)?.length ?? 0;
+}
+
 function git(args) {
   return execFileSync('git', args, {
     cwd: repoRoot,
@@ -93,11 +112,10 @@ function main(args) {
   const baseIndex = args.indexOf('--base');
   const base = baseIndex >= 0 ? args[baseIndex + 1] : undefined;
   if (!base) throw new Error('usage: check-operational-schema-compatibility --base <commit>');
-  const baseEpoch = parseEpoch(sourceAtRevision(base, manifestPath), `${base}:${manifestPath}`);
-  const currentEpoch = parseEpoch(
-    readFileSync(resolve(repoRoot, manifestPath), 'utf8'),
-    manifestPath,
-  );
+  const baseManifest = sourceAtRevision(base, manifestPath);
+  const currentManifest = readFileSync(resolve(repoRoot, manifestPath), 'utf8');
+  const baseEpoch = parseEpoch(baseManifest, `${base}:${manifestPath}`);
+  const currentEpoch = parseEpoch(currentManifest, manifestPath);
   const changes = parseChanges(
     git([
       'diff',
@@ -107,7 +125,13 @@ function main(args) {
       'packages/storage/src/__tests__/fixtures/operational-epoch-*-probe.ts',
     ]),
   );
-  validateOperationalProbeChanges({ baseEpoch, currentEpoch, changes });
+  validateOperationalProbeChanges({
+    baseEpoch,
+    currentEpoch,
+    baseBreakingChanges: countBreakingChanges(baseManifest),
+    currentBreakingChanges: countBreakingChanges(currentManifest),
+    changes,
+  });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {

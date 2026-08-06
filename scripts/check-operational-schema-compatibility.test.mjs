@@ -20,13 +20,22 @@ test('keeps every existing operational epoch probe immutable', () => {
 
 test('requires exactly the new epoch probe when reader compatibility breaks', () => {
   assert.throws(
-    () => validateOperationalProbeChanges({ baseEpoch: 1, currentEpoch: 2, changes: [] }),
+    () =>
+      validateOperationalProbeChanges({
+        baseEpoch: 1,
+        currentEpoch: 2,
+        baseBreakingChanges: 0,
+        currentBreakingChanges: 1,
+        changes: [],
+      }),
     /requires a new frozen epoch-2 probe/,
   );
   assert.doesNotThrow(() =>
     validateOperationalProbeChanges({
       baseEpoch: 1,
       currentEpoch: 2,
+      baseBreakingChanges: 0,
+      currentBreakingChanges: 1,
       changes: [
         {
           status: 'A',
@@ -51,5 +60,35 @@ test('rejects adding a probe without changing the reader epoch', () => {
         ],
       }),
     /requires a reader epoch increase/,
+  );
+});
+
+test('requires a new breaking declaration and epoch increase together', () => {
+  assert.throws(
+    () =>
+      validateOperationalProbeChanges({
+        baseEpoch: 1,
+        currentEpoch: 1,
+        baseBreakingChanges: 0,
+        currentBreakingChanges: 1,
+        changes: [],
+      }),
+    /must raise the reader epoch/,
+  );
+  assert.throws(
+    () =>
+      validateOperationalProbeChanges({
+        baseEpoch: 1,
+        currentEpoch: 2,
+        baseBreakingChanges: 0,
+        currentBreakingChanges: 0,
+        changes: [
+          {
+            status: 'A',
+            path: 'packages/storage/src/__tests__/fixtures/operational-epoch-2-probe.ts',
+          },
+        ],
+      }),
+    /requires a new breaking declaration/,
   );
 });

@@ -46,6 +46,37 @@ describe('trial cell log', () => {
     });
   });
 
+  // A cell can be attempted twice: the adjudicated-infra retry re-runs a round,
+  // and each attempt deletes the previous attempt's job directory first. Two
+  // rows for one cell would count it twice, and would let an attempt whose
+  // artifacts no longer exist speak for the attempt that was graded.
+  test('keeps the attempt that is still on disk when a cell was retried', async () => {
+    await withTempDir(async (dir) => {
+      const path = trialCellLogPath(dir);
+      await appendTrialCell(path, cell({ trialDir: '/runs/first-attempt' }));
+      await appendTrialCell(path, cell({ taskId: 'task-2', roundId: 'maka-r0-task-2' }));
+      await appendTrialCell(path, cell({ trialDir: '/runs/retry' }));
+      const rows = await readTrialCellLog(path);
+      assert.deepEqual(
+        rows.map((row) => [row.taskId, row.trialDir]),
+        [
+          ['task-1', '/runs/retry'],
+          ['task-2', cell().trialDir],
+        ],
+      );
+    });
+  });
+
+  // Two arms grade the same task; they are two cells, not one retried cell.
+  test('does not fold two arms of the same task into one cell', async () => {
+    await withTempDir(async (dir) => {
+      const path = trialCellLogPath(dir);
+      await appendTrialCell(path, cell());
+      await appendTrialCell(path, cell({ agent: 'codex', roundId: 'codex-r0-task-1' }));
+      assert.equal((await readTrialCellLog(path)).length, 2);
+    });
+  });
+
   // A run that asked for no log is the ordinary case for every caller outside
   // the harness A/B path; it must not have to invent a path to stay silent.
   test('writes nothing when no path is configured', async () => {

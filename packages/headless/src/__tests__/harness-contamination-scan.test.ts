@@ -70,11 +70,28 @@ describe('benchmark identity', () => {
   });
 
   // The failure this guards is the quiet one: a renamed field turns every cell
-  // clean, and a clean report is exactly what a reader wants to see.
+  // clean, and a clean report is exactly what a reader wants to see. A partial
+  // rename is quieter still, because the families that survived keep the report
+  // looking whole.
+  test('refuses a catalog that lost the revision alone', () => {
+    assert.throws(
+      () =>
+        flattenBenchmarkIdentity({
+          bench: {
+            upstreamRepositoryUrl: 'https://github.com/example-org/example-bench-2-1',
+            commit: '0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d',
+            taskTreeFingerprint: 'sha256:00001111',
+            taskIds: ['a'],
+          },
+        }),
+      /carries no revisions/,
+    );
+  });
+
   test('refuses a catalog that carries no needles', () => {
     assert.throws(
       () => flattenBenchmarkIdentity({ terminalBench21: { revision: 'abc' } }),
-      /no upstream repository or task ids/,
+      /carries no upstreamRepositoryUrls, taskTreeFingerprints, taskIds/,
     );
   });
 });
@@ -88,6 +105,23 @@ describe('scanTrajectory', () => {
       ]),
       [],
     );
+  });
+
+  test('finds the fingerprint written without the digest scheme', () => {
+    const bare = identity.taskTreeFingerprints[0]!.replace(/^sha256:/, '');
+    assert.deepEqual(kinds([`tree hash ${bare}`]), ['task_tree_fingerprint']);
+  });
+
+  // Seven hex characters occur inside other hashes. This one written down is
+  // the signal; this one occurring inside an unrelated digest is not.
+  test('does not read the revision out of the middle of another hash', () => {
+    const prefix = identity.revisions[0]!.slice(0, MIN_REVISION_PREFIX);
+    assert.deepEqual(kinds([`blob ff${prefix}aa`]), []);
+    assert.deepEqual(kinds([`checked out ${prefix}`]), ['pinned_revision']);
+  });
+
+  test("does not flag the cell's own task id written in another case", () => {
+    assert.deepEqual(kinds(['solving Cobol-Modernization']), []);
   });
 
   test('finds each of the four signals', () => {
@@ -401,6 +435,46 @@ describe('scanRunForContamination', () => {
     );
   });
 
+  // The retry deleted the first attempt's directory, so the superseded row now
+  // points at the retry's artifacts. Counting it would report one cell twice,
+  // and — in the other direction — would let an attempt the harness threw away
+  // fail a run whose graded cell was clean.
+  test('counts a retried cell once, as the attempt that is on disk', async () => {
+    const runRoot = await mkdtemp(join(tmpdir(), 'maka-contamination-retry-'));
+    try {
+      const firstDir = join(runRoot, 'jobs', 'first', 'trial');
+      const retryDir = join(runRoot, 'jobs', 'retry', 'trial');
+      await mkdir(join(retryDir, 'agent'), { recursive: true });
+      await writeFile(
+        join(retryDir, 'agent', 'trajectory.json'),
+        JSON.stringify(trajectory(['ordinary work'])),
+        'utf8',
+      );
+      const row = {
+        runId: 'run-1',
+        roundId: 'maka-r0-cobol',
+        taskId: 'cobol-modernization',
+        agent: 'maka',
+      };
+      await appendTrialCell(trialCellLogPath(runRoot), { ...row, trialDir: firstDir });
+      await appendTrialCell(trialCellLogPath(runRoot), { ...row, trialDir: retryDir });
+
+      const report = await scanRunForContamination({
+        trialCellLogPath: trialCellLogPath(runRoot),
+        identity,
+      });
+      assert.deepEqual(report.totals, {
+        cells: 1,
+        analyzed: 1,
+        cellsWithRetrievalSignals: 0,
+        cellsWithAdvisorySignalsOnly: 0,
+      });
+      assert.equal(report.cells[0]?.trialDir, retryDir);
+    } finally {
+      await rm(runRoot, { recursive: true, force: true });
+    }
+  });
+
   test('renders what was searched before what was found', async () => {
     await withRun(
       [
@@ -418,7 +492,8 @@ describe('scanRunForContamination', () => {
             identity,
           }),
         );
-        assert.match(markdown, /Searched 1\/2 cells\./);
+        assert.match(markdown, /Searched 1 of 2 recorded cells\./);
+        assert.match(markdown, /Recorded means the harness got far enough/);
         assert.match(markdown, /\| codex \| 1 \| 0 \|/);
         assert.match(markdown, /## Not searched/);
         assert.match(markdown, /\*\*upstream_repository\*\*/);

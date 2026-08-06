@@ -136,11 +136,16 @@ export function flattenBenchmarkIdentity(catalog: unknown): BenchmarkIdentity {
     taskTreeFingerprints: [...taskTreeFingerprints],
     taskIds: [...taskIds],
   };
-  // A catalog that carries none of the four is either the wrong file or a
-  // renamed field, and either way a scan run against it reports every cell
-  // clean. That is the one outcome this must never produce silently.
-  if (identity.upstreamRepositoryUrls.length === 0 || identity.taskIds.length === 0) {
-    throw new Error('benchmark identity carries no upstream repository or task ids');
+  // A missing family is either the wrong file or a renamed field, and a scan
+  // that lost one searches for less than it reports having searched for. Each
+  // is required, not just enough of them to look populated: a rename of
+  // `revision` alone would disarm the most specific retrieval needle there is
+  // while the two coarser ones kept the report looking whole.
+  const empty = Object.entries(identity)
+    .filter(([, values]) => values.length === 0)
+    .map(([family]) => family);
+  if (empty.length > 0) {
+    throw new Error(`benchmark identity carries no ${empty.join(', ')}`);
   }
   return identity;
 }
@@ -148,15 +153,18 @@ export function flattenBenchmarkIdentity(catalog: unknown): BenchmarkIdentity {
 /**
  * The shortest revision prefix worth searching for.
  *
- * Two things write this revision down. One is the harness, which abbreviates to
- * eight in the task-source path a cell can see. The other is git, which the
- * cell runs: `git log --oneline` and `rev-parse --short` abbreviate to seven by
- * default, so a cell that reads the revision out of a checkout and writes it
- * down the way git just showed it is one character below anything the harness
- * itself would have written. Take the smaller.
+ * A cell that fetched the upstream ran git, and git decides how much of the
+ * revision it then sees: `git log --oneline` and `rev-parse --short` abbreviate
+ * to seven by default. Searching for more than a cell was shown is searching
+ * for a string it had no way to write, so seven is the floor — measured against
+ * git rather than remembered, because `core.abbrev=auto` grows with object
+ * count and only the smallest repository gives the shortest answer.
  *
- * Short does not mean noisy: the pattern is one specific string, not a run of
- * hex, so a false match needs those seven characters to occur verbatim.
+ * Seven hex characters are not rare in the abstract, so the pattern is bounded
+ * on the left against hex: this revision written down, not this revision
+ * occurring inside an unrelated hash. It is deliberately unbounded on the
+ * right, because the full forty-character revision is the match that matters
+ * most and it continues in hex.
  */
 export const MIN_REVISION_PREFIX = 7;
 
@@ -231,11 +239,17 @@ export function scanTrajectory(input: {
   const revisionPatterns = input.identity.revisions
     .map(revisionPattern)
     .filter((pattern): pattern is RegExp => pattern !== null);
+  // Searched without the `sha256:` the catalog writes it with: the digest is
+  // the fingerprint, and a cell that copied it out of a hex-only listing would
+  // otherwise carry the whole of it and match none of it.
   const fingerprintPatterns = input.identity.taskTreeFingerprints.map(
-    (fingerprint) => new RegExp(escapeRegExp(fingerprint), 'gi'),
+    (fingerprint) => new RegExp(escapeRegExp(fingerprint.replace(/^[a-z0-9]+:/i, '')), 'gi'),
   );
+  const ownTaskId = input.ownTaskId.toLowerCase();
   const foreignTaskPatterns = input.identity.taskIds
-    .filter((taskId) => taskId !== input.ownTaskId)
+    // Compared case-insensitively, as the patterns match: a cell that writes
+    // its own task id in another case is still describing its own work.
+    .filter((taskId) => taskId.toLowerCase() !== ownTaskId)
     .map((taskId) => ({
       taskId,
       // Case-insensitive because a cell writes a task id however it likes. The
@@ -264,18 +278,19 @@ export function scanTrajectory(input: {
 }
 
 /**
- * Scan every cell a run wrote down.
+ * Scan every cell a run recorded.
  *
- * The cell list is the run's, not this file's guess at it: a cell missing from
- * the log is missing from the report, which is the honest answer when the
- * harness never got far enough to record it.
+ * The cell list is the run's, not this file's guess at it. A cell the harness
+ * never got far enough to record — an arm that died before its trial directory
+ * existed — is absent here, and the report says "recorded cells" rather than
+ * "cells" so that a reader is not told a run was covered end to end on the
+ * strength of the part of it that reached disk.
  */
 export async function scanRunForContamination(input: {
   trialCellLogPath: string;
   identity: BenchmarkIdentity;
-  readTrajectory?: (path: string) => Promise<string>;
 }): Promise<ContaminationScanReport> {
-  const readTrajectory = input.readTrajectory ?? ((path: string) => readFile(path, 'utf8'));
+  const readTrajectory = (path: string) => readFile(path, 'utf8');
   const records = await readTrialCellLog(input.trialCellLogPath);
   const cells: CellContaminationReport[] = [];
   for (const record of records) {
@@ -334,7 +349,9 @@ export function renderContaminationScanReportMarkdown(report: ContaminationScanR
   const lines = [
     '# Contamination scan',
     '',
-    `Searched ${totals.analyzed}/${totals.cells} cells.`,
+    `Searched ${totals.analyzed} of ${totals.cells} recorded cells.`,
+    '',
+    'Recorded means the harness got far enough to resolve a trial directory. A cell that died before that is not counted here or anywhere below.',
     '',
     '| arm | cells | searched |',
     '| --- | --- | --- |',
@@ -403,7 +420,7 @@ function repositoryPattern(upstreamRepositoryUrl: string): RegExp {
 
 function revisionPattern(revision: string): RegExp | null {
   if (revision.length < MIN_REVISION_PREFIX) return null;
-  return new RegExp(revision.slice(0, MIN_REVISION_PREFIX), 'gi');
+  return new RegExp(`(?<![0-9a-f])${revision.slice(0, MIN_REVISION_PREFIX)}`, 'gi');
 }
 
 /**

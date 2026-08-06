@@ -50,9 +50,21 @@ export async function appendTrialCell(
   }
 }
 
+/**
+ * The run's cells: one row per cell, each the attempt that is still on disk.
+ *
+ * A cell can be attempted more than once — the adjudicated-infra retry re-runs
+ * a round, and so does re-invoking a run id against a WAL that does not mark it
+ * complete. Each attempt appends, and each attempt starts by deleting the
+ * previous attempt's job directory, so an earlier row names a directory that
+ * now holds the later attempt's artifacts. Reading the rows one-to-one would
+ * count one cell twice and let an attempt the harness itself superseded — whose
+ * artifacts no longer exist — decide the verdict for the attempt that was
+ * graded. The last row for a cell is the one that ran.
+ */
 export async function readTrialCellLog(path: string): Promise<TrialCellRecord[]> {
   const text = await readFile(path, 'utf8');
-  return text
+  const attempts = text
     .split('\n')
     .filter((line) => line.trim().length > 0)
     .map((line, index) => {
@@ -64,6 +76,11 @@ export async function readTrialCellLog(path: string): Promise<TrialCellRecord[]>
       }
       return assertTrialCellRecord(parsed, `${path}: line ${index + 1}`);
     });
+  const byCell = new Map<string, TrialCellRecord>();
+  for (const attempt of attempts) {
+    byCell.set(JSON.stringify([attempt.runId, attempt.roundId, attempt.taskId]), attempt);
+  }
+  return [...byCell.values()];
 }
 
 function assertTrialCellRecord(value: unknown, where: string): TrialCellRecord {

@@ -465,6 +465,77 @@ describe('tool activity presentation', () => {
     assert.doesNotMatch(markup, /astryx-codeblock/);
   });
 
+  // The marker used to sit inline at the head of the line's text: it ate the
+  // first column, so an addition's indentation stopped lining up with the
+  // context around it, and it was flush against the code — `+# Tool result
+  // diffs` reads as one token. It is a column of its own now.
+  it('gives the +/- marker its own column so the code keeps its indentation', () => {
+    const markup = renderToStaticMarkup(createElement(ToolResultPreview, {
+      content: {
+        kind: 'file_diff',
+        paths: ['x.md'],
+        diff: ['@@ -1,2 +1,2 @@', '   kept', '-# old', '+# new'].join('\n'),
+      },
+    }));
+
+    assert.deepEqual(diffMarkers(markup), ['', '-', '+']);
+    // Two spaces of source indentation on the context line, and neither
+    // changed line carries its sign into the code.
+    assert.deepEqual(diffCodeText(markup), ['  kept', '# old', '# new']);
+  });
+
+  // Every line painted one flat colour before this: Astryx's CodeBlock
+  // highlights a whole buffer in one language, and a diff is neither. The
+  // tokenizer underneath it is line-local, which is what a diff can use.
+  it('colours the code beside the marker in the language the path names', () => {
+    const markup = renderToStaticMarkup(createElement(ToolResultPreview, {
+      content: {
+        kind: 'file_diff',
+        paths: ['x.ts'],
+        diff: ['@@ -1,2 +1,2 @@', ' const kept = 1;', '-const removed = 2;', '+const added = 3;'].join('\n'),
+      },
+    }));
+
+    // Keywords, numbers and the identifiers between them are separate spans —
+    // the whole point is that a line is no longer one colour.
+    assert.match(markup, /class="astryx-token-keyword">const</);
+    assert.match(markup, /class="astryx-token-number">3</);
+    // Splitting into spans must not add or drop a character of source.
+    assert.deepEqual(diffCodeText(markup), ['const kept = 1;', 'const removed = 2;', 'const added = 3;']);
+  });
+
+  // The rows are tokenized as one joined buffer, and the JS block-comment
+  // pattern (`/\*[\s\S]*?\*\/`) matches across newlines — so a row that opens
+  // `/*` returns a token reaching into the rows below it. The row's own text
+  // has to survive that intact; a colour is the only thing allowed to be lost.
+  it('keeps a row text intact when a token runs past the end of its line', () => {
+    const markup = renderToStaticMarkup(createElement(ToolResultPreview, {
+      content: {
+        kind: 'file_diff',
+        paths: ['x.ts'],
+        diff: ['@@ -1,3 +1,3 @@', '+/* opened here', ' const kept = 1;', '+*/'].join('\n'),
+      },
+    }));
+
+    assert.deepEqual(diffCodeText(markup), ['/* opened here', 'const kept = 1;', '*/']);
+  });
+
+  // A wrong colouring is worse than none: an extension the tokenizer does not
+  // know, and a diff whose paths disagree, both render plain.
+  it('leaves a diff plain when the language is unknown or ambiguous', () => {
+    const diff = ['@@ -1,1 +1,1 @@', '-const removed = 2;', '+const added = 3;'].join('\n');
+    const unknown = renderToStaticMarkup(createElement(ToolResultPreview, {
+      content: { kind: 'file_diff', paths: ['notes.rst'], diff },
+    }));
+    const ambiguous = renderToStaticMarkup(createElement(ToolResultPreview, {
+      content: { kind: 'file_diff', paths: ['x.ts', 'y.py'], diff },
+    }));
+
+    assert.doesNotMatch(unknown, /astryx-token-/);
+    assert.doesNotMatch(ambiguous, /astryx-token-/);
+    assert.deepEqual(diffCodeText(unknown), ['const removed = 2;', 'const added = 3;']);
+  });
+
   it('resumes line numbering from each hunk header', () => {
     const markup = renderToStaticMarkup(createElement(ToolResultPreview, {
       content: {
@@ -700,6 +771,23 @@ describe('tool activity presentation', () => {
 
 function diffGutterNumbers(markup: string): string[] {
   return Array.from(markup.matchAll(/maka-tool-diff-gutter"[^>]*>([^<]*)</g)).map((m) => m[1]);
+}
+
+function diffMarkers(markup: string): string[] {
+  return Array.from(markup.matchAll(/maka-tool-diff-marker">([^<]*)</g)).map((m) => m[1]);
+}
+
+/** The rendered source of each row, with the syntax spans flattened back out. */
+function diffCodeText(markup: string): string[] {
+  return Array.from(markup.matchAll(/maka-tool-diff-code">(.*?)<\/span>\n/gs)).map((m) =>
+    m[1]
+      .replace(/<[^>]*>/g, '')
+      .replace(/&quot;/g, '"')
+      .replace(/&#x27;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&'),
+  );
 }
 
 function pipeOutput(stdout = '', stderr = '') {

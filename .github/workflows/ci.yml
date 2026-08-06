@@ -44,6 +44,11 @@ jobs:
           else
             node scripts/ci-test-plan.mjs --base "$BASE_SHA" --head "$HEAD_SHA" >> "$GITHUB_OUTPUT"
           fi
+      - name: Operational schema compatibility governance
+        if: steps.plan.outputs.code == 'true'
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+        run: node scripts/check-operational-schema-compatibility.mjs --base "$BASE_SHA"
 
   typecheck:
     needs: changes

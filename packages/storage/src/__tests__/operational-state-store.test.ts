@@ -111,7 +111,7 @@ test('migrates older operational state without losing sessions or messages', asy
   }
 });
 
-test('rejects a newer scope before migrating an older scope', async () => {
+test('opens a same-epoch newer scope without lowering it while migrating an older scope', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-operational-mixed-version-'));
   const databasePath = join(root, 'runtime.sqlite');
   try {
@@ -125,9 +125,124 @@ test('rejects a newer scope before migrating an older scope', async () => {
       .run(SQLITE_USAGE_SCHEMA_VERSION + 1);
     database.close();
 
+    const reopened = acquireOperationalStateDatabase(root);
+    try {
+      assert.equal(
+        (reopened.database.prepare('PRAGMA user_version').get() as { user_version: number })
+          .user_version,
+        SQLITE_RUNTIME_SCHEMA_VERSION,
+      );
+      assert.equal(
+        (
+          reopened.database
+            .prepare(`SELECT version FROM operational_schema_migrations WHERE scope = 'usage'`)
+            .get() as { version: number }
+        ).version,
+        SQLITE_USAGE_SCHEMA_VERSION + 1,
+      );
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('preserves and ignores an unknown scope in the same reader epoch', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-same-epoch-unknown-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  try {
+    acquireOperationalStateDatabase(root).close();
+    const database = new DatabaseSync(databasePath);
+    database
+      .prepare(
+        'INSERT INTO operational_schema_migrations(scope, version, applied_at) VALUES (?, ?, ?)',
+      )
+      .run('future_scope', 7, 11);
+    database.exec('CREATE TABLE future_scope_state (value TEXT NOT NULL)');
+    database.exec("INSERT INTO future_scope_state(value) VALUES ('preserved')");
+    database.close();
+
+    const reopened = acquireOperationalStateDatabase(root);
+    try {
+      const registration = reopened.database
+        .prepare(
+          `SELECT version, applied_at AS appliedAt
+           FROM operational_schema_migrations WHERE scope = 'future_scope'`,
+        )
+        .get() as { version: number; appliedAt: number };
+      assert.equal(registration.version, 7);
+      assert.equal(registration.appliedAt, 11);
+      assert.equal(
+        (
+          reopened.database.prepare('SELECT value FROM future_scope_state').get() as {
+            value: string;
+          }
+        ).value,
+        'preserved',
+      );
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('does not lower same-epoch runtime and session metadata versions', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-same-epoch-authorities-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  try {
+    acquireOperationalStateDatabase(root).close();
+    const database = new DatabaseSync(databasePath);
+    database.exec(`PRAGMA user_version = ${SQLITE_RUNTIME_SCHEMA_VERSION + 1}`);
+    database
+      .prepare(`UPDATE session_metadata_schema SET version = ? WHERE scope = 'session_metadata'`)
+      .run(SQLITE_SESSION_METADATA_SCHEMA_VERSION + 1);
+    database.close();
+
+    const reopened = acquireOperationalStateDatabase(root);
+    try {
+      assert.equal(
+        (reopened.database.prepare('PRAGMA user_version').get() as { user_version: number })
+          .user_version,
+        SQLITE_RUNTIME_SCHEMA_VERSION + 1,
+      );
+      assert.equal(
+        (
+          reopened.database
+            .prepare(`SELECT version FROM session_metadata_schema WHERE scope = 'session_metadata'`)
+            .get() as { version: number }
+        ).version,
+        SQLITE_SESSION_METADATA_SCHEMA_VERSION + 1,
+      );
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects a higher reader epoch before migrating any scope', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-reader-epoch-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  try {
+    const lease = acquireOperationalStateDatabase(root);
+    lease.close();
+
+    const database = new DatabaseSync(databasePath);
+    rewindRuntimeSchema(database);
+    database.exec('CREATE TABLE future_epoch_sentinel (value TEXT NOT NULL)');
+    database.exec("INSERT INTO future_epoch_sentinel(value) VALUES ('preserved')");
+    database.exec(
+      'UPDATE operational_schema_compatibility SET minimum_reader_epoch = 2 WHERE singleton = 1',
+    );
+    database.close();
+
     assert.throws(
       () => acquireOperationalStateDatabase(root),
-      /Operational schema usage is newer than supported/,
+      /requires reader epoch 2, but this Maka build supports epoch 1/,
     );
 
     const preserved = new DatabaseSync(databasePath, { readOnly: true });
@@ -135,6 +250,14 @@ test('rejects a newer scope before migrating an older scope', async () => {
       assert.equal(
         (preserved.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
         SQLITE_RUNTIME_SCHEMA_VERSION - 1,
+      );
+      assert.equal(
+        (
+          preserved.prepare('SELECT value FROM future_epoch_sentinel').get() as {
+            value: string;
+          }
+        ).value,
+        'preserved',
       );
     } finally {
       preserved.close();
@@ -152,6 +275,7 @@ test('rejects a newer runtime schema without changing the database', async () =>
     lease.close();
 
     const database = new DatabaseSync(databasePath);
+    database.exec('DROP TABLE operational_schema_compatibility');
     database.exec(`PRAGMA user_version = ${SQLITE_RUNTIME_SCHEMA_VERSION + 1}`);
     database.exec('CREATE TABLE runtime_future_sentinel (value TEXT NOT NULL)');
     database.exec("INSERT INTO runtime_future_sentinel(value) VALUES ('preserved')");
@@ -192,6 +316,7 @@ test('rejects newer session metadata before migrating older runtime state', asyn
     lease.close();
 
     const database = new DatabaseSync(databasePath);
+    database.exec('DROP TABLE operational_schema_compatibility');
     rewindRuntimeSchema(database);
     database
       .prepare(`UPDATE session_metadata_schema SET version = ? WHERE scope = 'session_metadata'`)
@@ -225,6 +350,7 @@ test('rejects an unknown operational schema without changing the database', asyn
     lease.close();
 
     const database = new DatabaseSync(databasePath);
+    database.exec('DROP TABLE operational_schema_compatibility');
     database
       .prepare(
         `INSERT INTO operational_schema_migrations(scope, version, applied_at) VALUES (?, ?, ?)`,
@@ -283,6 +409,28 @@ test('rejects an invalid registered schema version before migrating', async () =
     } finally {
       preserved.close();
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects a non-text operational schema scope before migrating', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-invalid-scope-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  try {
+    acquireOperationalStateDatabase(root).close();
+    const database = new DatabaseSync(databasePath);
+    database
+      .prepare(
+        'INSERT INTO operational_schema_migrations(scope, version, applied_at) VALUES (?, ?, ?)',
+      )
+      .run(new Uint8Array([1, 2, 3]), 1, 1);
+    database.close();
+
+    assert.throws(
+      () => acquireOperationalStateDatabase(root),
+      /Operational schema has invalid scope metadata/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

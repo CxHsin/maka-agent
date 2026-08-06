@@ -27,24 +27,22 @@ import {
   migrateSqliteArtifactDatabase,
   SQLITE_ARTIFACT_SCHEMA_VERSION,
 } from './sqlite-artifact-schema.js';
+import { migrateSqliteAutomationDatabase } from './sqlite-automation-schema.js';
 import {
-  migrateSqliteAutomationDatabase,
-  SQLITE_AUTOMATION_SCHEMA_VERSION,
-} from './sqlite-automation-schema.js';
+  OPERATIONAL_SCHEMA_MANIFEST,
+  OPERATIONAL_STATE_READER_EPOCH,
+  OPERATIONAL_STATE_SCHEMA_VERSION,
+  validateOperationalSchemaManifest,
+} from './operational-schema-manifest.js';
 
 export const OPERATIONAL_STATE_DATABASE_NAME = 'runtime.sqlite';
-export const OPERATIONAL_STATE_SCHEMA_VERSION = 1;
+export { OPERATIONAL_STATE_READER_EPOCH, OPERATIONAL_STATE_SCHEMA_VERSION };
 
-const OPERATIONAL_SCHEMA_VERSIONS: ReadonlyMap<string, number> = new Map([
-  ['runtime', SQLITE_RUNTIME_SCHEMA_VERSION],
-  ['session_metadata', SQLITE_SESSION_METADATA_SCHEMA_VERSION],
-  ['core_execution', SQLITE_CORE_EXECUTION_SCHEMA_VERSION],
-  ['workflow', SQLITE_WORKFLOW_SCHEMA_VERSION],
-  ['usage', SQLITE_USAGE_SCHEMA_VERSION],
-  ['artifact', SQLITE_ARTIFACT_SCHEMA_VERSION],
-  ['automation', SQLITE_AUTOMATION_SCHEMA_VERSION],
-  ['operational', OPERATIONAL_STATE_SCHEMA_VERSION],
-] as const);
+validateOperationalSchemaManifest(OPERATIONAL_SCHEMA_MANIFEST, OPERATIONAL_STATE_READER_EPOCH);
+
+const OPERATIONAL_SCHEMA_VERSIONS: ReadonlyMap<string, number> = new Map(
+  OPERATIONAL_SCHEMA_MANIFEST.map(({ scope, currentVersion }) => [scope, currentVersion]),
+);
 
 const require = createRequire(import.meta.url);
 const owners = new Map<string, OperationalStateDatabaseOwner>();
@@ -100,10 +98,22 @@ class OperationalStateDatabaseOwner {
       configureSqliteRuntimeLockWait(this.database);
       // Reject every unsupported authority before the first migration commits,
       // so a newer later scope cannot leave an older earlier scope half-upgraded.
-      assertOperationalSchemaCanMigrate(this.database);
+      const compatibility = assertOperationalSchemaCanMigrate(this.database);
       configureSqliteRuntimeDatabase(this.database);
-      migrateSqliteRuntimeDatabase(this.database);
-      migrateSqliteSessionMetadataDatabase(this.database);
+      if (
+        !compatibility.allowsNewerScopes ||
+        readUserVersion(this.database) <= SQLITE_RUNTIME_SCHEMA_VERSION
+      ) {
+        migrateSqliteRuntimeDatabase(this.database);
+      }
+      if (
+        !compatibility.allowsNewerScopes ||
+        !hasTable(this.database, 'session_metadata_schema') ||
+        readSqliteSessionMetadataSchemaVersion(this.database) <=
+          SQLITE_SESSION_METADATA_SCHEMA_VERSION
+      ) {
+        migrateSqliteSessionMetadataDatabase(this.database);
+      }
       migrateSqliteCoreExecutionDatabase(this.database);
       migrateSqliteWorkflowDatabase(this.database);
       migrateSqliteUsageDatabase(this.database);
@@ -181,28 +191,41 @@ class OperationalStateDatabaseOwner {
   }
 }
 
-function assertOperationalSchemaCanMigrate(database: DatabaseSync): void {
+interface OperationalSchemaCompatibility {
+  allowsNewerScopes: boolean;
+}
+
+function assertOperationalSchemaCanMigrate(database: DatabaseSync): OperationalSchemaCompatibility {
+  const compatibility = readOperationalSchemaCompatibility(database);
   assertSupportedOperationalSchemaVersion(
     'runtime',
     readUserVersion(database),
     SQLITE_RUNTIME_SCHEMA_VERSION,
+    compatibility.allowsNewerScopes,
   );
   if (hasTable(database, 'session_metadata_schema')) {
     assertSupportedOperationalSchemaVersion(
       'session_metadata',
       readSqliteSessionMetadataSchemaVersion(database),
       SQLITE_SESSION_METADATA_SCHEMA_VERSION,
+      compatibility.allowsNewerScopes,
     );
   }
 
-  if (!hasTable(database, 'operational_schema_migrations')) return;
+  if (!hasTable(database, 'operational_schema_migrations')) return compatibility;
   const rows = database
     .prepare('SELECT scope, version FROM operational_schema_migrations')
     .all() as Array<{ scope?: unknown; version?: unknown }>;
   for (const { scope, version } of rows) {
-    if (typeof scope !== 'string') continue;
+    if (typeof scope !== 'string' || scope.length === 0) {
+      throw new Error(
+        'Operational schema has invalid scope metadata; ' +
+          'Maka did not migrate or delete the database. Restore or repair this workspace before opening it.',
+      );
+    }
     const supportedVersion = OPERATIONAL_SCHEMA_VERSIONS.get(scope);
     if (supportedVersion === undefined) {
+      if (compatibility.allowsNewerScopes) continue;
       throw new Error(
         `Operational schema ${scope} is unknown to this Maka build; ` +
           'Maka did not migrate or delete the database. Upgrade Maka to open this workspace.',
@@ -214,20 +237,61 @@ function assertOperationalSchemaCanMigrate(database: DatabaseSync): void {
           'Maka did not migrate or delete the database. Restore or repair this workspace before opening it.',
       );
     }
-    assertSupportedOperationalSchemaVersion(scope, version, supportedVersion);
+    assertSupportedOperationalSchemaVersion(
+      scope,
+      version,
+      supportedVersion,
+      compatibility.allowsNewerScopes,
+    );
   }
+  return compatibility;
 }
 
 function assertSupportedOperationalSchemaVersion(
   scope: string,
   observedVersion: number,
   supportedVersion: number,
+  allowsNewerScopes = false,
 ): void {
-  if (observedVersion <= supportedVersion) return;
+  if (observedVersion <= supportedVersion || allowsNewerScopes) return;
   throw new Error(
     `Operational schema ${scope} is newer than supported version ${supportedVersion}; ` +
       'Maka did not migrate or delete the database. Upgrade Maka to open this workspace.',
   );
+}
+
+function readOperationalSchemaCompatibility(
+  database: DatabaseSync,
+): OperationalSchemaCompatibility {
+  if (!hasTable(database, 'operational_schema_compatibility')) {
+    return { allowsNewerScopes: false };
+  }
+  const rows = database
+    .prepare(`
+      SELECT singleton, minimum_reader_epoch AS minimumReaderEpoch
+      FROM operational_schema_compatibility
+    `)
+    .all() as Array<{ singleton?: unknown; minimumReaderEpoch?: unknown }>;
+  const row = rows[0];
+  if (
+    rows.length !== 1 ||
+    row?.singleton !== 1 ||
+    typeof row.minimumReaderEpoch !== 'number' ||
+    !Number.isSafeInteger(row.minimumReaderEpoch) ||
+    row.minimumReaderEpoch < 1
+  ) {
+    throw new Error(
+      'Operational schema compatibility metadata is invalid; ' +
+        'Maka did not migrate or delete the database. Restore or repair this workspace before opening it.',
+    );
+  }
+  if (row.minimumReaderEpoch > OPERATIONAL_STATE_READER_EPOCH) {
+    throw new Error(
+      `Operational state requires reader epoch ${row.minimumReaderEpoch}, but this Maka build supports epoch ${OPERATIONAL_STATE_READER_EPOCH}; ` +
+        'Maka did not migrate or delete the database. Upgrade Maka to open this workspace.',
+    );
+  }
+  return { allowsNewerScopes: true };
 }
 
 function hasTable(database: DatabaseSync, name: string): boolean {
@@ -245,6 +309,14 @@ function migrateOperationalStateDatabase(db: DatabaseSync, now: () => number): v
   db.exec('BEGIN IMMEDIATE');
   try {
     db.exec(`
+      CREATE TABLE IF NOT EXISTS operational_schema_compatibility (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        minimum_reader_epoch INTEGER NOT NULL CHECK (minimum_reader_epoch >= 1)
+      );
+      INSERT INTO operational_schema_compatibility(singleton, minimum_reader_epoch)
+      VALUES (1, ${OPERATIONAL_STATE_READER_EPOCH})
+      ON CONFLICT(singleton) DO NOTHING;
+
       CREATE TABLE IF NOT EXISTS operational_schema_migrations (
         scope TEXT PRIMARY KEY,
         version INTEGER NOT NULL CHECK (version >= 0),
@@ -277,7 +349,7 @@ function registerSchema(db: DatabaseSync, scope: string, version: number, applie
           'Maka did not migrate or delete the database. Restore or repair this workspace before opening it.',
       );
     }
-    assertSupportedOperationalSchemaVersion(scope, existing.version, version);
+    if (existing.version >= version) return;
   }
   db.prepare(`
     INSERT INTO operational_schema_migrations(scope, version, applied_at)

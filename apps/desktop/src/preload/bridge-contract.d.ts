@@ -153,8 +153,6 @@ export type AppUpdateStatus =
       state: 'available';
       currentVersion: string;
       latestVersion: string;
-      releaseName?: string;
-      publishedAt?: string;
     }
   | {
       state: 'downloading';
@@ -171,8 +169,6 @@ export type AppUpdateStatus =
       state: 'downloaded';
       currentVersion: string;
       latestVersion: string;
-      releaseName?: string;
-      downloadedFile?: string;
     }
   | { state: 'installing'; currentVersion: string; latestVersion: string }
   | {

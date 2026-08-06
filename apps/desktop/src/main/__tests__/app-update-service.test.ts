@@ -215,8 +215,6 @@ describe('AppUpdateService', () => {
       state: 'downloaded',
       currentVersion: '1.0.0',
       latestVersion: '1.1.0',
-      releaseName: undefined,
-      downloadedFile: '/tmp/maka-update.zip',
     });
   });
 

@@ -17,8 +17,6 @@ export type AppUpdateStatus =
       state: 'available';
       currentVersion: string;
       latestVersion: string;
-      releaseName?: string;
-      publishedAt?: string;
     }
   | {
       state: 'downloading';
@@ -30,8 +28,6 @@ export type AppUpdateStatus =
       state: 'downloaded';
       currentVersion: string;
       latestVersion: string;
-      releaseName?: string;
-      downloadedFile?: string;
     }
   | { state: 'installing'; currentVersion: string; latestVersion: string }
   | {
@@ -108,14 +104,6 @@ function updateInfoVersion(info: Pick<UpdateInfo, 'version'> | undefined): strin
   return typeof info?.version === 'string' ? normalizeVersion(info.version) : undefined;
 }
 
-function updateInfoReleaseName(info: UpdateInfo | undefined): string | undefined {
-  return typeof info?.releaseName === 'string' ? info.releaseName : undefined;
-}
-
-function updateInfoReleaseDate(info: UpdateInfo | undefined): string | undefined {
-  return typeof info?.releaseDate === 'string' ? info.releaseDate : undefined;
-}
-
 function progressFromInfo(info: ProgressInfo): AppUpdateProgress {
   return {
     percent: Math.max(0, Math.min(100, Number.isFinite(info.percent) ? info.percent : 0)),
@@ -134,8 +122,6 @@ function mockStatus(currentVersion: string, latestVersion: string, state: AppUpd
       state: 'downloaded',
       currentVersion,
       latestVersion,
-      releaseName: `Maka ${latestVersion}`,
-      downloadedFile: 'mock-update.zip',
     };
   }
   if (state === 'downloading') {
@@ -150,8 +136,6 @@ function mockStatus(currentVersion: string, latestVersion: string, state: AppUpd
     state: 'available',
     currentVersion,
     latestVersion,
-    releaseName: `Maka ${latestVersion}`,
-    publishedAt: new Date().toISOString(),
   };
 }
 
@@ -242,8 +226,6 @@ export function createAppUpdateService(deps: AppUpdateServiceDeps): AppUpdateSer
       state: 'available',
       currentVersion: deps.currentVersion,
       latestVersion: version,
-      releaseName: updateInfoReleaseName(info),
-      publishedAt: updateInfoReleaseDate(info),
     });
   });
   updater.on('update-not-available', (info) => {
@@ -269,8 +251,6 @@ export function createAppUpdateService(deps: AppUpdateServiceDeps): AppUpdateSer
       state: 'downloaded',
       currentVersion: deps.currentVersion,
       latestVersion: updateInfoVersion(event) ?? latestVersion() ?? deps.currentVersion,
-      releaseName: updateInfoReleaseName(event),
-      downloadedFile: event.downloadedFile,
     });
   });
   updater.on('error', (error) => {

@@ -5,14 +5,15 @@ import {
   Button,
   EmptyState,
   MoreMenu,
+  TextInput,
   useMountedRef,
   useToast,
   useUiLocale,
 } from '@maka/ui';
 import { getSettingsProjectsCopy } from '../locales/settings-projects-copy.js';
 import { settingsActionErrorMessage } from './settings-error-copy';
-import { SettingRow } from './settings-rows';
 import { SettingsPage, SettingsSection } from './settings-section';
+import { SettingsExpandableRow } from './settings-expandable-row';
 import { useKeyedActionGuard } from './use-action-guard';
 
 /**
@@ -41,6 +42,8 @@ export function ProjectsSettingsPage(props: {
   const mountedRef = useMountedRef();
   const actionGuard = useKeyedActionGuard<string>();
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState('');
 
   const reload = useCallback(async () => {
     const next = await window.maka.projects.list();
@@ -109,18 +112,7 @@ export function ProjectsSettingsPage(props: {
         ) : (
           listed.map((project) => {
             const isDefault = project.id === defaultProjectId;
-            return (
-              // `SettingRow` with `mono` is the house treatment for machine
-              // text: the path renders as a full-width `code` line under the
-              // name rather than squeezed into the right-anchored end slot,
-              // where long absolute paths wrap into a ragged block.
-              <SettingRow
-                key={project.id}
-                title={project.name}
-                detail=""
-                value={project.preferredPath ?? copy.unavailable}
-                mono
-                action={
+            const endCluster = (
                   <>
                     {isDefault ? (
                       <Badge variant="neutral" label={copy.defaultBadge} />
@@ -149,7 +141,7 @@ export function ProjectsSettingsPage(props: {
                       />
                     )}
                     <MoreMenu
-                      label={copy.moreActions}
+                      label={copy.moreActions(project.name)}
                       size="sm"
                       items={[
                         ...(isDefault
@@ -163,6 +155,29 @@ export function ProjectsSettingsPage(props: {
                                 ),
                             }]
                           : []),
+                        {
+                          label: copy.rename,
+                          onClick: () => {
+                            setDraftName(project.name);
+                            setRenamingId(project.id);
+                          },
+                        },
+                        {
+                          label: copy.openFolder,
+                          // Only offered when the catalog still vouches for the
+                          // folder; a menu entry that always fails is worse
+                          // than one that is not there.
+                          isDisabled: !project.available,
+                          onClick: () =>
+                            void runRowAction(
+                              `reveal:${project.id}`,
+                              async () => {
+                                const result = await window.maka.projects.reveal(project.id);
+                                if (!result.ok) throw new Error(result.reason);
+                              },
+                              copy.openFolderFailed,
+                            ),
+                        },
                         {
                           label: copy.remove,
                           onClick: () =>
@@ -189,8 +204,53 @@ export function ProjectsSettingsPage(props: {
                       ]}
                     />
                   </>
+            );
+
+            // Renaming swaps the row for the shared expandable editor, which
+            // owns the focus move in and back out. The end cluster rides along
+            // so the row keeps its default state and menu while collapsed —
+            // rename is reached from that menu, not from a competing button.
+            return (
+              <SettingsExpandableRow
+                key={project.id}
+                label={project.name}
+                value={
+                  <code className="settingsReadOnlyValue" data-mono="true">
+                    {project.preferredPath ?? copy.unavailable}
+                  </code>
                 }
-              />
+                end={endCluster}
+                isEditing={renamingId === project.id}
+                canSave={draftName.trim() !== '' && draftName.trim() !== project.name}
+                saveLabel={copy.save}
+                cancelLabel={copy.cancel}
+                onEdit={() => {
+                  setDraftName(project.name);
+                  setRenamingId(project.id);
+                }}
+                onCancel={() => setRenamingId(null)}
+                onSave={async () => {
+                  const next = draftName.trim();
+                  if (next === '' || next === project.name) return;
+                  await runRowAction(
+                    `rename:${project.id}`,
+                    async () => {
+                      await window.maka.projects.rename(project.id, next);
+                      setRenamingId(null);
+                    },
+                    copy.renameFailed,
+                  );
+                }}
+              >
+                <TextInput
+                  type="text"
+                  value={draftName}
+                  onChange={(value) => setDraftName(value.slice(0, 80))}
+                  label={copy.renameLabel}
+                  isLabelHidden
+                  width="100%"
+                />
+              </SettingsExpandableRow>
             );
           })
         )}

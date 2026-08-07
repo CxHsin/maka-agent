@@ -410,6 +410,15 @@ const makaBridge = {
     > {
       return ipcRenderer.invoke('projects:relink', projectId);
     },
+    reveal(projectId: string): Promise<
+      | { ok: true; opened: string }
+      | {
+          ok: false;
+          reason: 'unknown-key' | 'not-allowed' | 'missing' | 'not-a-directory' | 'open-failed';
+        }
+    > {
+      return ipcRenderer.invoke('projects:reveal', projectId);
+    },
     rename(projectId: string, name: string): Promise<ProjectRecord> {
       return ipcRenderer.invoke('projects:rename', projectId, name);
     },

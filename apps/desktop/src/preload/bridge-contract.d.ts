@@ -369,6 +369,8 @@ export interface MakaBridge {
     relink(
       projectId: string,
     ): Promise<{ ok: true; project: ProjectRecord } | { ok: false; reason: 'cancelled' }>;
+    /** Open a catalogued project's folder in the OS file manager. */
+    reveal(projectId: string): Promise<OpenPathResult>;
     rename(projectId: string, name: string): Promise<ProjectRecord>;
     archive(projectId: string): Promise<ProjectRecord>;
     restore(projectId: string): Promise<ProjectRecord>;

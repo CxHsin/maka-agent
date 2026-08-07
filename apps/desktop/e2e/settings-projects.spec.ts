@@ -75,3 +75,63 @@ test('the projects page lists the catalog and moves the default between rows', a
     await expect(main.getByText('默认', { exact: true })).toHaveCount(1);
   }
 });
+
+test('a project can be renamed in place from the row menu', async ({
+  settingsProjectsWindow: page,
+}) => {
+  await page
+    .getByRole('navigation', { name: /设置分组|Settings sections/ })
+    .getByRole('button', { name: /项目|Projects/, exact: true })
+    .click();
+
+  const main = page.getByRole('main', { name: /设置内容|Settings content/ });
+  await expect(main.getByText('astryx-design-system', { exact: true })).toBeVisible();
+
+  // Address the row by name, not by index: the app self-registers its own
+  // workspace as a project, so the seeded order is not the rendered order —
+  // an index here renamed the wrong project.
+  await main.getByRole('button', { name: '更多操作：astryx-design-system' }).click();
+  await page.getByRole('menuitem', { name: '重命名' }).click();
+
+  const field = main.getByRole('textbox');
+  await expect(field).toBeFocused();
+  await field.fill('astryx-renamed');
+  await main.getByRole('button', { name: '保存' }).click();
+
+  await expect(main.getByText('astryx-renamed', { exact: true })).toBeVisible();
+  await expect(main.getByText('astryx-design-system', { exact: true })).toHaveCount(0);
+
+  // It is the catalog that changed, not just the row.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        window.maka.projects.list().then((all) => all.map((p) => p.name)),
+      ),
+    )
+    .toContain('astryx-renamed');
+});
+
+test('reveal is offered only for a project whose folder is still there', async ({
+  settingsProjectsWindow: page,
+}) => {
+  await page
+    .getByRole('navigation', { name: /设置分组|Settings sections/ })
+    .getByRole('button', { name: /项目|Projects/, exact: true })
+    .click();
+
+  const main = page.getByRole('main', { name: /设置内容|Settings content/ });
+  await expect(main.getByText('retired-prototype', { exact: true })).toBeVisible();
+
+  // The seeded `retired-prototype` folder was never created, so opening it
+  // could only fail; the entry is disabled rather than offered-and-broken.
+  await main.getByRole('button', { name: '更多操作：retired-prototype' }).click();
+  await expect(page.getByRole('menuitem', { name: '在访达中打开' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+
+  // Main resolves the path from the catalog by id, so an available project
+  // reports a real directory rather than a renderer-supplied one.
+  const result = await page.evaluate(() =>
+    window.maka.projects.reveal('proj-fixture-gone'),
+  );
+  expect(result.ok).toBe(false);
+});

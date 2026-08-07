@@ -10,6 +10,13 @@ export type SettingsProjectsCopy = {
   /** Why the control is disabled — a disabled control must say so itself. */
   setDefaultDisabledTitle: string;
   setDefaultFailed: string;
+  rename: string;
+  renameLabel: string;
+  renameFailed: string;
+  openFolder: string;
+  openFolderFailed: string;
+  save: string;
+  cancel: string;
   clearDefault: string;
   remove: string;
   removeConfirmTitle: string;
@@ -22,7 +29,12 @@ export type SettingsProjectsCopy = {
   defaultUnavailable: string;
   emptyTitle: string;
   emptyBody: string;
-  moreActions: string;
+  /**
+   * Names the row it belongs to. Four buttons all called 更多操作 are one
+   * button as far as assistive tech is concerned — and they were equally
+   * ambiguous to a test, which is how the ambiguity was noticed.
+   */
+  moreActions(projectName: string): string;
 };
 
 const SETTINGS_PROJECTS_COPY_BY_LOCALE = {
@@ -38,6 +50,15 @@ const SETTINGS_PROJECTS_COPY_BY_LOCALE = {
     setDefaultTitle: '新对话默认打开这个项目',
     setDefaultDisabledTitle: '目录不可用，无法设为默认',
     setDefaultFailed: '设置默认项目失败',
+    rename: '重命名',
+    renameLabel: '项目名称',
+    renameFailed: '重命名失败',
+    openFolder: '在访达中打开',
+    // Says which of the two things went wrong, because the fix differs: a
+    // missing folder is the user's to restore, a refusal to open is not.
+    openFolderFailed: '打不开这个目录，它可能已被移动或删除',
+    save: '保存',
+    cancel: '取消',
     clearDefault: '取消默认',
     remove: '从 Maka 移除',
     removeConfirmTitle: '从 Maka 移除这个项目？',
@@ -50,7 +71,7 @@ const SETTINGS_PROJECTS_COPY_BY_LOCALE = {
     defaultUnavailable: '原来的默认项目已不可用，新对话暂时沿用上次使用的项目。',
     emptyTitle: '还没有项目',
     emptyBody: '添加一个项目目录后，新对话就能默认从它打开，侧边栏也会按项目归类对话。',
-    moreActions: '更多操作',
+    moreActions: (projectName: string) => `更多操作：${projectName}`,
   },
   en: {
     section: 'Projects',
@@ -62,6 +83,13 @@ const SETTINGS_PROJECTS_COPY_BY_LOCALE = {
     setDefaultTitle: 'Open new conversations in this project',
     setDefaultDisabledTitle: 'The folder is unavailable, so this cannot be the default',
     setDefaultFailed: 'Could not set the default project',
+    rename: 'Rename',
+    renameLabel: 'Project name',
+    renameFailed: 'Could not rename the project',
+    openFolder: 'Reveal in Finder',
+    openFolderFailed: 'Could not open this folder — it may have been moved or deleted',
+    save: 'Save',
+    cancel: 'Cancel',
     clearDefault: 'Clear default',
     remove: 'Remove from Maka',
     removeConfirmTitle: 'Remove this project from Maka?',
@@ -76,7 +104,7 @@ const SETTINGS_PROJECTS_COPY_BY_LOCALE = {
     emptyTitle: 'No projects yet',
     emptyBody:
       'Add a project folder and new conversations can start in it, with the sidebar grouping conversations by project.',
-    moreActions: 'More actions',
+    moreActions: (projectName: string) => `More actions for ${projectName}`,
   },
 } satisfies UiCatalog<SettingsProjectsCopy>;
 

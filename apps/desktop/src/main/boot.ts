@@ -1378,7 +1378,12 @@ async function ensureSessionWorkspaceAvailable(sessionId: string): Promise<void>
 }
 
 async function createDesktopSession(input: DesktopCreateSessionInput) {
-  const selected = await resolveDesktopSessionSelection(input, projectManagement);
+  const selected = await resolveDesktopSessionSelection(input, {
+    ...projectManagement,
+    // Read per creation rather than cached at boot: the user can change the
+    // default project in Settings without restarting the app.
+    defaultProjectId: async () => (await settingsStore.get()).projects.defaultProjectId,
+  });
   await assertSessionWorkspaceAvailable(selected.cwd);
   return runtime.createSession(await resolveNewSessionProjectInput(selected, projectCatalog));
 }

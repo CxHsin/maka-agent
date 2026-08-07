@@ -601,6 +601,7 @@ const EN_STATIC_COMMANDS: Record<StaticCommandId, CommandCopy> = {
 const ZH_SETTINGS_SECTIONS: Record<SettingsSection, string> = {
   general: '通用',
   appearance: '外观',
+  projects: '项目',
   models: '模型',
   subagents: '子 Agent',
   usage: '使用统计',
@@ -617,6 +618,7 @@ const ZH_SETTINGS_SECTIONS: Record<SettingsSection, string> = {
 const EN_SETTINGS_SECTIONS: Record<SettingsSection, string> = {
   general: 'General',
   appearance: 'Appearance',
+  projects: 'Projects',
   models: 'Models',
   subagents: 'Subagents',
   usage: 'Usage',

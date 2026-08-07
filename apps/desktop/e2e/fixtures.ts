@@ -264,6 +264,7 @@ export const test = base.extend<{
   botSettingsWindow: Page;
   localeSwitchWindow: Page;
   invocableSkillsWindow: Page;
+  settingsProjectsWindow: Page;
   planRemindersWindow: Page;
   oauthReloginWindow: Page;
 }>({
@@ -280,6 +281,20 @@ export const test = base.extend<{
         seed: false,
         readinessSelector: '[data-maka-contract="onboarding-card"]',
         e2eFixtureScenario: 'first-run',
+        locale: 'zh',
+      },
+      use,
+    );
+  },
+  // Settings -> 偏好 -> 项目, with three seeded catalog entries (available,
+  // long-path, and folder-gone) so the list, the default control, and the
+  // unavailable row all render without touching a native directory picker.
+  settingsProjectsWindow: async ({}, use) => {
+    await withE2eWindow(
+      {
+        seed: true,
+        readinessSelector: '.settingsMainPane',
+        e2eFixtureScenario: 'settings-projects',
         locale: 'zh',
       },
       use,

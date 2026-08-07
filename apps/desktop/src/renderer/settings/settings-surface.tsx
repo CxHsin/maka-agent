@@ -32,6 +32,7 @@ import { useMountedRef, useToast, useUiLocale } from '@maka/ui';
 import { ProvidersPanel } from './providers-panel';
 import { SubagentSettingsPage } from './subagent-settings-page';
 import { safeLocalStorageSet } from '../browser-storage';
+import { ProjectsSettingsPage } from './projects-settings-page';
 import { AboutSettingsPage } from './about-settings-page';
 import { AppearanceSettingsPage } from './appearance-settings-page';
 import { BotChatSettingsPage } from './bot-chat-settings-page';
@@ -460,6 +461,10 @@ function SettingsPageBody(props: {
           onUpdate={props.onUpdateSettings}
           onRefreshConnections={props.onRefreshConnections}
         />
+      );
+    case 'projects':
+      return (
+        <ProjectsSettingsPage settings={props.settings} onUpdate={props.onUpdateSettings} />
       );
     case 'appearance':
       return (

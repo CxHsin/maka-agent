@@ -51,6 +51,7 @@ export type E2eFixtureScenario =
   | 'settings-bots-onboarding'
   | 'settings-about'
   | 'settings-general'
+  | 'settings-projects'
   | 'settings-memory'
   | 'settings-daily-review'
   | 'settings-permissions'

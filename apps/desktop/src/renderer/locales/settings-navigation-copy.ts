@@ -17,6 +17,7 @@ const SETTINGS_NAVIGATION_COPY_BY_LOCALE = {
     sections: {
       general: { label: '通用', description: '隐身、启动、对话默认与网络代理等系统偏好。' },
       appearance: { label: '外观', description: '主题、配色与界面语言。' },
+      projects: { label: '项目', description: '管理 Maka 认识的项目，以及新对话默认打开哪一个。' },
       models: { label: '模型', description: '模型连接、API key 与 OAuth 订阅管理。' },
       subagents: { label: '子 Agent', description: '配置主 Agent 可以自动选择的子 Agent、能力边界与模型。' },
       usage: { label: '使用统计', description: 'token、模型、工具使用走势与配额追踪。' },
@@ -40,6 +41,7 @@ const SETTINGS_NAVIGATION_COPY_BY_LOCALE = {
     sections: {
       general: { label: 'General', description: 'Privacy, startup, conversation defaults, and network proxy preferences.' },
       appearance: { label: 'Appearance', description: 'Theme, color palette, and interface language.' },
+      projects: { label: 'Projects', description: 'Manage the projects Maka knows about, and which one new conversations open in.' },
       models: { label: 'Models', description: 'Model connections, API keys, and OAuth subscriptions.' },
       subagents: { label: 'Subagents', description: 'Configure the subagents, capability boundaries, and models the main agent may select.' },
       usage: { label: 'Usage', description: 'Token, model, tool usage trends, and quota tracking.' },

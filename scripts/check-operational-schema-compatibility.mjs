@@ -7,9 +7,43 @@ import { fileURLToPath } from 'node:url';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const repoRoot = dirname(dirname(scriptPath));
-const manifestPath = 'packages/storage/src/operational-schema-manifest.ts';
+const historyPath = 'packages/storage/src/operational-schema-history.json';
+const probeTestPath = 'packages/storage/src/__tests__/operational-epoch-probe.test.ts';
 const probePattern =
   /^packages\/storage\/src\/__tests__\/fixtures\/operational-epoch-(\d+)-probe\.ts$/;
+const currentProbeReference = 'operational-epoch-${OPERATIONAL_STATE_READER_EPOCH}-probe.js';
+
+export function validateOperationalSchemaHistory({ baseScopes, currentScopes }) {
+  const currentByScope = uniqueScopes(currentScopes, 'current');
+  for (const baseScope of uniqueScopes(baseScopes, 'base').values()) {
+    const currentScope = currentByScope.get(baseScope.scope);
+    if (!currentScope) {
+      throw new Error(`Operational schema history cannot delete scope ${baseScope.scope}`);
+    }
+    if (currentScope.baselineVersion !== baseScope.baselineVersion) {
+      throw new Error(
+        `Operational schema history cannot change ${baseScope.scope} baseline version ${baseScope.baselineVersion}`,
+      );
+    }
+    if (currentScope.changes.length < baseScope.changes.length) {
+      throw new Error(`Operational schema history cannot delete ${baseScope.scope} declarations`);
+    }
+    for (const [index, baseChange] of baseScope.changes.entries()) {
+      const currentChange = currentScope.changes[index];
+      if (!sameSchemaChange(baseChange, currentChange)) {
+        throw new Error(
+          `Operational schema history cannot rewrite published version ${baseChange.version} in ${baseScope.scope}`,
+        );
+      }
+    }
+  }
+}
+
+export function validateCurrentProbeTestSource(source) {
+  if (!source.includes(currentProbeReference)) {
+    throw new Error('Operational epoch probe test must select the current reader epoch');
+  }
+}
 
 export function validateOperationalProbeChanges({
   baseEpoch,
@@ -70,15 +104,52 @@ export function validateOperationalProbeChanges({
   }
 }
 
-function parseEpoch(source, label) {
-  if (source === undefined) return 0;
-  const match = /export const OPERATIONAL_STATE_READER_EPOCH = (\d+);/.exec(source);
-  if (!match) throw new Error(`Unable to read operational reader epoch from ${label}`);
-  return Number(match[1]);
+function parseHistory(source, label) {
+  if (source === undefined) return { readerEpoch: 0, scopes: [] };
+  try {
+    const history = JSON.parse(source);
+    if (!history || !Number.isSafeInteger(history.readerEpoch) || !Array.isArray(history.scopes)) {
+      throw new Error('invalid shape');
+    }
+    return history;
+  } catch (error) {
+    throw new Error(`Unable to read operational schema history from ${label}`, { cause: error });
+  }
 }
 
-function countBreakingChanges(source) {
-  return source?.match(/compatibility:\s*'breaking'/g)?.length ?? 0;
+function countBreakingChanges(scopes) {
+  return scopes.reduce(
+    (count, scope) =>
+      count + scope.changes.filter((change) => change.compatibility === 'breaking').length,
+    0,
+  );
+}
+
+function uniqueScopes(scopes, label) {
+  const byScope = new Map();
+  for (const scope of scopes) {
+    if (
+      !scope ||
+      typeof scope.scope !== 'string' ||
+      !Number.isSafeInteger(scope.baselineVersion) ||
+      !Array.isArray(scope.changes) ||
+      byScope.has(scope.scope)
+    ) {
+      throw new Error(`Operational schema ${label} history is invalid`);
+    }
+    byScope.set(scope.scope, scope);
+  }
+  return byScope;
+}
+
+function sameSchemaChange(left, right) {
+  return (
+    right !== undefined &&
+    left.version === right.version &&
+    left.compatibility === right.compatibility &&
+    left.minimumReaderEpoch === right.minimumReaderEpoch &&
+    left.summary === right.summary
+  );
 }
 
 function git(args) {
@@ -119,10 +190,16 @@ function main(args) {
   const baseIndex = args.indexOf('--base');
   const base = baseIndex >= 0 ? args[baseIndex + 1] : undefined;
   if (!base) throw new Error('usage: check-operational-schema-compatibility --base <commit>');
-  const baseManifest = sourceAtRevision(base, manifestPath);
-  const currentManifest = readFileSync(resolve(repoRoot, manifestPath), 'utf8');
-  const baseEpoch = parseEpoch(baseManifest, `${base}:${manifestPath}`);
-  const currentEpoch = parseEpoch(currentManifest, manifestPath);
+  const baseHistory = parseHistory(sourceAtRevision(base, historyPath), `${base}:${historyPath}`);
+  const currentHistory = parseHistory(
+    readFileSync(resolve(repoRoot, historyPath), 'utf8'),
+    historyPath,
+  );
+  validateOperationalSchemaHistory({
+    baseScopes: baseHistory.scopes,
+    currentScopes: currentHistory.scopes,
+  });
+  validateCurrentProbeTestSource(readFileSync(resolve(repoRoot, probeTestPath), 'utf8'));
   const changes = parseOperationalProbeChanges(
     git([
       'diff',
@@ -133,10 +210,10 @@ function main(args) {
     ]),
   );
   validateOperationalProbeChanges({
-    baseEpoch,
-    currentEpoch,
-    baseBreakingChanges: countBreakingChanges(baseManifest),
-    currentBreakingChanges: countBreakingChanges(currentManifest),
+    baseEpoch: baseHistory.readerEpoch,
+    currentEpoch: currentHistory.readerEpoch,
+    baseBreakingChanges: countBreakingChanges(baseHistory.scopes),
+    currentBreakingChanges: countBreakingChanges(currentHistory.scopes),
     changes,
   });
 }

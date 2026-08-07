@@ -1,0 +1,13 @@
+{
+  "readerEpoch": 1,
+  "scopes": [
+    { "scope": "runtime", "baselineVersion": 11, "changes": [] },
+    { "scope": "session_metadata", "baselineVersion": 22, "changes": [] },
+    { "scope": "core_execution", "baselineVersion": 1, "changes": [] },
+    { "scope": "workflow", "baselineVersion": 3, "changes": [] },
+    { "scope": "usage", "baselineVersion": 3, "changes": [] },
+    { "scope": "artifact", "baselineVersion": 1, "changes": [] },
+    { "scope": "automation", "baselineVersion": 1, "changes": [] },
+    { "scope": "operational", "baselineVersion": 1, "changes": [] }
+  ]
+}

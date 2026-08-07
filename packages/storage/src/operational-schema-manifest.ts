@@ -5,8 +5,8 @@ import { SQLITE_RUNTIME_SCHEMA_VERSION } from './sqlite-runtime-schema.js';
 import { SQLITE_SESSION_METADATA_SCHEMA_VERSION } from './sqlite-session-metadata-schema.js';
 import { SQLITE_USAGE_SCHEMA_VERSION } from './sqlite-usage-schema.js';
 import { SQLITE_WORKFLOW_SCHEMA_VERSION } from './sqlite-workflow-schema.js';
+import operationalSchemaHistory from './operational-schema-history.json' with { type: 'json' };
 
-export const OPERATIONAL_STATE_READER_EPOCH = 1;
 export const OPERATIONAL_STATE_SCHEMA_VERSION = 1;
 
 export type OperationalSchemaCompatibility = 'compatible' | 'breaking';
@@ -25,19 +25,34 @@ export interface OperationalSchemaScope {
   readonly changes: readonly OperationalSchemaChange[];
 }
 
+interface OperationalSchemaHistory {
+  readonly readerEpoch: number;
+  readonly scopes: readonly Omit<OperationalSchemaScope, 'currentVersion'>[];
+}
+
+const history = operationalSchemaHistory as OperationalSchemaHistory;
+const currentVersions = new Map<string, number>([
+  ['runtime', SQLITE_RUNTIME_SCHEMA_VERSION],
+  ['session_metadata', SQLITE_SESSION_METADATA_SCHEMA_VERSION],
+  ['core_execution', SQLITE_CORE_EXECUTION_SCHEMA_VERSION],
+  ['workflow', SQLITE_WORKFLOW_SCHEMA_VERSION],
+  ['usage', SQLITE_USAGE_SCHEMA_VERSION],
+  ['artifact', SQLITE_ARTIFACT_SCHEMA_VERSION],
+  ['automation', SQLITE_AUTOMATION_SCHEMA_VERSION],
+  ['operational', OPERATIONAL_STATE_SCHEMA_VERSION],
+]);
+
+export const OPERATIONAL_STATE_READER_EPOCH = history.readerEpoch;
+
 /**
  * The epoch-one versions are immutable compatibility anchors. Every later
  * version must append one declaration instead of replacing history.
  */
 export const OPERATIONAL_SCHEMA_MANIFEST: readonly OperationalSchemaScope[] = [
-  schemaScope('runtime', 11, SQLITE_RUNTIME_SCHEMA_VERSION),
-  schemaScope('session_metadata', 22, SQLITE_SESSION_METADATA_SCHEMA_VERSION),
-  schemaScope('core_execution', 1, SQLITE_CORE_EXECUTION_SCHEMA_VERSION),
-  schemaScope('workflow', 3, SQLITE_WORKFLOW_SCHEMA_VERSION),
-  schemaScope('usage', 3, SQLITE_USAGE_SCHEMA_VERSION),
-  schemaScope('artifact', 1, SQLITE_ARTIFACT_SCHEMA_VERSION),
-  schemaScope('automation', 1, SQLITE_AUTOMATION_SCHEMA_VERSION),
-  schemaScope('operational', 1, OPERATIONAL_STATE_SCHEMA_VERSION),
+  ...history.scopes.map((scope) => ({
+    ...scope,
+    currentVersion: requireCurrentVersion(scope.scope),
+  })),
 ];
 
 export function validateOperationalSchemaManifest(
@@ -72,6 +87,10 @@ export function validateOperationalSchemaManifest(
             `Compatible operational schema ${scope.scope} version ${change.version} cannot raise its reader epoch`,
           );
         }
+      } else if (change.compatibility !== 'breaking') {
+        throw new Error(
+          `Operational schema ${scope.scope} version ${change.version} compatibility is invalid`,
+        );
       } else if (change.minimumReaderEpoch <= scopeReaderEpoch) {
         throw new Error(
           `Breaking operational schema ${scope.scope} version ${change.version} must raise its reader epoch`,
@@ -93,12 +112,12 @@ export function validateOperationalSchemaManifest(
   }
 }
 
-function schemaScope(
-  scope: string,
-  baselineVersion: number,
-  currentVersion: number,
-): OperationalSchemaScope {
-  return { scope, baselineVersion, currentVersion, changes: [] };
+function requireCurrentVersion(scope: string): number {
+  const currentVersion = currentVersions.get(scope);
+  if (currentVersion === undefined) {
+    throw new Error(`Operational schema scope has no current version: ${scope}`);
+  }
+  return currentVersion;
 }
 
 function assertPositiveInteger(value: number, label: string): void {

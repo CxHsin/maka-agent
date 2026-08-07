@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   parseOperationalProbeChanges,
+  validateCurrentProbeTestSource,
+  validateOperationalSchemaHistory,
   validateOperationalProbeChanges,
 } from './check-operational-schema-compatibility.mjs';
 
@@ -103,5 +105,84 @@ test('requires a new breaking declaration and epoch increase together', () => {
         ],
       }),
     /requires a new breaking declaration/,
+  );
+});
+
+test('keeps published operational schema history append-only', () => {
+  const baseScopes = [
+    {
+      scope: 'runtime',
+      baselineVersion: 11,
+      changes: [
+        {
+          version: 12,
+          compatibility: 'breaking',
+          minimumReaderEpoch: 2,
+          summary: 'published change',
+        },
+      ],
+    },
+  ];
+  assert.throws(
+    () =>
+      validateOperationalSchemaHistory({
+        baseScopes,
+        currentScopes: [
+          {
+            ...baseScopes[0],
+            changes: [
+              {
+                ...baseScopes[0].changes[0],
+                compatibility: 'compatible',
+                minimumReaderEpoch: 1,
+              },
+              {
+                version: 13,
+                compatibility: 'breaking',
+                minimumReaderEpoch: 2,
+                summary: 'replacement change',
+              },
+            ],
+          },
+        ],
+      }),
+    /cannot rewrite published version 12/,
+  );
+});
+
+test('allows operational schema history to append new declarations', () => {
+  const baseScopes = [{ scope: 'runtime', baselineVersion: 11, changes: [] }];
+  assert.doesNotThrow(() =>
+    validateOperationalSchemaHistory({
+      baseScopes,
+      currentScopes: [
+        {
+          ...baseScopes[0],
+          changes: [
+            {
+              version: 12,
+              compatibility: 'compatible',
+              minimumReaderEpoch: 1,
+              summary: 'new declaration',
+            },
+          ],
+        },
+      ],
+    }),
+  );
+});
+
+test('requires the probe test to select the current reader epoch', () => {
+  assert.throws(
+    () =>
+      validateCurrentProbeTestSource(
+        "new URL('./fixtures/operational-epoch-1-probe.js', import.meta.url)",
+      ),
+    /current reader epoch/,
+  );
+  assert.doesNotThrow(() =>
+    validateCurrentProbeTestSource(
+      'new URL(`./fixtures/operational-epoch-${OPERATIONAL_STATE_READER_EPOCH}-probe.js`, import.meta.url)',
+    ),
   );
 });

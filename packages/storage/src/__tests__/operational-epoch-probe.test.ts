@@ -6,7 +6,10 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { acquireOperationalStateDatabase } from '../operational-state-store.js';
+import {
+  acquireOperationalStateDatabase,
+  OPERATIONAL_STATE_READER_EPOCH,
+} from '../operational-state-store.js';
 import { createSessionStore } from '../session-store.js';
 
 test('keeps the frozen epoch-one reader and writer compatible with the current database', async () => {
@@ -65,16 +68,56 @@ test('keeps the frozen epoch-one reader and writer compatible with the current d
   }
 });
 
+test('runs the current reader epoch probe against the current database', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-current-epoch-probe-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  try {
+    const writer = createSessionStore(root);
+    const currentSession = await writer.create({
+      cwd: root,
+      backend: 'fake',
+      llmConnectionSlug: 'fake',
+      model: 'fake',
+      permissionMode: 'ask',
+      name: 'Current writer',
+      labels: [],
+    });
+    await writer.close?.();
+    await runCurrentEpochProbe(databasePath, currentSession.id);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function runEpochOneProbe(databasePath: string, currentSessionId: string): Promise<void> {
-  const child = spawn(
-    process.execPath,
-    [
-      fileURLToPath(new URL('./fixtures/operational-epoch-1-probe.js', import.meta.url)),
-      databasePath,
-      currentSessionId,
-    ],
-    { stdio: ['ignore', 'pipe', 'pipe'] },
+  return runProbe(
+    fileURLToPath(new URL('./fixtures/operational-epoch-1-probe.js', import.meta.url)),
+    databasePath,
+    currentSessionId,
   );
+}
+
+function runCurrentEpochProbe(databasePath: string, currentSessionId: string): Promise<void> {
+  return runProbe(
+    fileURLToPath(
+      new URL(
+        `./fixtures/operational-epoch-${OPERATIONAL_STATE_READER_EPOCH}-probe.js`,
+        import.meta.url,
+      ),
+    ),
+    databasePath,
+    currentSessionId,
+  );
+}
+
+function runProbe(
+  probePath: string,
+  databasePath: string,
+  currentSessionId: string,
+): Promise<void> {
+  const child = spawn(process.execPath, [probePath, databasePath, currentSessionId], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
   let stderr = '';
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk: string) => {

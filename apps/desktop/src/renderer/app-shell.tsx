@@ -20,9 +20,11 @@ import {
   collapseSessionRevisions,
   filterLinkedSessionTree,
   isLinkedSubagentSession,
+  linkedSubagentParentSessionId,
   parseGraphCommand,
   parseSwarmCommand,
   projectRevisionLinkedSessionTree,
+  resolveLinkedSessionRootId,
   resolveUiLocale,
 } from '@maka/core';
 import { hasSettledInitialOnboarding } from '@maka/core/onboarding-milestone';
@@ -592,6 +594,13 @@ function AppShellContent({
     [sidebarSessionTree, navSelection, hiddenCompanionForkIds],
   );
   const visibleSessions = visibleSessionTree.roots;
+  // Linked children open in the main column and stay out of the sidebar list.
+  // While a child is active, highlight its root ancestor so the rail still
+  // answers "which conversation am I in?" without nesting rows.
+  const sidebarActiveId = useMemo(
+    () => resolveLinkedSessionRootId(activeId, sessions) ?? activeId,
+    [activeId, sessions],
+  );
   // PR-DAILY-REVIEW-MVP-0: bridge for the main Daily Review module.
   // Memoized so the panel's `useEffect` cleanup keys
   // off a stable reference instead of refetching on every render.
@@ -1024,6 +1033,18 @@ function AppShellContent({
   function handleBranchBannerClick(parentSessionId: string): void {
     openSessionInChat(parentSessionId);
   }
+
+  const titlebarParentSession = useMemo(() => {
+    if (!activeSession) return undefined;
+    const parentId = linkedSubagentParentSessionId(activeSession);
+    if (!parentId) return undefined;
+    const parent = sessions.find((session) => session.id === parentId);
+    if (!parent) return undefined;
+    return {
+      name: parent.name,
+      onOpen: () => openSessionInChatRef.current(parentId),
+    };
+  }, [activeSession, sessions]);
 
   const activeSessionForView: SessionSummary | undefined =
     activeSession ??
@@ -2133,6 +2154,7 @@ function AppShellContent({
                 ? { name: titlebarProjectName, onOpenFolder: () => void openProjectFolder() }
                 : undefined
             }
+            parentSession={titlebarParentSession}
           />
         )}
         {!VIEWS_WITHOUT_WORKSPACE_ACTIONS.has(agentsView) && (
@@ -2168,14 +2190,13 @@ function AppShellContent({
             maxWidth={SESSION_LIST_EXPANDED_MAX_WIDTH}
             selection={navSelection}
             sessions={visibleSessions}
-            activeId={activeId}
+            activeId={sidebarActiveId}
             planReminders={planReminders}
             streamingSessionIds={streamingSessionIds}
             staleSessionIds={staleSessionIds}
             viewMode={viewMode}
             onViewModeChange={setViewMode}
             groups={viewMode === 'project' ? sessionProjectGroups : undefined}
-            childSessionsByParentId={visibleSessionTree.childrenByParentId}
             worktreeSessionIds={worktreeSessionIds}
             moduleMemory={navigationState.moduleMemory}
             onSelect={setNavSelection}
@@ -2517,6 +2538,7 @@ function AppShellContent({
                 } : undefined}
                 onLineageBadgeClick={handleLineageBadgeClick}
                 onReadAttachmentBytes={window.maka.attachments.readBytes}
+                onOpenLinkedSession={openSessionInChat}
                 scrollTargetTurn={
                   activeId && searchScrollTarget?.sessionId === activeId
                         ? {

@@ -389,7 +389,6 @@ function ComposedShell(props: {
             maxWidth={480}
             selection={{ section: 'sessions', filter: 'chats' }}
             sessions={sidebarRows}
-            childSessionsByParentId={sessionTree.childrenByParentId}
             activeId={active?.id}
             groups={viewMode === 'project' ? projectGroups : undefined}
             streamingSessionIds={streamingIds}

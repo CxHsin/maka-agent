@@ -199,6 +199,11 @@ export function ChatView(props: {
    * reconciliation on the hot streaming path.
    */
   onReadAttachmentBytes?: ReadAttachmentBytes;
+  /**
+   * Open a linked subagent child session in the main chat column (option A).
+   * Threaded into SubagentPreview inside tool detail.
+   */
+  onOpenLinkedSession?(sessionId: string): void;
   onNew(): void;
   onPromptSuggestion?(prompt: string): void;
   /**
@@ -626,6 +631,7 @@ export function ChatView(props: {
                       lineageBadges={turnPresentation?.lineageBadgesByTurn[turn.turnId]}
                       onLineageBadgeClick={stableLineageBadgeClick}
                       onReadAttachmentBytes={props.onReadAttachmentBytes}
+                      onOpenLinkedSession={props.onOpenLinkedSession}
                       searchHighlighted={highlightedTurnId === turn.turnId}
                       liveStreaming={
                         turn.turnId === tailTurnId

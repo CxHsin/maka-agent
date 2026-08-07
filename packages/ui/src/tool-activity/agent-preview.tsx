@@ -93,6 +93,8 @@ function boundedAgentSwarmSummary(summary: string): string {
 
 export function SubagentPreview(props: {
   result: SubagentResult;
+  /** Host switches the main chat column to this linked child session. */
+  onOpenSession?(sessionId: string): void;
 }) {
   const locale = useUiLocale();
   const copy = getToolActivityCopy(locale).agent;
@@ -101,6 +103,9 @@ export function SubagentPreview(props: {
   const status = presentSubagentStatus(result.status, locale);
   const summary = typeof result.summary === 'string' ? result.summary.trim() : '';
   const artifactCount = result.artifactIds.length;
+  const agentLabel = redactSecrets(result.agentName || 'Subagent');
+  const childSessionId = result.childSessionId;
+  const canOpen = Boolean(childSessionId && props.onOpenSession);
   const meta = [
     status,
     presentSubagentPermission(result.permissionMode, locale),
@@ -110,8 +115,21 @@ export function SubagentPreview(props: {
   return (
     <div className={cn(previewVariants({ part: 'overlay' }), previewVariants({ part: 'agent' }))} data-kind="subagent" data-status={result.status}>
       <header className={previewVariants({ part: 'agent-head' })}>
-        <strong>{redactSecrets(result.agentName || 'Subagent')}</strong>
+        <strong>{agentLabel}</strong>
         <small>{meta}</small>
+        {canOpen && childSessionId && props.onOpenSession ? (
+          <div className={previewVariants({ part: 'agent-actions' })} role="group">
+            <UiButton
+              variant="ghost"
+              size="sm"
+              className={previewVariants({ part: 'agent-copy' })}
+              data-maka-contract="open-subagent-session"
+              onClick={() => props.onOpenSession?.(childSessionId)}
+              aria-label={copy.openSessionAriaLabel(agentLabel)}
+              label={copy.openSession}
+            />
+          </div>
+        ) : null}
       </header>
       {summary.length > 0 && (
         <section className={previewVariants({ part: 'agent-section' })} aria-label={copy.resultSummaryAriaLabel}>

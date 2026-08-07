@@ -392,6 +392,11 @@ export const TurnView = memo(function TurnView(props: {
    * reaching into the desktop preload directly.
    */
   onReadAttachmentBytes?: ReadAttachmentBytes;
+  /**
+   * Open a linked subagent child session in the main chat column. Threaded into
+   * tool-detail SubagentPreview; omitted when the host has no navigation.
+   */
+  onOpenLinkedSession?(sessionId: string): void;
 }) {
   const locale = useUiLocale();
   const copy = getConversationCopy(locale).messages;
@@ -570,12 +575,17 @@ export const TurnView = memo(function TurnView(props: {
                 through the derived fold as collapsed Processing blocks. */}
             {foldedTimeline.map((item, index) =>
               item.kind === 'processing' ? (
-                <ProcessingBlock key={`processing-${item.id}`} entries={item.children} />
+                <ProcessingBlock
+                  key={`processing-${item.id}`}
+                  entries={item.children}
+                  onOpenLinkedSession={props.onOpenLinkedSession}
+                />
               ) : (
                 <TurnTimelineEntry
                   key={timelineEntryKey(item, index)}
                   item={item}
                   onStreamingSettled={props.liveStreaming?.onStreamingSettled}
+                  onOpenLinkedSession={props.onOpenLinkedSession}
                 />
               ),
             )}
@@ -957,12 +967,15 @@ function timelineEntryKey(item: TurnTimelineItem, index: number): string {
 function TurnTimelineEntry(props: {
   item: TurnTimelineItem;
   onStreamingSettled?: (messageId?: string) => void;
+  onOpenLinkedSession?(sessionId: string): void;
 }) {
   const { item } = props;
   if (item.kind === 'thinking') {
     return <DeepThinking text={item.text} live={item.live === true} truncated={item.truncated === true} />;
   }
-  if (item.kind === 'tools') return <ToolTrow items={item.items} />;
+  if (item.kind === 'tools') {
+    return <ToolTrow items={item.items} onOpenLinkedSession={props.onOpenLinkedSession} />;
+  }
   if (item.kind === 'text' && item.live) {
     return (
       <StreamingAssistantBubble
@@ -976,12 +989,19 @@ function TurnTimelineEntry(props: {
   return <MessageBody role="assistant" text={item.text} ts={item.ts} />;
 }
 
-function ProcessingBlock(props: { entries: FoldedTimelineChild[] }) {
+function ProcessingBlock(props: {
+  entries: FoldedTimelineChild[];
+  onOpenLinkedSession?(sessionId: string): void;
+}) {
   const { entries } = props;
   return (
     <div className="maka-processing-sequence">
       {entries.map((entry, index) => (
-        <TurnTimelineEntry key={timelineEntryKey(entry, index)} item={entry} />
+        <TurnTimelineEntry
+          key={timelineEntryKey(entry, index)}
+          item={entry}
+          onOpenLinkedSession={props.onOpenLinkedSession}
+        />
       ))}
     </div>
   );

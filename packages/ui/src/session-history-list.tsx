@@ -2,7 +2,6 @@ import {
   memo,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -16,7 +15,6 @@ import {
   AlertTriangle,
   Archive,
   ArchiveRestore,
-  Bot,
   FolderGit2,
   FolderOpen,
   Pencil,
@@ -74,7 +72,6 @@ export function SessionHistoryList(props: {
   groups?: ReadonlyArray<SessionHistoryGroup>;
   worktreeSessionIds?: ReadonlySet<string>;
   projectActions?: ProjectRowActions;
-  childSessionsByParentId?: ReadonlyMap<string, readonly SessionSummary[]>;
   groupVariant?: SessionHistoryGroupVariant;
   /** Optional section chrome (title + end actions) wrapping the history. */
   heading?: string;
@@ -122,7 +119,6 @@ export function SessionHistoryList(props: {
       activeId={props.activeId}
       streamingSessionIds={props.streamingSessionIds}
       staleSessionIds={props.staleSessionIds}
-      childSessionsByParentId={props.childSessionsByParentId}
       worktreeSessionIds={props.worktreeSessionIds}
       onSelectSession={props.onSelectSession}
       rowActions={props.rowActions}
@@ -159,7 +155,6 @@ function SessionListGroups(props: {
   activeId?: string;
   streamingSessionIds?: Set<string>;
   staleSessionIds?: Set<string>;
-  childSessionsByParentId?: ReadonlyMap<string, readonly SessionSummary[]>;
   worktreeSessionIds?: ReadonlySet<string>;
   onSelectSession(sessionId: string): void;
   rowActions?: SessionRowActions;
@@ -184,10 +179,6 @@ function SessionListGroups(props: {
    */
   const renameOpenerRef = useRef<HTMLElement | null>(null);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
-  const activeAncestorIds = useMemo(
-    () => resolveActiveSessionAncestorIds(props.activeId, props.childSessionsByParentId),
-    [props.activeId, props.childSessionsByParentId],
-  );
 
   const startRename = useCallback((target: SessionRenameTarget, opener: HTMLElement | null) => {
     renameOpenerRef.current = opener;
@@ -214,32 +205,25 @@ function SessionListGroups(props: {
     });
   }
 
-  const renderSessionTree = useCallback(
-    function renderSessionTree(session: SessionSummary, nested: boolean): ReactNode {
-      const childSessions = props.childSessionsByParentId?.get(session.id);
-      return (
-        <SessionNavRow
-          key={session.id}
-          session={session}
-          nested={nested}
-          active={session.id === props.activeId}
-          streaming={props.streamingSessionIds?.has(session.id) ?? false}
-          stale={props.staleSessionIds?.has(session.id) ?? false}
-          worktree={props.worktreeSessionIds?.has(session.id) ?? false}
-          onSelectSession={props.onSelectSession}
-          actions={props.rowActions}
-          onStartRename={startRename}
-          childSessions={childSessions}
-          expandedForActiveDescendant={activeAncestorIds.has(session.id)}
-          renderSessionTree={childSessions?.length ? renderSessionTree : undefined}
-        />
-      );
-    },
+  // Linked subagent sessions open in the main chat column, not as nested
+  // sidebar rows. The host passes only root/user sessions here.
+  const renderSessionRow = useCallback(
+    (session: SessionSummary): ReactNode => (
+      <SessionNavRow
+        key={session.id}
+        session={session}
+        active={session.id === props.activeId}
+        streaming={props.streamingSessionIds?.has(session.id) ?? false}
+        stale={props.staleSessionIds?.has(session.id) ?? false}
+        worktree={props.worktreeSessionIds?.has(session.id) ?? false}
+        onSelectSession={props.onSelectSession}
+        actions={props.rowActions}
+        onStartRename={startRename}
+      />
+    ),
     [
-      activeAncestorIds,
       startRename,
       props.activeId,
-      props.childSessionsByParentId,
       props.onSelectSession,
       props.rowActions,
       props.staleSessionIds,
@@ -282,7 +266,7 @@ function SessionListGroups(props: {
               startRename({ kind: 'project', id: project.id, name: project.name }, opener);
             }
           }}
-          renderSession={(session) => renderSessionTree(session, false)}
+          renderSession={renderSessionRow}
         />
       );
     }
@@ -313,7 +297,7 @@ function SessionListGroups(props: {
     <>
       {renameDialog}
       {props.groups.map((group) => {
-        const items = group.sessions.map((session) => renderSessionTree(session, false));
+        const items = group.sessions.map((session) => renderSessionRow(session));
         if (!group.label) {
           return (
             <div key={group.key} className="maka-session-group">
@@ -388,7 +372,6 @@ function EndContentHitTarget(props: {
 
 const SessionNavRow = memo(function SessionNavRow(props: {
   session: SessionSummary;
-  nested: boolean;
   active: boolean;
   streaming: boolean;
   stale: boolean;
@@ -396,45 +379,22 @@ const SessionNavRow = memo(function SessionNavRow(props: {
   onSelectSession(sessionId: string): void;
   actions?: SessionRowActions;
   onStartRename(target: SessionRenameTarget, opener: HTMLElement | null): void;
-  childSessions?: readonly SessionSummary[];
-  expandedForActiveDescendant: boolean;
-  renderSessionTree?(session: SessionSummary, nested: boolean): ReactNode;
 }) {
   const locale = useUiLocale();
   const metaTitle = formatSessionMeta(props.session, locale);
-  const hasChildren = Boolean(props.childSessions?.length);
-  const [userCollapsed, setUserCollapsed] = useState<boolean | null>(null);
-  // A tree should not pay to mount every descendant before the user opens it.
-  // Keep the active session visible by forcing only its ancestor chain open;
-  // the active node itself may stay collapsed when it owns a large Swarm.
-  const isCollapsed = props.expandedForActiveDescendant
-    ? false
-    : (userCollapsed ?? true);
 
   return (
     <div
       className="maka-session-row"
       data-maka-contract="session-row"
       data-session-id={props.session.id}
-      data-subagent={props.nested ? 'true' : undefined}
       data-stale={props.stale ? 'true' : undefined}
       title={metaTitle}
     >
       <SideNavItem
         label={props.session.name}
-        // Nested (subagent) rows: native leading Bot icon keeps hierarchy
-        // readable without CSS nest-padding overrides. Parent rows stay iconless.
-        icon={props.nested ? Bot : undefined}
         size="md"
         isSelected={props.active}
-        collapsible={
-          hasChildren
-            ? {
-                isCollapsed,
-                onCollapsedChange: setUserCollapsed,
-              }
-            : undefined
-        }
         onClick={(event) => {
           if (event.detail > 1 && props.actions) {
             props.onStartRename(
@@ -458,43 +418,10 @@ const SessionNavRow = memo(function SessionNavRow(props: {
             onStartRename={props.onStartRename}
           />
         }
-      >
-        {hasChildren ? (
-          isCollapsed ? (
-            // Astryx derives disclosure chrome from `Boolean(children)`.
-            // A zero-layout sentinel preserves the chevron without mounting
-            // the expensive descendant tree while this node is collapsed.
-            <span className="maka-session-lazy-children-sentinel" aria-hidden="true" />
-          ) : (
-            props.childSessions?.map((child) => props.renderSessionTree?.(child, true))
-          )
-        ) : undefined}
-      </SideNavItem>
+      />
     </div>
   );
 });
-
-function resolveActiveSessionAncestorIds(
-  activeId: string | undefined,
-  childSessionsByParentId: ReadonlyMap<string, readonly SessionSummary[]> | undefined,
-): ReadonlySet<string> {
-  const ancestors = new Set<string>();
-  if (!activeId || !childSessionsByParentId) return ancestors;
-
-  const parentByChildId = new Map<string, string>();
-  for (const [parentId, children] of childSessionsByParentId) {
-    for (const child of children) parentByChildId.set(child.id, parentId);
-  }
-
-  const visited = new Set<string>([activeId]);
-  let parentId = parentByChildId.get(activeId);
-  while (parentId && !visited.has(parentId)) {
-    ancestors.add(parentId);
-    visited.add(parentId);
-    parentId = parentByChildId.get(parentId);
-  }
-  return ancestors;
-}
 
 function ProjectItemEndContent(props: {
   project?: ProjectRecord;

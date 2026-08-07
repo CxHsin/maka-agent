@@ -505,6 +505,37 @@ export function isLinkedSubagentSession(
   return linkedSubagentParentId(session) !== undefined;
 }
 
+/** Immediate linked parent session id, if this session is a linked child. */
+export function linkedSubagentParentSessionId(
+  session: Pick<SessionSummary, 'subagent' | 'subagentParent'>,
+): string | undefined {
+  return linkedSubagentParentId(session);
+}
+
+/**
+ * Walk linked-subagent parent pointers to the root session id for sidebar
+ * selection. When a child is open in the main column, the sidebar still only
+ * lists roots, so the parent (or further ancestor) should appear selected.
+ */
+export function resolveLinkedSessionRootId(
+  sessionId: string | undefined,
+  sessions: readonly Pick<SessionSummary, 'id' | 'subagent' | 'subagentParent'>[],
+): string | undefined {
+  if (!sessionId) return undefined;
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  let currentId = sessionId;
+  const visited = new Set<string>();
+  while (!visited.has(currentId)) {
+    visited.add(currentId);
+    const session = byId.get(currentId);
+    if (!session) return currentId;
+    const parentId = linkedSubagentParentId(session);
+    if (!parentId || !byId.has(parentId)) return currentId;
+    currentId = parentId;
+  }
+  return currentId;
+}
+
 /** Read-model projection; input order is preserved at every tree level. */
 export function projectLinkedSessionTree(
   sessions: readonly SessionSummary[],

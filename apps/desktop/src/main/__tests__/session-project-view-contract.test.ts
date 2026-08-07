@@ -230,33 +230,22 @@ describe('sidebar project view mode', () => {
     assert.doesNotMatch(activeChunk, /data-session-status=/);
   });
 
-  it('lazy-mounts linked children and expands the active child ancestor chain', () => {
+  it('keeps the sidebar flat: linked children are not nested under parents', () => {
     const parent = makeSessionSummary({ id: 'parent', name: 'Parent task' });
     const child = makeSessionSummary({ id: 'child', name: 'Child agent' });
-    const collapsedMarkup = renderSessionListPanel({
-      sessions: [parent],
-      childSessionsByParentId: new Map([[parent.id, [child]]]),
-    });
-    assert.match(collapsedMarkup, /maka-session-lazy-children-sentinel/);
-    assert.doesNotMatch(collapsedMarkup, /data-session-id="child"/);
-
+    // Host passes only root sessions; child open state is titlebar + main column.
     const markup = renderSessionListPanel({
       sessions: [parent],
-      activeId: child.id,
-      childSessionsByParentId: new Map([[parent.id, [child]]]),
+      activeId: parent.id,
     });
 
-    assert.ok(markup.indexOf('Parent task') < markup.indexOf('Child agent'));
-    assert.match(markup, /data-subagent="true"/);
-    assert.match(markup, /data-session-id="child"/);
-    assert.match(markup, /data-maka-contract="session-row"/);
-    // Nested subagent rows use native SideNavItem Bot icon (lucide-bot).
-    const childChunk =
-      markup.match(/data-session-id="child"[\s\S]*?(?=data-session-id="|$)/)?.[0] ?? '';
-    assert.match(childChunk, /lucide-bot/);
-    const parentChunk =
-      markup.match(/data-session-id="parent"[\s\S]*?(?=data-session-id="child"|$)/)?.[0] ?? '';
-    assert.doesNotMatch(parentChunk, /lucide-bot/);
+    assert.match(markup, /data-session-id="parent"/);
+    assert.doesNotMatch(markup, /data-session-id="child"/);
+    assert.doesNotMatch(markup, /data-subagent="true"/);
+    assert.doesNotMatch(markup, /maka-session-lazy-children-sentinel/);
+    assert.doesNotMatch(markup, /lucide-bot/);
+    // Child is not a sidebar peer either — only the root list is rendered.
+    assert.doesNotMatch(markup, /Child agent/);
   });
 
   it('applies Chats, Flagged, and Archived filters independently to parents and children', () => {

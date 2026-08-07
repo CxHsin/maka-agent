@@ -271,6 +271,10 @@ export interface ConversationCopy {
     openProjectFolder: (name: string) => string;
     /** Action phrase appended to the titlebar project crumb's accessible name. */
     openProjectFolderAction: string;
+    /** Tooltip / accessible name for the parent crumb when a linked child is open. */
+    openParentSession: (name: string) => string;
+    /** Action phrase appended to the titlebar parent crumb's accessible name. */
+    openParentSessionAction: string;
     sessionContextMore: (count: number) => string;
     revisionVersionsAriaLabel: string;
     revisionVersion: (current: number, total: number) => string;
@@ -437,6 +441,7 @@ const CONVERSATION_COPY = {
       loadFailed: '对话载入失败', loading: '载入中…', retryLoad: '重试载入', quoteSelection: '引用', askInSidePanel: '在侧栏追问', noMessages: '暂无消息',
       branchBeforeInterrupt: '从中断前分支', sessionContextAriaLabel: '会话上下文', sessionLineageAriaLabel: '会话来源', sessionContextMore: (count) => `更多会话上下文（${count}）`,
       titlebarIdentityAriaLabel: '当前会话', openProjectFolder: (name) => `在文件管理器中打开「${name}」`, openProjectFolderAction: '打开项目文件夹',
+      openParentSession: (name) => `返回父会话「${name}」`, openParentSessionAction: '打开父会话',
       revisionVersionsAriaLabel: '对话版本', revisionVersion: (current, total) => `版本 ${current} / ${total}`, previousRevision: '查看上一版本', nextRevision: '查看下一版本',
     },
     sessions: {
@@ -580,6 +585,7 @@ const CONVERSATION_COPY = {
       loadFailed: 'Conversation failed to load', loading: 'Loading…', retryLoad: 'Retry', quoteSelection: 'Quote', askInSidePanel: 'Ask in side panel', noMessages: 'No messages yet',
       branchBeforeInterrupt: 'Branched before interruption', sessionContextAriaLabel: 'Session context', sessionLineageAriaLabel: 'Session origin', sessionContextMore: (count) => `More session context (${count})`,
       titlebarIdentityAriaLabel: 'Current conversation', openProjectFolder: (name) => `Open “${name}” in the file manager`, openProjectFolderAction: 'Open project folder',
+      openParentSession: (name) => `Return to parent session “${name}”`, openParentSessionAction: 'Open parent session',
       revisionVersionsAriaLabel: 'Conversation versions', revisionVersion: (current, total) => `Version ${current} of ${total}`, previousRevision: 'View previous version', nextRevision: 'View next version',
     },
     sessions: {

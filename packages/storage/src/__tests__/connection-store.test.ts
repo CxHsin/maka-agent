@@ -27,11 +27,7 @@ describe('FileConnectionStore', () => {
         name: 'OpenCode Free',
         providerType: 'opencode-free',
         defaultModel: 'nemotron-3-ultra-free',
-        enabledModelIds: [
-          'nemotron-3-ultra-free',
-          'mimo-v2.5-free',
-          'deepseek-v4-flash-free',
-        ],
+        enabledModelIds: ['nemotron-3-ultra-free', 'mimo-v2.5-free', 'deepseek-v4-flash-free'],
       });
 
       assert.deepEqual(created.enabledModelIds, [
@@ -884,11 +880,7 @@ describe('FileConnectionStore', () => {
 
       const migrated = await store.updateIfUnchanged(created.slug, created.updatedAt, {
         defaultModel: 'nemotron-3-ultra-free',
-        enabledModelIds: [
-          'nemotron-3-ultra-free',
-          'mimo-v2.5-free',
-          'deepseek-v4-flash-free',
-        ],
+        enabledModelIds: ['nemotron-3-ultra-free', 'mimo-v2.5-free', 'deepseek-v4-flash-free'],
         extras: { makaBootstrap: { id: 'opencode-free', version: 3 } },
       });
       assert.equal(migrated?.defaultModel, 'nemotron-3-ultra-free');

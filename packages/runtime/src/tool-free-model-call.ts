@@ -1,9 +1,5 @@
 import type { ModelMessage } from './model-protocol.js';
-import {
-  lowerModelTools,
-  normalizeAiSdkUsage,
-  type AiSdkUsageLike,
-} from './model-adapter.js';
+import { lowerModelTools, normalizeAiSdkUsage, type AiSdkUsageLike } from './model-adapter.js';
 import { rawFinishReasonString, type NormalizedUsage } from './model-protocol.js';
 import type { ModelToolSet } from './model-protocol.js';
 

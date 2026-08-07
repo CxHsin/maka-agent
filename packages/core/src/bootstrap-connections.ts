@@ -149,6 +149,9 @@ function bootstrapVersion(connection: LlmConnection): number | undefined {
   return record.version;
 }
 
-function sameStringList(actual: readonly string[] | undefined, expected: readonly string[]): boolean {
+function sameStringList(
+  actual: readonly string[] | undefined,
+  expected: readonly string[],
+): boolean {
   return actual?.length === expected.length && actual.every((id, index) => id === expected[index]);
 }

@@ -38,6 +38,11 @@ import {
   validateOperationalSchemaManifest,
 } from './operational-schema-manifest.js';
 import {
+  acquireOperationalStateCompatibilityLock,
+  type OperationalStateCompatibilityLock,
+  tryAcquireOperationalStateMigrationLock,
+} from './operational-state-compatibility-lock.js';
+import {
   assertHeadlessRootMigrationOwner,
   assertInteractiveRootOwner,
   authenticateHeadlessRootMigrationOwner,
@@ -113,22 +118,49 @@ export async function migrateOperationalStateDatabaseForOwner(
   } else {
     await assertHeadlessRootMigrationOwner(authenticOwner as HeadlessRootMigrationOwner);
   }
-  acquireOperationalStateDatabaseAtEpoch(
-    authenticOwner.capability.canonicalPath,
-    OPERATIONAL_STATE_READER_EPOCH,
-    options,
-  ).close();
+  const workspaceRoot = authenticOwner.capability.canonicalPath;
+  if (!operationalStateRequiresExclusiveMigration(workspaceRoot)) {
+    acquireOperationalStateDatabaseAtEpoch(
+      workspaceRoot,
+      OPERATIONAL_STATE_READER_EPOCH,
+      options,
+    ).close();
+    return;
+  }
+  const migrationLock = tryAcquireOperationalStateMigrationLock(workspaceRoot);
+  if (!migrationLock) {
+    throw new Error(
+      'Operational state migration requires every older reader and writer to close first',
+    );
+  }
+  try {
+    acquireOperationalStateDatabaseAtEpoch(
+      workspaceRoot,
+      OPERATIONAL_STATE_READER_EPOCH,
+      options,
+      migrationLock,
+    ).close();
+  } finally {
+    migrationLock.close();
+  }
 }
 
 function acquireOperationalStateDatabaseAtEpoch(
   workspaceRoot: string,
   targetReaderEpoch: number,
   options: OperationalStateDatabaseOptions,
+  migrationLock?: OperationalStateCompatibilityLock,
 ): OperationalStateDatabaseLease {
   const databasePath = resolve(workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME);
   let owner = owners.get(databasePath);
   if (!owner) {
-    owner = new OperationalStateDatabaseOwner(databasePath, targetReaderEpoch, options);
+    owner = new OperationalStateDatabaseOwner(
+      workspaceRoot,
+      databasePath,
+      targetReaderEpoch,
+      options,
+      migrationLock,
+    );
     owners.set(databasePath, owner);
   }
   return owner.acquire();
@@ -157,18 +189,29 @@ export function operationalStateRequiresExclusiveMigration(
 
 class OperationalStateDatabaseOwner {
   readonly database: DatabaseSync;
+  readonly #compatibilityLock?: OperationalStateCompatibilityLock;
   private references = 0;
   private closed = false;
   private transactionDepth = 0;
 
   constructor(
+    workspaceRoot: string,
     readonly databasePath: string,
     targetReaderEpoch: number,
     options: OperationalStateDatabaseOptions,
+    migrationLock?: OperationalStateCompatibilityLock,
   ) {
     mkdirSync(dirname(databasePath), { recursive: true });
+    this.#compatibilityLock = migrationLock
+      ? undefined
+      : acquireOperationalStateCompatibilityLock(workspaceRoot);
     const Database = loadDatabaseSync();
-    this.database = new Database(databasePath);
+    try {
+      this.database = new Database(databasePath);
+    } catch (error) {
+      this.#compatibilityLock?.close();
+      throw error;
+    }
     try {
       // Preflight reads must wait for another opener's WAL transition, but this
       // connection-only pragma keeps rejected databases byte-for-byte intact.
@@ -240,6 +283,7 @@ class OperationalStateDatabaseOwner {
       }
     } catch (error) {
       this.database.close();
+      this.#compatibilityLock?.close();
       this.closed = true;
       throw error;
     }
@@ -288,7 +332,20 @@ class OperationalStateDatabaseOwner {
     if (this.references !== 0) return;
     this.closed = true;
     owners.delete(this.databasePath);
-    this.database.close();
+    const errors: unknown[] = [];
+    try {
+      this.database.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      this.#compatibilityLock?.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Unable to close the operational state database');
+    }
   }
 
   private transaction<T>(mode: 'read' | 'write', operation: () => T): T {

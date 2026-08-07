@@ -15,13 +15,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, test } from 'node:test';
+import { tryAcquireOperationalStateMigrationLock } from '@maka/storage';
 import {
   discoverMarkedStorageRoot,
   resolveRootControlNamespace,
   resolveStorageRoot,
   STORAGE_ROOT_MARKER_FILE,
   StorageRootAuthorityError,
-  tryAcquireHeadlessRootMigrationOwner,
 } from '@maka/storage/root-authority';
 import { registerFakeBackend } from '../backends.js';
 import { runHarborCell } from '../harbor-cell.js';
@@ -43,14 +43,12 @@ describe('Headless storage root boundary', () => {
     const storageRoot = join(base, 'storage');
     try {
       const storage = await openHeadlessStorageForWrite(storageRoot);
-      const capability = await discoverMarkedStorageRoot({ path: storageRoot });
-      assert.equal(capability.kind, 'headless');
-      assert.equal(await tryAcquireHeadlessRootMigrationOwner(capability), undefined);
+      assert.equal(tryAcquireOperationalStateMigrationLock(storageRoot), undefined);
 
       await storage.close();
-      const migrationOwner = await tryAcquireHeadlessRootMigrationOwner(capability);
+      const migrationOwner = tryAcquireOperationalStateMigrationLock(storageRoot);
       assert.ok(migrationOwner);
-      await migrationOwner.close();
+      migrationOwner.close();
     } finally {
       await rm(base, { recursive: true, force: true });
     }
@@ -74,11 +72,9 @@ describe('Headless storage root boundary', () => {
         { storageRoot, taskRunId: 'task-run-close' },
       );
 
-      const capability = await discoverMarkedStorageRoot({ path: storageRoot });
-      assert.equal(capability.kind, 'headless');
-      const migrationOwner = await tryAcquireHeadlessRootMigrationOwner(capability);
+      const migrationOwner = tryAcquireOperationalStateMigrationLock(storageRoot);
       assert.ok(migrationOwner);
-      await migrationOwner.close();
+      migrationOwner.close();
     } finally {
       await rm(base, { recursive: true, force: true });
     }
@@ -101,11 +97,9 @@ describe('Headless storage root boundary', () => {
         /requires reader epoch 2, but this Maka build supports epoch 1/,
       );
 
-      const capability = await discoverMarkedStorageRoot({ path: storageRoot });
-      assert.equal(capability.kind, 'headless');
-      const migrationOwner = await tryAcquireHeadlessRootMigrationOwner(capability);
+      const migrationOwner = tryAcquireOperationalStateMigrationLock(storageRoot);
       assert.ok(migrationOwner);
-      await migrationOwner.close();
+      migrationOwner.close();
     } finally {
       await rm(base, { recursive: true, force: true });
     }

@@ -102,15 +102,6 @@ export interface InteractiveRootReader {
   close(): Promise<void>;
 }
 
-export interface HeadlessRootCompatibilityLock<A extends StorageRootAccess> {
-  readonly capability: StorageRootCapability<'headless'>;
-  readonly lease: StorageRootLease<'headless', A>;
-  readonly controlDirectory: string;
-  readonly lockPath: string;
-  readonly closed: boolean;
-  close(): Promise<void>;
-}
-
 export interface HeadlessRootMigrationOwner {
   readonly capability: StorageRootCapability<'headless'>;
   readonly lease: StorageRootLease<'headless', 'write'>;
@@ -127,7 +118,7 @@ type StorageRootLockFor<
   ? A extends 'write'
     ? InteractiveRootOwner
     : InteractiveRootReader
-  : HeadlessRootCompatibilityLock<A>;
+  : HeadlessRootMigrationOwner;
 
 interface RootIdentity {
   dev: bigint;
@@ -628,17 +619,6 @@ export async function tryAcquireInteractiveRootReader(
     'lock_failed',
     'Unable to acquire the interactive storage root reader lock',
     () => acquireInteractiveRootLock(capability, 'read'),
-  );
-}
-
-export async function tryAcquireHeadlessRootCompatibilityLock<A extends StorageRootAccess>(
-  capability: StorageRootCapability<'headless'>,
-  access: A,
-): Promise<HeadlessRootCompatibilityLock<A> | undefined> {
-  return withAuthorityFailure(
-    'lock_failed',
-    'Unable to acquire the headless storage root compatibility lock',
-    () => acquireStorageRootLock(capability, access, true),
   );
 }
 

@@ -125,6 +125,7 @@ export * from './automation-authority.js';
 export * from './sqlite-runtime-store.js';
 export * from './runtime-event-persistence.js';
 export * from './operational-state-store.js';
+export * from './operational-state-compatibility-lock.js';
 export * from './operational-state-backup.js';
 export * from './mcp-config-store.js';
 export * from './workspace-identity.js';

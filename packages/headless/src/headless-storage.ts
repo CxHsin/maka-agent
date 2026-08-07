@@ -15,13 +15,12 @@ import {
   type ExecutionStoresWriter,
 } from '@maka/storage/execution-stores';
 import {
+  createHeadlessRootLease,
   discoverMarkedStorageRoot,
   resolveStorageRoot,
   StorageRootAuthorityError,
-  tryAcquireHeadlessRootCompatibilityLock,
   tryAcquireHeadlessRootMigrationOwner,
   type DiscoveredStorageRootCapability,
-  type HeadlessRootCompatibilityLock,
   type StorageRootCapability,
 } from '@maka/storage/root-authority';
 import {
@@ -58,8 +57,7 @@ export async function openHeadlessStorageForWrite(
 ): Promise<HeadlessStorageWriter> {
   const capability = await resolveStorageRoot({ path: storageRoot, kind: 'headless' });
   await applyRequiredExclusiveMigration(capability);
-  const lock = await requireCompatibilityLock(capability, 'write');
-  const lease = lock.lease;
+  const lease = createHeadlessRootLease(capability, 'write');
   let executionStores: ExecutionStoresWriter<'headless'> | undefined;
   let artifactStore: HeadlessArtifactStore | undefined;
   let taskRunStore: TaskRunWriter;
@@ -68,7 +66,7 @@ export async function openHeadlessStorageForWrite(
     executionStores = await openHeadlessExecutionStoresForWrite(lease);
     artifactStore = await openHeadlessArtifactStoreForWrite(lease);
   } catch (error) {
-    await closeStorage(lock, executionStores, artifactStore).catch(() => {});
+    await closeStorage(executionStores, artifactStore).catch(() => {});
     throw error;
   }
 
@@ -82,7 +80,7 @@ export async function openHeadlessStorageForWrite(
       if (closed) return;
       closed = true;
       headlessStorageWriters.delete(storage);
-      await closeStorage(lock, executionStores, artifactStore);
+      await closeStorage(executionStores, artifactStore);
     },
   };
   Object.freeze(storage);
@@ -98,15 +96,14 @@ export async function openHeadlessStorageForRead(
       ? requireHeadlessCapability(await discoverMarkedStorageRoot({ path: source }))
       : source;
   await applyRequiredExclusiveMigration(capability);
-  const lock = await requireCompatibilityLock(capability, 'read');
-  const lease = lock.lease;
+  const lease = createHeadlessRootLease(capability, 'read');
   let executionStores: ExecutionStoresReader<'headless'> | undefined;
   let taskRunStore: TaskRunReader;
   try {
     taskRunStore = await openHeadlessTaskRunReader(lease);
     executionStores = await openHeadlessExecutionStoresForRead(lease);
   } catch (error) {
-    await closeStorage(lock, executionStores).catch(() => {});
+    await closeStorage(executionStores).catch(() => {});
     throw error;
   }
 
@@ -119,7 +116,7 @@ export async function openHeadlessStorageForRead(
       if (closed) return;
       closed = true;
       headlessStorageReaders.delete(storage);
-      await closeStorage(lock, executionStores);
+      await closeStorage(executionStores);
     },
   };
   Object.freeze(storage);
@@ -146,20 +143,7 @@ async function applyRequiredExclusiveMigration(
   }
 }
 
-async function requireCompatibilityLock<A extends 'read' | 'write'>(
-  capability: StorageRootCapability<'headless'>,
-  access: A,
-): Promise<HeadlessRootCompatibilityLock<A>> {
-  const lock = await tryAcquireHeadlessRootCompatibilityLock(capability, access);
-  if (lock) return lock;
-  throw new StorageRootAuthorityError(
-    'lock_failed',
-    'Headless storage is unavailable while an operational schema migration owns this root',
-  );
-}
-
 async function closeStorage(
-  lock: HeadlessRootCompatibilityLock<'read' | 'write'>,
   executionStores?: ExecutionStoresReader<'headless'> | ExecutionStoresWriter<'headless'>,
   artifactStore?: HeadlessArtifactStore,
 ): Promise<void> {
@@ -171,11 +155,6 @@ async function closeStorage(
   }
   try {
     artifactStore?.close();
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    await lock.close();
   } catch (error) {
     errors.push(error);
   }

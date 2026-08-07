@@ -39,7 +39,6 @@ import {
   StorageRootAuthorityError,
   tryAcquireInteractiveRootOwner,
   tryAcquireInteractiveRootReader,
-  tryAcquireHeadlessRootCompatibilityLock,
   tryAcquireHeadlessRootMigrationOwner,
   type StorageRootCapability,
   type StorageRootLease,
@@ -796,38 +795,9 @@ describe('storage root authority', () => {
     });
   });
 
-  test('shares headless compatibility locks and excludes a breaking migration owner', async () => {
+  test('rejects copied values as headless migration owners', async () => {
     await withRoots(async ({ root }) => {
       const capability = await resolveStorageRoot({ path: root, kind: 'headless' });
-      const writer = await tryAcquireHeadlessRootCompatibilityLock(capability, 'write');
-      const reader = await tryAcquireHeadlessRootCompatibilityLock(capability, 'read');
-      assert.ok(writer);
-      assert.ok(reader);
-      assert.equal(await tryAcquireHeadlessRootMigrationOwner(capability), undefined);
-
-      await writer.close();
-      await reader.close();
-
-      const migrationOwner = await tryAcquireHeadlessRootMigrationOwner(capability);
-      assert.ok(migrationOwner);
-      assert.equal(authenticateHeadlessRootMigrationOwner(migrationOwner), migrationOwner);
-      assert.equal(await tryAcquireHeadlessRootCompatibilityLock(capability, 'write'), undefined);
-      await migrationOwner.close();
-    });
-  });
-
-  test('rejects compatibility locks and copied values as migration owners', async () => {
-    await withRoots(async ({ root }) => {
-      const capability = await resolveStorageRoot({ path: root, kind: 'headless' });
-      const compatibilityLock = await tryAcquireHeadlessRootCompatibilityLock(capability, 'write');
-      assert.ok(compatibilityLock);
-      assert.throws(
-        () => authenticateHeadlessRootMigrationOwner(compatibilityLock),
-        (error: unknown) =>
-          error instanceof StorageRootAuthorityError && error.code === 'invalid_owner',
-      );
-      await compatibilityLock.close();
-
       const migrationOwner = await tryAcquireHeadlessRootMigrationOwner(capability);
       assert.ok(migrationOwner);
       assert.throws(

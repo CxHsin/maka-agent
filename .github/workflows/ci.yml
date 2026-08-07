@@ -48,12 +48,7 @@ jobs:
         if: steps.plan.outputs.code == 'true'
         env:
           BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-        run: |
-          if [[ "$BASE_SHA" =~ ^0+$ ]] || ! git cat-file -e "${BASE_SHA}^{commit}"; then
-            echo "No comparable base; current-state validation will run in typecheck and tests."
-          else
-            node scripts/check-operational-schema-compatibility.mjs --base "$BASE_SHA"
-          fi
+        run: node scripts/check-operational-schema-compatibility.mjs --base "$BASE_SHA"
 
   typecheck:
     needs: changes

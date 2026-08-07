@@ -519,6 +519,74 @@ describe('ToolRuntime settlement', () => {
       'child-session',
     );
   });
+
+  it('does not publish tool_result_preview for swarm batch spawns', async () => {
+    const events: Array<{ type: string }> = [];
+    let readySeen = false;
+    const runtime = makeRuntime({
+      runId: 'parent-run',
+      spawnChildSession: async (input) => {
+        await input.onReady?.({
+          childSessionId: 'swarm-child-session',
+          turnId: 'swarm-child-turn',
+          runId: 'swarm-child-run',
+          agentId: 'local_read',
+          agentName: 'Local Read',
+          permissionMode: 'explore',
+        });
+        readySeen = true;
+        return {
+          kind: 'subagent',
+          childSessionId: 'swarm-child-session',
+          agentId: 'local_read',
+          agentName: 'Local Read',
+          turnId: 'swarm-child-turn',
+          runId: 'swarm-child-run',
+          status: 'completed',
+          permissionMode: 'explore',
+          summary: 'done',
+          artifactIds: [],
+        };
+      },
+    });
+
+    await runtime.settleToolCall({
+      tool: {
+        name: 'agent_swarm',
+        description: 'swarm',
+        parameters: {},
+        impl: async (_args, ctx) => {
+          assert.equal(typeof ctx.spawnChildSession, 'function');
+          return await ctx.spawnChildSession!({
+            agentProfile: 'local_read',
+            prompt: 'Swarm item',
+            swarm: { swarmId: 'swarm-1', itemId: 'item-0' },
+          });
+        },
+      },
+      turnId: 'turn-1',
+      stepId: 'step-1',
+      toolCallId: 'swarm-1',
+      input: {},
+      abortSignal: new AbortController().signal,
+      eventSink: {
+        push: (event) => events.push(event),
+        pushAndWaitUntilConsumed: async (event) => {
+          events.push(event);
+        },
+      },
+    });
+
+    assert.equal(readySeen, true);
+    assert.equal(
+      events.some((event) => event.type === 'tool_result_preview'),
+      false,
+    );
+    assert.equal(
+      events.some((event) => event.type === 'tool_result'),
+      true,
+    );
+  });
 });
 
 function makeRuntime(

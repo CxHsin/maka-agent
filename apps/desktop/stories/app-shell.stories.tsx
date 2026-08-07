@@ -494,18 +494,17 @@ export const StreamingTurn: Story = {
   ),
 };
 
-/**
- * The stretch the running status line exists for: a tool has been running for
- * minutes and the model has produced nothing to look at. The cue this replaced
- * was hidden here — it only covered the gap before the first content event — so
- * this state used to offer no evidence the harness was still working.
- *
- * What renders here is the frozen form: the shell frame carries the
- * e2e-fixture attribute, and the elapsed clock is dropped rather than pinned
- * under it, because any value it could print is a real wall-clock difference
- * that would differ between two captures. In the app the same row reads
- * "正在琢磨… · 2m 1s", with the phrase swapping every 20s.
- */
+// Real path: ask for something long-running → a tool has been going for
+// minutes and the model has produced nothing to look at. The cue this replaced
+// was hidden exactly here — it only covered the gap before the first content
+// event — so this state used to offer no evidence the harness was still
+// working.
+//
+// What renders is the frozen form: the shell frame carries the e2e-fixture
+// attribute, and the elapsed clock is dropped rather than pinned under it,
+// because any value it could print is a real wall-clock difference that would
+// differ between two captures. In the app the same row reads
+// "正在琢磨… · 2m 1s", with the phrase swapping every 20s.
 export const RunningStatusDuringToolRun: Story = {
   render: () => (
     <ComposedShell

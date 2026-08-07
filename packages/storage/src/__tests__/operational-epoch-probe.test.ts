@@ -7,13 +7,34 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { acquireOperationalStateDatabase } from '../operational-state-store.js';
+import { createSessionStore } from '../session-store.js';
 
 test('keeps the frozen epoch-one reader and writer compatible with the current database', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-operational-epoch-1-probe-'));
   const databasePath = join(root, 'runtime.sqlite');
   try {
-    acquireOperationalStateDatabase(root).close();
-    await runEpochOneProbe(databasePath);
+    const writer = createSessionStore(root);
+    const currentSession = await writer.create({
+      cwd: root,
+      backend: 'fake',
+      llmConnectionSlug: 'fake',
+      model: 'fake',
+      permissionMode: 'ask',
+      name: 'Current writer',
+      labels: [],
+    });
+    await writer.close?.();
+    await runEpochOneProbe(databasePath, currentSession.id);
+
+    const reader = createSessionStore(root);
+    try {
+      assert.equal((await reader.readHeaderSnapshot(currentSession.id)).name, 'Epoch 1 updated');
+      assert.equal((await reader.readHeaderSnapshot('epoch-1-session')).name, 'Epoch 1');
+      await reader.rename('epoch-1-session', 'Current updated');
+      assert.equal((await reader.readHeaderSnapshot('epoch-1-session')).name, 'Current updated');
+    } finally {
+      await reader.close?.();
+    }
 
     const current = acquireOperationalStateDatabase(root);
     try {
@@ -44,12 +65,13 @@ test('keeps the frozen epoch-one reader and writer compatible with the current d
   }
 });
 
-function runEpochOneProbe(databasePath: string): Promise<void> {
+function runEpochOneProbe(databasePath: string, currentSessionId: string): Promise<void> {
   const child = spawn(
     process.execPath,
     [
       fileURLToPath(new URL('./fixtures/operational-epoch-1-probe.js', import.meta.url)),
       databasePath,
+      currentSessionId,
     ],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );

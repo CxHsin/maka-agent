@@ -2,6 +2,10 @@ import { DatabaseSync } from 'node:sqlite';
 
 const databasePath = process.argv[2];
 if (!databasePath) throw new Error('usage: operational-epoch-1-probe <runtime.sqlite>');
+const currentSessionId = process.argv[3];
+if (!currentSessionId) {
+  throw new Error('usage: operational-epoch-1-probe <runtime.sqlite> <current-writer-session-id>');
+}
 
 const database = new DatabaseSync(databasePath);
 try {
@@ -44,8 +48,31 @@ try {
     throw new Error(`epoch-1 reader found session_metadata ${metadataVersion}`);
   }
 
+  const currentSession = database
+    .prepare('SELECT payload_json AS payloadJson FROM session_metadata WHERE session_id = ?')
+    .get(currentSessionId) as { payloadJson?: unknown } | undefined;
+  if (typeof currentSession?.payloadJson !== 'string') {
+    throw new Error('epoch-1 reader could not read the current-writer session');
+  }
+  const currentHeader = JSON.parse(currentSession.payloadJson) as Record<string, unknown>;
+  if (currentHeader.name !== 'Current writer') {
+    throw new Error(`epoch-1 reader found unexpected current-writer name ${currentHeader.name}`);
+  }
+
   database.exec('BEGIN IMMEDIATE');
   try {
+    database
+      .prepare(`
+        UPDATE session_metadata
+        SET payload_json = ?, name = ?, metadata_version = metadata_version + 1, committed_at = ?
+        WHERE session_id = ?
+      `)
+      .run(
+        JSON.stringify({ ...currentHeader, name: 'Epoch 1 updated' }),
+        'Epoch 1 updated',
+        2,
+        currentSessionId,
+      );
     database
       .prepare(`
         INSERT INTO runtime_events(
@@ -75,7 +102,30 @@ try {
       `)
       .run(
         'epoch-1-session',
-        '{}',
+        JSON.stringify({
+          id: 'epoch-1-session',
+          workspaceRoot: databasePath,
+          cwd: databasePath,
+          createdAt: 1,
+          lastUsedAt: 1,
+          lastMessageAt: 1,
+          name: 'Epoch 1',
+          titleIsManual: true,
+          isFlagged: false,
+          labels: [],
+          isArchived: false,
+          status: 'active',
+          statusUpdatedAt: 1,
+          hasUnread: false,
+          backend: 'fake',
+          llmConnectionSlug: 'fake',
+          connectionLocked: false,
+          model: 'fake',
+          permissionMode: 'ask',
+          collaborationMode: 'agent',
+          orchestrationMode: 'default',
+          schemaVersion: 1,
+        }),
         1,
         1,
         1,

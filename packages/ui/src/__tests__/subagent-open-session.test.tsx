@@ -104,18 +104,16 @@ describe('AgentSwarm ToolTrow presentation', () => {
         <ToolTrow items={[item]} onOpenLinkedSession={() => undefined} />
       </LocaleProvider>,
     );
-    // Astryx ChatToolCalls group — not the custom AgentSwarmPreview card.
+    // Outer collapsed row keeps the tool display name; children mount only when expanded.
     assert.match(html, /astryx-chat-tool-calls/);
     assert.match(html, /data-kind="agent_swarm"/);
     assert.match(html, /data-item-count="2"/);
-    assert.match(html, /reader/);
-    assert.match(html, /item-2/);
-    assert.match(html, /Running/);
-    assert.match(html, /Queued/);
+    assert.match(html, />Agent Swarm</);
+    assert.match(html, /2 tasks|2 个任务/);
     assert.doesNotMatch(html, /maka-agent-preview/);
-    // Ready child is an expandable CallRow (role=button); open contract mounts
-    // only after that row is activated, so SSR only proves the Astryx rows.
-    assert.match(html, /reader[\s\S]*Running/);
+    // Detail (child rows) is not SSR'd while the outer CallRow is collapsed.
+    assert.doesNotMatch(html, /reader/);
+    assert.doesNotMatch(html, /item-2/);
   });
 });
 

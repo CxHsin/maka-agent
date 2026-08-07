@@ -335,7 +335,7 @@ export function ToolTrow({
       nodes.push(
         <AgentSwarmToolCalls
           key={item.toolUseId}
-          toolUseId={item.toolUseId}
+          item={item}
           result={item.result}
           onOpenLinkedSession={onOpenLinkedSession}
         />,
@@ -389,37 +389,40 @@ type AgentSwarmResult = Extract<ToolResultContent, { kind: 'agent_swarm' }>;
 type AgentSwarmItem = AgentSwarmResult['items'][number];
 
 /**
- * Astryx tool group for one agent_swarm tool: collapsed by default; each
- * swarm item is a CallRow with live status. Ready rows open the child session
- * when activated (expand = navigate).
+ * One outer Astryx row named like the tool (`Agent Swarm`), expandable to a
+ * nested ChatToolCalls of per-item rows. Multi-call group chrome is wrong
+ * here: Astryx's collapsed header shows the *latest child name*, not the tool.
  */
 function AgentSwarmToolCalls(props: {
-  toolUseId: string;
+  item: ToolActivityItem;
   result: AgentSwarmResult;
   onOpenLinkedSession?(sessionId: string): void;
 }) {
   const locale = useUiLocale();
   const copy = getToolActivityCopy(locale).agent;
-  const { result, toolUseId, onOpenLinkedSession } = props;
-  const calls: ChatToolCallItem[] = result.items.map((item) => {
-    const name = redactSecrets(item.agentName?.trim() || item.itemId);
-    const sessionId = item.childSessionId;
+  const { item, result, onOpenLinkedSession } = props;
+  const toolUseId = item.toolUseId;
+  const childCalls: ChatToolCallItem[] = result.items.map((swarmItem) => {
+    const name = redactSecrets(swarmItem.agentName?.trim() || swarmItem.itemId);
+    const sessionId = swarmItem.childSessionId;
     const canOpen = Boolean(sessionId && onOpenLinkedSession);
     return {
-      key: `${toolUseId}:${item.itemId}`,
+      key: `${toolUseId}:${swarmItem.itemId}`,
       name,
-      status: astryxSwarmItemStatus(item.status),
-      target: item.profile,
-      duration: formatDuration(item.durationMs) ?? undefined,
-      stats: copy.swarm.status[item.status],
+      status: astryxSwarmItemStatus(swarmItem.status),
+      target: swarmItem.profile,
+      duration: formatDuration(swarmItem.durationMs) ?? undefined,
+      stats: copy.swarm.status[swarmItem.status],
       errorMessage:
-        item.status === 'failed'
+        swarmItem.status === 'failed'
           ? summarizeErrorText(
-              formatUserVisibleToolText(redactSecrets(item.summary || item.failureClass || ''), locale),
+              formatUserVisibleToolText(
+                redactSecrets(swarmItem.summary || swarmItem.failureClass || ''),
+                locale,
+              ),
             ).replace(/^Error:\s*/i, '') || undefined
           : undefined,
-      // Ready child: expanding the Astryx row opens the session (product
-      // click-through). No session yet: non-expandable status-only row.
+      // Ready child: activating the Astryx row opens the session.
       ...(canOpen
         ? {
             resultDetail: (
@@ -431,11 +434,11 @@ function AgentSwarmToolCalls(props: {
               />
             ),
           }
-        : item.summary.trim().length > 0
+        : swarmItem.summary.trim().length > 0
           ? {
               resultDetail: (
                 <ToolDetailReveal>
-                  <p className={TOOL_OUTPUT_NOTE_CLASS}>{redactSecrets(item.summary)}</p>
+                  <p className={TOOL_OUTPUT_NOTE_CLASS}>{redactSecrets(swarmItem.summary)}</p>
                 </ToolDetailReveal>
               ),
             }
@@ -443,14 +446,31 @@ function AgentSwarmToolCalls(props: {
     };
   });
 
-  // Astryx owns the collapsed chrome: latest child + wrench count when folded,
-  // i18n group label when expanded. Force collapsed so a live batch does not
-  // latch open (same reason ordinary ToolTrow leaves defaultIsExpanded alone,
-  // except swarm always starts folded).
+  const parentName =
+    computerActionLabel(item, locale) ?? resolveToolDisplayName(item, locale);
+  const parentCall: ChatToolCallItem = {
+    key: toolUseId,
+    name: parentName,
+    status: isInFlightToolStatus(item.status)
+      ? astryxToolStatus(item)
+      : astryxSwarmBatchStatus(result.status),
+    target: copy.swarm.taskCount(result.items.length),
+    duration: formatDuration(result.durationMs) ?? formatDuration(item.durationMs) ?? undefined,
+    stats: copy.swarm.status[result.status],
+    resultDetail: (
+      <ToolDetailReveal>
+        <ChatToolCalls
+          calls={childCalls}
+          data-kind="agent_swarm-items"
+          data-tool-use-id={toolUseId}
+        />
+      </ToolDetailReveal>
+    ),
+  };
+
   return (
     <ChatToolCalls
-      calls={calls}
-      defaultIsExpanded={false}
+      calls={[parentCall]}
       data-kind="agent_swarm"
       data-status={result.status}
       data-tool-use-id={toolUseId}
@@ -504,6 +524,23 @@ function astryxSwarmItemStatus(
     case 'running':
       return 'running';
     case 'queued':
+    default:
+      return 'pending';
+  }
+}
+
+function astryxSwarmBatchStatus(
+  status: AgentSwarmResult['status'],
+): ChatToolCallItem['status'] {
+  switch (status) {
+    case 'completed':
+    case 'partial':
+      return 'complete';
+    case 'failed':
+    case 'cancelled':
+      return 'error';
+    case 'running':
+      return 'running';
     default:
       return 'pending';
   }

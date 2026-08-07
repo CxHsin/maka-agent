@@ -40,6 +40,7 @@ export type {
   ToolOutputDeltaEvent,
   ToolOutputStream,
   ToolProgressEvent,
+  ToolResultPreviewEvent,
   ToolResultEvent,
   ToolResultContent,
   ShellRunSnapshotResult,

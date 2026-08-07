@@ -313,6 +313,27 @@ function mapBackendSessionEvent(
             : {}),
         },
       };
+    case 'tool_result_preview':
+      // Live-only mid-flight result detail (for example linked child Open).
+      // Must not project as function_response; durable tool_result remains the
+      // committed model-visible outcome.
+      return {
+        ...base,
+        partial: true,
+        role: 'tool',
+        author: 'tool',
+        ...(event.origin !== undefined ? { origin: event.origin } : {}),
+        ...(event.modelVisibility !== undefined ? { modelVisibility: event.modelVisibility } : {}),
+        refs: {
+          toolCallId: event.toolUseId,
+          ...(event.parentToolCallId !== undefined
+            ? { parentToolCallId: event.parentToolCallId }
+            : {}),
+          ...(event.parentOperationId !== undefined
+            ? { parentOperationId: event.parentOperationId }
+            : {}),
+        },
+      };
     case 'tool_result': {
       const name = memory.toolNameByUseId.get(event.toolUseId) ?? '';
       const ev: RuntimeEvent = {

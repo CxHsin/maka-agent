@@ -310,6 +310,7 @@ describe('AgentSwarm adapter', () => {
             turnId: `turn-${index}`,
             agentId: requireBuiltinAgentDefinitionByProfile(input.agentProfile).id,
             agentName: requireBuiltinAgentDefinitionByProfile(input.agentProfile).name,
+            permissionMode: 'explore',
           });
           return {
             ...childResult(index),
@@ -753,6 +754,7 @@ describe('AgentSwarm adapter', () => {
             turnId: 'turn-0',
             agentId: requireBuiltinAgentDefinitionByProfile(input.agentProfile).id,
             agentName: requireBuiltinAgentDefinitionByProfile(input.agentProfile).name,
+            permissionMode: 'explore',
           });
           return childResult(0);
         },
@@ -861,6 +863,7 @@ describe('AgentSwarm adapter', () => {
               turnId: `turn-${index}`,
               agentId: requireBuiltinAgentDefinitionByProfile(input.agentProfile).id,
               agentName: requireBuiltinAgentDefinitionByProfile(input.agentProfile).name,
+              permissionMode: 'explore',
             });
             const result = await gates[index]!.promise;
             completionOrder.push(index);
@@ -968,6 +971,7 @@ describe('AgentSwarm adapter', () => {
             turnId: `turn-${index}`,
             agentId: requireBuiltinAgentDefinitionByProfile(input.agentProfile).id,
             agentName: requireBuiltinAgentDefinitionByProfile(input.agentProfile).name,
+            permissionMode: 'explore',
           });
           return childResult(index);
         },
@@ -1140,6 +1144,7 @@ describe('AgentSwarm adapter', () => {
             turnId: `turn-${index}`,
             agentId: requireBuiltinAgentDefinitionByProfile(input.agentProfile).id,
             agentName: requireBuiltinAgentDefinitionByProfile(input.agentProfile).name,
+            permissionMode: 'explore',
           });
           await onceAborted(controller.signal);
           return childResult(index, 'cancelled');
@@ -1215,6 +1220,7 @@ describe('AgentSwarm adapter', () => {
           turnId: `turn-${index}`,
           agentId: requireBuiltinAgentDefinitionByProfile(input.agentProfile).id,
           agentName: requireBuiltinAgentDefinitionByProfile(input.agentProfile).name,
+          permissionMode: 'explore',
         });
         if (index === 0) {
           await onceAborted(input.abortSignal);
@@ -1270,6 +1276,7 @@ describe('AgentSwarm adapter', () => {
           turnId: `turn-${input.prompt}`,
           agentId: requireBuiltinAgentDefinitionByProfile(input.agentProfile).id,
           agentName: requireBuiltinAgentDefinitionByProfile(input.agentProfile).name,
+          permissionMode: 'explore',
         });
         return await new Promise((resolve) => {
           releases.set(input.prompt, () => {
@@ -1500,6 +1507,7 @@ describe('AgentSwarm adapter', () => {
         runId: 'child-run-1',
         agentId: definition.id,
         agentName: definition.name,
+        permissionMode: 'explore',
       });
       return {
         ...childResult(1),

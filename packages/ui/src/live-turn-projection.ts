@@ -6,7 +6,7 @@ import type { ToolActivityItem } from './materialize.js';
 import { applyThinkingComplete, applyThinkingDelta } from './thinking-stream.js';
 import { applyToolOutputChunk } from './tool-output-stream.js';
 
-type LiveTurnContentEvent = Extract<SessionEvent, { type: 'thinking_delta' | 'thinking_complete' | 'text_delta' | 'text_complete' | 'tool_start' | 'tool_output_delta' | 'tool_result' }>;
+type LiveTurnContentEvent = Extract<SessionEvent, { type: 'thinking_delta' | 'thinking_complete' | 'text_delta' | 'text_complete' | 'tool_start' | 'tool_output_delta' | 'tool_result_preview' | 'tool_result' }>;
 
 export interface LiveThinkingProjection {
   text: string;
@@ -167,6 +167,7 @@ export function applyLiveTurnEvent(
     && event.type !== 'text_complete'
     && event.type !== 'tool_start'
     && event.type !== 'tool_output_delta'
+    && event.type !== 'tool_result_preview'
     && event.type !== 'tool_result'
   ) {
     return current;
@@ -181,6 +182,7 @@ export function applyLiveTurnEvent(
     || event.type === 'text_complete';
   const existingToolStep = event.type === 'tool_start'
     || event.type === 'tool_output_delta'
+    || event.type === 'tool_result_preview'
     || event.type === 'tool_result'
     ? prior.steps.find((candidate) => candidate.tools.some((tool) => tool.toolUseId === event.toolUseId))
     : undefined;
@@ -287,6 +289,25 @@ export function applyLiveTurnEvent(
       status: base.status === 'pending' ? 'running' : base.status,
       outputChunks: applied.chunks,
       outputTruncated: base.outputTruncated || applied.truncated,
+    };
+    nextStep = {
+      ...step,
+      tools: toolIndex >= 0
+        ? step.tools.map((candidate, index) => index === toolIndex ? tool : candidate)
+        : [...step.tools, tool],
+    };
+  } else if (event.type === 'tool_result_preview') {
+    // Live-only: attach result detail (for example childSessionId for Open)
+    // without the terminal status mapping that tool_result applies.
+    const toolIndex = step.tools.findIndex((candidate) => candidate.toolUseId === event.toolUseId);
+    const base: ToolActivityItem = toolIndex >= 0
+      ? step.tools[toolIndex]!
+      : { toolUseId: event.toolUseId, toolName: 'Tool', status: 'pending', args: undefined };
+    const tool: ToolActivityItem = {
+      ...base,
+      ...projectToolActivityIdentity(event),
+      status: isInFlightToolStatus(base.status) ? 'running' : base.status,
+      result: event.content,
     };
     nextStep = {
       ...step,

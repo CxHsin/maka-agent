@@ -901,7 +901,7 @@ describe('mapSessionEventToRuntimeEvent (pure)', () => {
     });
   });
 
-  test('tool_output_delta and tool_progress map to partial tool-role heartbeats', () => {
+  test('tool_output_delta, tool_progress, and tool_result_preview map to partial tool-role heartbeats', () => {
     const mem = createSessionEventMapMemory();
     const a = mapSessionEventToRuntimeEvent(
       ev({
@@ -930,6 +930,29 @@ describe('mapSessionEventToRuntimeEvent (pure)', () => {
     );
     assert.equal(b.partial, true);
     assert.equal(b.role, 'tool');
+
+    const preview = mapSessionEventToRuntimeEvent(
+      ev({
+        type: 'tool_result_preview',
+        toolUseId: 'tu-1',
+        isError: false,
+        content: {
+          kind: 'subagent',
+          childSessionId: 'child-session',
+          agentName: 'Local Read',
+          turnId: 'child-turn',
+          status: 'running',
+          permissionMode: 'explore',
+          summary: '',
+          artifactIds: [],
+        },
+      }),
+      ctx,
+      mem,
+    );
+    assert.equal(preview.partial, true);
+    assert.equal(preview.role, 'tool');
+    assert.equal(preview.content, undefined);
   });
 
   test('tool_start maps its semantic activity kind into runtime state', () => {
@@ -1189,6 +1212,26 @@ const PROJECTION_SAMPLES: ProjectionSamples = {
       ts: 1,
       toolUseId: 'tool-1',
       chunk: 'x',
+    },
+  },
+  tool_result_preview: {
+    subject: {
+      type: 'tool_result_preview',
+      id: 'e',
+      turnId: 'turn-1',
+      ts: 1,
+      toolUseId: 'tool-1',
+      isError: false,
+      content: {
+        kind: 'subagent',
+        childSessionId: 'child-session',
+        agentName: 'Local Read',
+        turnId: 'child-turn',
+        status: 'running',
+        permissionMode: 'explore',
+        summary: '',
+        artifactIds: [],
+      },
     },
   },
   tool_result: {

@@ -454,6 +454,7 @@ export type SessionEvent =
   | ToolStartEvent
   | ToolOutputDeltaEvent
   | ToolProgressEvent
+  | ToolResultPreviewEvent
   | ToolResultEvent
   | AnyPermissionRequestEvent
   | SandboxBoundaryRequestEvent
@@ -558,6 +559,21 @@ export interface ToolProgressEvent extends BaseEvent, ToolActivityIdentity {
   type: 'tool_progress';
   toolUseId: string;
   chunk: string | { kind: 'stdout' | 'stderr'; text: string };
+}
+
+/**
+ * Live-only preview of a tool result before the tool has settled.
+ *
+ * Distinct from ToolResultEvent: previews are not durable transcript commits
+ * and must not be treated as model-visible function_response. UI may attach
+ * `content` (for example a linked childSessionId) while the tool stays
+ * in-flight; the terminal persisted result remains a later tool_result.
+ */
+export interface ToolResultPreviewEvent extends BaseEvent, ToolActivityIdentity {
+  type: 'tool_result_preview';
+  toolUseId: string;
+  isError: boolean;
+  content: ToolResultContent;
 }
 
 export interface ToolResultEvent extends BaseEvent, ToolActivityIdentity {

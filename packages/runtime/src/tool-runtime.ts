@@ -211,6 +211,7 @@ export interface MakaToolContext {
       runId: string;
       agentId: string;
       agentName: string;
+      permissionMode: PermissionMode;
     }) => void | Promise<void>;
     onEvent?: (event: SessionEvent) => void;
   }) => Promise<unknown>;
@@ -377,6 +378,7 @@ export interface ToolRuntimeInput {
       runId: string;
       agentId: string;
       agentName: string;
+      permissionMode: PermissionMode;
     }) => void | Promise<void>;
     onEvent?: (event: SessionEvent) => void;
   }) => Promise<unknown>;
@@ -1334,6 +1336,8 @@ export class ToolRuntime {
             trace,
             toolUseId,
             toolName: tool.name,
+            queue,
+            activityIdentity,
           }),
           askUserQuestion: (questions) =>
             this.askUserQuestion(turnId, toolUseId, questions, ctx.abortSignal, queue),
@@ -1839,6 +1843,13 @@ export class ToolRuntime {
     trace: RunTraceLike | null;
     toolUseId: string;
     toolName: string;
+    queue: DurableSessionEventSink;
+    activityIdentity: {
+      origin?: 'provider' | 'code_mode';
+      modelVisibility?: 'visible' | 'hidden';
+      parentToolCallId?: string;
+      parentOperationId?: string;
+    };
   }): Pick<
     MakaToolContext,
     | 'spawnChildAgent'
@@ -1981,7 +1992,32 @@ export class ToolRuntime {
                     prompt: spawnInput.prompt,
                     ...(spawnInput.swarm ? { swarm: spawnInput.swarm } : {}),
                     abortSignal,
-                    ...(spawnInput.onReady ? { onReady: spawnInput.onReady } : {}),
+                    onReady: async (ready) => {
+                      // Live-only: surface childSessionId for Open before the
+                      // durable tool_result commits. Must not appendMessage.
+                      input.queue.push({
+                        type: 'tool_result_preview',
+                        id: this.input.newId(),
+                        turnId: input.turnId,
+                        ts: this.input.now(),
+                        toolUseId: input.toolUseId,
+                        isError: false,
+                        content: {
+                          kind: 'subagent',
+                          childSessionId: ready.childSessionId,
+                          agentId: ready.agentId,
+                          agentName: ready.agentName,
+                          turnId: ready.turnId,
+                          runId: ready.runId,
+                          status: 'running',
+                          permissionMode: ready.permissionMode,
+                          summary: '',
+                          artifactIds: [],
+                        },
+                        ...input.activityIdentity,
+                      });
+                      await spawnInput.onReady?.(ready);
+                    },
                     ...(spawnInput.onEvent ? { onEvent: spawnInput.onEvent } : {}),
                   }),
               );

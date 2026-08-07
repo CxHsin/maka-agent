@@ -4,6 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { ToolResultContent } from '@maka/core';
 import { LocaleProvider } from '../locale-context.js';
 import { AgentSwarmPreview, SubagentPreview } from '../tool-activity/agent-preview.js';
+import { ToolTrow } from '../tool-activity.js';
+import type { ToolActivityItem } from '../materialize.js';
 
 function subagentResult(
   overrides: Partial<Extract<ToolResultContent, { kind: 'subagent' }>> = {},
@@ -63,6 +65,57 @@ describe('SubagentPreview open session', () => {
       </LocaleProvider>,
     );
     assert.doesNotMatch(html, /data-maka-contract="open-subagent-session"/);
+  });
+});
+
+describe('AgentSwarm ToolTrow presentation', () => {
+  it('renders swarm items as Astryx tool rows, not the AgentSwarmPreview card', () => {
+    const item: ToolActivityItem = {
+      toolUseId: 'swarm-1',
+      toolName: 'agent_swarm',
+      displayName: 'Agent Swarm',
+      status: 'running',
+      args: {},
+      result: swarmResult([
+        {
+          itemId: 'item-1',
+          index: 0,
+          profile: 'local_read',
+          started: true,
+          childSessionId: 'child-swarm-1',
+          agentName: 'reader',
+          status: 'running',
+          summary: '',
+          artifactIds: [],
+        },
+        {
+          itemId: 'item-2',
+          index: 1,
+          profile: 'local_read',
+          started: false,
+          status: 'queued',
+          summary: '',
+          artifactIds: [],
+        },
+      ]),
+    };
+    const html = renderToStaticMarkup(
+      <LocaleProvider locale="en">
+        <ToolTrow items={[item]} onOpenLinkedSession={() => undefined} />
+      </LocaleProvider>,
+    );
+    // Astryx ChatToolCalls group — not the custom AgentSwarmPreview card.
+    assert.match(html, /astryx-chat-tool-calls/);
+    assert.match(html, /data-kind="agent_swarm"/);
+    assert.match(html, /data-item-count="2"/);
+    assert.match(html, /reader/);
+    assert.match(html, /item-2/);
+    assert.match(html, /Running/);
+    assert.match(html, /Queued/);
+    assert.doesNotMatch(html, /maka-agent-preview/);
+    // Ready child is an expandable CallRow (role=button); open contract mounts
+    // only after that row is activated, so SSR only proves the Astryx rows.
+    assert.match(html, /reader[\s\S]*Running/);
   });
 });
 

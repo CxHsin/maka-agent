@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ComponentType } from 'react';
+import { useEffect, useRef, type ComponentType, type ReactNode } from 'react';
 import {
   countDiffLineStats,
   isInFlightToolStatus,
@@ -297,6 +297,11 @@ export function ToolCallDetail({
  * Astryx's four: `interrupted` and sandbox denials are failures that carry
  * their own word in `errorMessage`, and the detail panel (banner, command,
  * output, previews) rides along in `resultDetail`.
+ *
+ * Agent Swarm is special: once a live or settled `agent_swarm` result exists,
+ * it becomes its own collapsed Astryx group whose rows are the swarm items
+ * (not a custom AgentSwarmPreview card). Clicking a ready child row opens that
+ * child session — the same shell navigation as linked-subagent Open.
  */
 export function ToolTrow({
   items,
@@ -307,6 +312,48 @@ export function ToolTrow({
 }) {
   const locale = useUiLocale();
   if (items.length === 0) return null;
+
+  const nodes: ReactNode[] = [];
+  let ordinary: ToolActivityItem[] = [];
+
+  const flushOrdinary = () => {
+    if (ordinary.length === 0) return;
+    nodes.push(
+      <OrdinaryToolCalls
+        key={ordinary.map((item) => item.toolUseId).join('|')}
+        items={ordinary}
+        locale={locale}
+        onOpenLinkedSession={onOpenLinkedSession}
+      />,
+    );
+    ordinary = [];
+  };
+
+  for (const item of items) {
+    if (item.result?.kind === 'agent_swarm') {
+      flushOrdinary();
+      nodes.push(
+        <AgentSwarmToolCalls
+          key={item.toolUseId}
+          toolUseId={item.toolUseId}
+          result={item.result}
+          onOpenLinkedSession={onOpenLinkedSession}
+        />,
+      );
+      continue;
+    }
+    ordinary.push(item);
+  }
+  flushOrdinary();
+  return <>{nodes}</>;
+}
+
+function OrdinaryToolCalls(props: {
+  items: ToolActivityItem[];
+  locale: UiLocale;
+  onOpenLinkedSession?(sessionId: string): void;
+}) {
+  const { items, locale, onOpenLinkedSession } = props;
   const calls: ChatToolCallItem[] = items.map((item) => ({
     key: item.toolUseId,
     // The name is what a person reads to tell one call from the next, and for
@@ -336,6 +383,130 @@ export function ToolTrow({
   // Edits collapses to one line, and "what did this turn change" is the
   // question that line has to answer. Per-call counts stay on the rows inside.
   return <ChatToolCalls calls={calls} {...diffStats(items.flatMap(itemDiffs))} />;
+}
+
+type AgentSwarmResult = Extract<ToolResultContent, { kind: 'agent_swarm' }>;
+type AgentSwarmItem = AgentSwarmResult['items'][number];
+
+/**
+ * Astryx tool group for one agent_swarm tool: collapsed by default; each
+ * swarm item is a CallRow with live status. Ready rows open the child session
+ * when activated (expand = navigate).
+ */
+function AgentSwarmToolCalls(props: {
+  toolUseId: string;
+  result: AgentSwarmResult;
+  onOpenLinkedSession?(sessionId: string): void;
+}) {
+  const locale = useUiLocale();
+  const copy = getToolActivityCopy(locale).agent;
+  const { result, toolUseId, onOpenLinkedSession } = props;
+  const calls: ChatToolCallItem[] = result.items.map((item) => {
+    const name = redactSecrets(item.agentName?.trim() || item.itemId);
+    const sessionId = item.childSessionId;
+    const canOpen = Boolean(sessionId && onOpenLinkedSession);
+    return {
+      key: `${toolUseId}:${item.itemId}`,
+      name,
+      status: astryxSwarmItemStatus(item.status),
+      target: item.profile,
+      duration: formatDuration(item.durationMs) ?? undefined,
+      stats: copy.swarm.status[item.status],
+      errorMessage:
+        item.status === 'failed'
+          ? summarizeErrorText(
+              formatUserVisibleToolText(redactSecrets(item.summary || item.failureClass || ''), locale),
+            ).replace(/^Error:\s*/i, '') || undefined
+          : undefined,
+      // Ready child: expanding the Astryx row opens the session (product
+      // click-through). No session yet: non-expandable status-only row.
+      ...(canOpen
+        ? {
+            resultDetail: (
+              <OpenLinkedSessionOnActivate
+                sessionId={sessionId!}
+                onOpen={onOpenLinkedSession!}
+                label={copy.openSession}
+                ariaLabel={copy.openSessionAriaLabel(name)}
+              />
+            ),
+          }
+        : item.summary.trim().length > 0
+          ? {
+              resultDetail: (
+                <ToolDetailReveal>
+                  <p className={TOOL_OUTPUT_NOTE_CLASS}>{redactSecrets(item.summary)}</p>
+                </ToolDetailReveal>
+              ),
+            }
+          : {}),
+    };
+  });
+
+  // Astryx owns the collapsed chrome: latest child + wrench count when folded,
+  // i18n group label when expanded. Force collapsed so a live batch does not
+  // latch open (same reason ordinary ToolTrow leaves defaultIsExpanded alone,
+  // except swarm always starts folded).
+  return (
+    <ChatToolCalls
+      calls={calls}
+      defaultIsExpanded={false}
+      data-kind="agent_swarm"
+      data-status={result.status}
+      data-tool-use-id={toolUseId}
+      data-item-count={result.items.length}
+    />
+  );
+}
+
+/**
+ * Astryx expands a CallRow by mounting resultDetail. For swarm children that
+ * already have a session id, that activation is the Open gesture — navigate
+ * immediately; keep a contract node for tests and as a manual fallback.
+ */
+function OpenLinkedSessionOnActivate(props: {
+  sessionId: string;
+  onOpen: (sessionId: string) => void;
+  label: string;
+  ariaLabel: string;
+}) {
+  const onOpenRef = useRef(props.onOpen);
+  onOpenRef.current = props.onOpen;
+  useEffect(() => {
+    onOpenRef.current(props.sessionId);
+  }, [props.sessionId]);
+
+  return (
+    <div className={previewVariants({ part: 'agent-actions' })} role="group">
+      <UiButton
+        variant="ghost"
+        size="sm"
+        className={previewVariants({ part: 'agent-copy' })}
+        data-maka-contract="open-subagent-session"
+        data-session-id={props.sessionId}
+        onClick={() => props.onOpen(props.sessionId)}
+        aria-label={props.ariaLabel}
+        label={props.label}
+      />
+    </div>
+  );
+}
+
+function astryxSwarmItemStatus(
+  status: AgentSwarmItem['status'],
+): ChatToolCallItem['status'] {
+  switch (status) {
+    case 'completed':
+      return 'complete';
+    case 'failed':
+    case 'cancelled':
+      return 'error';
+    case 'running':
+      return 'running';
+    case 'queued':
+    default:
+      return 'pending';
+  }
 }
 
 /**

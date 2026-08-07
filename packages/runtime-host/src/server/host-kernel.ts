@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server, type Socket } from 'node:net';
+import { migrateOperationalStateDatabaseForOwner } from '@maka/storage';
 import {
   assertInteractiveRootOwner,
   authenticateInteractiveRootOwner,
@@ -203,6 +204,7 @@ export class RuntimeHostKernel {
 
   async #start(): Promise<void> {
     await assertInteractiveRootOwner(this.#options.owner);
+    await migrateOperationalStateDatabaseForOwner(this.#options.owner);
     this.#endpoint = await prepareRuntimeHostEndpoint({
       rootId: this.#options.owner.capability.rootId,
       hostEpoch: this.hostEpoch,

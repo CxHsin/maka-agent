@@ -21,6 +21,7 @@ import { describe, test } from 'node:test';
 import { unlock, waitForLock } from 'fs-native-extensions';
 import {
   adoptStorageRootOnImport,
+  authenticateHeadlessRootMigrationOwner,
   assertStorageRootCapability,
   assertStorageRootLease,
   createHeadlessRootLease,
@@ -809,7 +810,31 @@ describe('storage root authority', () => {
 
       const migrationOwner = await tryAcquireHeadlessRootMigrationOwner(capability);
       assert.ok(migrationOwner);
+      assert.equal(authenticateHeadlessRootMigrationOwner(migrationOwner), migrationOwner);
       assert.equal(await tryAcquireHeadlessRootCompatibilityLock(capability, 'write'), undefined);
+      await migrationOwner.close();
+    });
+  });
+
+  test('rejects compatibility locks and copied values as migration owners', async () => {
+    await withRoots(async ({ root }) => {
+      const capability = await resolveStorageRoot({ path: root, kind: 'headless' });
+      const compatibilityLock = await tryAcquireHeadlessRootCompatibilityLock(capability, 'write');
+      assert.ok(compatibilityLock);
+      assert.throws(
+        () => authenticateHeadlessRootMigrationOwner(compatibilityLock),
+        (error: unknown) =>
+          error instanceof StorageRootAuthorityError && error.code === 'invalid_owner',
+      );
+      await compatibilityLock.close();
+
+      const migrationOwner = await tryAcquireHeadlessRootMigrationOwner(capability);
+      assert.ok(migrationOwner);
+      assert.throws(
+        () => authenticateHeadlessRootMigrationOwner({ ...migrationOwner }),
+        (error: unknown) =>
+          error instanceof StorageRootAuthorityError && error.code === 'invalid_owner',
+      );
       await migrationOwner.close();
     });
   });

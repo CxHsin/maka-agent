@@ -37,6 +37,14 @@ import {
   OPERATIONAL_STATE_SCHEMA_VERSION,
   validateOperationalSchemaManifest,
 } from './operational-schema-manifest.js';
+import {
+  assertHeadlessRootMigrationOwner,
+  assertInteractiveRootOwner,
+  authenticateHeadlessRootMigrationOwner,
+  authenticateInteractiveRootOwner,
+  type HeadlessRootMigrationOwner,
+  type InteractiveRootOwner,
+} from './root-authority.js';
 
 export const OPERATIONAL_STATE_DATABASE_NAME = 'runtime.sqlite';
 export { OPERATIONAL_STATE_READER_EPOCH, OPERATIONAL_STATE_SCHEMA_VERSION };
@@ -73,10 +81,47 @@ export function acquireOperationalStateDatabase(
   workspaceRoot: string,
   options: OperationalStateDatabaseOptions = {},
 ): OperationalStateDatabaseLease {
+  if (operationalStateRequiresExclusiveMigration(workspaceRoot)) {
+    throw new Error(
+      'Operational state requires an exclusive reader-epoch migration owner before opening',
+    );
+  }
+  return acquireOperationalStateDatabaseAtEpoch(
+    workspaceRoot,
+    OPERATIONAL_STATE_READER_EPOCH,
+    options,
+  );
+}
+
+export async function migrateOperationalStateDatabaseForOwner(
+  owner: InteractiveRootOwner | HeadlessRootMigrationOwner,
+  options: OperationalStateDatabaseOptions = {},
+): Promise<void> {
+  const authenticOwner =
+    owner.capability.kind === 'interactive'
+      ? authenticateInteractiveRootOwner(owner as InteractiveRootOwner)
+      : authenticateHeadlessRootMigrationOwner(owner as HeadlessRootMigrationOwner);
+  if (authenticOwner.capability.kind === 'interactive') {
+    await assertInteractiveRootOwner(authenticOwner as InteractiveRootOwner);
+  } else {
+    await assertHeadlessRootMigrationOwner(authenticOwner as HeadlessRootMigrationOwner);
+  }
+  acquireOperationalStateDatabaseAtEpoch(
+    authenticOwner.capability.canonicalPath,
+    OPERATIONAL_STATE_READER_EPOCH,
+    options,
+  ).close();
+}
+
+function acquireOperationalStateDatabaseAtEpoch(
+  workspaceRoot: string,
+  targetReaderEpoch: number,
+  options: OperationalStateDatabaseOptions,
+): OperationalStateDatabaseLease {
   const databasePath = resolve(workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME);
   let owner = owners.get(databasePath);
   if (!owner) {
-    owner = new OperationalStateDatabaseOwner(databasePath, options);
+    owner = new OperationalStateDatabaseOwner(databasePath, targetReaderEpoch, options);
     owners.set(databasePath, owner);
   }
   return owner.acquire();
@@ -86,9 +131,7 @@ export function operationalStateRequiresExclusiveMigration(
   workspaceRoot: string,
   targetReaderEpoch = OPERATIONAL_STATE_READER_EPOCH,
 ): boolean {
-  if (!Number.isSafeInteger(targetReaderEpoch) || targetReaderEpoch < 1) {
-    throw new Error('Operational target reader epoch must be a positive integer');
-  }
+  assertTargetReaderEpoch(targetReaderEpoch);
   if (targetReaderEpoch === 1) return false;
   const databasePath = resolve(workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME);
   if (!existsSync(databasePath)) return targetReaderEpoch > 1;
@@ -113,6 +156,7 @@ class OperationalStateDatabaseOwner {
 
   constructor(
     readonly databasePath: string,
+    targetReaderEpoch: number,
     options: OperationalStateDatabaseOptions,
   ) {
     mkdirSync(dirname(databasePath), { recursive: true });
@@ -124,13 +168,13 @@ class OperationalStateDatabaseOwner {
       configureSqliteRuntimeLockWait(this.database);
       // Reject every unsupported authority before the first migration commits,
       // so a newer later scope cannot leave an older earlier scope half-upgraded.
-      assertOperationalSchemaCanMigrate(this.database);
+      assertOperationalSchemaCanMigrate(this.database, targetReaderEpoch);
       configureSqliteRuntimeDatabase(this.database);
       this.database.exec('BEGIN IMMEDIATE');
       try {
         // Recheck under the write lock: another process may have migrated after
         // the optimistic preflight and before this transaction was admitted.
-        const compatibility = assertOperationalSchemaCanMigrate(this.database);
+        const compatibility = assertOperationalSchemaCanMigrate(this.database, targetReaderEpoch);
         if (
           !compatibility.allowsNewerScopes ||
           readUserVersion(this.database) <= SQLITE_RUNTIME_SCHEMA_VERSION
@@ -176,7 +220,12 @@ class OperationalStateDatabaseOwner {
         ) {
           migrateSqliteAutomationDatabase(this.database);
         }
-        migrateOperationalStateDatabase(this.database, options.now ?? Date.now, 'caller');
+        publishOperationalStateSchema(
+          this.database,
+          targetReaderEpoch,
+          options.now ?? Date.now,
+          'caller',
+        );
         this.database.exec('COMMIT');
       } catch (error) {
         rollback(this.database);
@@ -261,8 +310,11 @@ interface OperationalSchemaCompatibility extends OperationalSchemaEpochCompatibi
   scopeVersions: ReadonlyMap<string, number>;
 }
 
-function assertOperationalSchemaCanMigrate(database: DatabaseSync): OperationalSchemaCompatibility {
-  const compatibility = readOperationalSchemaCompatibility(database);
+function assertOperationalSchemaCanMigrate(
+  database: DatabaseSync,
+  targetReaderEpoch: number,
+): OperationalSchemaCompatibility {
+  const compatibility = readOperationalSchemaCompatibility(database, targetReaderEpoch);
   const scopeVersions = new Map<string, number>();
   assertSupportedOperationalSchemaVersion(
     'runtime',
@@ -345,12 +397,13 @@ function assertSupportedOperationalSchemaVersion(
 
 function readOperationalSchemaCompatibility(
   database: DatabaseSync,
+  targetReaderEpoch: number,
 ): OperationalSchemaEpochCompatibility {
   const minimumReaderEpoch = readMinimumReaderEpoch(database);
   if (minimumReaderEpoch === undefined) return { allowsNewerScopes: false };
-  if (minimumReaderEpoch > OPERATIONAL_STATE_READER_EPOCH) {
+  if (minimumReaderEpoch > targetReaderEpoch) {
     throw new Error(
-      `Operational state requires reader epoch ${minimumReaderEpoch}, but this Maka build supports epoch ${OPERATIONAL_STATE_READER_EPOCH}; ` +
+      `Operational state requires reader epoch ${minimumReaderEpoch}, but this Maka build supports epoch ${targetReaderEpoch}; ` +
         'Maka did not migrate or delete the database. Upgrade Maka to open this workspace.',
     );
   }
@@ -392,8 +445,9 @@ function hasTable(database: DatabaseSync, name: string): boolean {
   return table?.present === 1;
 }
 
-function migrateOperationalStateDatabase(
+function publishOperationalStateSchema(
   db: DatabaseSync,
+  targetReaderEpoch: number,
   now: () => number,
   transaction: 'self' | 'caller' = 'self',
 ): void {
@@ -406,7 +460,7 @@ function migrateOperationalStateDatabase(
         minimum_reader_epoch INTEGER NOT NULL CHECK (minimum_reader_epoch >= 1)
       );
       INSERT INTO operational_schema_compatibility(singleton, minimum_reader_epoch)
-      VALUES (1, ${OPERATIONAL_STATE_READER_EPOCH})
+      VALUES (1, ${targetReaderEpoch})
       ON CONFLICT(singleton) DO UPDATE SET
         minimum_reader_epoch = MAX(
           operational_schema_compatibility.minimum_reader_epoch,
@@ -427,6 +481,12 @@ function migrateOperationalStateDatabase(
   } catch (error) {
     if (ownsTransaction) rollback(db);
     throw error;
+  }
+}
+
+function assertTargetReaderEpoch(targetReaderEpoch: number): void {
+  if (!Number.isSafeInteger(targetReaderEpoch) || targetReaderEpoch < 1) {
+    throw new Error('Operational target reader epoch must be a positive integer');
   }
 }
 

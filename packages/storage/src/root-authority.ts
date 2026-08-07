@@ -168,6 +168,7 @@ interface StorageRootIdentityRepairRecord<K extends StorageRootKind = StorageRoo
 const capabilities = new WeakMap<object, CapabilityRecord>();
 const leases = new WeakMap<object, LeaseRecord>();
 const interactiveRootLocks = new WeakMap<object, { access: StorageRootAccess }>();
+const headlessRootMigrationOwners = new WeakSet<object>();
 const storageRootIdentityRepairs = new WeakMap<object, StorageRootIdentityRepairRecord>();
 
 export type StorageRootAuthorityErrorCode =
@@ -644,11 +645,35 @@ export async function tryAcquireHeadlessRootCompatibilityLock<A extends StorageR
 export async function tryAcquireHeadlessRootMigrationOwner(
   capability: StorageRootCapability<'headless'>,
 ): Promise<HeadlessRootMigrationOwner | undefined> {
-  return withAuthorityFailure(
+  const owner = await withAuthorityFailure(
     'lock_failed',
     'Unable to acquire the headless storage root migration owner lock',
     () => acquireStorageRootLock(capability, 'write', false),
   );
+  if (owner) headlessRootMigrationOwners.add(owner);
+  return owner;
+}
+
+export function authenticateHeadlessRootMigrationOwner(
+  owner: HeadlessRootMigrationOwner,
+): HeadlessRootMigrationOwner {
+  if (!headlessRootMigrationOwners.has(owner)) {
+    throw new StorageRootAuthorityError(
+      'invalid_owner',
+      'Expected an authentic headless storage root migration owner',
+    );
+  }
+  return owner;
+}
+
+export async function assertHeadlessRootMigrationOwner(
+  owner: HeadlessRootMigrationOwner,
+): Promise<void> {
+  const authenticOwner = authenticateHeadlessRootMigrationOwner(owner);
+  const capabilityRecord = requireCapability(authenticOwner.capability, 'headless');
+  requireLease(authenticOwner.lease, 'headless', 'write');
+  await assertRootIdentity(capabilityRecord);
+  requireLease(authenticOwner.lease, 'headless', 'write');
 }
 
 export function createHeadlessRootLease<A extends StorageRootAccess>(

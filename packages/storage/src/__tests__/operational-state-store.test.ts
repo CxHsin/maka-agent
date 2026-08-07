@@ -7,8 +7,10 @@ import { test } from 'node:test';
 import type { SessionHeader } from '@maka/core';
 import {
   acquireOperationalStateDatabase,
+  migrateOperationalStateDatabaseForOwner,
   operationalStateRequiresExclusiveMigration,
 } from '../operational-state-store.js';
+import { resolveStorageRoot, tryAcquireHeadlessRootMigrationOwner } from '../root-authority.js';
 import { SQLITE_RUNTIME_SCHEMA_VERSION } from '../sqlite-runtime-schema.js';
 import { SQLITE_SESSION_METADATA_SCHEMA_VERSION } from '../sqlite-session-metadata-schema.js';
 import { SQLITE_USAGE_SCHEMA_VERSION } from '../sqlite-usage-schema.js';
@@ -329,6 +331,36 @@ test('detects when a higher binary epoch requires an exclusive migration', async
     acquireOperationalStateDatabase(root).close();
     assert.equal(operationalStateRequiresExclusiveMigration(root, 1), false);
     assert.equal(operationalStateRequiresExclusiveMigration(root, 2), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('requires an authentic migration owner and rejects newer epochs through the direct seam', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-migration-owner-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  try {
+    acquireOperationalStateDatabase(root).close();
+    const capability = await resolveStorageRoot({ path: root, kind: 'headless' });
+    const owner = await tryAcquireHeadlessRootMigrationOwner(capability);
+    assert.ok(owner);
+
+    await assert.rejects(
+      migrateOperationalStateDatabaseForOwner({ ...owner }),
+      /authentic headless storage root migration owner/,
+    );
+    await migrateOperationalStateDatabaseForOwner(owner);
+    await owner.close();
+
+    const database = new DatabaseSync(databasePath);
+    database.exec(
+      'UPDATE operational_schema_compatibility SET minimum_reader_epoch = 2 WHERE singleton = 1',
+    );
+    database.close();
+    assert.throws(
+      () => acquireOperationalStateDatabase(root),
+      /requires reader epoch 2, but this Maka build supports epoch 1/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -3,7 +3,7 @@ import {
   type HeadlessArtifactStoreWriter,
 } from '@maka/storage/artifact-stores';
 import {
-  acquireOperationalStateDatabase,
+  migrateOperationalStateDatabaseForOwner,
   operationalStateRequiresExclusiveMigration,
 } from '@maka/storage';
 import {
@@ -140,7 +140,7 @@ async function applyRequiredExclusiveMigration(
   }
   try {
     if (!operationalStateRequiresExclusiveMigration(capability.canonicalPath)) return;
-    acquireOperationalStateDatabase(capability.canonicalPath).close();
+    await migrateOperationalStateDatabaseForOwner(owner);
   } finally {
     await owner.close();
   }

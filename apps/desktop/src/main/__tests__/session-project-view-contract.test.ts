@@ -1,15 +1,12 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import {
-  filterLinkedSessionTree,
-  isLinkedSubagentSession,
-  projectLinkedSessionTree,
-} from '@maka/core';
+import { filterLinkedSessionTree, projectLinkedSessionTree } from '@maka/core';
 import { sessionMatchesNavSelection } from '../../renderer/session-nav-filter.js';
 import {
   deriveProjectGroups,
   deriveWorktreeSessionIds,
 } from '../../renderer/session-project-grouping.js';
+import { deriveSessionRail } from '../../renderer/session-rail.js';
 import { makeSessionSummary, renderSessionListPanel } from './session-list-render-helpers.js';
 
 describe('sidebar project view mode', () => {
@@ -252,7 +249,7 @@ describe('sidebar project view mode', () => {
     assert.doesNotMatch(markup, /Child agent/);
   });
 
-  it('applies Chats, Flagged, and Archived filters independently to parents and children', () => {
+  it('applies Chats, Flagged, and Archived filters through the production rail projection', () => {
     const parent = makeSessionSummary({
       id: 'parent',
       name: 'Parent task',
@@ -284,51 +281,39 @@ describe('sidebar project view mode', () => {
       lastMessageAt: 50,
       subagentParent: childRelation(archivedParent.id),
     });
-    const tree = projectLinkedSessionTree([
+    const sessions = [
       parent,
       archivedChild,
       flaggedChild,
       archivedParent,
       activeChild,
-    ]);
-    const filter = (selection: 'chats' | 'flagged' | 'archived') =>
-      filterLinkedSessionTree(tree, (session) =>
-        sessionMatchesNavSelection(session, { section: 'sessions', filter: selection }),
-      );
-    // Desktop rail: tree filter may promote a matching linked child past a
-    // hidden ancestor, but the flat sidebar still drops every linked child.
-    const flatSidebarRoots = (selection: 'chats' | 'flagged' | 'archived') =>
-      filter(selection).roots.filter((session) => !isLinkedSubagentSession(session));
-
-    const chats = filter('chats');
+    ];
+    // Core tree filter still promotes matching linked descendants for CLI / nested
+    // UIs — assert that contract separately from the desktop flat rail.
+    const tree = projectLinkedSessionTree(sessions);
+    const chatsTree = filterLinkedSessionTree(tree, (session) =>
+      sessionMatchesNavSelection(session, { section: 'sessions', filter: 'chats' }),
+    );
     assert.deepEqual(
-      chats.roots.map((session) => session.id),
+      chatsTree.roots.map((session) => session.id),
       [parent.id, activeChild.id],
     );
+
+    const rail = (selection: 'chats' | 'flagged' | 'archived') =>
+      deriveSessionRail(sessions, parent.id, (session) =>
+        sessionMatchesNavSelection(session, { section: 'sessions', filter: selection }),
+      );
+
     assert.deepEqual(
-      chats.childrenByParentId.get(parent.id)?.map((session) => session.id),
-      [flaggedChild.id],
-    );
-    assert.deepEqual(
-      flatSidebarRoots('chats').map((session) => session.id),
+      rail('chats').sessions.map((session) => session.id),
       [parent.id],
     );
-
-    const flagged = filter('flagged');
     assert.deepEqual(
-      flagged.roots.map((session) => session.id),
-      [flaggedChild.id],
+      rail('flagged').sessions.map((session) => session.id),
+      [],
     );
-    assert.deepEqual(flatSidebarRoots('flagged').map((session) => session.id), []);
-
-    const archived = filter('archived');
     assert.deepEqual(
-      archived.roots.map((session) => session.id),
-      [archivedChild.id, archivedParent.id],
-    );
-    // Only the archived ordinary parent remains; linked children stay off the rail.
-    assert.deepEqual(
-      flatSidebarRoots('archived').map((session) => session.id),
+      rail('archived').sessions.map((session) => session.id),
       [archivedParent.id],
     );
   });

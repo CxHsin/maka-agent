@@ -18,13 +18,10 @@ import type {
 } from '@maka/core';
 import {
   collapseSessionRevisions,
-  filterLinkedSessionTree,
   isLinkedSubagentSession,
   linkedSubagentParentSessionId,
   parseGraphCommand,
   parseSwarmCommand,
-  projectRevisionLinkedSessionTree,
-  resolveLinkedSessionRootId,
   resolveUiLocale,
 } from '@maka/core';
 import { hasSettledInitialOnboarding } from '@maka/core/onboarding-milestone';
@@ -94,6 +91,7 @@ import { useShellSearch } from './use-shell-search';
 import { useSessionGoal } from './use-session-goal';
 import { deriveStaleSessionIds } from './stale-sessions';
 import { deriveProjectGroups, deriveWorktreeSessionIds } from './session-project-grouping';
+import { deriveSessionRail } from './session-rail';
 import { useAppShellTurnPresentation } from './app-shell-turn-view-model';
 import { readScrollMotionBehavior } from './scroll-motion-policy';
 import { deriveBranchBanner } from './branch-banner';
@@ -578,34 +576,17 @@ function AppShellContent({
   // Running → Waiting → Blocked → Active → Review → Done → Archived);
   // `aborted` is dropped. Pinned (flagged) sessions float to the top
   // in their own group, preserving the PR48 pin-floats behavior.
-  const sidebarSessionTree = useMemo(
-    () => projectRevisionLinkedSessionTree(sessions, activeId),
-    [sessions, activeId],
-  );
-  const visibleSessionTree = useMemo(
+  // One projection owns both rail membership and active highlight: revision-
+  // tree roots (orphans stay; linked children with a live parent leave), then
+  // a flat nav / companion filter — never promote children past ancestors.
+  const { sessions: visibleSessions, activeRowId: sidebarActiveId } = useMemo(
     () =>
-      // Exclude the quote companion's ephemeral fork so it stays hidden from the
-      // main session list while its panel is open.
-      filterLinkedSessionTree(sidebarSessionTree, (session) =>
+      deriveSessionRail(sessions, activeId, (session) =>
         !hiddenCompanionForkIds.has(session.id)
           ? sessionMatchesNavSelection(session, navSelection)
           : false,
       ),
-    [sidebarSessionTree, navSelection, hiddenCompanionForkIds],
-  );
-  // Tree filter can promote a matching linked child to a root when its parent
-  // is filtered out (e.g. archived parent + active child under Chats). The
-  // rail never lists linked children — they open only from stream tools /
-  // titlebar — so drop them here rather than reintroducing nesting.
-  const visibleSessions = useMemo(
-    () => visibleSessionTree.roots.filter((session) => !isLinkedSubagentSession(session)),
-    [visibleSessionTree],
-  );
-  // While a child is active, highlight its root ancestor so the rail still
-  // answers "which conversation am I in?" without nesting rows.
-  const sidebarActiveId = useMemo(
-    () => resolveLinkedSessionRootId(activeId, sessions),
-    [activeId, sessions],
+    [sessions, activeId, navSelection, hiddenCompanionForkIds],
   );
   // PR-DAILY-REVIEW-MVP-0: bridge for the main Daily Review module.
   // Memoized so the panel's `useEffect` cleanup keys

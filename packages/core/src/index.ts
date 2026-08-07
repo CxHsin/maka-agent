@@ -382,7 +382,6 @@ export {
   isSessionBlockedReason,
   isLinkedSubagentSession,
   linkedSubagentParentSessionId,
-  resolveLinkedSessionRootId,
   isSubagentSessionParent,
   isSubagentSessionRuntime,
   isSubagentSessionSpawn,

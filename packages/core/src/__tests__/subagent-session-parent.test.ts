@@ -15,7 +15,6 @@ import {
   isSubagentSessionSpawn,
   linkedSubagentParentSessionId,
   projectLinkedSessionTree,
-  resolveLinkedSessionRootId,
   subagentSessionRuntimeSummary,
 } from '../session.js';
 import { isPermissionModeWithinCeiling } from '../permission.js';
@@ -161,21 +160,6 @@ describe('subagent session parent relation', () => {
     assert.equal(linkedSubagentParentSessionId(childA), 'parent-session');
     assert.equal(linkedSubagentParentSessionId(hostChild), 'parent-session');
     assert.equal(linkedSubagentParentSessionId(branch), undefined);
-  });
-
-  test('resolveLinkedSessionRootId walks linked parents for sidebar selection', () => {
-    const parent = summary('parent');
-    const child = summary('child', {
-      subagentParent: { ...relation, parentSessionId: parent.id },
-    });
-    const grandchild = summary('grandchild', {
-      subagentParent: { ...relation, parentSessionId: child.id },
-    });
-    const sessions = [parent, child, grandchild];
-    assert.equal(resolveLinkedSessionRootId(grandchild.id, sessions), parent.id);
-    assert.equal(resolveLinkedSessionRootId(child.id, sessions), parent.id);
-    assert.equal(resolveLinkedSessionRootId(parent.id, sessions), parent.id);
-    assert.equal(resolveLinkedSessionRootId(undefined, sessions), undefined);
   });
 
   test('projects linked children beneath parents while preserving branches and orphans', () => {

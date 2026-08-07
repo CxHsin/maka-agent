@@ -110,9 +110,10 @@ describe('AgentSwarm ToolTrow presentation', () => {
     assert.match(html, /data-item-count="2"/);
     assert.doesNotMatch(html, /maka-agent-swarm-tools/);
     assert.doesNotMatch(html, /maka-agent-preview/);
-    // Folded multi-call SSR still includes the call list in the tree.
+    // Kind in name slot; agentName (else profile) only as target identity.
+    assert.match(html, />Agent</);
     assert.match(html, /reader/);
-    assert.match(html, /item-2/);
+    assert.match(html, /local_read/);
   });
 });
 

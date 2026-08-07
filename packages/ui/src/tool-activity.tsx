@@ -396,15 +396,20 @@ function AgentSwarmToolCalls(props: {
   const locale = useUiLocale();
   const copy = getToolActivityCopy(locale).agent;
   const { toolUseId, result, onOpenLinkedSession } = props;
+  // Same slot split as ordinary tools / agent_spawn: name = kind ("Agent"),
+  // target = who (preset or child id). Preset strings like "Local Read" are not
+  // tool names and must not occupy the name column.
   const calls: ChatToolCallItem[] = result.items.map((swarmItem) => {
-    const name = redactSecrets(swarmItem.agentName?.trim() || swarmItem.itemId);
+    const identity = redactSecrets(
+      swarmItem.agentName?.trim() || swarmItem.profile?.trim() || swarmItem.itemId,
+    );
     const sessionId = swarmItem.childSessionId;
     const canOpen = Boolean(sessionId && onOpenLinkedSession);
     return {
       key: `${toolUseId}:${swarmItem.itemId}`,
-      name,
+      name: 'Agent',
       status: astryxSwarmItemStatus(swarmItem.status),
-      target: swarmItem.profile,
+      target: identity,
       duration: formatDuration(swarmItem.durationMs) ?? undefined,
       stats: copy.swarm.status[swarmItem.status],
       errorMessage:
@@ -423,7 +428,7 @@ function AgentSwarmToolCalls(props: {
                 sessionId={sessionId!}
                 onOpen={onOpenLinkedSession!}
                 label={copy.openSession}
-                ariaLabel={copy.openSessionAriaLabel(name)}
+                ariaLabel={copy.openSessionAriaLabel(identity)}
               />
             ),
           }

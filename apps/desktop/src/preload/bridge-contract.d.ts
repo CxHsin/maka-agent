@@ -688,6 +688,8 @@ export interface MakaBridge {
       arch: string;
       osRelease: string;
       workspacePath: string;
+      /** The OS home directory, for collapsing displayed paths to `~`. */
+      homePath: string;
       projectId?: string | null;
       projectPath: string;
       projectGit: { isGitRepo: boolean; branch?: string };

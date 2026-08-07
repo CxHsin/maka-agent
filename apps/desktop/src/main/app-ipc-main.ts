@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { arch as osArch, release as osRelease } from 'node:os';
+import { arch as osArch, homedir, release as osRelease } from 'node:os';
 import { app, ipcMain, shell, type IpcMain } from 'electron';
 import { resolveProjectGitInfo } from '@maka/runtime';
 import type { createMainWindowController } from './main-window.js';
@@ -71,6 +71,9 @@ export function registerAppIpc(
       arch: osArch(),
       osRelease: osRelease(),
       workspacePath: workspaceRoot,
+      // Lets the renderer collapse a home prefix to `~` in displayed paths;
+      // it has no other way to learn this.
+      homePath: homedir(),
       projectId: selection.projectId,
       projectPath,
       projectGit: await resolveProjectGitInfo(projectPath),

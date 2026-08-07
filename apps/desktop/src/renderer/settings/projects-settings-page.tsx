@@ -10,10 +10,12 @@ import {
   useToast,
   useUiLocale,
 } from '@maka/ui';
+import { HStack, List, ListItem } from '@astryxdesign/core';
+import { FolderOpen } from '@maka/ui/icons';
 import { getSettingsProjectsCopy } from '../locales/settings-projects-copy.js';
+import { projectPathDisplay } from '../project-path-display.js';
 import { settingsActionErrorMessage } from './settings-error-copy';
 import { SettingsPage, SettingsSection } from './settings-section';
-import { SettingsExpandableRow } from './settings-expandable-row';
 import { useKeyedActionGuard } from './use-action-guard';
 
 /**
@@ -42,6 +44,7 @@ export function ProjectsSettingsPage(props: {
   const mountedRef = useMountedRef();
   const actionGuard = useKeyedActionGuard<string>();
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [homePath, setHomePath] = useState<string | undefined>(undefined);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
 
@@ -52,7 +55,12 @@ export function ProjectsSettingsPage(props: {
 
   useEffect(() => {
     void reload();
-  }, [reload]);
+    // Paths render unabbreviated until this lands, which is why
+    // `collapseHomePath` treats an unknown home as a no-op rather than a bug.
+    void window.maka.app.info().then((info) => {
+      if (mountedRef.current) setHomePath(info.homePath);
+    });
+  }, [reload, mountedRef]);
 
   // Archived projects are removed-from-Maka, not deleted; they belong to the
   // restore path, not to a list whose whole purpose is "what can I open".
@@ -110,7 +118,13 @@ export function ProjectsSettingsPage(props: {
         {listed.length === 0 ? (
           <EmptyState title={copy.emptyTitle} description={copy.emptyBody} />
         ) : (
-          listed.map((project) => {
+          // A project is an entity, not a preference, so it belongs in the
+          // entity-list carrier the MCP and skills pages already use — real
+          // list semantics, real dividers, and a leading slot for the icon
+          // that gives each row something to hang on. Built out of settings
+          // rows first, the page was four paragraphs of text in a column.
+          <List density="balanced" hasDividers aria-label={copy.section}>
+          {listed.map((project) => {
             const isDefault = project.id === defaultProjectId;
             const endCluster = (
                   <>
@@ -206,53 +220,88 @@ export function ProjectsSettingsPage(props: {
                   </>
             );
 
-            // Renaming swaps the row for the shared expandable editor, which
-            // owns the focus move in and back out. The end cluster rides along
-            // so the row keeps its default state and menu while collapsed —
-            // rename is reached from that menu, not from a competing button.
+            const isRenaming = renamingId === project.id;
+            const canSave =
+              draftName.trim() !== '' && draftName.trim() !== project.name;
+
+            async function saveRename() {
+              const next = draftName.trim();
+              if (next === '' || next === project.name) return;
+              await runRowAction(
+                `rename:${project.id}`,
+                async () => {
+                  await window.maka.projects.rename(project.id, next);
+                  setRenamingId(null);
+                },
+                copy.renameFailed,
+              );
+            }
+
+            const path = project.preferredPath
+              ? projectPathDisplay(project.preferredPath, { homePath })
+              : undefined;
+
             return (
-              <SettingsExpandableRow
+              <ListItem
                 key={project.id}
-                label={project.name}
-                value={
-                  <code className="settingsReadOnlyValue" data-mono="true">
-                    {project.preferredPath ?? copy.unavailable}
+                // While renaming, the field and its save/cancel pair share ONE
+                // flex container. Split across label and endContent they
+                // overlapped: the field claims the label slot's full width and
+                // the buttons render on top of its right edge.
+                label={isRenaming ? (
+                  <HStack gap={2} align="center">
+                  <TextInput
+                    type="text"
+                    value={draftName}
+                    onChange={(value) => setDraftName(value.slice(0, 80))}
+                    // Enter saves and Escape backs out: a field that can only
+                    // be dismissed by mousing to a button is a trap for anyone
+                    // who opened it from the keyboard.
+                    onEnter={() => {
+                      if (canSave) void saveRename();
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') setRenamingId(null);
+                    }}
+                    label={copy.renameLabel}
+                    isLabelHidden
+                    hasAutoFocus
+                  />
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      isDisabled={!canSave}
+                      clickAction={() => saveRename()}
+                      label={copy.save}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setRenamingId(null)}
+                      label={copy.cancel}
+                    />
+                  </HStack>
+                ) : project.name}
+                description={isRenaming ? undefined : (
+                  <code
+                    className="settingsReadOnlyValue"
+                    data-mono="true"
+                    // The abbreviated form is what the row shows; the whole
+                    // path stays one hover away rather than being lost.
+                    title={path?.title}
+                  >
+                    {path?.text ?? copy.unavailable}
                   </code>
-                }
-                end={endCluster}
-                isEditing={renamingId === project.id}
-                canSave={draftName.trim() !== '' && draftName.trim() !== project.name}
-                saveLabel={copy.save}
-                cancelLabel={copy.cancel}
-                onEdit={() => {
-                  setDraftName(project.name);
-                  setRenamingId(project.id);
-                }}
-                onCancel={() => setRenamingId(null)}
-                onSave={async () => {
-                  const next = draftName.trim();
-                  if (next === '' || next === project.name) return;
-                  await runRowAction(
-                    `rename:${project.id}`,
-                    async () => {
-                      await window.maka.projects.rename(project.id, next);
-                      setRenamingId(null);
-                    },
-                    copy.renameFailed,
-                  );
-                }}
-              >
-                <TextInput
-                  type="text"
-                  value={draftName}
-                  onChange={(value) => setDraftName(value.slice(0, 80))}
-                  label={copy.renameLabel}
-                  isLabelHidden
-                  width="100%"
-                />
-              </SettingsExpandableRow>
+                )}
+                // No wrapper class: `startContent` already owns the slot's
+                // layout, and the anchor's weight comes from the icon's size
+                // rather than a plate or a second glyph family.
+                startContent={<FolderOpen size={18} aria-hidden="true" />}
+                endContent={isRenaming ? undefined : endCluster}
+              />
             );
-          })
+          })}
+          </List>
         )}
       </SettingsSection>
     </SettingsPage>

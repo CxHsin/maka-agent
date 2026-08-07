@@ -20,7 +20,6 @@ import {
 } from '@maka/core';
 import { useMountedRef, useUiLocale, useToast , dotForStatus } from '@maka/ui';
 import { connectionChipStatus } from './provider-connection-status';
-import { statusDotVariant } from './settings-status-badge';
 import {
   CATALOG_INITIAL_FILTER,
   ProviderCatalogPage,

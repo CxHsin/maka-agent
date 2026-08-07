@@ -35,7 +35,7 @@ import { RelativeTime, StatusDot, useMountedRef, useToast, useUiLocale } from '@
 import { SettingsPage, SettingsSection } from './settings-section';
 import { getPermissionCenterCopy, type PermissionCenterCopy } from '../locales/permission-center-copy';
 import { settingsActionErrorMessage } from './settings-error-copy';
-import { statusDotVariant } from './settings-status-badge';
+import { dotForStatus } from '@maka/ui';
 import { SettingsSkeletonStack } from './settings-skeleton';
 import { useActionGuard } from './use-action-guard';
 
@@ -394,7 +394,7 @@ function CapabilityRow(props: {
           <HStack gap={2} align="center">
             <Text type="label" size="sm">{capabilityLabel}</Text>
             <span className="settingsStatus">
-              <StatusDot variant={statusDotVariant(readinessCopy.tone)} label={readinessCopy.label} />
+              <StatusDot variant={dotForStatus(readinessCopy.tone)} label={readinessCopy.label} />
               <span>{readinessCopy.label}</span>
             </span>
           </HStack>
@@ -445,7 +445,7 @@ function CapabilityRow(props: {
               {capability.osPermissions.map((req) => (
                 <MetadataListItem key={req.id} label={copy.osPermissions[req.id]?.label ?? req.id}>
                   <span className="settingsStatus">
-                    <StatusDot variant={statusDotVariant(copy.osStates[req.status].tone)} label={copy.osStates[req.status].label} />
+                    <StatusDot variant={dotForStatus(copy.osStates[req.status].tone)} label={copy.osStates[req.status].label} />
                     <span>{copy.osStates[req.status].label}</span>
                   </span>
                 </MetadataListItem>
@@ -599,7 +599,7 @@ function OsPermissionRow(props: {
         <HStack gap={2} align="center">
           <Text type="label" size="sm">{label}</Text>
           <span className="settingsStatus">
-            <StatusDot variant={statusDotVariant(stateCopy.tone)} label={stateCopy.label} />
+            <StatusDot variant={dotForStatus(stateCopy.tone)} label={stateCopy.label} />
             <span>{stateCopy.label}</span>
           </span>
         </HStack>

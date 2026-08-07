@@ -66,20 +66,17 @@ const SEMANTIC_TO_DOT: Record<StatusSemantic, StatusDotVariant> = {
 };
 
 /**
- * Named `dotForStatus` rather than `statusDotVariant` only to avoid colliding
- * with the settings surface's own `statusDotVariant`
- * (`settings-status-badge.ts`), which nine files still import.
+ * Every status dot in the app now comes through here.
  *
- * That file is the eighth mapper and the largest — it predates this one and
- * carries the settings surface's whole status language. The end state is that
- * it becomes another adapter onto this vocabulary rather than a parallel
- * system, at which point these two names collapse into one. It is not migrated
- * here because its `info` states need a per-surface semantic decision (nine of
- * them: does this mean "do not draw the eye" or "something is live?"), which is
- * a design call and deserves its own pass rather than being guessed mid-refactor.
+ * The name was chosen to avoid colliding with the settings surface's own
+ * `statusDotVariant` while both existed; that one is gone, so the collision is
+ * too. Kept as `dotForStatus` because it reads as what it does and renaming it
+ * back would churn a dozen call sites for nothing.
  *
- * Until then: new code uses this vocabulary; the settings surface keeps its
- * own; neither grows a second opinion about what a state colour means.
+ * `StatusTone` still exists next to it, and deliberately: Astryx's Badge has an
+ * `info` pill and its own `neutral`, so a Badge can express a shade a dot
+ * cannot. One surface still renders those. Two vocabularies, because there are
+ * genuinely two — not because nobody cleaned up.
  */
 export function dotForStatus(semantic: StatusSemantic): StatusDotVariant {
   return SEMANTIC_TO_DOT[semantic];

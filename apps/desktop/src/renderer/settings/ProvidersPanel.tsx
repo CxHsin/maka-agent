@@ -258,6 +258,12 @@ export function ProvidersPanel({ bridge, initialPage = 'connections', initialCon
                label and gave up. Whichever of the two a connection is, this
                slot now tells the truth AND is the way to change it.
 
+               `secondary`, not ghost: this button sits alone beside a title,
+               where a ghost's bare text reads as a subtitle rather than
+               something you can press — which would recreate the very problem
+               it exists to solve. 测试连接 below is secondary sm, and that is
+               this page's dialect for "quiet but unmistakably a control".
+
                `clickAction` rather than onClick: it opens no confirm, so there
                is no state-driven UI to await inside the transition, and the
                button gets its own pending affordance for free. */
@@ -265,7 +271,7 @@ export function ProvidersPanel({ bridge, initialPage = 'connections', initialCon
               ? <Badge variant="neutral" label={copy.default} />
               : (
                 <Button
-                  variant="ghost"
+                  variant="secondary"
                   size="sm"
                   label={copy.setDefault}
                   tooltip={copy.setDefaultTitle}

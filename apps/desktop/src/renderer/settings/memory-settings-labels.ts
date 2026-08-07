@@ -68,6 +68,12 @@ export function localMemoryPromptPreviewBlockedReason(state: LocalMemoryState, c
   return '';
 }
 
+// NOT migrated to the shared vocabulary yet, deliberately. This feeds the
+// settings surface's own `statusDotVariant` (settings-status-badge.ts, nine
+// files), and its `disabled` state is one of the nine `info` states awaiting a
+// batch semantic ruling: `info` renders as the accent dot there, so moving it
+// to `neutral` would be a visible colour change — exactly what this pass is
+// not allowed to make on its own. It migrates with the settings surface.
 export function memoryStatusTone(status: LocalMemoryState['status']): 'success' | 'info' | 'warning' | 'destructive' {
   switch (status) {
     case 'ok': return 'success';

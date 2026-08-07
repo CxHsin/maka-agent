@@ -97,13 +97,20 @@ function sourceAtRevision(revision, path) {
   }
 }
 
-function parseChanges(output) {
+export function parseOperationalProbeChanges(output) {
   return output
     .trim()
     .split('\n')
     .filter(Boolean)
-    .map((line) => {
+    .flatMap((line) => {
       const [status, ...paths] = line.split('\t');
+      if (status.startsWith('R')) {
+        return [
+          { status: 'D', path: paths[0] },
+          { status: 'A', path: paths[1] },
+        ];
+      }
+      if (status.startsWith('C')) return [{ status: 'A', path: paths[1] }];
       return { status: status[0], path: paths.at(-1) };
     });
 }
@@ -116,7 +123,7 @@ function main(args) {
   const currentManifest = readFileSync(resolve(repoRoot, manifestPath), 'utf8');
   const baseEpoch = parseEpoch(baseManifest, `${base}:${manifestPath}`);
   const currentEpoch = parseEpoch(currentManifest, manifestPath);
-  const changes = parseChanges(
+  const changes = parseOperationalProbeChanges(
     git([
       'diff',
       '--name-status',

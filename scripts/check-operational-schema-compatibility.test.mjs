@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { validateOperationalProbeChanges } from './check-operational-schema-compatibility.mjs';
+import {
+  parseOperationalProbeChanges,
+  validateOperationalProbeChanges,
+} from './check-operational-schema-compatibility.mjs';
 
 const epochOneProbe = 'packages/storage/src/__tests__/fixtures/operational-epoch-1-probe.ts';
 
@@ -16,6 +19,16 @@ test('keeps every existing operational epoch probe immutable', () => {
       /cannot be modified or deleted/,
     );
   }
+});
+
+test('treats the old side of a rename as deleting a frozen probe', () => {
+  const changes = parseOperationalProbeChanges(
+    `R100\t${epochOneProbe}\tpackages/storage/src/__tests__/fixtures/renamed-probe.ts\n`,
+  );
+  assert.throws(
+    () => validateOperationalProbeChanges({ baseEpoch: 1, currentEpoch: 1, changes }),
+    /cannot be modified or deleted/,
+  );
 });
 
 test('requires exactly the new epoch probe when reader compatibility breaks', () => {

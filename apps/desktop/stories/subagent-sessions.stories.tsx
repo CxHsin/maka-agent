@@ -8,11 +8,13 @@
  *   titlebar is project › parent › child.
  * - No composer drawer, strip, or parallel card system for subagents.
  *
- * Review scaffold for the layout target; not yet the shipped shell path.
+ * Titlebar and sidebar use the same product components as app-shell
+ * (TitlebarSessionIdentity, SessionListPanel, deriveSessionRail). The
+ * multi-spawn tool group still maps through ChatToolCalls the way
+ * production ToolTrow does, with real ToolCallDetail for Open.
  */
 import type { CSSProperties, ReactNode } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { BreadcrumbItem, Breadcrumbs } from '@astryxdesign/core/Breadcrumbs';
 import {
   ChatComposer,
   ChatComposerInput,
@@ -23,15 +25,19 @@ import {
   ChatToolCalls,
   type ChatToolCallItem,
 } from '@astryxdesign/core/Chat';
-import { Icon } from '@astryxdesign/core/Icon';
 import { Text } from '@astryxdesign/core/Text';
-import type { ToolResultContent } from '@maka/core';
+import type { SessionSummary, ToolResultContent } from '@maka/core';
+import {
+  SessionListPanel,
+  TitlebarSessionIdentity,
+} from '@maka/ui';
 import { formatDuration } from '../../../packages/ui/src/tool-activity/preview-utils.js';
 import { formatToolIntent } from '../../../packages/ui/src/tool-format.js';
 import { resolveToolDisplayName } from '../../../packages/ui/src/tool-activity/display-name.js';
 import { ToolCallDetail } from '../../../packages/ui/src/tool-activity.js';
 import type { ToolActivityItem } from '../../../packages/ui/src/materialize.js';
 import { useUiLocale } from '../../../packages/ui/src/locale-context.js';
+import { deriveSessionRail } from '../src/renderer/session-rail.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures — multi-subagent contiguous tool run
@@ -268,34 +274,11 @@ const shell: Record<string, CSSProperties> = {
     borderBottom: '1px solid var(--color-border-muted, rgba(0,0,0,0.06))',
     background: 'var(--color-background-muted, rgba(0,0,0,0.03))',
   },
-  sideNav: {
-    width: 220,
+  rail: {
+    width: 260,
     flex: '0 0 auto',
     minHeight: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 4,
-    padding: 10,
-    background: 'var(--color-background-surface, #fff)',
-    borderRadius: 12,
-    overflow: 'auto',
-  },
-  sideNavLabel: {
-    fontSize: 11,
-    fontWeight: 600,
-    letterSpacing: '0.04em',
-    textTransform: 'uppercase' as const,
-    color: 'var(--color-text-secondary, #71717a)',
-    padding: '4px 8px',
-  },
-  sideNavRow: {
-    padding: '8px 10px',
-    borderRadius: 8,
-    fontSize: 13,
-    fontWeight: 500,
-  },
-  sideNavRowActive: {
-    background: 'var(--color-background-muted, rgba(0,0,0,0.06))',
+    alignSelf: 'stretch',
   },
   compareRoot: {
     display: 'grid',
@@ -318,6 +301,57 @@ const shell: Record<string, CSSProperties> = {
   },
 };
 
+const NOOP_ROW_ACTIONS = {
+  onToggleFlag() {},
+  onArchive() {},
+  onUnarchive() {},
+  onRename() {},
+  onDelete() {},
+};
+
+function makeRailSession(
+  overrides: Partial<SessionSummary> & Pick<SessionSummary, 'id' | 'name'>,
+): SessionSummary {
+  return {
+    isFlagged: false,
+    isArchived: false,
+    labels: [],
+    hasUnread: false,
+    status: 'active',
+    backend: 'fake',
+    llmConnectionSlug: 'default',
+    connectionLocked: false,
+    model: 'fake',
+    permissionMode: 'ask',
+    ...overrides,
+  };
+}
+
+const PARENT_SESSION_ID = 'parent';
+const LINKED_CHILD_SESSION_ID = 'session-explore-layout';
+
+/** Full session catalog: roots plus one linked child (child stays off the rail). */
+const RAIL_FIXTURE_SESSIONS: SessionSummary[] = [
+  makeRailSession({ id: PARENT_SESSION_ID, name: PARENT_NAME, lastMessageAt: 30 }),
+  makeRailSession({ id: 'peer-ci', name: '修 CI 绿线', lastMessageAt: 20 }),
+  makeRailSession({ id: 'peer-docs', name: '文档润色', lastMessageAt: 10 }),
+  makeRailSession({
+    id: LINKED_CHILD_SESSION_ID,
+    name: 'explore · 读布局',
+    lastMessageAt: 25,
+    subagentParent: {
+      kind: 'subagent',
+      parentSessionId: PARENT_SESSION_ID,
+      spawnedBy: {
+        parentRunId: 'run',
+        parentTurnId: 'turn',
+        toolCallId: 'tool',
+      },
+      lifecycle: 'foreground',
+    },
+  }),
+];
+
 function Caption(props: { children: ReactNode }) {
   return (
     <div style={shell.caption}>
@@ -328,43 +362,50 @@ function Caption(props: { children: ReactNode }) {
   );
 }
 
-function TitlebarTrail(props: {
-  project?: string;
-  parent?: { name: string; onClick?: () => void };
+function ProductTitlebar(props: {
   sessionName: string;
-  sessionIsCurrent?: boolean;
+  parentName?: string;
 }) {
   return (
-    <Breadcrumbs
-      label="会话位置"
-      separator={<Icon icon="chevronRight" size="xsm" />}
-    >
-      {props.project ? (
-        <BreadcrumbItem onClick={() => undefined}>{props.project}</BreadcrumbItem>
-      ) : null}
-      {props.parent ? (
-        <BreadcrumbItem onClick={props.parent.onClick}>{props.parent.name}</BreadcrumbItem>
-      ) : null}
-      <BreadcrumbItem isCurrent={props.sessionIsCurrent ?? !props.parent}>
-        {props.sessionName}
-      </BreadcrumbItem>
-    </Breadcrumbs>
+    <TitlebarSessionIdentity
+      sessionName={props.sessionName}
+      onRenameSession={() => undefined}
+      project={{
+        name: PROJECT_NAME,
+        onOpenFolder: () => undefined,
+      }}
+      parentSession={
+        props.parentName
+          ? {
+              name: props.parentName,
+              onOpen: () => undefined,
+            }
+          : undefined
+      }
+    />
   );
 }
 
-function RootSidebar() {
+function ProductRail(props: { activeSessionId: string }) {
+  const { sessions, activeRowId } = deriveSessionRail(
+    RAIL_FIXTURE_SESSIONS,
+    props.activeSessionId,
+    () => true,
+  );
   return (
-    <aside style={shell.sideNav} aria-label="会话列表">
-      <div style={shell.sideNavLabel}>会话</div>
-      <div style={{ ...shell.sideNavRow, ...shell.sideNavRowActive }}>{PARENT_NAME}</div>
-      <div style={shell.sideNavRow}>修 CI 绿线</div>
-      <div style={shell.sideNavRow}>文档润色</div>
-      <div style={{ marginTop: 12, paddingInline: 8 }}>
-        <Text type="supporting" color="secondary">
-          仅 root 会话；无 data-subagent 嵌套。
-        </Text>
-      </div>
-    </aside>
+    <div style={shell.rail}>
+      <SessionListPanel
+        selection={{ section: 'sessions', filter: 'chats' }}
+        sessions={sessions}
+        activeId={activeRowId}
+        width={260}
+        onSelectSession={() => undefined}
+        onSelect={() => undefined}
+        onOpenSettings={() => undefined}
+        onNew={() => undefined}
+        rowActions={NOOP_ROW_ACTIONS}
+      />
+    </div>
   );
 }
 
@@ -372,14 +413,14 @@ function ParentShell() {
   return (
     <div style={shell.root} data-maka-contract="subagent-session-layout">
       <header style={shell.titlebar}>
-        <TitlebarTrail project={PROJECT_NAME} sessionName={PARENT_NAME} />
+        <ProductTitlebar sessionName={PARENT_NAME} />
       </header>
       <Caption>
-        侧栏无嵌套。流内一组可折叠 spawn_subagent（仅工具原语）。产品在 linked
-        工具行上挂打开；无第二套列表、无 ComposerDrawer / strip。
+        侧栏为 SessionListPanel + deriveSessionRail（仅 root）。流内一组可折叠
+        spawn_subagent；Open 走 ToolCallDetail。无 ComposerDrawer / strip。
       </Caption>
       <div style={shell.body}>
-        <RootSidebar />
+        <ProductRail activeSessionId={PARENT_SESSION_ID} />
         <div style={shell.plate}>
           <div style={shell.stream}>
             <ChatMessageList>
@@ -390,7 +431,7 @@ function ParentShell() {
               </ChatMessage>
               <ChatMessage sender="assistant" name="Maka">
                 <ChatMessageBubble>
-                  当轮连续 spawn_subagent 合成一个工具组（与其它连续 tool run 相同）。点某行进对应子会话（产品接线，非下方平行列表）。
+                  当轮连续 spawn_subagent 合成一个工具组（与其它连续 tool run 相同）。点某行进对应子会话。
                 </ChatMessageBubble>
                 <ChatMessageMetadata timestamp="刚刚" />
                 <div style={{ marginTop: 10, width: '100%' }}>
@@ -438,13 +479,13 @@ export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-// Real path: Review scaffold — parent session with multi-subagent tool group, flat sidebar, open child in main column; design lock, not yet shipped shell path.
+// Real path: parent session with multi-subagent tool group; flat SessionListPanel rail + TitlebarSessionIdentity.
 export const ParentSession: Story = {
   name: '父会话 · 工具组 + 打开子会话',
   render: () => <ParentShell />,
 };
 
-// Real path: Review scaffold — multi spawn_subagent group collapsed vs expanded using ChatToolCalls; side-by-side review aid, not a product screen.
+// Real path: multi spawn_subagent group collapsed vs expanded via ChatToolCalls + ToolCallDetail Open.
 export const ToolGroupFold: Story = {
   name: '工具组 · 折叠 vs 展开',
   render: () => (
@@ -479,7 +520,7 @@ export const ToolGroupFold: Story = {
   ),
 };
 
-// Real path: Review scaffold — child session main column with project › parent › child breadcrumbs after open from tool group; design lock, not yet shipped.
+// Real path: child open — product titlebar parent crumb; rail still roots only (parent highlighted).
 export const ChildSession: Story = {
   name: '子会话 · 面包屑回父',
   render: () => {
@@ -487,18 +528,13 @@ export const ChildSession: Story = {
     return (
       <div style={shell.root}>
         <header style={shell.titlebar}>
-          <TitlebarTrail
-            project={PROJECT_NAME}
-            parent={{ name: PARENT_NAME }}
-            sessionName={childLabel(item)}
-            sessionIsCurrent
-          />
+          <ProductTitlebar sessionName={childLabel(item)} parentName={PARENT_NAME} />
         </header>
         <Caption>
-          从工具组打开后的主区。侧栏仍是 root 列表，不嵌套该子代理。
+          从工具组打开后的主区。侧栏仍是 deriveSessionRail 的 root 列表并高亮父会话。
         </Caption>
         <div style={shell.body}>
-          <RootSidebar />
+          <ProductRail activeSessionId={LINKED_CHILD_SESSION_ID} />
           <div style={shell.plate}>
             <div style={shell.stream}>
               <ChatMessageList>

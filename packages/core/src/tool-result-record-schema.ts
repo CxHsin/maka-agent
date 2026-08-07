@@ -343,7 +343,7 @@ function hasValidSubagentResultFields(value: Record<string, unknown>): boolean {
 function isAgentSwarmResult(value: Record<string, unknown>): value is AgentSwarmResult {
   return (
     hasExactShape(value, AGENT_SWARM_SHAPE) &&
-    ['completed', 'partial', 'failed', 'cancelled'].includes(value.status as string) &&
+    ['running', 'completed', 'partial', 'failed', 'cancelled'].includes(value.status as string) &&
     Array.isArray(value.items) &&
     value.items.every(isAgentSwarmItem) &&
     isFiniteNumber(value.startedAt) &&
@@ -367,7 +367,7 @@ function isAgentSwarmItem(value: unknown): value is AgentSwarmItem {
     isOptionalString(value.turnId) &&
     isOptionalString(value.runId) &&
     isOptionalString(value.resumedFromRunId) &&
-    ['completed', 'failed', 'cancelled'].includes(value.status as string) &&
+    ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(value.status as string) &&
     typeof value.summary === 'string' &&
     isStringArray(value.artifactIds) &&
     isOptionalFiniteNumber(value.startedAt) &&

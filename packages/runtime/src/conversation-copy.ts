@@ -59,7 +59,7 @@ export interface ConversationCopyLinkedChildReference {
   readonly resumedFromRunId?: string;
   readonly turnId?: string;
   readonly artifactIds: readonly string[];
-  readonly status: 'completed' | 'failed' | 'cancelled' | 'running' | 'waiting_for_user';
+  readonly status: 'completed' | 'failed' | 'cancelled' | 'running' | 'queued' | 'waiting_for_user';
   readonly failureClass?: string;
 }
 

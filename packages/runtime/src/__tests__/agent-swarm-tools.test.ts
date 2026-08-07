@@ -352,6 +352,77 @@ describe('AgentSwarm adapter', () => {
     );
   });
 
+  test('publishes live agent_swarm previews from batch start through ready Open', async () => {
+    const previews: AgentSwarmToolResult[] = [];
+    const result = await buildAgentSwarmTool().impl(
+      {
+        items: [
+          {
+            item_id: 'auth',
+            profile: LOCAL_READ_AGENT_PROFILE,
+            task: 'Inspect auth.',
+          },
+          {
+            item_id: 'storage',
+            profile: LOCAL_READ_AGENT_PROFILE,
+            task: 'Inspect storage.',
+          },
+        ],
+        max_concurrency: 1,
+      },
+      context({
+        publishToolResultPreview: (content) => {
+          assert.equal(content.kind, 'agent_swarm');
+          previews.push(content as AgentSwarmToolResult);
+        },
+        spawnChildSession: async (input) => {
+          const itemId = input.swarm?.itemId ?? 'unknown';
+          const index = itemId === 'auth' ? 0 : 1;
+          await input.onReady?.({
+            childSessionId: `child-${itemId}`,
+            turnId: `turn-${itemId}`,
+            runId: `run-${itemId}`,
+            agentId: requireBuiltinAgentDefinitionByProfile(input.agentProfile).id,
+            agentName: requireBuiltinAgentDefinitionByProfile(input.agentProfile).name,
+            permissionMode: 'explore',
+          });
+          return {
+            ...childResult(index),
+            childSessionId: `child-${itemId}`,
+            turnId: `turn-${itemId}`,
+            runId: `run-${itemId}`,
+          };
+        },
+      }),
+    );
+
+    assert.ok(previews.length >= 2, 'expected batch-start and ready previews');
+    assert.equal(previews[0]?.status, 'running');
+    assert.deepEqual(
+      previews[0]?.items.map((item) => ({
+        itemId: item.itemId,
+        status: item.status,
+        childSessionId: item.childSessionId,
+      })),
+      [
+        { itemId: 'auth', status: 'queued', childSessionId: undefined },
+        { itemId: 'storage', status: 'queued', childSessionId: undefined },
+      ],
+    );
+
+    const readyPreview = previews.find(
+      (preview) =>
+        preview.status === 'running' &&
+        preview.items.some(
+          (item) => item.itemId === 'auth' && item.childSessionId === 'child-auth',
+        ),
+    );
+    assert.ok(readyPreview, 'expected a preview that surfaces Open for the ready child');
+    assert.equal(result.status, 'completed');
+    assert.equal(result.items[0]?.childSessionId, 'child-auth');
+    assert.equal(result.items[1]?.childSessionId, 'child-storage');
+  });
+
   test('routes every configured template item through the selected subagent_id', async () => {
     const parsed = (
       buildAgentSwarmTool().parameters as {
@@ -947,6 +1018,8 @@ describe('AgentSwarm adapter', () => {
         completedItemCount: 2,
         failedItemCount: 1,
         cancelledItemCount: 0,
+        runningItemCount: 0,
+        queuedItemCount: 0,
         artifactCount: 3,
         durationMs: 80,
         resumedItemCount: 0,

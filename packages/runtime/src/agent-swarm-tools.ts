@@ -1,9 +1,11 @@
 import { redactSecrets } from '@maka/core/redaction';
 import {
   TASK_ID_MAX_CHARS,
+  buildAgentSwarmContent,
   isSafeTaskId,
   isSafeSubagentPresetId,
   projectAgentSwarmResult,
+  type AgentSwarmItem,
   type ToolResultContent,
 } from '@maka/core';
 import { z } from 'zod';
@@ -221,6 +223,29 @@ export function buildAgentSwarmTool(
       const childResults: Array<ChildExecutionResult | undefined> = Array.from({
         length: prepared.items.length,
       });
+      // Live snapshot rows — same content shape as the durable tool_result.
+      // Publish only through buildAgentSwarmContent so mid-flight Open and
+      // settlement never diverge on field assembly.
+      const liveItems: AgentSwarmItem[] = prepared.items.map((item) => ({
+        itemId: item.itemId,
+        index: item.index,
+        profile: item.profile,
+        started: false,
+        status: 'queued',
+        summary: '',
+        artifactIds: [],
+        ...(item.resumedFromRunId ? { resumedFromRunId: item.resumedFromRunId } : {}),
+      }));
+      const publishLiveSnapshot = () => {
+        ctx.publishToolResultPreview?.(
+          buildAgentSwarmContent({
+            items: liveItems,
+            startedAt,
+            completedAt: now(),
+          }),
+        );
+      };
+      publishLiveSnapshot();
       const artifactIds = prepared.items.map(() => new Set<string>());
       const progressBudget = createChildAgentProgressBudget(
         CHILD_AGENT_PROGRESS_BATCH_MAX_EVENTS,
@@ -241,6 +266,12 @@ export function buildAgentSwarmTool(
         prepared.items,
         async (item, { index, attempt, retry, markReady }) => {
           const deadline = createItemDeadline(ctx.abortSignal, itemTimeoutMs);
+          liveItems[index] = {
+            ...liveItems[index]!,
+            started: true,
+            status: 'running',
+          };
+          publishLiveSnapshot();
           traceAgentSwarm(ctx, 'tool_started', 'item_started', {
             itemId: item.itemId,
             index: item.index,
@@ -270,6 +301,17 @@ export function buildAgentSwarmTool(
                 agentId,
                 agentName,
               };
+              liveItems[index] = {
+                ...liveItems[index]!,
+                started: true,
+                status: 'running',
+                agentId,
+                agentName,
+                turnId,
+                ...(childSessionId ? { childSessionId } : {}),
+                ...(runId ? { runId } : {}),
+              };
+              publishLiveSnapshot();
               markReady();
             };
             const result: ChildExecutionResult = retry
@@ -346,6 +388,14 @@ export function buildAgentSwarmTool(
                 reason: new ProviderRateLimitRetry(effectiveResult),
               };
             }
+            const itemStatus =
+              effectiveResult.status === 'cancelled'
+                ? 'cancelled'
+                : effectiveResult.status === 'completed'
+                  ? 'completed'
+                  : 'failed';
+            liveItems[index] = mapChildResult(item, observedResult, itemStatus);
+            publishLiveSnapshot();
             traceAgentSwarm(
               ctx,
               effectiveResult.status === 'failed' ? 'tool_failed' : 'tool_completed',
@@ -378,6 +428,20 @@ export function buildAgentSwarmTool(
             const effectiveError = deadline.timedOut()
               ? new AgentSwarmItemTimeoutError(itemTimeoutMs)
               : error;
+            const ready = readyRefs[index];
+            liveItems[index] = {
+              itemId: item.itemId,
+              index: item.index,
+              profile: item.profile,
+              started: ready !== undefined || liveItems[index]!.started,
+              ...(item.resumedFromRunId ? { resumedFromRunId: item.resumedFromRunId } : {}),
+              ...(ready ?? {}),
+              status: ctx.abortSignal.aborted ? 'cancelled' : 'failed',
+              summary: boundedSwarmError(effectiveError),
+              artifactIds: [...(artifactIds[index] ?? [])],
+              failureClass: boundedFailureClass(effectiveError, 'ChildAgentError'),
+            };
+            publishLiveSnapshot();
             traceAgentSwarm(ctx, 'tool_failed', 'item_completed', {
               itemId: item.itemId,
               index: item.index,
@@ -429,19 +493,11 @@ export function buildAgentSwarmTool(
         mapAgentSwarmItem(prepared.items[index]!, row, readyRefs[index], childResults[index]),
       );
       const completedAt = now();
-      const status = aggregateAgentSwarmStatus(items);
-      ctx.emitOutput('stdout', `Agent swarm: ${status}\n`);
-      const result: AgentSwarmToolResult = {
-        kind: 'agent_swarm',
-        status,
-        items,
-        startedAt,
-        completedAt,
-        durationMs: Math.max(0, completedAt - startedAt),
-      };
+      const result = buildAgentSwarmContent({ items, startedAt, completedAt });
+      ctx.emitOutput('stdout', `Agent swarm: ${result.status}\n`);
       traceAgentSwarm(
         ctx,
-        status === 'failed' ? 'tool_failed' : 'tool_completed',
+        result.status === 'failed' ? 'tool_failed' : 'tool_completed',
         'batch_completed',
         {
           ...projectAgentSwarmResult(result),
@@ -1128,8 +1184,8 @@ function formatDuration(ms: number): string {
 function mapChildResult(
   item: PreparedAgentSwarmItem,
   result: ChildExecutionResult,
-  status: AgentSwarmToolResult['items'][number]['status'],
-): AgentSwarmToolResult['items'][number] {
+  status: Extract<AgentSwarmItem['status'], 'completed' | 'failed' | 'cancelled'>,
+): AgentSwarmItem {
   return {
     itemId: item.itemId,
     index: item.index,
@@ -1149,15 +1205,6 @@ function mapChildResult(
     durationMs: result.durationMs,
     ...(result.failureClass ? { failureClass: result.failureClass } : {}),
   };
-}
-
-function aggregateAgentSwarmStatus(
-  items: AgentSwarmToolResult['items'],
-): AgentSwarmToolResult['status'] {
-  if (items.every((item) => item.status === 'failed')) return 'failed';
-  if (items.some((item) => item.status === 'cancelled')) return 'cancelled';
-  if (items.every((item) => item.status === 'completed')) return 'completed';
-  return 'partial';
 }
 
 function boundedSwarmError(error: unknown): string {

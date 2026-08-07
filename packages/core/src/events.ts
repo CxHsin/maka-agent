@@ -778,7 +778,12 @@ export type ToolResultContent =
     }
   | {
       kind: 'agent_swarm';
-      status: 'completed' | 'partial' | 'failed' | 'cancelled';
+      /**
+       * Batch rollup. `running` is live-only (tool_result_preview while the
+       * parent tool is still in flight). Durable tool_result commits only
+       * terminal batch statuses.
+       */
+      status: 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
       items: ReadonlyArray<{
         itemId: string;
         index: number;
@@ -790,7 +795,11 @@ export type ToolResultContent =
         turnId?: string;
         runId?: string;
         resumedFromRunId?: string;
-        status: 'completed' | 'failed' | 'cancelled';
+        /**
+         * Item rollup. `queued` / `running` are live-only mid-flight states;
+         * durable tool_result rows use terminal statuses only.
+         */
+        status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
         summary: string;
         artifactIds: readonly string[];
         startedAt?: number;

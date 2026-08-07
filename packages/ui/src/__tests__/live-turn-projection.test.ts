@@ -444,6 +444,65 @@ describe('applyLiveTurnEvent', () => {
     );
   });
 
+  it('attaches a live agent_swarm tool_result_preview without settling the tool', () => {
+    const started = applyLiveTurnEvent(undefined, {
+      type: 'tool_start',
+      id: 'event-1',
+      turnId: 'turn-1',
+      stepId: 'step-1',
+      toolUseId: 'swarm-1',
+      toolName: 'agent_swarm',
+      args: { items: [{ item_id: 'auth', profile: 'local_read', task: 'Inspect' }] },
+      ts: 100,
+    });
+    const previewed = applyLiveTurnEvent(started, {
+      type: 'tool_result_preview',
+      id: 'event-2',
+      turnId: 'turn-1',
+      toolUseId: 'swarm-1',
+      isError: false,
+      content: {
+        kind: 'agent_swarm',
+        status: 'running',
+        items: [
+          {
+            itemId: 'auth',
+            index: 0,
+            profile: 'local_read',
+            started: true,
+            childSessionId: 'child-auth',
+            status: 'running',
+            summary: '',
+            artifactIds: [],
+          },
+          {
+            itemId: 'storage',
+            index: 1,
+            profile: 'local_read',
+            started: false,
+            status: 'queued',
+            summary: '',
+            artifactIds: [],
+          },
+        ],
+        startedAt: 100,
+        completedAt: 101,
+        durationMs: 1,
+      },
+      ts: 101,
+    });
+
+    assert.equal(previewed.steps[0]?.tools[0]?.status, 'running');
+    assert.equal(previewed.steps[0]?.tools[0]?.result?.kind, 'agent_swarm');
+    assert.equal(
+      previewed.steps[0]?.tools[0]?.result &&
+        previewed.steps[0].tools[0].result.kind === 'agent_swarm'
+        ? previewed.steps[0].tools[0].result.items[0]?.childSessionId
+        : undefined,
+      'child-auth',
+    );
+  });
+
   it('retains live nested tool activity identity', () => {
     const projection = applyLiveTurnEvent(undefined, {
       type: 'tool_start',

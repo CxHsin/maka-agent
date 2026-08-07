@@ -170,6 +170,11 @@ export interface MakaToolContext {
   operationId?: string;
   abortSignal: AbortSignal;
   emitOutput: (stream: ToolOutputStream, chunk: string) => void;
+  /**
+   * Live-only partial tool result for the current toolUseId. Must not persist
+   * transcript; final settlement remains the durable tool_result.
+   */
+  publishToolResultPreview?: (content: ToolResultContent) => void;
   /** Diagnostic-only trace projection. It must never affect tool execution. */
   emitRunTrace?: (
     type:
@@ -1306,6 +1311,18 @@ export class ToolRuntime {
           ...(pushedCallEvent?.operationId ? { operationId: pushedCallEvent.operationId } : {}),
           abortSignal: ctx.abortSignal,
           emitOutput: output.emit,
+          publishToolResultPreview: (content) => {
+            queue.push({
+              type: 'tool_result_preview',
+              id: this.input.newId(),
+              turnId,
+              ts: this.input.now(),
+              toolUseId,
+              isError: false,
+              content,
+              ...activityIdentity,
+            });
+          },
           ...(trace
             ? {
                 emitRunTrace: (
@@ -1995,9 +2012,9 @@ export class ToolRuntime {
                     onReady: async (ready) => {
                       // Live-only linked-spawn Open: surface childSessionId
                       // before the durable tool_result commits. Must not
-                      // appendMessage. Swarm/batch mid-flight preview is
-                      // explicitly out of scope — agent_swarm still settles
-                      // into AgentSwarmPreview with per-item Open.
+                      // appendMessage. Swarm batches publish kind:agent_swarm
+                      // previews from the agent_swarm tool instead — a
+                      // subagent preview here would overwrite that snapshot.
                       if (!spawnInput.swarm) {
                         input.queue.push({
                           type: 'tool_result_preview',

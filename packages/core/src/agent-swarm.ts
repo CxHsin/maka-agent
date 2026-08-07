@@ -1,35 +1,84 @@
 import type { ToolResultContent } from './events.js';
 
 export type AgentSwarmResult = Extract<ToolResultContent, { kind: 'agent_swarm' }>;
+export type AgentSwarmItem = AgentSwarmResult['items'][number];
+export type AgentSwarmBatchStatus = AgentSwarmResult['status'];
+export type AgentSwarmItemStatus = AgentSwarmItem['status'];
 
 export interface AgentSwarmResultProjection {
-  status: AgentSwarmResult['status'];
+  status: AgentSwarmBatchStatus;
   itemCount: number;
   startedItemCount: number;
   completedItemCount: number;
   failedItemCount: number;
   cancelledItemCount: number;
+  runningItemCount: number;
+  queuedItemCount: number;
   artifactCount: number;
   durationMs: number;
 }
 
+const TERMINAL_ITEM_STATUSES = new Set<AgentSwarmItemStatus>(['completed', 'failed', 'cancelled']);
+
 /**
- * Bounded presentation/diagnostic facts derived from the canonical settled
- * tool result. This is a projection only: child AgentRuns remain the authority
- * for child lifecycle and artifacts.
+ * Batch status from item rows. Any live item keeps the batch `running`; once
+ * every item is terminal the rollup matches the settled agent_swarm contract.
+ */
+export function aggregateAgentSwarmStatus(items: readonly AgentSwarmItem[]): AgentSwarmBatchStatus {
+  if (items.some((item) => !TERMINAL_ITEM_STATUSES.has(item.status))) return 'running';
+  if (items.length > 0 && items.every((item) => item.status === 'failed')) return 'failed';
+  if (items.some((item) => item.status === 'cancelled')) return 'cancelled';
+  if (items.length > 0 && items.every((item) => item.status === 'completed')) return 'completed';
+  return 'partial';
+}
+
+/**
+ * Single content builder for live tool_result_preview snapshots and durable
+ * tool_result settlement — same shape, one aggregation path.
+ */
+export function buildAgentSwarmContent(input: {
+  readonly items: readonly AgentSwarmItem[];
+  readonly startedAt: number;
+  readonly completedAt: number;
+}): AgentSwarmResult {
+  const startedAt = input.startedAt;
+  const completedAt = input.completedAt;
+  // Snapshot rows so live mutation of a working items array cannot rewrite
+  // already-published tool_result_preview contents.
+  const items = input.items.map((item) => ({
+    ...item,
+    artifactIds: [...item.artifactIds],
+  }));
+  return {
+    kind: 'agent_swarm',
+    status: aggregateAgentSwarmStatus(items),
+    items,
+    startedAt,
+    completedAt,
+    durationMs: Math.max(0, completedAt - startedAt),
+  };
+}
+
+/**
+ * Bounded presentation/diagnostic facts derived from agent_swarm content.
+ * Child AgentRuns remain the authority for child lifecycle and artifacts.
  */
 export function projectAgentSwarmResult(result: AgentSwarmResult): AgentSwarmResultProjection {
   let startedItemCount = 0;
   let completedItemCount = 0;
   let failedItemCount = 0;
   let cancelledItemCount = 0;
+  let runningItemCount = 0;
+  let queuedItemCount = 0;
   let artifactCount = 0;
 
   for (const item of result.items) {
     if (item.started) startedItemCount += 1;
     if (item.status === 'completed') completedItemCount += 1;
     else if (item.status === 'failed') failedItemCount += 1;
-    else cancelledItemCount += 1;
+    else if (item.status === 'cancelled') cancelledItemCount += 1;
+    else if (item.status === 'running') runningItemCount += 1;
+    else if (item.status === 'queued') queuedItemCount += 1;
     artifactCount += item.artifactIds.length;
   }
 
@@ -40,6 +89,8 @@ export function projectAgentSwarmResult(result: AgentSwarmResult): AgentSwarmRes
     completedItemCount,
     failedItemCount,
     cancelledItemCount,
+    runningItemCount,
+    queuedItemCount,
     artifactCount,
     durationMs: result.durationMs,
   };

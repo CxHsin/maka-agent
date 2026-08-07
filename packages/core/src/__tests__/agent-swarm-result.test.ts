@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { projectAgentSwarmResult } from '../agent-swarm.js';
+import { buildAgentSwarmContent, projectAgentSwarmResult } from '../agent-swarm.js';
 import type { ToolResultContent } from '../events.js';
 import { decodeCanonicalToolResultContent } from '../tool-result-record-schema.js';
 import { isCancelledToolResultContent, toolResultActivityStatus } from '../tool-result-status.js';
@@ -88,9 +88,56 @@ describe('agent swarm result contract', () => {
       completedItemCount: 1,
       failedItemCount: 1,
       cancelledItemCount: 1,
+      runningItemCount: 0,
+      queuedItemCount: 0,
       artifactCount: 3,
       durationMs: 30,
     });
+  });
+
+  test('buildAgentSwarmContent keeps the batch running while any item is live', () => {
+    const content = buildAgentSwarmContent({
+      startedAt: 10,
+      completedAt: 25,
+      items: [
+        {
+          itemId: 'auth',
+          index: 0,
+          profile: 'local_read',
+          started: true,
+          childSessionId: 'child-auth',
+          status: 'running',
+          summary: '',
+          artifactIds: [],
+        },
+        {
+          itemId: 'storage',
+          index: 1,
+          profile: 'local_read',
+          started: false,
+          status: 'queued',
+          summary: '',
+          artifactIds: [],
+        },
+      ],
+    });
+
+    assert.equal(content.kind, 'agent_swarm');
+    assert.equal(content.status, 'running');
+    assert.equal(content.durationMs, 15);
+    assert.deepEqual(projectAgentSwarmResult(content), {
+      status: 'running',
+      itemCount: 2,
+      startedItemCount: 1,
+      completedItemCount: 0,
+      failedItemCount: 0,
+      cancelledItemCount: 0,
+      runningItemCount: 1,
+      queuedItemCount: 1,
+      artifactCount: 0,
+      durationMs: 15,
+    });
+    assert.deepEqual(decodeCanonicalToolResultContent(content), content);
   });
 });
 

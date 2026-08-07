@@ -520,8 +520,10 @@ describe('ToolRuntime settlement', () => {
     );
   });
 
-  it('does not publish tool_result_preview for swarm batch spawns', async () => {
-    const events: Array<{ type: string }> = [];
+  it('does not publish a subagent tool_result_preview for swarm-tagged spawns', async () => {
+    // Swarm mid-flight Open is owned by agent_swarm (kind:agent_swarm snapshots).
+    // The spawn wrapper must not emit kind:subagent previews that would overwrite them.
+    const events: Array<{ type: string; content?: unknown }> = [];
     let readySeen = false;
     const runtime = makeRuntime({
       runId: 'parent-run',
@@ -557,6 +559,7 @@ describe('ToolRuntime settlement', () => {
         parameters: {},
         impl: async (_args, ctx) => {
           assert.equal(typeof ctx.spawnChildSession, 'function');
+          assert.equal(typeof ctx.publishToolResultPreview, 'function');
           return await ctx.spawnChildSession!({
             agentProfile: 'local_read',
             prompt: 'Swarm item',
@@ -579,7 +582,14 @@ describe('ToolRuntime settlement', () => {
 
     assert.equal(readySeen, true);
     assert.equal(
-      events.some((event) => event.type === 'tool_result_preview'),
+      events.some((event) => {
+        if (event.type !== 'tool_result_preview') return false;
+        return (
+          typeof event.content === 'object' &&
+          event.content !== null &&
+          (event.content as { kind?: string }).kind === 'subagent'
+        );
+      }),
       false,
     );
     assert.equal(

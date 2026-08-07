@@ -30,7 +30,9 @@ export function AgentSwarmPreview(props: {
   const duration = formatDuration(result.durationMs);
   const meta = [
     copy.swarm.status[result.status],
-    copy.swarm.completedCount(projection.completedItemCount),
+    projection.runningItemCount > 0 ? copy.swarm.runningCount(projection.runningItemCount) : '',
+    projection.queuedItemCount > 0 ? copy.swarm.queuedCount(projection.queuedItemCount) : '',
+    projection.completedItemCount > 0 ? copy.swarm.completedCount(projection.completedItemCount) : '',
     projection.failedItemCount > 0 ? copy.swarm.failedCount(projection.failedItemCount) : '',
     projection.cancelledItemCount > 0 ? copy.swarm.cancelledCount(projection.cancelledItemCount) : '',
     projection.artifactCount > 0 ? copy.swarm.artifactCount(projection.artifactCount) : '',

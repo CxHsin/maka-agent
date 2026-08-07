@@ -19,7 +19,6 @@ import type {
 import {
   collapseSessionRevisions,
   isLinkedSubagentSession,
-  linkedSubagentParentSessionId,
   parseGraphCommand,
   parseSwarmCommand,
   resolveUiLocale,
@@ -576,10 +575,14 @@ function AppShellContent({
   // Running → Waiting → Blocked → Active → Review → Done → Archived);
   // `aborted` is dropped. Pinned (flagged) sessions float to the top
   // in their own group, preserving the PR48 pin-floats behavior.
-  // One projection owns both rail membership and active highlight: revision-
-  // tree roots (orphans stay; linked children with a live parent leave), then
-  // a flat nav / companion filter — never promote children past ancestors.
-  const { sessions: visibleSessions, activeRowId: sidebarActiveId } = useMemo(
+  // One projection owns rail membership, active highlight, and titlebar parent:
+  // revision-tree roots (orphans stay; linked children with a live parent leave),
+  // flat nav / companion filter — never promote children past ancestors.
+  const {
+    sessions: visibleSessions,
+    activeRowId: sidebarActiveId,
+    activeParentSession: railParentSession,
+  } = useMemo(
     () =>
       deriveSessionRail(sessions, activeId, (session) =>
         !hiddenCompanionForkIds.has(session.id)
@@ -1021,17 +1024,15 @@ function AppShellContent({
     openSessionInChat(parentSessionId);
   }
 
+  // Same revision-aware parent row the rail uses — not a second physical-id walk.
   const titlebarParentSession = useMemo(() => {
-    if (!activeSession) return undefined;
-    const parentId = linkedSubagentParentSessionId(activeSession);
-    if (!parentId) return undefined;
-    const parent = sessions.find((session) => session.id === parentId);
-    if (!parent) return undefined;
+    if (!railParentSession) return undefined;
+    const parentId = railParentSession.id;
     return {
-      name: parent.name,
+      name: railParentSession.name,
       onOpen: () => openSessionInChatRef.current(parentId),
     };
-  }, [activeSession, sessions]);
+  }, [railParentSession]);
 
   const activeSessionForView: SessionSummary | undefined =
     activeSession ??

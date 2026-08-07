@@ -122,6 +122,28 @@ describe('deriveSessionRail', () => {
       [parentV2.id],
     );
     assert.equal(rail.activeRowId, parentV2.id);
+    // Titlebar parent shares the same representative, not the physical parent-v1 name.
+    assert.equal(rail.activeParentSession?.id, parentV2.id);
+    assert.equal(rail.activeParentSession?.name, 'Parent v2');
+  });
+
+  it('surfaces no titlebar parent for ordinary roots or orphans', () => {
+    const root = makeSessionSummary({ id: 'root', name: 'Root', lastMessageAt: 1 });
+    const orphan = makeSessionSummary({
+      id: 'orphan',
+      name: 'Orphan',
+      lastMessageAt: 2,
+      subagentParent: childRelation('missing'),
+    });
+
+    assert.equal(
+      deriveSessionRail([root], root.id, chatsInclude).activeParentSession,
+      undefined,
+    );
+    assert.equal(
+      deriveSessionRail([orphan], orphan.id, chatsInclude).activeParentSession,
+      undefined,
+    );
   });
 
   it('applies flagged and archived filters flat against rail roots only', () => {

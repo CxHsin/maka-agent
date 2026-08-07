@@ -58,12 +58,6 @@ import type {
   PlanReminderRecurrence,
   DailyReviewArchive,
   QueueEnqueueOutcome,
-  VoiceBeginRequest,
-  VoiceBeginResult,
-  VoiceCapturedAudio,
-  VoiceCoordinatorToolCall,
-  VoiceFinishCaptureResult,
-  VoiceRealtimeClientSession,
   DailyReviewArchiveSummary,
   DailyReviewConfig,
   DailyReviewRange,
@@ -260,7 +254,6 @@ export interface MakaBridge {
             turnId: string;
             text: string;
             displayText?: string;
-            voiceOperationId?: string;
             skillIds?: string[];
             attachmentItems?: RendererIngestInput[];
             turnOrchestration?: TurnOrchestration;
@@ -407,17 +400,6 @@ export interface MakaBridge {
         openInBrowser(sessionId: string): Promise<Result<void>>;
       };
     };
-  };
-  voice: {
-    begin(input: VoiceBeginRequest): Promise<VoiceBeginResult>;
-    finishCapture(
-      operationId: string,
-      audio: VoiceCapturedAudio,
-    ): Promise<VoiceFinishCaptureResult>;
-    cancel(operationId: string): Promise<void>;
-    createRealtimeSession(offerSdp: string): Promise<VoiceRealtimeClientSession>;
-    closeRealtimeSession(sessionId: string): Promise<void>;
-    validateCoordinatorToolCall(input: unknown): Promise<VoiceCoordinatorToolCall>;
   };
   notifications: {
     /** Fire-and-forget: report that an agent turn reached a terminal

@@ -73,12 +73,6 @@ import type {
   DailyReviewArchive,
   DailyReviewArchiveSummary,
   QueueEnqueueOutcome,
-  VoiceBeginRequest,
-  VoiceBeginResult,
-  VoiceCapturedAudio,
-  VoiceCoordinatorToolCall,
-  VoiceFinishCaptureResult,
-  VoiceRealtimeClientSession,
   DailyReviewConfig,
   DailyReviewRange,
   DailyReviewSummary,
@@ -206,7 +200,6 @@ const makaBridge = {
             turnId: string;
             text: string;
             displayText?: string;
-            voiceOperationId?: string;
             skillIds?: string[];
             attachmentItems?: RendererIngestInput[];
             turnOrchestration?: TurnOrchestration;
@@ -877,29 +870,6 @@ const makaBridge = {
           return ipcRenderer.invoke('settings:bots:onboarding:open', sessionId);
         },
       },
-    },
-  },
-  voice: {
-    begin(input: VoiceBeginRequest): Promise<VoiceBeginResult> {
-      return ipcRenderer.invoke('voice:begin', input);
-    },
-    finishCapture(
-      operationId: string,
-      audio: VoiceCapturedAudio,
-    ): Promise<VoiceFinishCaptureResult> {
-      return ipcRenderer.invoke('voice:finishCapture', operationId, audio);
-    },
-    cancel(operationId: string): Promise<void> {
-      return ipcRenderer.invoke('voice:cancel', operationId);
-    },
-    createRealtimeSession(offerSdp: string): Promise<VoiceRealtimeClientSession> {
-      return ipcRenderer.invoke('voice:createRealtimeSession', offerSdp);
-    },
-    closeRealtimeSession(sessionId: string): Promise<void> {
-      return ipcRenderer.invoke('voice:closeRealtimeSession', sessionId);
-    },
-    validateCoordinatorToolCall(input: unknown): Promise<VoiceCoordinatorToolCall> {
-      return ipcRenderer.invoke('voice:validateCoordinatorToolCall', input);
     },
   },
   notifications: {

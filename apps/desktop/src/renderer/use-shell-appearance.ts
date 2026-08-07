@@ -9,7 +9,6 @@ import type {
 import { createUiLocaleUpdateGate } from './settings/ui-locale-update-gate';
 import { applyTheme, applyThemePalette } from './theme';
 import { getShellCopy, localizedShellErrorMessage } from './locales/shell-copy';
-import { voiceComposerAvailability } from './voice-composer-availability.js';
 
 type ToastApi = {
   error(title: string, description?: string): void;
@@ -23,8 +22,8 @@ type ToastApi = {
  * close-settings re-reads.
  *
  * `closeSettings` stays in AppShell: on close it calls `refreshShellSettings()`
- * so display mirrors (default permission mode, configured voice routes) catch
- * up without an app restart. The full settings hydration lives here.
+ * so display mirrors (default permission mode) catch up without an app restart.
+ * The full settings hydration lives here.
  */
 export function useShellAppearance({
   toastApi,
@@ -48,7 +47,6 @@ export function useShellAppearance({
   // so a stale value here can briefly mislabel the chip but never changes
   // which mode a session is created with.
   const [defaultPermissionMode, setDefaultPermissionMode] = useState<ChatDefaultPermissionMode>('ask');
-  const [voiceCaptureConfigured, setVoiceCaptureConfigured] = useState(false);
 
   async function refreshShellSettings() {
     const uiLocaleHydration = uiLocaleUpdateGate.beginHydration();
@@ -69,8 +67,6 @@ export function useShellAppearance({
       setThemePalette(palette);
       setUserLabel(name);
       setDefaultPermissionMode(next.chatDefaults?.permissionMode ?? 'ask');
-      const voiceAvailability = voiceComposerAvailability(next.voice);
-      setVoiceCaptureConfigured(voiceAvailability.capture);
       applyTheme(pref);
       applyThemePalette(palette);
     } catch (error) {
@@ -92,7 +88,6 @@ export function useShellAppearance({
     setUserLabel,
     defaultPermissionMode,
     setDefaultPermissionMode,
-    voiceCaptureConfigured,
     refreshShellSettings,
   };
 }

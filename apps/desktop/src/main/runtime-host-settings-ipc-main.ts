@@ -374,7 +374,6 @@ function toClientOwnedPatch(
     ...(personalization ? { personalization } : {}),
     ...(patch.notifications ? { notifications: patch.notifications } : {}),
     ...(patch.system ? { system: patch.system } : {}),
-    ...(patch.voice ? { voice: patch.voice } : {}),
     ...(patch.subagents ? { subagents: patch.subagents } : {}),
   };
 }

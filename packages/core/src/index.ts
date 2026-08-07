@@ -1338,64 +1338,6 @@ export {
   stableLocalMemoryProposalId,
 } from './local-memory.js';
 
-// voice.ts (PR-VOICE-0) — core contract; no IPC/storage/provider/runtime/UI.
-export type {
-  VoiceCapabilitySnapshot,
-  VoiceCaptureCaps,
-  VoiceCaptureRequest,
-  VoiceInputMode,
-  VoiceNormalizeResult,
-  VoicePermissionStatus,
-  VoicePrivacyFlags,
-  VoiceReadinessReason,
-  VoiceSttProvider,
-  VoiceTranscriptPersistence,
-  VoiceTranscriptRequest,
-  VoiceTranscriptResult,
-  VoiceTranscriptSource,
-  VoiceTtsPolicy,
-  VoiceTtsProvider,
-  VoiceTtsRequest,
-  VoiceIntent,
-  VoiceAudioFormat,
-  EphemeralVoiceAudio,
-  VoiceModelRouteCapability,
-  VoiceRecognitionConfig,
-  VoiceRealtimeConfig,
-  VoiceSettings,
-  VoiceRoutePlan,
-  ResolveVoiceRouteInput,
-  VoiceBeginRequest,
-  VoiceBeginResult,
-  VoiceCapturedAudio,
-  VoiceFinishCaptureResult,
-  VoiceRealtimeClientSession,
-  VoiceCoordinatorToolName,
-  VoiceCoordinatorToolCall,
-} from './voice.js';
-export {
-  VOICE_MAX_AUDIO_BYTES,
-  VOICE_MAX_CAPTURE_DURATION_MS,
-  VOICE_MAX_CHANNELS,
-  VOICE_MAX_SAMPLE_RATE,
-  VOICE_MAX_TRANSCRIPT_CHARS,
-  VOICE_TTS_MAX_TEXT_CHARS,
-  VOICE_INPUT_MARKER,
-  defaultVoiceCapabilitySnapshot,
-  defaultVoiceCaptureCaps,
-  defaultVoicePrivacyFlags,
-  defaultVoiceSettings,
-  normalizeVoiceSettings,
-  resolveVoiceRoute,
-  normalizeVoiceCoordinatorToolCall,
-  normalizeVoiceInputMode,
-  normalizeVoiceTranscriptText,
-  normalizeVoiceTtsPolicy,
-  validateVoiceCaptureRequest,
-  validateVoiceTranscriptResult,
-  validateVoiceTtsRequest,
-} from './voice.js';
-
 // backend-types.ts
 export type {
   BackendSendInput,
@@ -1587,7 +1529,6 @@ export {
 export {
   modelMetadataIdsForProvider,
   resolveModelVisionSupport,
-  resolveModelVoiceMetadata,
 } from './model-metadata.js';
 export type {
   HostedWebSearchAdapter,

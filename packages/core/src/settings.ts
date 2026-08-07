@@ -20,7 +20,6 @@ import {
   isUiLocalePreference,
   type UiLocalePreference,
 } from './ui-locale.js';
-import { defaultVoiceSettings, normalizeVoiceSettings, type VoiceSettings } from './voice.js';
 import { normalizeSubagentSettings, type SubagentSettings } from './subagent-settings.js';
 
 export { UI_LOCALE_PREFERENCES, isUiLocalePreference } from './ui-locale.js';
@@ -54,7 +53,6 @@ export {
  * Final mapping:
  *   - `network`                       → `general`
  *   - `personalization` + `theme`     → `appearance`
- *   - `voice` is an independent section
  *   - `daily-review` is its own section again
  *   - `memory` is its own section again
  *
@@ -68,7 +66,6 @@ export const SETTINGS_SECTIONS = [
   'models',
   'subagents',
   'usage',
-  'voice',
   'bot-chat',
   'search',
   'data',
@@ -280,7 +277,6 @@ export interface AppSettings {
   chatDefaults: ChatDefaultsSettings;
   notifications: NotificationSettings;
   system: SystemSettings;
-  voice: VoiceSettings;
   subagents: SubagentSettings;
 }
 
@@ -382,10 +378,6 @@ export type UpdateAppSettingsInput = Partial<{
   chatDefaults: Partial<ChatDefaultsSettings>;
   notifications: Partial<NotificationSettings>;
   system: Partial<SystemSettings>;
-  voice: Partial<{
-    recognition: Partial<VoiceSettings['recognition']>;
-    realtime: Partial<VoiceSettings['realtime']>;
-  }>;
   webSearch: WebSearchSettingsPatch;
   subagents: SubagentSettings;
 }>;
@@ -464,7 +456,6 @@ export function createDefaultSettings(): AppSettings {
       // battery-affecting opt-in, not a silent default.
       keepSystemAwake: false,
     },
-    voice: defaultVoiceSettings(),
     subagents: { presets: [] },
   };
 }
@@ -528,16 +519,6 @@ export function mergeSettings(current: AppSettings, patch: UpdateAppSettingsInpu
       ...current.system,
       ...(patch.system ?? {}),
     },
-    voice: normalizeVoiceSettings({
-      recognition: {
-        ...current.voice.recognition,
-        ...(patch.voice?.recognition ?? {}),
-      },
-      realtime: {
-        ...current.voice.realtime,
-        ...(patch.voice?.realtime ?? {}),
-      },
-    }),
     webSearch: mergeWebSearchSettings(current.webSearch, patch.webSearch),
     subagents:
       patch.subagents === undefined
@@ -563,7 +544,6 @@ export function normalizeSettings(input: unknown): AppSettings {
     chatDefaults: value.chatDefaults,
     notifications: value.notifications,
     system: value.system,
-    voice: value.voice,
     subagents: value.subagents,
   });
   // PR110b: milestones bypass the generic patch surface so we can
@@ -640,7 +620,6 @@ export function normalizeSettings(input: unknown): AppSettings {
       keepSystemAwake:
         typeof base.system.keepSystemAwake === 'boolean' ? base.system.keepSystemAwake : false,
     },
-    voice: normalizeVoiceSettings(base.voice),
     subagents: normalizeSubagentSettings(base.subagents),
   };
 }

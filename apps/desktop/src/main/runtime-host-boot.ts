@@ -85,7 +85,6 @@ import {
 import { registerRuntimeHostSkillsIpc } from "./runtime-host-skills-ipc-main.js";
 import { hasRuntimeHostInterruptibleWork } from "./runtime-host-update-activity.js";
 import { registerRuntimeHostUsageIpc } from "./runtime-host-usage-ipc-main.js";
-import { registerRuntimeHostVoiceIpc } from "./runtime-host-voice-ipc-main.js";
 import { registerRuntimeHostWebSearchIpc } from "./runtime-host-web-search-ipc-main.js";
 import { resolveShellEnv } from "./shell-env.js";
 import {
@@ -454,7 +453,6 @@ function registerHostClientIpc(
       mainWindowController.send(channel, ...args),
   });
   registerRuntimeHostWebSearchIpc({ ipcMain: scopedIpc, client });
-  registerRuntimeHostVoiceIpc({ ipcMain: scopedIpc, client, settingsStore });
   registerPlanReminderIpc({
     ipcMain: scopedIpc,
     planReminders,

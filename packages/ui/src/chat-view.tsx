@@ -201,7 +201,9 @@ export function ChatView(props: {
   onReadAttachmentBytes?: ReadAttachmentBytes;
   /**
    * Open a linked subagent child session in the main chat column (option A).
-   * Threaded into SubagentPreview inside tool detail.
+   * Threaded into SubagentPreview / AgentSwarmPreview inside tool detail.
+   * Pass an identity-stable reference so memoized TurnViews keep skipping
+   * reconciliation on the hot streaming path (ChatView also ref-wraps this).
    */
   onOpenLinkedSession?(sessionId: string): void;
   onNew(): void;
@@ -353,6 +355,12 @@ export function ChatView(props: {
   onLineageBadgeClickRef.current = props.onLineageBadgeClick;
   const stableLineageBadgeClick = useCallback(
     (targetTurnId: string) => onLineageBadgeClickRef.current?.(targetTurnId),
+    [],
+  );
+  const onOpenLinkedSessionRef = useRef(props.onOpenLinkedSession);
+  onOpenLinkedSessionRef.current = props.onOpenLinkedSession;
+  const stableOpenLinkedSession = useCallback(
+    (sessionId: string) => onOpenLinkedSessionRef.current?.(sessionId),
     [],
   );
   const conversationItemsByTurn = useMemo(() => {
@@ -631,7 +639,9 @@ export function ChatView(props: {
                       lineageBadges={turnPresentation?.lineageBadgesByTurn[turn.turnId]}
                       onLineageBadgeClick={stableLineageBadgeClick}
                       onReadAttachmentBytes={props.onReadAttachmentBytes}
-                      onOpenLinkedSession={props.onOpenLinkedSession}
+                      onOpenLinkedSession={
+                        props.onOpenLinkedSession ? stableOpenLinkedSession : undefined
+                      }
                       searchHighlighted={highlightedTurnId === turn.turnId}
                       liveStreaming={
                         turn.turnId === tailTurnId

@@ -593,12 +593,18 @@ function AppShellContent({
       ),
     [sidebarSessionTree, navSelection, hiddenCompanionForkIds],
   );
-  const visibleSessions = visibleSessionTree.roots;
-  // Linked children open in the main column and stay out of the sidebar list.
+  // Tree filter can promote a matching linked child to a root when its parent
+  // is filtered out (e.g. archived parent + active child under Chats). The
+  // rail never lists linked children — they open only from stream tools /
+  // titlebar — so drop them here rather than reintroducing nesting.
+  const visibleSessions = useMemo(
+    () => visibleSessionTree.roots.filter((session) => !isLinkedSubagentSession(session)),
+    [visibleSessionTree],
+  );
   // While a child is active, highlight its root ancestor so the rail still
   // answers "which conversation am I in?" without nesting rows.
   const sidebarActiveId = useMemo(
-    () => resolveLinkedSessionRootId(activeId, sessions) ?? activeId,
+    () => resolveLinkedSessionRootId(activeId, sessions),
     [activeId, sessions],
   );
   // PR-DAILY-REVIEW-MVP-0: bridge for the main Daily Review module.

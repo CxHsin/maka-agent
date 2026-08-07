@@ -18,6 +18,8 @@ const AGENT_SWARM_PREVIEW_MAX_ITEMS = 32;
 
 export function AgentSwarmPreview(props: {
   result: AgentSwarmResult;
+  /** Host switches the main chat column to a linked swarm child session. */
+  onOpenSession?(sessionId: string): void;
 }) {
   const locale = useUiLocale();
   const copy = getToolActivityCopy(locale).agent;
@@ -63,6 +65,9 @@ export function AgentSwarmPreview(props: {
               item.runId ? `run ${redactSecrets(item.runId)}` : '',
               item.turnId ? `turn ${redactSecrets(item.turnId)}` : '',
             ].filter(Boolean).join(' · ');
+            const agentLabel = redactSecrets(item.agentName || item.itemId);
+            const openSession = props.onOpenSession;
+            const openSessionId = item.childSessionId;
 
             return (
               <li key={`${item.index}:${item.itemId}`} data-status={item.status}>
@@ -75,6 +80,19 @@ export function AgentSwarmPreview(props: {
                   </span>
                 )}
                 {refs && <code title={refs}>{refs}</code>}
+                {openSessionId && openSession ? (
+                  <div className={previewVariants({ part: 'agent-actions' })} role="group">
+                    <UiButton
+                      variant="ghost"
+                      size="sm"
+                      className={previewVariants({ part: 'agent-copy' })}
+                      data-maka-contract="open-subagent-session"
+                      onClick={() => openSession(openSessionId)}
+                      aria-label={copy.openSessionAriaLabel(agentLabel)}
+                      label={copy.openSession}
+                    />
+                  </div>
+                ) : null}
               </li>
             );
           })}
@@ -104,8 +122,8 @@ export function SubagentPreview(props: {
   const summary = typeof result.summary === 'string' ? result.summary.trim() : '';
   const artifactCount = result.artifactIds.length;
   const agentLabel = redactSecrets(result.agentName || 'Subagent');
-  const childSessionId = result.childSessionId;
-  const canOpen = Boolean(childSessionId && props.onOpenSession);
+  const openSession = props.onOpenSession;
+  const openSessionId = result.childSessionId;
   const meta = [
     status,
     presentSubagentPermission(result.permissionMode, locale),
@@ -117,14 +135,14 @@ export function SubagentPreview(props: {
       <header className={previewVariants({ part: 'agent-head' })}>
         <strong>{agentLabel}</strong>
         <small>{meta}</small>
-        {canOpen && childSessionId && props.onOpenSession ? (
+        {openSessionId && openSession ? (
           <div className={previewVariants({ part: 'agent-actions' })} role="group">
             <UiButton
               variant="ghost"
               size="sm"
               className={previewVariants({ part: 'agent-copy' })}
               data-maka-contract="open-subagent-session"
-              onClick={() => props.onOpenSession?.(childSessionId)}
+              onClick={() => openSession(openSessionId)}
               aria-label={copy.openSessionAriaLabel(agentLabel)}
               label={copy.openSession}
             />

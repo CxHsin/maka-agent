@@ -51,6 +51,9 @@ function subagentResult(
     agentName: partial.agentName,
     turnId: partial.turnId ?? `turn-${partial.agentName}`,
     runId: partial.runId ?? `run-${partial.agentName}`,
+    // Linked child id is what product open wiring needs; stories seed it so
+    // expanded tool detail shows the same Open control as the shell.
+    childSessionId: partial.childSessionId ?? `session-${partial.agentName}`,
     status: partial.status,
     permissionMode: partial.permissionMode ?? 'ask',
     summary: partial.summary ?? '',
@@ -183,6 +186,7 @@ function astryxToolStatus(item: ToolActivityItem): ChatToolCallItem['status'] {
 function SubagentToolGroup(props: {
   items: ToolActivityItem[];
   defaultIsExpanded?: boolean;
+  onOpenLinkedSession?(sessionId: string): void;
 }) {
   const locale = useUiLocale();
   if (props.items.length === 0) return null;
@@ -194,7 +198,7 @@ function SubagentToolGroup(props: {
     duration: formatDuration(item.durationMs) ?? undefined,
     resultDetail: (
       <div className="maka-tool-call-detail">
-        <ToolCallDetail item={item} />
+        <ToolCallDetail item={item} onOpenLinkedSession={props.onOpenLinkedSession} />
       </div>
     ),
   }));
@@ -390,7 +394,11 @@ function ParentShell() {
                 </ChatMessageBubble>
                 <ChatMessageMetadata timestamp="刚刚" />
                 <div style={{ marginTop: 10, width: '100%' }}>
-                  <SubagentToolGroup items={MULTI_SUBAGENT_ITEMS} defaultIsExpanded />
+                  <SubagentToolGroup
+                    items={MULTI_SUBAGENT_ITEMS}
+                    defaultIsExpanded
+                    onOpenLinkedSession={() => undefined}
+                  />
                 </div>
               </ChatMessage>
             </ChatMessageList>
@@ -448,16 +456,24 @@ export const ToolGroupFold: Story = {
         <Text type="supporting" color="secondary">
           {MULTI_SUBAGENT_ITEMS.length} 个 spawn_subagent 一组；头上数量 + 最近行（同 ContiguousGroup）。
         </Text>
-        <SubagentToolGroup items={MULTI_SUBAGENT_ITEMS} defaultIsExpanded={false} />
+        <SubagentToolGroup
+          items={MULTI_SUBAGENT_ITEMS}
+          defaultIsExpanded={false}
+          onOpenLinkedSession={() => undefined}
+        />
       </div>
       <div style={shell.comparePane}>
         <Text type="body" style={{ fontWeight: 600 }}>
           展开
         </Text>
         <Text type="supporting" color="secondary">
-          每行 + resultDetail = 现有 ToolCallDetail / SubagentPreview。
+          每行 + resultDetail = 现有 ToolCallDetail / SubagentPreview（含打开会话）。
         </Text>
-        <SubagentToolGroup items={MULTI_SUBAGENT_ITEMS} defaultIsExpanded />
+        <SubagentToolGroup
+          items={MULTI_SUBAGENT_ITEMS}
+          defaultIsExpanded
+          onOpenLinkedSession={() => undefined}
+        />
       </div>
     </div>
   ),

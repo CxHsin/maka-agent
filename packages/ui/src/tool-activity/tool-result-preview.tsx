@@ -190,7 +190,12 @@ export function ToolResultPreview(props: {
   }
 
   if (content.kind === 'agent_swarm') {
-    return <AgentSwarmPreview result={content} />;
+    return (
+      <AgentSwarmPreview
+        result={content}
+        onOpenSession={props.onOpenLinkedSession}
+      />
+    );
   }
 
   if (content.kind === 'rive_workflow') {

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import { useEffect, useRef, type ComponentType, type ReactNode } from 'react';
 import {
   countDiffLineStats,
   isInFlightToolStatus,
@@ -298,10 +298,9 @@ export function ToolCallDetail({
  * their own word in `errorMessage`, and the detail panel (banner, command,
  * output, previews) rides along in `resultDetail`.
  *
- * Agent Swarm is special: once a live or settled `agent_swarm` result exists,
- * it becomes its own collapsed Astryx group whose rows are the swarm items
- * (not a custom AgentSwarmPreview card). Clicking a ready child row opens that
- * child session — the same shell navigation as linked-subagent Open.
+ * Agent Swarm with a live/settled `agent_swarm` result projects to one Astryx
+ * multi-call group (one CallRow per item). Ready rows open the child session.
+ * Folded chrome is Astryx's (latest child + count) — no product header shell.
  */
 export function ToolTrow({
   items,
@@ -335,7 +334,7 @@ export function ToolTrow({
       nodes.push(
         <AgentSwarmToolCalls
           key={item.toolUseId}
-          item={item}
+          toolUseId={item.toolUseId}
           result={item.result}
           onOpenLinkedSession={onOpenLinkedSession}
         />,
@@ -388,35 +387,16 @@ function OrdinaryToolCalls(props: {
 type AgentSwarmResult = Extract<ToolResultContent, { kind: 'agent_swarm' }>;
 type AgentSwarmItem = AgentSwarmResult['items'][number];
 
-/**
- * Single expansion level for agent_swarm:
- *   collapsed → one header named like the tool (`Agent Swarm`)
- *   expanded  → flat Astryx CallRows for each item (no nested tool group)
- *
- * Astryx multi-call chrome cannot do this: folded it shows the latest *child*
- * name and ignores `label`. So the header is ours; each child is a one-call
- * ChatToolCalls (Astryx's single-call path = plain CallRow).
- */
+/** items[] → one ChatToolCalls group; Astryx owns fold chrome. */
 function AgentSwarmToolCalls(props: {
-  item: ToolActivityItem;
+  toolUseId: string;
   result: AgentSwarmResult;
   onOpenLinkedSession?(sessionId: string): void;
 }) {
   const locale = useUiLocale();
   const copy = getToolActivityCopy(locale).agent;
-  const { item, result, onOpenLinkedSession } = props;
-  const toolUseId = item.toolUseId;
-  const [expanded, setExpanded] = useState(false);
-  const itemsId = useId();
-  const parentName =
-    computerActionLabel(item, locale) ?? resolveToolDisplayName(item, locale);
-  const batchStatus = isInFlightToolStatus(item.status)
-    ? astryxToolStatus(item)
-    : astryxSwarmBatchStatus(result.status);
-  const duration =
-    formatDuration(result.durationMs) ?? formatDuration(item.durationMs) ?? undefined;
-
-  const childCalls: ChatToolCallItem[] = result.items.map((swarmItem) => {
+  const { toolUseId, result, onOpenLinkedSession } = props;
+  const calls: ChatToolCallItem[] = result.items.map((swarmItem) => {
     const name = redactSecrets(swarmItem.agentName?.trim() || swarmItem.itemId);
     const sessionId = swarmItem.childSessionId;
     const canOpen = Boolean(sessionId && onOpenLinkedSession);
@@ -460,38 +440,14 @@ function AgentSwarmToolCalls(props: {
   });
 
   return (
-    <div
-      className="maka-agent-swarm-tools"
+    <ChatToolCalls
+      calls={calls}
+      defaultIsExpanded={false}
       data-kind="agent_swarm"
       data-status={result.status}
       data-tool-use-id={toolUseId}
       data-item-count={result.items.length}
-      data-expanded={expanded ? 'true' : 'false'}
-    >
-      <button
-        type="button"
-        className="maka-agent-swarm-tools-header"
-        aria-expanded={expanded}
-        aria-controls={itemsId}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        <span className="maka-agent-swarm-tools-status" data-status={batchStatus} aria-hidden="true" />
-        <span className="maka-agent-swarm-tools-name">{parentName}</span>
-        <span className="maka-agent-swarm-tools-meta">
-          {copy.swarm.taskCount(result.items.length)}
-          {` · ${copy.swarm.status[result.status]}`}
-          {duration ? ` · ${copy.duration(duration)}` : ''}
-        </span>
-        <span className="maka-agent-swarm-tools-chevron" data-expanded={expanded ? 'true' : 'false'} aria-hidden="true" />
-      </button>
-      {expanded ? (
-        <div id={itemsId} className="maka-agent-swarm-tools-items" role="group" aria-label={parentName}>
-          {childCalls.map((call) => (
-            <ChatToolCalls key={call.key} calls={[call]} />
-          ))}
-        </div>
-      ) : null}
-    </div>
+    />
   );
 }
 
@@ -545,22 +501,6 @@ function astryxSwarmItemStatus(
   }
 }
 
-function astryxSwarmBatchStatus(
-  status: AgentSwarmResult['status'],
-): ChatToolCallItem['status'] {
-  switch (status) {
-    case 'completed':
-    case 'partial':
-      return 'complete';
-    case 'failed':
-    case 'cancelled':
-      return 'error';
-    case 'running':
-      return 'running';
-    default:
-      return 'pending';
-  }
-}
 
 /**
  * Green `+N` / red `-N`, from the shared structural parse. One diff for a row,

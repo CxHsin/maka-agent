@@ -104,16 +104,15 @@ describe('AgentSwarm ToolTrow presentation', () => {
         <ToolTrow items={[item]} onOpenLinkedSession={() => undefined} />
       </LocaleProvider>,
     );
-    // Single-level group: tool-named header when folded; children only after expand.
-    assert.match(html, /maka-agent-swarm-tools/);
+    // Pure Astryx multi-call: no product header shell, no AgentSwarmPreview card.
+    assert.match(html, /astryx-chat-tool-calls/);
     assert.match(html, /data-kind="agent_swarm"/);
     assert.match(html, /data-item-count="2"/);
-    assert.match(html, /data-expanded="false"/);
-    assert.match(html, />Agent Swarm</);
-    assert.match(html, /2 tasks|2 个任务/);
+    assert.doesNotMatch(html, /maka-agent-swarm-tools/);
     assert.doesNotMatch(html, /maka-agent-preview/);
-    assert.doesNotMatch(html, /reader/);
-    assert.doesNotMatch(html, /item-2/);
+    // Folded multi-call SSR still includes the call list in the tree.
+    assert.match(html, /reader/);
+    assert.match(html, /item-2/);
   });
 });
 

@@ -5,11 +5,11 @@
 
 import type { LlmConnection, UiLocale } from '@maka/core';
 import { getProviderSettingsCopy } from '../locales/settings-provider-copy.js';
-import type { StatusTone } from './settings-status-badge';
+import type { StatusSemantic } from '@maka/ui';
 
 export interface ConnectionChipStatus {
   label: string;
-  tone: StatusTone;
+  tone: StatusSemantic;
 }
 
 /**
@@ -40,17 +40,20 @@ export interface ConnectionChipStatus {
  */
 export function connectionChipStatus(connection: LlmConnection, locale: UiLocale = 'zh'): ConnectionChipStatus | null {
   const copy = getProviderSettingsCopy(locale).shared.connectionStatuses;
-  if (connection.lastTestStatus === 'needs_reauth') return { label: copy.reauth, tone: 'info' };
+  // Waiting on the user, not on the system: an expired credential is a
+  // to-do, and it used to render as the live accent dot — reporting progress
+  // where nothing is progressing.
+  if (connection.lastTestStatus === 'needs_reauth') return { label: copy.reauth, tone: 'attention' };
   if (!connection.enabled) {
     return connection.lastTestStatus === 'error'
-      ? { label: copy.disabledFailed, tone: 'destructive' }
+      ? { label: copy.disabledFailed, tone: 'error' }
       : { label: copy.disabled, tone: 'neutral' };
   }
   switch (connection.lastTestStatus) {
     case 'verified':
       return null;
     case 'error':
-      return { label: copy.failed, tone: 'destructive' };
+      return { label: copy.failed, tone: 'error' };
     default:
       return null;
   }

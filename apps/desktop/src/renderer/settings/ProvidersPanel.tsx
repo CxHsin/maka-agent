@@ -18,7 +18,7 @@ import {
   type LlmConnection,
   type ProviderType,
 } from '@maka/core';
-import { useMountedRef, useUiLocale, useToast } from '@maka/ui';
+import { useMountedRef, useUiLocale, useToast , dotForStatus } from '@maka/ui';
 import { connectionChipStatus } from './provider-connection-status';
 import { statusDotVariant } from './settings-status-badge';
 import {
@@ -372,7 +372,7 @@ export function ProvidersPanel({ bridge, initialPage = 'connections', initialCon
                       <HStack gap={2} vAlign="center">
                         {status && (
                           <span className="settingsStatus">
-                            <StatusDot variant={statusDotVariant(status.tone)} label={status.label} />
+                            <StatusDot variant={dotForStatus(status.tone)} label={status.label} />
                             <span>{status.label}</span>
                           </span>
                         )}

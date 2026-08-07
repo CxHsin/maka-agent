@@ -1,3 +1,4 @@
+import type { StatusSemantic } from '@maka/ui';
 import { useEffect, useState, type ComponentType } from 'react';
 import {
   Accessibility as AccessibilityIcon,
@@ -643,36 +644,39 @@ function localizedCapabilityGuidance(
   return capability.guidance.filter((item) => locale === 'zh' || !/[\u3400-\u9fff]/u.test(item));
 }
 
-function featureTone(state: CapabilitySnapshot['feature']['state']): 'neutral' | 'info' | 'success' | 'warning' | 'destructive' {
+function featureTone(state: CapabilitySnapshot['feature']['state']): StatusSemantic {
   if (state === 'enabled') return 'success';
-  if (state === 'partial') return 'warning';
-  if (state === 'disabled') return 'info';
+  if (state === 'partial') return 'attention';
+  // A capability the user turned off is a settled fact, not activity.
+  if (state === 'disabled') return 'neutral';
   return 'neutral';
 }
 
-function configurationTone(state: CapabilitySnapshot['configuration']['state']): 'neutral' | 'info' | 'success' | 'warning' | 'destructive' {
+function configurationTone(state: CapabilitySnapshot['configuration']['state']): StatusSemantic {
   if (state === 'present') return 'success';
-  if (state === 'missing') return 'warning';
+  if (state === 'missing') return 'attention';
   return 'neutral';
 }
 
-function actionApprovalTone(state: CapabilitySnapshot['actionApproval']['state']): 'neutral' | 'info' | 'success' | 'warning' | 'destructive' {
+function actionApprovalTone(state: CapabilitySnapshot['actionApproval']['state']): StatusSemantic {
   if (state === 'approved') return 'success';
-  if (state === 'denied') return 'destructive';
-  if (state === 'pending') return 'warning';
-  if (state === 'required_per_action' || state === 'required_scoped_lease') return 'info';
+  if (state === 'denied') return 'error';
+  if (state === 'pending') return 'attention';
+  // A configured approval policy describes how things will behave, not
+  // something happening now.
+  if (state === 'required_per_action' || state === 'required_scoped_lease') return 'neutral';
   return 'neutral';
 }
 
-function memoryAcceptanceTone(state: CapabilitySnapshot['memoryAcceptance']['state']): 'neutral' | 'info' | 'success' | 'warning' | 'destructive' {
+function memoryAcceptanceTone(state: CapabilitySnapshot['memoryAcceptance']['state']): StatusSemantic {
   if (state === 'accepted') return 'success';
-  if (state === 'draft_required') return 'warning';
+  if (state === 'draft_required') return 'attention';
   return 'neutral';
 }
 
-function runtimeProbeTone(state: CapabilitySnapshot['runtimeProbe']['state']): 'neutral' | 'info' | 'success' | 'warning' | 'destructive' {
+function runtimeProbeTone(state: CapabilitySnapshot['runtimeProbe']['state']): StatusSemantic {
   if (state === 'healthy') return 'success';
-  if (state === 'degraded') return 'destructive';
-  if (state === 'not_run') return 'warning';
+  if (state === 'degraded') return 'error';
+  if (state === 'not_run') return 'attention';
   return 'neutral';
 }

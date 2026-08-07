@@ -22,16 +22,31 @@ import type { StatusDotVariant } from '@astryxdesign/core/StatusDot';
  * `active` respectively, and the disagreement is visible in the call site
  * rather than hidden in a shared name.
  */
+/**
+ * Choosing between these turns on two questions, in order:
+ *
+ *   1. Is something happening, and if so who is doing it? The SYSTEM working
+ *      is `active`; waiting on the USER is `attention`. Collapsing those two
+ *      is the mistake that produced this vocabulary's worst case — an expired
+ *      credential reported as "in progress" when nothing is progressing.
+ *   2. If nothing is happening, is this a verified good outcome (`success`), a
+ *      broken one (`error`), or simply a fact (`neutral`)?
+ *
+ * `success` is reserved for a health that was PROVEN — a connection test that
+ * passed, a credential that validated. A switch merely being on is not proof
+ * of anything and reads as `active` (participating) or `neutral` (present),
+ * which is why an enabled skill is not green.
+ */
 export type StatusSemantic =
-  /** Healthy, connected, finished well. */
+  /** Proven healthy: a test passed, a credential validated, a server answered. */
   | 'success'
-  /** Live right now — running, scheduled, in flight. */
+  /** The system is working on it right now — running, authorizing, in flight. */
   | 'active'
-  /** Needs a human eventually: paused, shadowed, degraded, review pending. */
+  /** Waiting on a person: re-auth needed, review pending, paused, untested. */
   | 'attention'
   /** Broken now: failed delivery, invalid metadata, unreachable server. */
   | 'error'
-  /** Present but not participating: disabled, completed-and-spent, off. */
+  /** A settled fact, nothing to do: disabled, configured, completed-and-spent. */
   | 'neutral';
 
 /**

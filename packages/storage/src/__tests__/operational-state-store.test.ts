@@ -10,6 +10,7 @@ import {
   migrateOperationalStateDatabaseForOwner,
   operationalStateRequiresExclusiveMigration,
 } from '../operational-state-store.js';
+import { openRuntimeEventReadPersistence } from '../runtime-event-persistence.js';
 import { resolveStorageRoot, tryAcquireHeadlessRootMigrationOwner } from '../root-authority.js';
 import { SQLITE_RUNTIME_SCHEMA_VERSION } from '../sqlite-runtime-schema.js';
 import { SQLITE_SESSION_METADATA_SCHEMA_VERSION } from '../sqlite-session-metadata-schema.js';
@@ -276,6 +277,29 @@ test('does not lower same-epoch runtime and session metadata versions', async ()
       );
     } finally {
       reopened.close();
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('reads runtime events from a same-epoch newer runtime schema', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-operational-same-epoch-runtime-reader-'));
+  const databasePath = join(root, 'runtime.sqlite');
+  try {
+    acquireOperationalStateDatabase(root).close();
+    const database = new DatabaseSync(databasePath);
+    database.exec(`PRAGMA user_version = ${SQLITE_RUNTIME_SCHEMA_VERSION + 1}`);
+    database
+      .prepare(`UPDATE operational_schema_migrations SET version = ? WHERE scope = 'runtime'`)
+      .run(SQLITE_RUNTIME_SCHEMA_VERSION + 1);
+    database.close();
+
+    const persistence = await openRuntimeEventReadPersistence({ workspaceRoot: root });
+    try {
+      assert.deepEqual(await persistence.runtimeEventStore.readSessionRuntimeEvents('missing'), []);
+    } finally {
+      persistence.close();
     }
   } finally {
     await rm(root, { recursive: true, force: true });

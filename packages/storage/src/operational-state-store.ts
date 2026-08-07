@@ -93,6 +93,13 @@ export function acquireOperationalStateDatabase(
   );
 }
 
+export function assertOperationalStateDatabaseReadable(
+  database: DatabaseSync,
+  targetReaderEpoch = OPERATIONAL_STATE_READER_EPOCH,
+): void {
+  assertOperationalSchemaCanMigrate(database, targetReaderEpoch);
+}
+
 export async function migrateOperationalStateDatabaseForOwner(
   owner: InteractiveRootOwner | HeadlessRootMigrationOwner,
   options: OperationalStateDatabaseOptions = {},

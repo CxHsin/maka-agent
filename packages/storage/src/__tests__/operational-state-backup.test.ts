@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { createSqliteArtifactStore } from '../artifact-store.js';
 import { createProjectCatalog } from '../project-catalog.js';
@@ -12,6 +13,7 @@ import {
   restoreOperationalStateBackup,
   validateOperationalStateBackup,
 } from '../operational-state-backup.js';
+import { SQLITE_RUNTIME_SCHEMA_VERSION } from '../sqlite-runtime-schema.js';
 
 test('backs up and restores runtime.sqlite plus artifact bytes', async () => {
   const base = await mkdtemp(join(tmpdir(), 'maka-operational-backup-'));
@@ -93,6 +95,27 @@ test('backs up and restores runtime.sqlite plus artifact bytes', async () => {
       await restored.close?.();
       restoredCatalog.close();
     }
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test('backs up a same-epoch newer runtime schema', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'maka-operational-backup-same-epoch-'));
+  const stateRoot = join(base, 'state');
+  const backupRoot = join(base, 'backup');
+  try {
+    const sessions = createSessionStore(stateRoot);
+    await sessions.close?.();
+    const database = new DatabaseSync(join(stateRoot, 'runtime.sqlite'));
+    database.exec(`PRAGMA user_version = ${SQLITE_RUNTIME_SCHEMA_VERSION + 1}`);
+    database
+      .prepare(`UPDATE operational_schema_migrations SET version = ? WHERE scope = 'runtime'`)
+      .run(SQLITE_RUNTIME_SCHEMA_VERSION + 1);
+    database.close();
+
+    await createOperationalStateBackup({ stateRoot, destinationRoot: backupRoot, now: () => 10 });
+    assert.equal((await validateOperationalStateBackup(backupRoot)).createdAt, 10);
   } finally {
     await rm(base, { recursive: true, force: true });
   }

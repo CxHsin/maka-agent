@@ -53,10 +53,7 @@ export function createWorkspaceRuntimeStore(workspaceRoot: string): SqliteRuntim
 export async function openRuntimeEventReadPersistence(input: {
   workspaceRoot: string;
 }): Promise<RuntimeEventReadPersistence> {
-  const store = createSqliteRuntimeStore(
-    join(input.workspaceRoot, OPERATIONAL_STATE_DATABASE_NAME),
-    { readOnly: true },
-  );
+  const store = createWorkspaceRuntimeStore(input.workspaceRoot);
   return {
     kind: 'sqlite',
     runtimeEventStore: Object.freeze({

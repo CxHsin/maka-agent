@@ -19,16 +19,10 @@ import { withArtifactWriterLock } from './artifact-writer-lock.js';
 import { decodeStoredMessageForRecovery } from './execution-record-codec.js';
 import {
   acquireOperationalStateDatabase,
+  assertOperationalStateDatabaseReadable,
   OPERATIONAL_STATE_DATABASE_NAME,
-  OPERATIONAL_STATE_SCHEMA_VERSION,
 } from './operational-state-store.js';
-import { SQLITE_ARTIFACT_SCHEMA_VERSION } from './sqlite-artifact-schema.js';
-import { SQLITE_AUTOMATION_SCHEMA_VERSION } from './sqlite-automation-schema.js';
-import { SQLITE_CORE_EXECUTION_SCHEMA_VERSION } from './sqlite-core-execution-schema.js';
-import { SQLITE_RUNTIME_SCHEMA_VERSION } from './sqlite-runtime-schema.js';
-import { SQLITE_SESSION_METADATA_SCHEMA_VERSION } from './sqlite-session-metadata-schema.js';
-import { SQLITE_USAGE_SCHEMA_VERSION } from './sqlite-usage-schema.js';
-import { SQLITE_WORKFLOW_SCHEMA_VERSION } from './sqlite-workflow-schema.js';
+import { OPERATIONAL_SCHEMA_MANIFEST } from './operational-schema-manifest.js';
 import { syncDirectory, syncDirectoryChain, syncFile } from './stable-storage.js';
 
 export const OPERATIONAL_BACKUP_FORMAT = 'maka-operational-backup';
@@ -340,23 +334,20 @@ function validateSqlite(path: string, files: readonly OperationalBackupFile[]): 
       if (database.prepare('PRAGMA foreign_key_check').all().length > 0) {
         throw new Error('foreign_key_check failed');
       }
-      const expected = new Map<string, number>([
-        ['runtime', SQLITE_RUNTIME_SCHEMA_VERSION],
-        ['session_metadata', SQLITE_SESSION_METADATA_SCHEMA_VERSION],
-        ['core_execution', SQLITE_CORE_EXECUTION_SCHEMA_VERSION],
-        ['workflow', SQLITE_WORKFLOW_SCHEMA_VERSION],
-        ['usage', SQLITE_USAGE_SCHEMA_VERSION],
-        ['artifact', SQLITE_ARTIFACT_SCHEMA_VERSION],
-        ['automation', SQLITE_AUTOMATION_SCHEMA_VERSION],
-        ['operational', OPERATIONAL_STATE_SCHEMA_VERSION],
-      ]);
+      assertOperationalStateDatabaseReadable(database);
       const rows = database
         .prepare('SELECT scope, version FROM operational_schema_migrations')
         .all() as Array<{ scope?: unknown; version?: unknown }>;
+      const versions = new Map(
+        rows.flatMap((entry) =>
+          typeof entry.scope === 'string' && typeof entry.version === 'number'
+            ? [[entry.scope, entry.version] as const]
+            : [],
+        ),
+      );
       if (
-        rows.length !== expected.size ||
-        rows.some(
-          (entry) => typeof entry.scope !== 'string' || expected.get(entry.scope) !== entry.version,
+        OPERATIONAL_SCHEMA_MANIFEST.some(
+          ({ scope, currentVersion }) => (versions.get(scope) ?? -1) < currentVersion,
         )
       ) {
         throw new Error('operational schema versions do not match');

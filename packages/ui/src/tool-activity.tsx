@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ComponentType, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import {
   countDiffLineStats,
   isInFlightToolStatus,
@@ -389,9 +389,13 @@ type AgentSwarmResult = Extract<ToolResultContent, { kind: 'agent_swarm' }>;
 type AgentSwarmItem = AgentSwarmResult['items'][number];
 
 /**
- * One outer Astryx row named like the tool (`Agent Swarm`), expandable to a
- * nested ChatToolCalls of per-item rows. Multi-call group chrome is wrong
- * here: Astryx's collapsed header shows the *latest child name*, not the tool.
+ * Single expansion level for agent_swarm:
+ *   collapsed → one header named like the tool (`Agent Swarm`)
+ *   expanded  → flat Astryx CallRows for each item (no nested tool group)
+ *
+ * Astryx multi-call chrome cannot do this: folded it shows the latest *child*
+ * name and ignores `label`. So the header is ours; each child is a one-call
+ * ChatToolCalls (Astryx's single-call path = plain CallRow).
  */
 function AgentSwarmToolCalls(props: {
   item: ToolActivityItem;
@@ -402,6 +406,16 @@ function AgentSwarmToolCalls(props: {
   const copy = getToolActivityCopy(locale).agent;
   const { item, result, onOpenLinkedSession } = props;
   const toolUseId = item.toolUseId;
+  const [expanded, setExpanded] = useState(false);
+  const itemsId = useId();
+  const parentName =
+    computerActionLabel(item, locale) ?? resolveToolDisplayName(item, locale);
+  const batchStatus = isInFlightToolStatus(item.status)
+    ? astryxToolStatus(item)
+    : astryxSwarmBatchStatus(result.status);
+  const duration =
+    formatDuration(result.durationMs) ?? formatDuration(item.durationMs) ?? undefined;
+
   const childCalls: ChatToolCallItem[] = result.items.map((swarmItem) => {
     const name = redactSecrets(swarmItem.agentName?.trim() || swarmItem.itemId);
     const sessionId = swarmItem.childSessionId;
@@ -422,7 +436,6 @@ function AgentSwarmToolCalls(props: {
               ),
             ).replace(/^Error:\s*/i, '') || undefined
           : undefined,
-      // Ready child: activating the Astryx row opens the session.
       ...(canOpen
         ? {
             resultDetail: (
@@ -446,36 +459,39 @@ function AgentSwarmToolCalls(props: {
     };
   });
 
-  const parentName =
-    computerActionLabel(item, locale) ?? resolveToolDisplayName(item, locale);
-  const parentCall: ChatToolCallItem = {
-    key: toolUseId,
-    name: parentName,
-    status: isInFlightToolStatus(item.status)
-      ? astryxToolStatus(item)
-      : astryxSwarmBatchStatus(result.status),
-    target: copy.swarm.taskCount(result.items.length),
-    duration: formatDuration(result.durationMs) ?? formatDuration(item.durationMs) ?? undefined,
-    stats: copy.swarm.status[result.status],
-    resultDetail: (
-      <ToolDetailReveal>
-        <ChatToolCalls
-          calls={childCalls}
-          data-kind="agent_swarm-items"
-          data-tool-use-id={toolUseId}
-        />
-      </ToolDetailReveal>
-    ),
-  };
-
   return (
-    <ChatToolCalls
-      calls={[parentCall]}
+    <div
+      className="maka-agent-swarm-tools"
       data-kind="agent_swarm"
       data-status={result.status}
       data-tool-use-id={toolUseId}
       data-item-count={result.items.length}
-    />
+      data-expanded={expanded ? 'true' : 'false'}
+    >
+      <button
+        type="button"
+        className="maka-agent-swarm-tools-header"
+        aria-expanded={expanded}
+        aria-controls={itemsId}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span className="maka-agent-swarm-tools-status" data-status={batchStatus} aria-hidden="true" />
+        <span className="maka-agent-swarm-tools-name">{parentName}</span>
+        <span className="maka-agent-swarm-tools-meta">
+          {copy.swarm.taskCount(result.items.length)}
+          {` · ${copy.swarm.status[result.status]}`}
+          {duration ? ` · ${copy.duration(duration)}` : ''}
+        </span>
+        <span className="maka-agent-swarm-tools-chevron" data-expanded={expanded ? 'true' : 'false'} aria-hidden="true" />
+      </button>
+      {expanded ? (
+        <div id={itemsId} className="maka-agent-swarm-tools-items" role="group" aria-label={parentName}>
+          {childCalls.map((call) => (
+            <ChatToolCalls key={call.key} calls={[call]} />
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

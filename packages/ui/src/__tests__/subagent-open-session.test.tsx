@@ -104,14 +104,14 @@ describe('AgentSwarm ToolTrow presentation', () => {
         <ToolTrow items={[item]} onOpenLinkedSession={() => undefined} />
       </LocaleProvider>,
     );
-    // Outer collapsed row keeps the tool display name; children mount only when expanded.
-    assert.match(html, /astryx-chat-tool-calls/);
+    // Single-level group: tool-named header when folded; children only after expand.
+    assert.match(html, /maka-agent-swarm-tools/);
     assert.match(html, /data-kind="agent_swarm"/);
     assert.match(html, /data-item-count="2"/);
+    assert.match(html, /data-expanded="false"/);
     assert.match(html, />Agent Swarm</);
     assert.match(html, /2 tasks|2 个任务/);
     assert.doesNotMatch(html, /maka-agent-preview/);
-    // Detail (child rows) is not SSR'd while the outer CallRow is collapsed.
     assert.doesNotMatch(html, /reader/);
     assert.doesNotMatch(html, /item-2/);
   });

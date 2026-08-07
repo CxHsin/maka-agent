@@ -188,15 +188,9 @@
   -webkit-app-region: no-drag;
 }
 
-/* SideNavItem needs a truthy child to retain its disclosure control. Collapsed
- * session trees provide this sentinel instead of mounting every Swarm child. */
-.maka-session-lazy-children-sentinel {
-  display: none;
-}
-
 /*
  * Dim only this row's SideNavItem. Child combinators stop before [role=group]
- * nests, so a stale parent never mutes healthy subagent rows underneath.
+ * nests under project groups.
  * DOM: .maka-session-row > SideNavItem root > .astryx-side-nav-item
  * (leaf: button; collapsible parent: split-action row that may host the
  * primary control with aria-current).
@@ -210,17 +204,13 @@
   opacity: 1;
 }
 
-.maka-session-row[data-subagent="true"] .astryx-side-nav-item {
-  color: var(--foreground-secondary);
-}
-
 /*
  * Project groups are a section label + peer sessions, not a deep tree.
  * Astryx SideNavItem always pads children with spacing-6 (24px); that is the
  * shell-side-nav workspace pattern, but it wastes a full icon column in a
  * narrow session rail. Zero only the project item's own nest so sessions share
- * the time-sort left edge. Do not use a descendant selector — that would also
- * punch through subagent trees under session rows inside the project.
+ * the time-sort left edge. Child combinator only — do not use a descendant
+ * selector that would punch deeper nest levels if any appear later.
  * DOM: .maka-project-row > SideNavItem root > [role=group] > childrenInner
  */
 .maka-project-row > div > [role="group"] > div {

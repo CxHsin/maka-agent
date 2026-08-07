@@ -74,6 +74,7 @@ const allowedServerExternalImports = new Set([
   '@maka/storage/deep-research-authority',
   '@maka/storage/daily-review-authority',
   '@maka/storage/model-call-ledger',
+  '@maka/storage/operational-state-migration',
   '@maka/storage/execution-stores',
   '@maka/storage/git-worktree-child-executor',
   '@maka/storage/interaction-store',

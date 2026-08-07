@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type Server, type Socket } from 'node:net';
-import { migrateOperationalStateDatabaseForOwner } from '@maka/storage';
+import { migrateOperationalStateDatabaseForOwner } from '@maka/storage/operational-state-migration';
 import {
   assertInteractiveRootOwner,
   authenticateInteractiveRootOwner,

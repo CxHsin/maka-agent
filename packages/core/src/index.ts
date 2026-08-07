@@ -1555,6 +1555,7 @@ export type {
 } from './bootstrap-connections.js';
 export {
   OPENCODE_FREE_BOOTSTRAP_VERSION,
+  OPENCODE_FREE_DEFAULT_ENABLED_MODELS,
   OPENCODE_FREE_DEFAULT_MODEL,
   OPENCODE_FREE_LEGACY_DEFAULT_MODEL,
   resolveBootstrapConnections,

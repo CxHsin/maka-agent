@@ -126,9 +126,7 @@ function main(args) {
       planLabel = 'full';
     } else {
       const { base, head } =
-        parsed.base && parsed.head
-          ? { base: parsed.base, head: parsed.head }
-          : defaultBaseHead();
+        parsed.base && parsed.head ? { base: parsed.base, head: parsed.head } : defaultBaseHead();
       changedFiles = gitChangedFiles(base, head);
       const plan = planTests(changedFiles, { graph, forceFull: false });
       workspaces = plan.workspaces;
@@ -143,7 +141,9 @@ function main(args) {
     }
   }
 
-  process.stderr.write(`test:changed selection (${planLabel}): ${workspaces.join(', ') || '(none)'}\n`);
+  process.stderr.write(
+    `test:changed selection (${planLabel}): ${workspaces.join(', ') || '(none)'}\n`,
+  );
 
   if (workspaces.length === 0) {
     process.stderr.write('No workspaces selected; nothing to run.\n');

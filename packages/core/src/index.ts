@@ -374,7 +374,6 @@ export {
   SUBAGENT_SESSION_SPAWN_SCHEMA_VERSION,
   TURN_STATUSES,
   childSessionsForParent,
-  filterLinkedSessionTree,
   projectLinkedSessionTree,
   STEP_LIMIT_NOTICE_TEXT,
   deriveTurnRecords,

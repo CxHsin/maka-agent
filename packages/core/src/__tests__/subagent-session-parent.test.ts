@@ -8,7 +8,6 @@ import type {
 } from '../session.js';
 import {
   childSessionsForParent,
-  filterLinkedSessionTree,
   isLinkedSubagentSession,
   isSubagentSessionParent,
   isSubagentSessionRuntime,
@@ -209,43 +208,6 @@ describe('subagent session parent relation', () => {
       ['child-a', 'child-b'],
     );
     assert.equal(tree.childrenByParentId.size, 0);
-  });
-
-  test('filters every tree level and promotes matching descendants past hidden ancestors', () => {
-    const parent = summary('parent', { isFlagged: false, isArchived: false });
-    const archivedChild = summary('archived-child', {
-      isArchived: true,
-      subagentParent: { ...relation, parentSessionId: parent.id },
-    });
-    const flaggedGrandchild = summary('flagged-grandchild', {
-      isFlagged: true,
-      subagentParent: { ...relation, parentSessionId: archivedChild.id },
-    });
-    const tree = projectLinkedSessionTree([parent, archivedChild, flaggedGrandchild]);
-
-    const chats = filterLinkedSessionTree(tree, (session) => !session.isArchived);
-    assert.deepEqual(
-      chats.roots.map((session) => session.id),
-      ['parent'],
-    );
-    assert.deepEqual(
-      chats.childrenByParentId.get(parent.id)?.map((session) => session.id),
-      ['flagged-grandchild'],
-    );
-
-    const archived = filterLinkedSessionTree(tree, (session) => session.isArchived);
-    assert.deepEqual(
-      archived.roots.map((session) => session.id),
-      ['archived-child'],
-    );
-    assert.equal(archived.childrenByParentId.size, 0);
-
-    const flagged = filterLinkedSessionTree(tree, (session) => session.isFlagged);
-    assert.deepEqual(
-      flagged.roots.map((session) => session.id),
-      ['flagged-grandchild'],
-    );
-    assert.equal(flagged.childrenByParentId.size, 0);
   });
 });
 

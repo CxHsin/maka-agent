@@ -1,6 +1,5 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import { filterLinkedSessionTree, projectLinkedSessionTree } from '@maka/core';
 import { sessionMatchesNavSelection } from '../../renderer/session-nav-filter.js';
 import {
   deriveProjectGroups,
@@ -288,16 +287,6 @@ describe('sidebar project view mode', () => {
       archivedParent,
       activeChild,
     ];
-    // Core tree filter still promotes matching linked descendants for CLI / nested
-    // UIs — assert that contract separately from the desktop flat rail.
-    const tree = projectLinkedSessionTree(sessions);
-    const chatsTree = filterLinkedSessionTree(tree, (session) =>
-      sessionMatchesNavSelection(session, { section: 'sessions', filter: 'chats' }),
-    );
-    assert.deepEqual(
-      chatsTree.roots.map((session) => session.id),
-      [parent.id, activeChild.id],
-    );
 
     const rail = (selection: 'chats' | 'flagged' | 'archived') =>
       deriveSessionRail(sessions, parent.id, (session) =>
@@ -318,7 +307,7 @@ describe('sidebar project view mode', () => {
     );
   });
 
-  it('keeps a running parent visible when preview metadata is temporarily unavailable', () => {
+  it('keeps a running parent on the rail when preview metadata is temporarily unavailable', () => {
     const parent = makeSessionSummary({
       id: 'running-parent',
       name: 'Running parent',
@@ -332,20 +321,15 @@ describe('sidebar project view mode', () => {
       lastMessageAt: 50,
       subagentParent: childRelation(parent.id),
     });
-    const tree = filterLinkedSessionTree(
-      projectLinkedSessionTree([parent, child]),
-      (session) =>
-        sessionMatchesNavSelection(session, { section: 'sessions', filter: 'chats' }),
+    const rail = deriveSessionRail([parent, child], parent.id, (session) =>
+      sessionMatchesNavSelection(session, { section: 'sessions', filter: 'chats' }),
     );
 
     assert.deepEqual(
-      tree.roots.map((session) => session.id),
+      rail.sessions.map((session) => session.id),
       [parent.id],
     );
-    assert.deepEqual(
-      tree.childrenByParentId.get(parent.id)?.map((session) => session.id),
-      [child.id],
-    );
+    assert.equal(rail.activeRowId, parent.id);
   });
 
   it('project group ids stay DOM-safe and distinct when the cwd has spaces or shared basenames', () => {

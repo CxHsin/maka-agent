@@ -562,39 +562,6 @@ function linkedSubagentParentId(
   return session.subagent?.parentSessionId;
 }
 
-/**
- * Filter a linked tree without leaking non-matching descendants through a
- * matching parent. Matching descendants whose ancestors do not match are
- * promoted to the nearest matching ancestor, or to a root when none exists.
- */
-export function filterLinkedSessionTree(
-  tree: LinkedSessionTree,
-  include: (session: SessionSummary) => boolean,
-): LinkedSessionTree {
-  const roots: SessionSummary[] = [];
-  const mutableChildren = new Map<string, SessionSummary[]>();
-
-  const visit = (session: SessionSummary, visibleParentId?: string): void => {
-    const included = include(session);
-    const nextVisibleParentId = included ? session.id : visibleParentId;
-    if (included) {
-      if (visibleParentId) {
-        const children = mutableChildren.get(visibleParentId) ?? [];
-        children.push(session);
-        mutableChildren.set(visibleParentId, children);
-      } else {
-        roots.push(session);
-      }
-    }
-    for (const child of tree.childrenByParentId.get(session.id) ?? []) {
-      visit(child, nextVisibleParentId);
-    }
-  };
-
-  for (const root of tree.roots) visit(root);
-  return { roots, childrenByParentId: mutableChildren };
-}
-
 function linkedParentChainContainsCycle(
   startSessionId: string,
   sessionsById: ReadonlyMap<string, SessionSummary>,

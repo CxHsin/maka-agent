@@ -352,8 +352,10 @@ describe('AgentSwarm adapter', () => {
     );
   });
 
-  test('publishes live agent_swarm previews from batch start through ready Open', async () => {
-    const previews: AgentSwarmToolResult[] = [];
+  test('publishes live agent_swarm open-facts previews from batch start through ready Open', async () => {
+    const previews: Array<
+      Extract<import('@maka/core').ToolResultPreviewContent, { kind: 'agent_swarm' }>
+    > = [];
     const result = await buildAgentSwarmTool().impl(
       {
         items: [
@@ -373,7 +375,13 @@ describe('AgentSwarm adapter', () => {
       context({
         publishToolResultPreview: (content) => {
           assert.equal(content.kind, 'agent_swarm');
-          previews.push(content as AgentSwarmToolResult);
+          if (content.kind === 'agent_swarm') previews.push(content);
+          // Open-facts: no summary bulk on live previews.
+          if (content.kind === 'agent_swarm') {
+            for (const item of content.items) {
+              assert.equal('summary' in item, false);
+            }
+          }
         },
         spawnChildSession: async (input) => {
           const itemId = input.swarm?.itemId ?? 'unknown';

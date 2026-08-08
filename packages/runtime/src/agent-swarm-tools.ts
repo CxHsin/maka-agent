@@ -2,10 +2,12 @@ import { redactSecrets } from '@maka/core/redaction';
 import {
   TASK_ID_MAX_CHARS,
   buildAgentSwarmContent,
+  buildAgentSwarmPreviewContent,
   isSafeTaskId,
   isSafeSubagentPresetId,
   projectAgentSwarmResult,
   type AgentSwarmItem,
+  type AgentSwarmPreviewItem,
   type ToolResultContent,
 } from '@maka/core';
 import { z } from 'zod';
@@ -223,27 +225,18 @@ export function buildAgentSwarmTool(
       const childResults: Array<ChildExecutionResult | undefined> = Array.from({
         length: prepared.items.length,
       });
-      // Live snapshot rows — same content shape as the durable tool_result.
-      // Publish only through buildAgentSwarmContent so mid-flight Open and
-      // settlement never diverge on field assembly.
-      const liveItems: AgentSwarmItem[] = prepared.items.map((item) => ({
+      // Live open-facts only (no summary/artifacts). Settlement uses full
+      // AgentSwarmItem rows via buildAgentSwarmContent after the batch ends.
+      const liveItems: AgentSwarmPreviewItem[] = prepared.items.map((item) => ({
         itemId: item.itemId,
         index: item.index,
         profile: item.profile,
         started: false,
         status: 'queued',
-        summary: '',
-        artifactIds: [],
         ...(item.resumedFromRunId ? { resumedFromRunId: item.resumedFromRunId } : {}),
       }));
       const publishLiveSnapshot = () => {
-        ctx.publishToolResultPreview?.(
-          buildAgentSwarmContent({
-            items: liveItems,
-            startedAt,
-            completedAt: now(),
-          }),
-        );
+        ctx.publishToolResultPreview?.(buildAgentSwarmPreviewContent({ items: liveItems }));
       };
       publishLiveSnapshot();
       const artifactIds = prepared.items.map(() => new Set<string>());
@@ -394,7 +387,7 @@ export function buildAgentSwarmTool(
                 : effectiveResult.status === 'completed'
                   ? 'completed'
                   : 'failed';
-            liveItems[index] = mapChildResult(item, observedResult, itemStatus);
+            liveItems[index] = mapChildPreviewItem(item, observedResult, itemStatus);
             publishLiveSnapshot();
             traceAgentSwarm(
               ctx,
@@ -437,9 +430,6 @@ export function buildAgentSwarmTool(
               ...(item.resumedFromRunId ? { resumedFromRunId: item.resumedFromRunId } : {}),
               ...(ready ?? {}),
               status: ctx.abortSignal.aborted ? 'cancelled' : 'failed',
-              summary: boundedSwarmError(effectiveError),
-              artifactIds: [...(artifactIds[index] ?? [])],
-              failureClass: boundedFailureClass(effectiveError, 'ChildAgentError'),
             };
             publishLiveSnapshot();
             traceAgentSwarm(ctx, 'tool_failed', 'item_completed', {
@@ -1204,6 +1194,27 @@ function mapChildResult(
     completedAt: result.completedAt,
     durationMs: result.durationMs,
     ...(result.failureClass ? { failureClass: result.failureClass } : {}),
+  };
+}
+
+/** Open-facts only — mid-flight preview never carries summary/artifacts. */
+function mapChildPreviewItem(
+  item: PreparedAgentSwarmItem,
+  result: ChildExecutionResult,
+  status: Extract<AgentSwarmPreviewItem['status'], 'completed' | 'failed' | 'cancelled'>,
+): AgentSwarmPreviewItem {
+  return {
+    itemId: item.itemId,
+    index: item.index,
+    profile: item.profile,
+    started: true,
+    agentId: result.agentId,
+    agentName: result.agentName,
+    ...(result.childSessionId ? { childSessionId: result.childSessionId } : {}),
+    turnId: result.turnId,
+    ...(result.runId ? { runId: result.runId } : {}),
+    ...(item.resumedFromRunId ? { resumedFromRunId: item.resumedFromRunId } : {}),
+    status,
   };
 }
 

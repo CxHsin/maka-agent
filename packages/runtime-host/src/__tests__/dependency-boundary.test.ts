@@ -116,6 +116,7 @@ const allowedExternalImports = {
     '@maka/core/session-trace',
     '@maka/core/settings/network-settings',
     '@maka/core/shell-run-result',
+    '@maka/core/tool-result-preview',
     '@maka/core/task-ledger',
     '@maka/core/voice',
     '@maka/core/web-search',

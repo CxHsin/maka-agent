@@ -392,13 +392,12 @@ describe('applyLiveTurnEvent', () => {
         runId: 'child-run',
         status: 'running',
         permissionMode: 'explore',
-        summary: '',
-        artifactIds: [],
       },
       ts: 101,
     });
 
     assert.equal(previewed.steps[0]?.tools[0]?.status, 'running');
+    // Materialized activity result: open-facts + empty bulk.
     assert.deepEqual(previewed.steps[0]?.tools[0]?.result, {
       kind: 'subagent',
       childSessionId: 'child-session',
@@ -472,8 +471,6 @@ describe('applyLiveTurnEvent', () => {
             started: true,
             childSessionId: 'child-auth',
             status: 'running',
-            summary: '',
-            artifactIds: [],
           },
           {
             itemId: 'storage',
@@ -481,13 +478,8 @@ describe('applyLiveTurnEvent', () => {
             profile: 'local_read',
             started: false,
             status: 'queued',
-            summary: '',
-            artifactIds: [],
           },
         ],
-        startedAt: 100,
-        completedAt: 101,
-        durationMs: 1,
       },
       ts: 101,
     });

@@ -33,8 +33,8 @@ export function aggregateAgentSwarmStatus(items: readonly AgentSwarmItem[]): Age
 }
 
 /**
- * Single content builder for live tool_result_preview snapshots and durable
- * tool_result settlement — same shape, one aggregation path.
+ * Durable agent_swarm tool_result builder. Live mid-flight Open uses
+ * buildAgentSwarmPreviewContent (open-facts only) instead.
  */
 export function buildAgentSwarmContent(input: {
   readonly items: readonly AgentSwarmItem[];
@@ -43,8 +43,6 @@ export function buildAgentSwarmContent(input: {
 }): AgentSwarmResult {
   const startedAt = input.startedAt;
   const completedAt = input.completedAt;
-  // Snapshot rows so live mutation of a working items array cannot rewrite
-  // already-published tool_result_preview contents.
   const items = input.items.map((item) => ({
     ...item,
     artifactIds: [...item.artifactIds],

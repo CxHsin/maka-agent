@@ -23,6 +23,7 @@
     "./execution-evidence": "./dist/execution-evidence.js",
     "./execution-inspect": "./dist/execution-inspect.js",
     "./events": "./dist/events.js",
+    "./tool-result-preview": "./dist/tool-result-preview.js",
     "./interaction": "./dist/interaction.js",
     "./session": "./dist/session.js",
     "./session-revisions": "./dist/session-revisions.js",

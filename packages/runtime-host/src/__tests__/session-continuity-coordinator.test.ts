@@ -692,8 +692,6 @@ test('forwards tool_result_preview with content and seeds it on rejoin', async (
       runId: 'child-run-1',
       status: 'running' as const,
       permissionMode: 'explore' as const,
-      summary: '',
-      artifactIds: [] as string[],
     },
   };
   await coordinator.acceptRuntimeEvent(SESSION_ID, 'run-1', preview);

@@ -19,6 +19,7 @@ import type {
   ToolActivityKind,
   ToolOutputStream,
   ToolResultContent,
+  ToolResultPreviewContent,
   ToolResultEvent,
   ToolStartEvent,
   ToolUncertainOutcomeSignal,
@@ -174,7 +175,7 @@ export interface MakaToolContext {
    * Live-only partial tool result for the current toolUseId. Must not persist
    * transcript; final settlement remains the durable tool_result.
    */
-  publishToolResultPreview?: (content: ToolResultContent) => void;
+  publishToolResultPreview?: (content: ToolResultPreviewContent) => void;
   /** Diagnostic-only trace projection. It must never affect tool execution. */
   emitRunTrace?: (
     type:
@@ -2010,11 +2011,9 @@ export class ToolRuntime {
                     ...(spawnInput.swarm ? { swarm: spawnInput.swarm } : {}),
                     abortSignal,
                     onReady: async (ready) => {
-                      // Live-only linked-spawn Open: surface childSessionId
-                      // before the durable tool_result commits. Must not
-                      // appendMessage. Swarm batches publish kind:agent_swarm
-                      // previews from the agent_swarm tool instead — a
-                      // subagent preview here would overwrite that snapshot.
+                      // Live-only linked-spawn Open: same publishToolResultPreview
+                      // choke as agent_swarm. Swarm batches own agent_swarm
+                      // previews — a subagent preview would overwrite them.
                       if (!spawnInput.swarm) {
                         input.queue.push({
                           type: 'tool_result_preview',
@@ -2032,9 +2031,7 @@ export class ToolRuntime {
                             runId: ready.runId,
                             status: 'running',
                             permissionMode: ready.permissionMode,
-                            summary: '',
-                            artifactIds: [],
-                          },
+                          } satisfies ToolResultPreviewContent,
                           ...input.activityIdentity,
                         });
                       }

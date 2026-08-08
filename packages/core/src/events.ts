@@ -562,18 +562,53 @@ export interface ToolProgressEvent extends BaseEvent, ToolActivityIdentity {
 }
 
 /**
+ * Live-only open-facts for mid-flight Open. Identity + lifecycle only —
+ * no summary, artifacts, or duration bulk. Durable results use ToolResultContent.
+ */
+export type ToolResultPreviewContent =
+  | {
+      kind: 'subagent';
+      childSessionId?: string;
+      agentId?: string;
+      agentName: string;
+      turnId: string;
+      runId?: string;
+      status: 'running' | 'waiting_for_user';
+      permissionMode: PermissionMode;
+    }
+  | {
+      kind: 'agent_swarm';
+      status: 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
+      items: ReadonlyArray<AgentSwarmPreviewItem>;
+    };
+
+export interface AgentSwarmPreviewItem {
+  itemId: string;
+  index: number;
+  profile: string;
+  started: boolean;
+  childSessionId?: string;
+  agentId?: string;
+  agentName?: string;
+  turnId?: string;
+  runId?: string;
+  resumedFromRunId?: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+}
+
+/**
  * Live-only preview of a tool result before the tool has settled.
  *
  * Distinct from ToolResultEvent: previews are not durable transcript commits
  * and must not be treated as model-visible function_response. UI may attach
- * `content` (for example a linked childSessionId) while the tool stays
- * in-flight; the terminal persisted result remains a later tool_result.
+ * open-facts while the tool stays in-flight; the terminal persisted result
+ * remains a later tool_result.
  */
 export interface ToolResultPreviewEvent extends BaseEvent, ToolActivityIdentity {
   type: 'tool_result_preview';
   toolUseId: string;
   isError: boolean;
-  content: ToolResultContent;
+  content: ToolResultPreviewContent;
 }
 
 export interface ToolResultEvent extends BaseEvent, ToolActivityIdentity {
@@ -779,9 +814,10 @@ export type ToolResultContent =
   | {
       kind: 'agent_swarm';
       /**
-       * Batch rollup. `running` is live-only (tool_result_preview while the
-       * parent tool is still in flight). Durable tool_result commits only
-       * terminal batch statuses.
+       * Durable batch rollup. Live mid-flight statuses live on
+       * ToolResultPreviewContent, not durable tool_result.
+       * Activity rows may materialize preview as ToolResultContent with
+       * empty bulk for display only.
        */
       status: 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
       items: ReadonlyArray<{
@@ -795,10 +831,7 @@ export type ToolResultContent =
         turnId?: string;
         runId?: string;
         resumedFromRunId?: string;
-        /**
-         * Item rollup. `queued` / `running` are live-only mid-flight states;
-         * durable tool_result rows use terminal statuses only.
-         */
+        /** Durable rows are terminal; queued/running appear only via materialize. */
         status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
         summary: string;
         artifactIds: readonly string[];

@@ -41,6 +41,8 @@ export type {
   ToolOutputStream,
   ToolProgressEvent,
   ToolResultPreviewEvent,
+  ToolResultPreviewContent,
+  AgentSwarmPreviewItem,
   ToolResultEvent,
   ToolResultContent,
   ShellRunSnapshotResult,
@@ -401,9 +403,14 @@ export {
 } from './session.js';
 export {
   decodeCanonicalToolResultContent,
-  decodeToolResultPreviewContent,
   normalizeToolResultContentForRead,
 } from './tool-result-record-schema.js';
+export {
+  aggregateAgentSwarmPreviewStatus,
+  buildAgentSwarmPreviewContent,
+  decodeToolResultPreviewContent,
+  materializeToolResultPreviewForActivity,
+} from './tool-result-preview.js';
 
 // model-thinking.ts
 export type { ThinkingLevel } from './model-thinking.js';

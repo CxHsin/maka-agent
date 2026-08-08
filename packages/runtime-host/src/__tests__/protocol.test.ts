@@ -20,6 +20,7 @@ import {
   SESSION_CONTINUITY_SCHEMA_VERSION,
   SESSION_CONTINUITY_SNAPSHOT_MAX_BYTES,
   SESSION_LIVE_DELTA_MAX_BYTES,
+  SESSION_SUBSCRIPTION_FRAME_MAX_BYTES,
   SESSION_TOOL_OUTPUT_DELTA_MAX_BYTES,
   SESSION_TOOL_NAME_MAX_BYTES,
   TURN_MESSAGE_CONTENT_MAX_BYTES,
@@ -298,8 +299,6 @@ describe('Runtime Host bootstrap protocol', () => {
           turnId: 'turn-child',
           status: 'running',
           permissionMode: 'explore',
-          summary: '',
-          artifactIds: [],
         },
       },
     ]) {
@@ -323,6 +322,25 @@ describe('Runtime Host bootstrap protocol', () => {
         type: 'tool_result',
         status: 'errored',
         error: 'raw provider error',
+      },
+      {
+        ...identity,
+        type: 'tool_result_preview',
+        isError: false,
+        content: {
+          kind: 'agent_swarm',
+          status: 'running',
+          items: [
+            {
+              itemId: 'item-0',
+              index: 0,
+              profile: 'local_read',
+              started: true,
+              status: 'running',
+              summary: 'fat bulk is not open-facts',
+            },
+          ],
+        },
       },
     ]) {
       assert.throws(() => decodeHostFrame({ ...envelope, event }), isInvalidFrame);
@@ -358,6 +376,45 @@ describe('Runtime Host bootstrap protocol', () => {
    *
    * Every kind on the wire decodes; a plausible one that is not on it does not.
    */
+  test('max-shape agent_swarm open-facts preview stays under subscription frame budget', () => {
+    // Must-B: live previews carry identity only; 32 items must encode under
+    // SESSION_SUBSCRIPTION_FRAME_MAX_BYTES (fat summaries must not be on wire).
+    const items = Array.from({ length: 32 }, (_, i) => ({
+      itemId: `item-${i}`,
+      index: i,
+      profile: 'local_read',
+      started: true,
+      childSessionId: `child-session-id-${i}`,
+      agentName: 'Local Read Agent Name',
+      turnId: `turn-id-${i}`,
+      runId: `run-id-${i}`,
+      status: 'running' as const,
+    }));
+    const frame = {
+      kind: 'subscription.session_event' as const,
+      hostEpoch: 'epoch-1',
+      subscriptionId: 'subscription-1',
+      sequence: 1,
+      sessionId: 'session-1',
+      runId: 'run-1',
+      event: {
+        type: 'tool_result_preview' as const,
+        id: 'event-1',
+        turnId: 'turn-1',
+        ts: 1,
+        toolUseId: 'tool-1',
+        isError: false,
+        content: { kind: 'agent_swarm' as const, status: 'running' as const, items },
+      },
+    };
+    const encoded = encodeProtocolFrame(frame);
+    assert.ok(
+      encoded.byteLength <= SESSION_SUBSCRIPTION_FRAME_MAX_BYTES,
+      `expected open-facts preview <= ${SESSION_SUBSCRIPTION_FRAME_MAX_BYTES}, got ${encoded.byteLength}`,
+    );
+    assert.doesNotThrow(() => decodeHostFrame(frame));
+  });
+
   test('accepts every declared tool activity kind and nothing else', () => {
     const envelope = {
       kind: 'subscription.session_event' as const,

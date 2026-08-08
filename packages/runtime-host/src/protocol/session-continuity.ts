@@ -1,6 +1,6 @@
 import { TOOL_ACTIVITY_KINDS, TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core/events';
-import type { ToolActivityKind, ToolResultContent } from '@maka/core/events';
-import { decodeToolResultPreviewContent } from '@maka/core';
+import type { ToolActivityKind, ToolResultPreviewContent } from '@maka/core/events';
+import { decodeToolResultPreviewContent } from '@maka/core/tool-result-preview';
 import {
   assertExactKeys,
   requireCount,
@@ -146,13 +146,12 @@ export type SessionToolEvent =
     })
   | (SessionToolEventIdentity & {
       /**
-       * Live-only structured result snapshot. Replace semantics per toolUseId;
-       * never durable transcript. Carries content so mid-flight Open can see
-       * childSessionId / swarm items before settlement.
+       * Live-only open-facts. Replace semantics per toolUseId; never durable
+       * transcript. Identity + status for mid-flight Open only.
        */
       type: 'tool_result_preview';
       isError: boolean;
-      content: ToolResultContent;
+      content: ToolResultPreviewContent;
     });
 
 export interface SessionEventFrame extends SubscriptionEnvelope {
@@ -657,7 +656,7 @@ function decodeSessionToolEvent(value: unknown): SessionToolEvent {
     if (typeof record.isError !== 'boolean') {
       throw invalidProtocolFrame('Invalid Session tool result preview isError');
     }
-    let content: ToolResultContent;
+    let content: ToolResultPreviewContent;
     try {
       content = decodeToolResultPreviewContent(record.content);
     } catch {

@@ -1,7 +1,11 @@
 import type { ProviderRetryEvent, SessionEvent, StoredMessage, UiLocale } from '@maka/core';
+import {
+  isInFlightToolStatus,
+  materializeToolResultPreviewForActivity,
+  projectToolActivityArgs,
+  toolResultActivityStatus,
+} from '@maka/core';
 import { applyAssistantComplete, applyAssistantDelta } from './assistant-stream.js';
-import { projectToolActivityArgs, toolResultActivityStatus } from '@maka/core';
-import { isInFlightToolStatus } from '@maka/core';
 import type { ToolActivityItem } from './materialize.js';
 import { applyThinkingComplete, applyThinkingDelta } from './thinking-stream.js';
 import { applyToolOutputChunk } from './tool-output-stream.js';
@@ -297,8 +301,8 @@ export function applyLiveTurnEvent(
         : [...step.tools, tool],
     };
   } else if (event.type === 'tool_result_preview') {
-    // Live-only: attach result detail (for example childSessionId for Open)
-    // without the terminal status mapping that tool_result applies.
+    // Live-only open-facts: materialize into activity.result with empty bulk
+    // so ToolTrow can Open without dual storage.
     const toolIndex = step.tools.findIndex((candidate) => candidate.toolUseId === event.toolUseId);
     const base: ToolActivityItem = toolIndex >= 0
       ? step.tools[toolIndex]!
@@ -307,7 +311,7 @@ export function applyLiveTurnEvent(
       ...base,
       ...projectToolActivityIdentity(event),
       status: isInFlightToolStatus(base.status) ? 'running' : base.status,
-      result: event.content,
+      result: materializeToolResultPreviewForActivity(event.content),
     };
     nextStep = {
       ...step,

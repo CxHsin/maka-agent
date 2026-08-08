@@ -205,23 +205,8 @@ export function decodeCanonicalToolResultContent(value: unknown): ToolResultCont
   const shell = decodeCanonicalShellToolResultContent(value);
   if (shell.state === 'invalid') throw new Error('Invalid shell tool result content');
   if (shell.state === 'valid') return shell.content;
-  if (!isNonShellToolResultContent(value, { liveAgentSwarm: false })) {
+  if (!isNonShellToolResultContent(value)) {
     throw new Error('Invalid tool result content');
-  }
-  return value;
-}
-
-/**
- * Live-only tool_result_preview content. Same shape as durable results, but
- * agent_swarm may still carry mid-flight `running` / item `queued|running`.
- * Never use this decoder for transcript or recovery reads.
- */
-export function decodeToolResultPreviewContent(value: unknown): ToolResultContent {
-  const shell = decodeCanonicalShellToolResultContent(value);
-  if (shell.state === 'invalid') throw new Error('Invalid shell tool result content');
-  if (shell.state === 'valid') return shell.content;
-  if (!isNonShellToolResultContent(value, { liveAgentSwarm: true })) {
-    throw new Error('Invalid tool result preview content');
   }
   return value;
 }
@@ -238,10 +223,7 @@ function normalizeLegacySubagentToolResultContent(value: unknown): unknown {
   return { ...value, status: 'waiting_for_user' };
 }
 
-function isNonShellToolResultContent(
-  value: unknown,
-  options: { liveAgentSwarm: boolean },
-): value is ToolResultContent {
+function isNonShellToolResultContent(value: unknown): value is ToolResultContent {
   if (!isRecord(value) || typeof value.kind !== 'string') return false;
   switch (value.kind) {
     case 'text':
@@ -324,14 +306,14 @@ function isNonShellToolResultContent(
     case 'explore_agent':
       return isExploreResult(value);
     case 'subagent':
+      // Durable transcript: terminal or permission-wait. Live `running` is
+      // tool_result_preview only (ToolResultPreviewContent).
       return (
         hasValidSubagentResultFields(value) &&
-        ['completed', 'failed', 'cancelled', 'running', 'waiting_for_user'].includes(
-          value.status as string,
-        )
+        ['completed', 'failed', 'cancelled', 'waiting_for_user'].includes(value.status as string)
       );
     case 'agent_swarm':
-      return isAgentSwarmResult(value, options.liveAgentSwarm);
+      return isAgentSwarmResult(value);
     case 'rive_workflow':
       return isRiveResult(value);
     default:
@@ -359,39 +341,21 @@ function hasValidSubagentResultFields(value: Record<string, unknown>): boolean {
 }
 
 const DURABLE_AGENT_SWARM_BATCH_STATUSES = new Set(['completed', 'partial', 'failed', 'cancelled']);
-const LIVE_AGENT_SWARM_BATCH_STATUSES = new Set(['running', ...DURABLE_AGENT_SWARM_BATCH_STATUSES]);
 const DURABLE_AGENT_SWARM_ITEM_STATUSES = new Set(['completed', 'failed', 'cancelled']);
-const LIVE_AGENT_SWARM_ITEM_STATUSES = new Set([
-  'queued',
-  'running',
-  ...DURABLE_AGENT_SWARM_ITEM_STATUSES,
-]);
 
-function isAgentSwarmResult(
-  value: Record<string, unknown>,
-  liveAgentSwarm: boolean,
-): value is AgentSwarmResult {
-  const batchStatuses = liveAgentSwarm
-    ? LIVE_AGENT_SWARM_BATCH_STATUSES
-    : DURABLE_AGENT_SWARM_BATCH_STATUSES;
-  const itemStatuses = liveAgentSwarm
-    ? LIVE_AGENT_SWARM_ITEM_STATUSES
-    : DURABLE_AGENT_SWARM_ITEM_STATUSES;
+function isAgentSwarmResult(value: Record<string, unknown>): value is AgentSwarmResult {
   return (
     hasExactShape(value, AGENT_SWARM_SHAPE) &&
-    batchStatuses.has(value.status as string) &&
+    DURABLE_AGENT_SWARM_BATCH_STATUSES.has(value.status as string) &&
     Array.isArray(value.items) &&
-    value.items.every((item) => isAgentSwarmItem(item, itemStatuses)) &&
+    value.items.every(isAgentSwarmItem) &&
     isFiniteNumber(value.startedAt) &&
     isFiniteNumber(value.completedAt) &&
     isFiniteNumber(value.durationMs)
   );
 }
 
-function isAgentSwarmItem(
-  value: unknown,
-  allowedStatuses: ReadonlySet<string>,
-): value is AgentSwarmItem {
+function isAgentSwarmItem(value: unknown): value is AgentSwarmItem {
   return (
     isRecord(value) &&
     hasExactShape(value, AGENT_SWARM_ITEM_SHAPE) &&
@@ -406,7 +370,7 @@ function isAgentSwarmItem(
     isOptionalString(value.turnId) &&
     isOptionalString(value.runId) &&
     isOptionalString(value.resumedFromRunId) &&
-    allowedStatuses.has(value.status as string) &&
+    DURABLE_AGENT_SWARM_ITEM_STATUSES.has(value.status as string) &&
     typeof value.summary === 'string' &&
     isStringArray(value.artifactIds) &&
     isOptionalFiniteNumber(value.startedAt) &&

@@ -507,8 +507,6 @@ describe('ToolRuntime settlement', () => {
       runId: 'child-run',
       status: 'running',
       permissionMode: 'explore',
-      summary: '',
-      artifactIds: [],
     });
     const previewIndex = events.findIndex((event) => event.type === 'tool_result_preview');
     const resultIndex = events.findIndex((event) => event.type === 'tool_result');

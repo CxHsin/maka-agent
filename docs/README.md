@@ -55,6 +55,12 @@ This page is the authority map for Maka documentation. Code and contract tests r
 - [Workspace privacy context](./workspace-privacy-context.md)
 - [Runtime sandbox boundary](../packages/runtime/src/sandbox/README.md)
 
+## Design material
+
+- [Agent-book design material](./design-material/README.md) ([中文](./design-material/README.zh-CN.md)) — knowledge points, design questions, and a design-document roadmap distilled from the open-source book *深入理解 AI Agent (AI Agents in Depth)*, as reference material for Maka design documents.
+- [Design question checklist](./design-material/01-Maka-Design-Question-Checklist.md) ([中文](./design-material/01-Maka-Design-Question-Checklist.zh-CN.md))
+- [Design-document topics and roadmap](./design-material/02-Maka-Design-Doc-Roadmap.md) ([中文](./design-material/02-Maka-Design-Doc-Roadmap.zh-CN.md))
+
 ## Historical material
 
 - [Runtime kernel extraction](./archive/runtime-kernel.md)

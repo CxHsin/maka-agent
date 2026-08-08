@@ -1,5 +1,9 @@
 import type { LlmConnection } from '@maka/core/llm-connections';
-import { buildSubscriptionModelFetch as buildRuntimeSubscriptionModelFetch } from '@maka/runtime';
+import {
+  buildSubscriptionModelFetch as buildRuntimeSubscriptionModelFetch,
+  inheritFetchProxySnapshot,
+  proxiedFetch,
+} from '@maka/runtime';
 import {
   type ClaudeSubscriptionService,
   isCloakEnabled,
@@ -18,19 +22,29 @@ export function createSubscriptionModelFetch(deps: SubscriptionModelFetchDeps) {
     connection: LlmConnection,
     sessionId: string,
     modelId: string,
-  ): typeof fetch | undefined {
+  ): typeof fetch {
     if (connection.providerType === 'claude-subscription' && isCloakEnabled()) {
-      return buildClaudeSubscriptionCloakedFetch(connection, deps.claudeSubscription, sessionId, modelId);
+      return inheritFetchProxySnapshot(
+        buildClaudeSubscriptionCloakedFetch(
+          connection,
+          deps.claudeSubscription,
+          sessionId,
+          modelId,
+          proxiedFetch,
+        ),
+        proxiedFetch,
+      );
     }
     if (
       connection.providerType === 'openai-codex'
       || connection.providerType === 'github-copilot'
       || connection.providerType === 'xai-oauth'
     ) {
-      return buildRuntimeSubscriptionModelFetch({
+      const subscriptionFetch = buildRuntimeSubscriptionModelFetch({
         connection,
         sessionId,
         modelId,
+        fetchFn: proxiedFetch,
         ...(connection.providerType === 'openai-codex'
           ? {
               refreshOAuthAccessToken: () =>
@@ -43,8 +57,11 @@ export function createSubscriptionModelFetch(deps: SubscriptionModelFetchDeps) {
               }
             : {}),
       });
+      return subscriptionFetch
+        ? inheritFetchProxySnapshot(subscriptionFetch, proxiedFetch)
+        : proxiedFetch;
     }
-    return undefined;
+    return proxiedFetch;
   };
 }
 
@@ -53,6 +70,7 @@ function buildClaudeSubscriptionCloakedFetch(
   claudeSubscription: ClaudeSubscriptionService,
   sessionId: string,
   modelId: string,
+  fetchFn: typeof fetch,
 ): typeof fetch {
   return async (url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const [deviceId, accountState] = await Promise.all([
@@ -63,13 +81,13 @@ function buildClaudeSubscriptionCloakedFetch(
       connection,
       sessionId,
       modelId,
-      fetchFn: fetch,
+      fetchFn,
       claude: {
         cloakEnabled: true,
         deviceId,
         accountUuid: accountState.profile?.accountUuid ?? '',
       },
     });
-    return (modelFetch ?? fetch)(url, init);
+    return (modelFetch ?? fetchFn)(url, init);
   };
 }

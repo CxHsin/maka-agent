@@ -1174,6 +1174,8 @@ export type {
 export {
   createConnectionEffectFetchTransport,
   createProxiedFetchTransport,
+  FETCH_PROXY_SNAPSHOT,
+  inheritFetchProxySnapshot,
 } from './network/scoped-fetch-transport.js';
 export type {
   ConnectionEffectFetchTransport,

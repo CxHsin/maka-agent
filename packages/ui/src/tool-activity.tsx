@@ -36,6 +36,10 @@ import {
   type ChatToolCallItem,
 } from '@astryxdesign/core';
 import { ToolCodeBlock, ToolDetailReveal } from './tool-activity/tool-code-block.js';
+import {
+  AgentSwarmToolCalls,
+  OpenLinkedSessionOnActivate,
+} from './tool-activity/agent-swarm-calls.js';
 import { cn } from './ui.js';
 import { describeLoadToolResult, formatToolIntent } from './tool-format.js';
 import {
@@ -227,6 +231,7 @@ export function ToolCallDetail({
           <ToolResultPreview
             content={displayResult}
             toolName={item.toolName}
+            toolUseId={item.toolUseId}
             args={item.args}
             shellRunSource={item.shellRunSource}
             onOpenLinkedSession={onOpenLinkedSession}
@@ -276,6 +281,7 @@ export function ToolCallDetail({
                 <ToolResultPreview
                   content={displayResult}
                   toolName={item.toolName}
+                  toolUseId={item.toolUseId}
                   onOpenLinkedSession={onOpenLinkedSession}
                 />
               );
@@ -317,9 +323,11 @@ export function ToolTrow({
 
   const flushOrdinary = () => {
     if (ordinary.length === 0) return;
+    // Stable key: first toolUseId in the group. Membership may grow mid-turn;
+    // joining every id remounts ChatToolCalls and collapses user-expanded rows.
     nodes.push(
       <OrdinaryToolCalls
-        key={ordinary.map((item) => item.toolUseId).join('|')}
+        key={ordinary[0]!.toolUseId}
         items={ordinary}
         locale={locale}
         onOpenLinkedSession={onOpenLinkedSession}
@@ -353,25 +361,46 @@ function OrdinaryToolCalls(props: {
   onOpenLinkedSession?(sessionId: string): void;
 }) {
   const { items, locale, onOpenLinkedSession } = props;
-  const calls: ChatToolCallItem[] = items.map((item) => ({
-    key: item.toolUseId,
-    // The name is what a person reads to tell one call from the next, and for
-    // Computer Use the display name is "Maka Computer" — a noun, identical on
-    // every row of a ten-call turn. A label derived from the call's own
-    // arguments says what happened instead.
-    name: computerActionLabel(item, locale) ?? resolveToolDisplayName(item, locale),
-    status: astryxToolStatus(item),
-    target: item.intent ? formatToolIntent(item.intent) : undefined,
-    duration: formatDuration(item.durationMs) ?? undefined,
-    errorMessage: toolCallErrorMessage(item, locale),
-    stats: outcomeWord(item, locale),
-    ...diffStats(itemDiffs(item)),
-    resultDetail: (
-      <ToolDetailReveal>
-        <ToolCallDetail item={item} onOpenLinkedSession={onOpenLinkedSession} />
-      </ToolDetailReveal>
-    ),
-  }));
+  const agentCopy = getToolActivityCopy(locale).agent;
+  const calls: ChatToolCallItem[] = items.map((item) => {
+    const readySessionId =
+      item.result?.kind === 'subagent' &&
+      item.result.childSessionId &&
+      onOpenLinkedSession
+        ? item.result.childSessionId
+        : undefined;
+    const identity =
+      item.result?.kind === 'subagent'
+        ? redactSecrets(item.result.agentName?.trim() || item.toolUseId)
+        : undefined;
+    return {
+      key: item.toolUseId,
+      // The name is what a person reads to tell one call from the next, and for
+      // Computer Use the display name is "Maka Computer" — a noun, identical on
+      // every row of a ten-call turn. A label derived from the call's own
+      // arguments says what happened instead.
+      name: computerActionLabel(item, locale) ?? resolveToolDisplayName(item, locale),
+      status: astryxToolStatus(item),
+      target: item.intent ? formatToolIntent(item.intent) : undefined,
+      duration: formatDuration(item.durationMs) ?? undefined,
+      errorMessage: toolCallErrorMessage(item, locale),
+      stats: outcomeWord(item, locale),
+      ...diffStats(itemDiffs(item)),
+      resultDetail:
+        readySessionId && onOpenLinkedSession ? (
+          <OpenLinkedSessionOnActivate
+            sessionId={readySessionId}
+            onOpen={onOpenLinkedSession}
+            label={agentCopy.openSession}
+            ariaLabel={agentCopy.openSessionAriaLabel(identity ?? item.toolUseId)}
+          />
+        ) : (
+          <ToolDetailReveal>
+            <ToolCallDetail item={item} onOpenLinkedSession={onOpenLinkedSession} />
+          </ToolDetailReveal>
+        ),
+    };
+  });
 
   // No defaultIsExpanded: opening a group is the reader's move. Seeding it open
   // from in-flight status latches, since the prop is uncontrolled and the
@@ -383,129 +412,6 @@ function OrdinaryToolCalls(props: {
   // question that line has to answer. Per-call counts stay on the rows inside.
   return <ChatToolCalls calls={calls} {...diffStats(items.flatMap(itemDiffs))} />;
 }
-
-type AgentSwarmResult = Extract<ToolResultContent, { kind: 'agent_swarm' }>;
-type AgentSwarmItem = AgentSwarmResult['items'][number];
-
-/** items[] → one ChatToolCalls group; Astryx owns fold chrome. */
-function AgentSwarmToolCalls(props: {
-  toolUseId: string;
-  result: AgentSwarmResult;
-  onOpenLinkedSession?(sessionId: string): void;
-}) {
-  const locale = useUiLocale();
-  const copy = getToolActivityCopy(locale).agent;
-  const { toolUseId, result, onOpenLinkedSession } = props;
-  // Same slot split as ordinary tools / agent_spawn: name = kind ("Agent"),
-  // target = who (preset or child id). Preset strings like "Local Read" are not
-  // tool names and must not occupy the name column.
-  const calls: ChatToolCallItem[] = result.items.map((swarmItem) => {
-    const identity = redactSecrets(
-      swarmItem.agentName?.trim() || swarmItem.profile?.trim() || swarmItem.itemId,
-    );
-    const sessionId = swarmItem.childSessionId;
-    const canOpen = Boolean(sessionId && onOpenLinkedSession);
-    return {
-      key: `${toolUseId}:${swarmItem.itemId}`,
-      name: 'Agent',
-      status: astryxSwarmItemStatus(swarmItem.status),
-      target: identity,
-      duration: formatDuration(swarmItem.durationMs) ?? undefined,
-      stats: copy.swarm.status[swarmItem.status],
-      errorMessage:
-        swarmItem.status === 'failed'
-          ? summarizeErrorText(
-              formatUserVisibleToolText(
-                redactSecrets(swarmItem.summary || swarmItem.failureClass || ''),
-                locale,
-              ),
-            ).replace(/^Error:\s*/i, '') || undefined
-          : undefined,
-      ...(canOpen
-        ? {
-            resultDetail: (
-              <OpenLinkedSessionOnActivate
-                sessionId={sessionId!}
-                onOpen={onOpenLinkedSession!}
-                label={copy.openSession}
-                ariaLabel={copy.openSessionAriaLabel(identity)}
-              />
-            ),
-          }
-        : swarmItem.summary.trim().length > 0
-          ? {
-              resultDetail: (
-                <ToolDetailReveal>
-                  <p className={TOOL_OUTPUT_NOTE_CLASS}>{redactSecrets(swarmItem.summary)}</p>
-                </ToolDetailReveal>
-              ),
-            }
-          : {}),
-    };
-  });
-
-  return (
-    <ChatToolCalls
-      calls={calls}
-      defaultIsExpanded={false}
-      data-kind="agent_swarm"
-      data-status={result.status}
-      data-tool-use-id={toolUseId}
-      data-item-count={result.items.length}
-    />
-  );
-}
-
-/**
- * Astryx expands a CallRow by mounting resultDetail. For swarm children that
- * already have a session id, that activation is the Open gesture — navigate
- * immediately; keep a contract node for tests and as a manual fallback.
- */
-function OpenLinkedSessionOnActivate(props: {
-  sessionId: string;
-  onOpen: (sessionId: string) => void;
-  label: string;
-  ariaLabel: string;
-}) {
-  const onOpenRef = useRef(props.onOpen);
-  onOpenRef.current = props.onOpen;
-  useEffect(() => {
-    onOpenRef.current(props.sessionId);
-  }, [props.sessionId]);
-
-  return (
-    <div className={previewVariants({ part: 'agent-actions' })} role="group">
-      <UiButton
-        variant="ghost"
-        size="sm"
-        className={previewVariants({ part: 'agent-copy' })}
-        data-maka-contract="open-subagent-session"
-        data-session-id={props.sessionId}
-        onClick={() => props.onOpen(props.sessionId)}
-        aria-label={props.ariaLabel}
-        label={props.label}
-      />
-    </div>
-  );
-}
-
-function astryxSwarmItemStatus(
-  status: AgentSwarmItem['status'],
-): ChatToolCallItem['status'] {
-  switch (status) {
-    case 'completed':
-      return 'complete';
-    case 'failed':
-    case 'cancelled':
-      return 'error';
-    case 'running':
-      return 'running';
-    case 'queued':
-    default:
-      return 'pending';
-  }
-}
-
 
 /**
  * Green `+N` / red `-N`, from the shared structural parse. One diff for a row,

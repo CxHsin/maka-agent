@@ -666,6 +666,113 @@ test('an in-flight transcript read cannot outlive its owning connection', async 
   coordinator.close();
 });
 
+test('forwards tool_result_preview with content and seeds it on rejoin', async () => {
+  const coordinator = new SessionContinuityCoordinator(
+    HOST_EPOCH,
+    async () => canonical(),
+    new SessionAdmissionGate(),
+  );
+  const sinkA = new RecordingSink();
+  const connectionA = coordinator.attachConnection('connection-1', sinkA);
+  const openedA = await open(coordinator, 'connection-1');
+  connectionA.activate(openedA.subscriptionId);
+
+  const preview = {
+    type: 'tool_result_preview' as const,
+    id: 'preview-1',
+    turnId: 'turn-1',
+    ts: 10,
+    toolUseId: 'swarm-tool-1',
+    isError: false,
+    content: {
+      kind: 'subagent' as const,
+      childSessionId: 'child-session-1',
+      agentName: 'Local Read',
+      turnId: 'child-turn-1',
+      runId: 'child-run-1',
+      status: 'running' as const,
+      permissionMode: 'explore' as const,
+      summary: '',
+      artifactIds: [] as string[],
+    },
+  };
+  await coordinator.acceptRuntimeEvent(SESSION_ID, 'run-1', preview);
+  await delayImmediate();
+
+  const liveFrame = sinkA.frames.find(
+    (frame) =>
+      frame.kind === 'subscription.session_event' && frame.event.type === 'tool_result_preview',
+  );
+  assert.ok(liveFrame);
+  if (liveFrame?.kind !== 'subscription.session_event') return;
+  assert.equal(liveFrame.event.type, 'tool_result_preview');
+  if (liveFrame.event.type !== 'tool_result_preview') return;
+  assert.equal(liveFrame.event.content.kind, 'subagent');
+  if (liveFrame.event.content.kind !== 'subagent') return;
+  assert.equal(liveFrame.event.content.childSessionId, 'child-session-1');
+
+  // Rejoin: second subscription should be seeded with the retained preview.
+  const sinkB = new RecordingSink();
+  const connectionB = coordinator.attachConnection('connection-2', sinkB);
+  const openedB = await open(coordinator, 'connection-2');
+  connectionB.activate(openedB.subscriptionId);
+  await delayImmediate();
+
+  const seeded = sinkB.frames.find(
+    (frame) =>
+      frame.kind === 'subscription.session_event' && frame.event.type === 'tool_result_preview',
+  );
+  assert.ok(seeded, 'rejoin must receive retained tool_result_preview');
+  if (
+    seeded?.kind !== 'subscription.session_event' ||
+    seeded.event.type !== 'tool_result_preview'
+  ) {
+    return;
+  }
+  assert.equal(
+    seeded.event.content.kind === 'subagent' ? seeded.event.content.childSessionId : undefined,
+    'child-session-1',
+  );
+
+  // Settlement clears retained preview — a third join must not reseed.
+  await coordinator.acceptRuntimeEvent(SESSION_ID, 'run-1', {
+    type: 'tool_result',
+    id: 'result-1',
+    turnId: 'turn-1',
+    ts: 20,
+    toolUseId: 'swarm-tool-1',
+    isError: false,
+    content: {
+      kind: 'subagent',
+      childSessionId: 'child-session-1',
+      agentName: 'Local Read',
+      turnId: 'child-turn-1',
+      runId: 'child-run-1',
+      status: 'completed',
+      permissionMode: 'explore',
+      summary: 'done',
+      artifactIds: [],
+    },
+  });
+  const sinkC = new RecordingSink();
+  const connectionC = coordinator.attachConnection('connection-3', sinkC);
+  const openedC = await open(coordinator, 'connection-3');
+  connectionC.activate(openedC.subscriptionId);
+  await delayImmediate();
+  assert.equal(
+    sinkC.frames.some(
+      (frame) =>
+        frame.kind === 'subscription.session_event' && frame.event.type === 'tool_result_preview',
+    ),
+    false,
+  );
+
+  connectionA.abort(openedA.subscriptionId);
+  connectionB.abort(openedB.subscriptionId);
+  connectionC.abort(openedC.subscriptionId);
+  coordinator.close();
+});
+
 class RecordingSink implements SessionContinuityFrameSink {
   readonly frames: SubscriptionFrame[] = [];
 

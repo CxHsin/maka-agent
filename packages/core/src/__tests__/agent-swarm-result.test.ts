@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { buildAgentSwarmContent, projectAgentSwarmResult } from '../agent-swarm.js';
 import type { ToolResultContent } from '../events.js';
-import { decodeCanonicalToolResultContent } from '../tool-result-record-schema.js';
+import {
+  decodeCanonicalToolResultContent,
+  decodeToolResultPreviewContent,
+} from '../tool-result-record-schema.js';
 import { isCancelledToolResultContent, toolResultActivityStatus } from '../tool-result-status.js';
 
 describe('agent swarm result contract', () => {
@@ -137,7 +140,29 @@ describe('agent swarm result contract', () => {
       artifactCount: 0,
       durationMs: 15,
     });
-    assert.deepEqual(decodeCanonicalToolResultContent(content), content);
+    // Live mid-flight snapshots are preview-only; durable decoder rejects them.
+    assert.throws(() => decodeCanonicalToolResultContent(content), /Invalid tool result content/);
+    assert.deepEqual(decodeToolResultPreviewContent(content), content);
+  });
+
+  test('durable decoder rejects live-only agent_swarm statuses', () => {
+    assert.throws(
+      () =>
+        decodeCanonicalToolResultContent({
+          ...agentSwarmResult(),
+          status: 'running',
+          items: [{ ...agentSwarmResult().items[0]!, status: 'running', summary: '' }],
+        }),
+      /Invalid tool result content/,
+    );
+    assert.throws(
+      () =>
+        decodeCanonicalToolResultContent({
+          ...agentSwarmResult(),
+          items: [{ ...agentSwarmResult().items[0]!, status: 'queued', summary: '' }],
+        }),
+      /Invalid tool result content/,
+    );
   });
 });
 

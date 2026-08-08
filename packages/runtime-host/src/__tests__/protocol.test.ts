@@ -287,6 +287,21 @@ describe('Runtime Host bootstrap protocol', () => {
       },
       { ...identity, type: 'tool_progress', chunk: 'working' },
       { ...identity, type: 'tool_result', status: 'completed', durationMs: 3 },
+      {
+        ...identity,
+        type: 'tool_result_preview',
+        isError: false,
+        content: {
+          kind: 'subagent',
+          childSessionId: 'child-1',
+          agentName: 'Local Read',
+          turnId: 'turn-child',
+          status: 'running',
+          permissionMode: 'explore',
+          summary: '',
+          artifactIds: [],
+        },
+      },
     ]) {
       assert.doesNotThrow(() => decodeHostFrame({ ...envelope, event }));
     }

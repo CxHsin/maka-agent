@@ -15,7 +15,8 @@ import { useClipboardCopyFeedback } from '../clipboard-feedback.js';
 import { useUiLocale } from '../locale-context.js';
 import { cn } from '../ui.js';
 import { previewVariants } from '../primitives/chat.js';
-import { AgentSwarmPreview, ExploreAgentPreview, SubagentPreview } from './agent-preview.js';
+import { AgentSwarmToolCalls } from './agent-swarm-calls.js';
+import { ExploreAgentPreview, SubagentPreview } from './agent-preview.js';
 import { formatQuietJsonValue } from './builtin-preview.js';
 import { ToolCodeBlock } from './tool-code-block.js';
 import { diffSyntaxTokens } from './diff-syntax.js';
@@ -127,6 +128,7 @@ export function ToolOutputSurface(props: {
 export function ToolResultPreview(props: {
   content: ToolResultContent;
   toolName?: string;
+  toolUseId?: string;
   args?: unknown;
   shellRunSource?: 'owned' | 'unavailable';
   /** Open a linked subagent child session in the main chat column. */
@@ -190,10 +192,12 @@ export function ToolResultPreview(props: {
   }
 
   if (content.kind === 'agent_swarm') {
+    // Same Astryx multi-call projection as ToolTrow — one path only.
     return (
-      <AgentSwarmPreview
+      <AgentSwarmToolCalls
+        toolUseId={props.toolUseId ?? 'agent_swarm'}
         result={content}
-        onOpenSession={props.onOpenLinkedSession}
+        onOpenLinkedSession={props.onOpenLinkedSession}
       />
     );
   }

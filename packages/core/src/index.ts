@@ -401,6 +401,7 @@ export {
 } from './session.js';
 export {
   decodeCanonicalToolResultContent,
+  decodeToolResultPreviewContent,
   normalizeToolResultContentForRead,
 } from './tool-result-record-schema.js';
 

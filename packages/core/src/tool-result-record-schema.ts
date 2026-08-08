@@ -205,8 +205,23 @@ export function decodeCanonicalToolResultContent(value: unknown): ToolResultCont
   const shell = decodeCanonicalShellToolResultContent(value);
   if (shell.state === 'invalid') throw new Error('Invalid shell tool result content');
   if (shell.state === 'valid') return shell.content;
-  if (!isNonShellToolResultContent(value)) {
+  if (!isNonShellToolResultContent(value, { liveAgentSwarm: false })) {
     throw new Error('Invalid tool result content');
+  }
+  return value;
+}
+
+/**
+ * Live-only tool_result_preview content. Same shape as durable results, but
+ * agent_swarm may still carry mid-flight `running` / item `queued|running`.
+ * Never use this decoder for transcript or recovery reads.
+ */
+export function decodeToolResultPreviewContent(value: unknown): ToolResultContent {
+  const shell = decodeCanonicalShellToolResultContent(value);
+  if (shell.state === 'invalid') throw new Error('Invalid shell tool result content');
+  if (shell.state === 'valid') return shell.content;
+  if (!isNonShellToolResultContent(value, { liveAgentSwarm: true })) {
+    throw new Error('Invalid tool result preview content');
   }
   return value;
 }
@@ -223,7 +238,10 @@ function normalizeLegacySubagentToolResultContent(value: unknown): unknown {
   return { ...value, status: 'waiting_for_user' };
 }
 
-function isNonShellToolResultContent(value: unknown): value is ToolResultContent {
+function isNonShellToolResultContent(
+  value: unknown,
+  options: { liveAgentSwarm: boolean },
+): value is ToolResultContent {
   if (!isRecord(value) || typeof value.kind !== 'string') return false;
   switch (value.kind) {
     case 'text':
@@ -313,7 +331,7 @@ function isNonShellToolResultContent(value: unknown): value is ToolResultContent
         )
       );
     case 'agent_swarm':
-      return isAgentSwarmResult(value);
+      return isAgentSwarmResult(value, options.liveAgentSwarm);
     case 'rive_workflow':
       return isRiveResult(value);
     default:
@@ -340,19 +358,40 @@ function hasValidSubagentResultFields(value: Record<string, unknown>): boolean {
   );
 }
 
-function isAgentSwarmResult(value: Record<string, unknown>): value is AgentSwarmResult {
+const DURABLE_AGENT_SWARM_BATCH_STATUSES = new Set(['completed', 'partial', 'failed', 'cancelled']);
+const LIVE_AGENT_SWARM_BATCH_STATUSES = new Set(['running', ...DURABLE_AGENT_SWARM_BATCH_STATUSES]);
+const DURABLE_AGENT_SWARM_ITEM_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const LIVE_AGENT_SWARM_ITEM_STATUSES = new Set([
+  'queued',
+  'running',
+  ...DURABLE_AGENT_SWARM_ITEM_STATUSES,
+]);
+
+function isAgentSwarmResult(
+  value: Record<string, unknown>,
+  liveAgentSwarm: boolean,
+): value is AgentSwarmResult {
+  const batchStatuses = liveAgentSwarm
+    ? LIVE_AGENT_SWARM_BATCH_STATUSES
+    : DURABLE_AGENT_SWARM_BATCH_STATUSES;
+  const itemStatuses = liveAgentSwarm
+    ? LIVE_AGENT_SWARM_ITEM_STATUSES
+    : DURABLE_AGENT_SWARM_ITEM_STATUSES;
   return (
     hasExactShape(value, AGENT_SWARM_SHAPE) &&
-    ['running', 'completed', 'partial', 'failed', 'cancelled'].includes(value.status as string) &&
+    batchStatuses.has(value.status as string) &&
     Array.isArray(value.items) &&
-    value.items.every(isAgentSwarmItem) &&
+    value.items.every((item) => isAgentSwarmItem(item, itemStatuses)) &&
     isFiniteNumber(value.startedAt) &&
     isFiniteNumber(value.completedAt) &&
     isFiniteNumber(value.durationMs)
   );
 }
 
-function isAgentSwarmItem(value: unknown): value is AgentSwarmItem {
+function isAgentSwarmItem(
+  value: unknown,
+  allowedStatuses: ReadonlySet<string>,
+): value is AgentSwarmItem {
   return (
     isRecord(value) &&
     hasExactShape(value, AGENT_SWARM_ITEM_SHAPE) &&
@@ -367,7 +406,7 @@ function isAgentSwarmItem(value: unknown): value is AgentSwarmItem {
     isOptionalString(value.turnId) &&
     isOptionalString(value.runId) &&
     isOptionalString(value.resumedFromRunId) &&
-    ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(value.status as string) &&
+    allowedStatuses.has(value.status as string) &&
     typeof value.summary === 'string' &&
     isStringArray(value.artifactIds) &&
     isOptionalFiniteNumber(value.startedAt) &&

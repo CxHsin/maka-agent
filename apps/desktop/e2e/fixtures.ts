@@ -182,21 +182,6 @@ async function seedE2eGitReviewProject(
 }
 
 /**
- * The sandboxed HOME of the run currently under test. Set by withE2eWindow
- * before Electron launches.
- *
- * Read it from inside a test BODY, never as a fixture: a fixture would have no
- * declared dependency on the window fixture, so Playwright could resolve it
- * before the window is set up and hand back a stale path.
- */
-let currentHomeDir = '';
-
-export function e2eHomeDir(): string {
-  if (!currentHomeDir) throw new Error('e2eHomeDir() is only valid inside a test that opened a window');
-  return currentHomeDir;
-}
-
-/**
  * Own the full launch lifecycle so a failure anywhere — seeding, Electron
  * launch, firstWindow, or the readiness wait — still tears down the Electron
  * process and the throwaway userData dir. The previous shape ran `mkdtemp`
@@ -234,7 +219,6 @@ async function withE2eWindow(
   // it too — there is no second path to leak.
   const homeDir = path.join(userDataDir, 'home');
   await mkdir(homeDir, { recursive: true });
-  currentHomeDir = homeDir;
   let app: ElectronApplication | undefined;
   const mainLogs: string[] = [];
   const rendererLogs: string[] = [];

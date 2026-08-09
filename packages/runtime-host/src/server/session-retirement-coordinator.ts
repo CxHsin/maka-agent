@@ -1,8 +1,5 @@
-import { sessionRevisionFamilyId } from '@maka/core/session';
-import type {
-  SubagentWorkspaceBinding,
-  SubagentWorktreeExecutor,
-} from '@maka/core/subagent-workspace';
+import { sessionRevisionFamilyId } from '@maka/core';
+import type { SubagentWorkspaceBinding, SubagentWorktreeExecutor } from '@maka/core';
 import type { InteractiveArtifactStoreWriter } from '@maka/storage/artifact-stores';
 import {
   isSessionNotFoundError,

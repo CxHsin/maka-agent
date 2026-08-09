@@ -1,5 +1,5 @@
-import { deriveConnectionSlug } from '@maka/core/llm-connections';
-import type { ConnectionCatalogSnapshot } from '@maka/core/runtime-policy';
+import { deriveConnectionSlug } from '@maka/core';
+import type { ConnectionCatalogSnapshot } from '@maka/core';
 import {
   readRuntimeHostConnectionCatalog,
   type RuntimeHostConnection,

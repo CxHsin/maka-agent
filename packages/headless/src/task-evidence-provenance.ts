@@ -3,8 +3,8 @@ import {
   validateExecutionEvidenceRef,
   type ExecutionEvidenceRef,
   type ExecutionLogCoverage,
-} from '@maka/core/execution-evidence';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+} from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import type { HeavyTaskCompactEvidenceEnvelope } from './task-contracts.js';
 
 export interface TaskEvidenceRuntimeProvenanceInput {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { AGENT_GRAPH_INTENT_CLAIM_SCHEMA_VERSION } from '@maka/core/agent-graph-control';
+import { AGENT_GRAPH_INTENT_CLAIM_SCHEMA_VERSION } from '@maka/core';
 import {
   AgentGraphIntentClaimConflictError,
   createSqliteSessionMetadataStore,

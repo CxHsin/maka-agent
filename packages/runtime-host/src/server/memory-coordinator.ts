@@ -11,9 +11,9 @@ import {
   setLocalMemoryEntryStatusDraft,
   stableLocalMemoryEntryId,
   stableLocalMemoryProposalId,
-} from '@maka/core/local-memory';
-import { redactSecrets } from '@maka/core/redaction';
-import type { RuntimePolicySnapshot } from '@maka/core/runtime-policy';
+} from '@maka/core';
+import { redactSecrets } from '@maka/core';
+import type { RuntimePolicySnapshot } from '@maka/core';
 import {
   authenticateInteractiveMemoryBundleStoreWriter,
   MemoryBundleBackupRevisionConflictError,

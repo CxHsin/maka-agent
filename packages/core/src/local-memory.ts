@@ -1055,8 +1055,8 @@ function slugId(title: string): string {
   return slug.length > 0 ? slug : 'memory-entry';
 }
 
-function sha256Hex(input: string): string {
-  const bytes = new TextEncoder().encode(input);
+export function sha256Hex(input: string | Uint8Array): string {
+  const bytes = typeof input === 'string' ? new TextEncoder().encode(input) : input;
   const bitLength = bytes.length * 8;
   const paddedLength = Math.ceil((bytes.length + 9) / 64) * 64;
   const padded = new Uint8Array(paddedLength);

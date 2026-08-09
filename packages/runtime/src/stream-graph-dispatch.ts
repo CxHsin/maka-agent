@@ -2,9 +2,9 @@ import {
   decodeAgentGraphIntentClaim,
   type AgentGraphIntentClaim,
   type AgentGraphIntentClaimStore,
-} from '@maka/core/agent-graph-control';
-import type { AgentRunStore } from '@maka/core/agent-run';
-import type { SessionEvent } from '@maka/core/events';
+} from '@maka/core';
+import type { AgentRunStore } from '@maka/core';
+import type { SessionEvent } from '@maka/core';
 import type { RuntimeEventStore } from '@maka/core';
 import type {
   ClaimedAgentGraphIntentResult,

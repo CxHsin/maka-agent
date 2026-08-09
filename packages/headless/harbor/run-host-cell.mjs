@@ -3,7 +3,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { providerAuthRequiresSecret } from '@maka/core/llm-connections';
+import { providerAuthRequiresSecret } from '@maka/core';
 import {
   buildAiSdkCellBackendRegistration,
   buildHarborCellContextBudgetPolicySnapshot,

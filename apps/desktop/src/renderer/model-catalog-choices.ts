@@ -2,13 +2,13 @@ import {
   buildConnectionModelCatalogEntries,
   type ModelCatalogEntry,
   type SavedModelChoice,
-} from '@maka/core/model-catalog';
+} from '@maka/core';
 import {
   CODEX_SUBSCRIPTION_UNSUPPORTED_CHATGPT_MODELS,
   PROVIDER_DEFAULTS,
   connectionEnabledModelIds,
-} from '@maka/core/llm-connections';
-import { isWiredOAuthProvider } from '@maka/core/provider-registry';
+} from '@maka/core';
+import { isWiredOAuthProvider } from '@maka/core';
 import type { LlmConnection, ProviderType, UiLocale } from '@maka/core';
 import { getShellRemainingCopy } from './locales/shell-remaining-copy.js';
 

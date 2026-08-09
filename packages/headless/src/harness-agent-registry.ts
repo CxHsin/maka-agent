@@ -1,5 +1,5 @@
-import { PROVIDER_DEFAULTS, type ModelInfo, type ProviderType } from '@maka/core/llm-connections';
-import { type ModelRuntimeWire, resolveModelRuntime } from '@maka/runtime/model-runtime';
+import { PROVIDER_DEFAULTS, type ModelInfo, type ProviderType } from '@maka/core';
+import { type ModelRuntimeWire, resolveModelRuntime } from '@maka/runtime';
 import type { ProviderAuthProxyMode, ProviderUsageProtocol } from './provider-auth-proxy.js';
 import { modelApiProtocolFromEnv, selectedModelApiProtocol } from './provider-env.js';
 

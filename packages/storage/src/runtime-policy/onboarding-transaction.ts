@@ -7,12 +7,8 @@ import {
   normalizeConnectionModelDiscoveryResult,
   normalizeCredentialSecret,
   type ConnectionModelDiscoveryResult,
-} from '@maka/core/runtime-policy';
-import {
-  PROVIDER_DEFAULTS,
-  providerAuthSupportsApiKey,
-  type ProviderType,
-} from '@maka/core/llm-connections';
+} from '@maka/core';
+import { PROVIDER_DEFAULTS, providerAuthSupportsApiKey, type ProviderType } from '@maka/core';
 import { syncDirectory } from '../stable-storage.js';
 import { record } from './codec.js';
 import {

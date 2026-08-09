@@ -1,12 +1,12 @@
 import {
   PROVIDER_DEFAULTS,
   type ProviderType,
-} from '@maka/core/llm-connections';
+} from '@maka/core';
 import type {
   ConnectionCatalogEntry,
   ConnectionCatalogSnapshot,
   CredentialLocator,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import type { DesktopRuntimeHostClient } from './runtime-host-client.js';
 
 export type RuntimeHostAccountConnectionClient = Pick<

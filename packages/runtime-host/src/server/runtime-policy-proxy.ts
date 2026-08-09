@@ -1,4 +1,4 @@
-import type { RuntimePolicy } from '@maka/core/runtime-policy';
+import type { RuntimePolicy } from '@maka/core';
 import type { ProxiedFetchProxy } from '@maka/runtime';
 
 export function toRuntimePolicyProxy(

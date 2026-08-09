@@ -13,15 +13,11 @@ import {
   type SelectItem,
   type Terminal,
 } from '@earendil-works/pi-tui';
-import type { PermissionMode } from '@maka/core/permission';
-import {
-  isThinkingLevel,
-  thinkingVariantsForModel,
-  type ThinkingLevel,
-} from '@maka/core/model-thinking';
-import { type ModelInfo, type ProviderType } from '@maka/core/llm-connections';
-import type { OrchestrationMode } from '@maka/core/orchestration';
-import type { SkillInvocationResult } from '@maka/core/skill-invocation';
+import type { PermissionMode } from '@maka/core';
+import { isThinkingLevel, thinkingVariantsForModel, type ThinkingLevel } from '@maka/core';
+import { type ModelInfo, type ProviderType } from '@maka/core';
+import type { OrchestrationMode } from '@maka/core';
+import type { SkillInvocationResult } from '@maka/core';
 import {
   projectRevisionLinkedSessionTree,
   type QueueEnqueueOutcome,
@@ -33,7 +29,7 @@ import {
   foreignSessionHandoffDisplayText,
   foreignSourceLabel,
   type ForeignSessionSummary,
-} from '@maka/core/foreign-session';
+} from '@maka/core';
 import type { ContextDiagnostics, GoalTurnOutcome, SessionActivityLease } from '@maka/runtime';
 import { listApiKeyOnboardableProviders } from './onboarding-catalog.js';
 import type {

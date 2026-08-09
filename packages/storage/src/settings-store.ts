@@ -9,8 +9,8 @@ import type {
   UsageRange,
   UsageStats,
 } from '@maka/core';
-import { createDefaultSettings, mergeSettings, normalizeSettings } from '@maka/core/settings';
-import { sanitizeOnboardingMilestones } from '@maka/core/onboarding';
+import { createDefaultSettings, mergeSettings, normalizeSettings } from '@maka/core';
+import { sanitizeOnboardingMilestones } from '@maka/core';
 import { readUsageStats } from './usage-stats-store.js';
 
 export interface SettingsStore {

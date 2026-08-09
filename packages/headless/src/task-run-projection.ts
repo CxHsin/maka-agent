@@ -1,7 +1,4 @@
-import {
-  validateExecutionEvidenceRef,
-  type ExecutionEvidenceRef,
-} from '@maka/core/execution-evidence';
+import { validateExecutionEvidenceRef, type ExecutionEvidenceRef } from '@maka/core';
 import type { ResultRecord } from './contracts.js';
 import { compactArtifactEvidence, compactSelfCheckEvidence } from './heavy-task-evidence.js';
 import {

@@ -9,7 +9,7 @@ import {
   MemoryItemStoreConflictError,
   type MemoryItemSource,
   type MemoryItemWrite,
-} from '@maka/core/long-term-memory';
+} from '@maka/core';
 import {
   LONG_TERM_MEMORY_DATABASE_NAME,
   authenticateInteractiveLongTermMemoryWriter,

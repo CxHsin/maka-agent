@@ -1,5 +1,5 @@
-import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeExecutionConnection } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 
 import type { ProviderRequestTracker } from './provider-request-telemetry.js';
 import type { ActiveFullCompactBlock } from './active-full-compact.js';

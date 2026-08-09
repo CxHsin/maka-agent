@@ -1,4 +1,4 @@
-import type { QuotaSnapshot, QuotaWindow } from '@maka/core/oauth-subscription';
+import type { QuotaSnapshot, QuotaWindow } from '@maka/core';
 import {
   OAuthTokenEndpointError,
   OAUTH_PROVIDER_CONTRACTS,

@@ -12,9 +12,9 @@ import {
   type CreateConnectionInput,
   type LlmConnection,
   type UpdateConnectionInput,
-} from '@maka/core/llm-connections';
-import { pruneRelayModelProfiles } from '@maka/core/model-thinking';
-import { normalizeOptionalRequestBodyOverlay } from '@maka/core/runtime-policy';
+} from '@maka/core';
+import { pruneRelayModelProfiles } from '@maka/core';
+import { normalizeOptionalRequestBodyOverlay } from '@maka/core';
 import { relayProfilesForStorage } from './relay-profile-store.js';
 
 export interface ConnectionStore {

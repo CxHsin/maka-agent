@@ -11,7 +11,7 @@ import {
   type CredentialVersionBasis,
   type DeleteCredentialInput,
   type SetCredentialInput,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import { deepFreeze, integer, nextRevision, record, revision, unique } from './codec.js';
 import {
   codecError,

@@ -19,7 +19,7 @@ import {
   ARTIFACT_ENTITY_ID_MAX_CHARS,
   ARTIFACT_TURN_KEY_MAX_CHARS,
   type ArtifactRecord,
-} from '@maka/core/artifacts';
+} from '@maka/core';
 import {
   ARTIFACT_TEXT_PREVIEW_LIMIT_BYTES,
   type ArtifactStore,

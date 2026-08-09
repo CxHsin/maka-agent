@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import type { StoredMessage } from '@maka/core/session';
+import type { StoredMessage } from '@maka/core';
 import { createSessionStore } from '../session-store.js';
 import { createSettingsStore } from '../settings-store.js';
 

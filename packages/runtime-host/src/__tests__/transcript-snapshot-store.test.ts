@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { StoredMessage } from '@maka/core/session';
+import type { StoredMessage } from '@maka/core';
 import { TranscriptSnapshotStore } from '../server/transcript-snapshot-store.js';
 
 test('expires idle snapshots against an injected clock', () => {

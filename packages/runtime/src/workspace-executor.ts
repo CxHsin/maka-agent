@@ -4,7 +4,7 @@ import { glob as nodeGlob } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { isPathInside, realpathAllowMissing } from './path-containment.js';
 import { promisify } from 'node:util';
-import type { ToolExecutionFacts } from '@maka/core/permission';
+import type { ToolExecutionFacts } from '@maka/core';
 import { runProcessWithBoundedTail, runShellWithBoundedTail } from './shell-exec.js';
 import type { ChildFdInput } from './child-fd-input.js';
 import type { ShellPlan } from './shell-detect.js';

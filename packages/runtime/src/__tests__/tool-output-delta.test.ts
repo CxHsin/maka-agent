@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
-import type { ToolOutputDeltaEvent } from '@maka/core/events';
-import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core/events';
+import type { ToolOutputDeltaEvent } from '@maka/core';
+import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core';
 import { expect } from '../test-helpers.js';
 import { createToolOutputDeltaEmitter } from '../tool-output-delta.js';
 

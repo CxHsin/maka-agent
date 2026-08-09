@@ -23,10 +23,9 @@ const tails = new Map<string, Promise<void>>();
  * settles, then runs, then releases the key for the next waiter. Distinct keys
  * never block each other.
  *
- * @internal Low-level primitive shared with the headless tools via the
- * `@maka/runtime/file-write-lock` subpath. Not part of the public runtime API —
- * file tools own the keying, so an external caller would only be sharing this
- * one process-global queue by accident.
+ * Low-level primitive shared with the headless tools through the
+ * `@maka/runtime` public API. File tools own the keying; other callers should
+ * not use this as a general-purpose lock.
  */
 export function withFileWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = tails.get(key) ?? Promise.resolve();

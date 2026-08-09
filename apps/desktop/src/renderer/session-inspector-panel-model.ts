@@ -1,4 +1,4 @@
-import { emptyTraceTotals, type SessionTrace, type TraceStep, type TraceTotals } from '@maka/core/session-trace';
+import { emptyTraceTotals, type SessionTrace, type TraceStep, type TraceTotals } from '@maka/core';
 
 /**
  * View model for the Inspector panel (#1625).

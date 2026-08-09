@@ -2,7 +2,7 @@ import {
   decodeCredentialLocator,
   REQUEST_HEADERS_MAX_BYTES,
   type CredentialLocator,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import {
   requireEncodedByteLimit,
   requireExactRecord,

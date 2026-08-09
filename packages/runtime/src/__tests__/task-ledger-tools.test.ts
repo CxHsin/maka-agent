@@ -11,7 +11,7 @@ import {
   type TaskLedgerMutationContext,
   type TaskLedgerStore,
   type TaskOwner,
-} from '@maka/core/task-ledger';
+} from '@maka/core';
 import {
   LEGACY_TASK_CREATE_TOOL_NAME,
   LEGACY_TASK_UPDATE_TOOL_NAME,

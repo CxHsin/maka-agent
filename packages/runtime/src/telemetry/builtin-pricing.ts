@@ -1,4 +1,4 @@
-import type { PricingConfig } from '@maka/core/usage-stats/types';
+import type { PricingConfig } from '@maka/core';
 import { GENERATED_MODEL_PRICING } from './model-pricing.generated.js';
 
 // Access-path-specific pricing that models.dev cannot represent. The generated

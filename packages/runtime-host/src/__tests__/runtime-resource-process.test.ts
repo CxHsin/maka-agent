@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { randomUUID } from 'node:crypto';
-import { isActiveShellRunStatus } from '@maka/core/shell-run';
+import { isActiveShellRunStatus } from '@maka/core';
 import {
   ShellRunProcessManager,
   ShellRunPtyControlClosedError,

@@ -1,10 +1,8 @@
 /**
- * @maka/core — barrel export.
+ * @maka/core public API.
  *
- * Convention: subpath imports (e.g. `@maka/core/permission`) are
- * the canonical form. The barrel below re-exports everything for convenience
- * but downstream code should prefer subpaths to keep the dependency graph
- * explicit.
+ * Cross-package consumers import this root entrypoint. Internal source files
+ * remain split by responsibility; those files are not separate public APIs.
  */
 
 export * from './mcp.js';
@@ -29,6 +27,37 @@ export * from './subagent-workspace.js';
 export * from './pet.js';
 export * from './skill-invocation.js';
 export * from './external-session.js';
+export * from './canonical-runtime-event.js';
+export * from './runtime-boundary.js';
+export * from './tool-args-identity.js';
+export * from './tool-ledger-scanner.js';
+export * from './tool-recovery-fact.js';
+export * from './tool-recovery-bundle.js';
+export * from './artifacts.js';
+export * from './automation.js';
+export * from './plan-reminders.js';
+export * from './task-ledger.js';
+export * from './provider-registry.js';
+export * from './provider-auth.js';
+export * from './llm-connections.js';
+export * from './model-metadata.js';
+export * from './model-call-usage-projection.js';
+export * from './usage-ledger-merge.js';
+export * from './session-trace.js';
+export * from './diagnostic-log.js';
+export * from './result.js';
+export * from './usage-stats/pricing.js';
+export * from './usage-stats/bucket-key.js';
+export * from './usage-record-schema.js';
+export * from './backend-types.js';
+export * from './session.js';
+export * from './settings/network-settings.js';
+export * from './usage-stats/types.js';
+export * from './model-thinking.js';
+export * from './runtime-inputs.js';
+export * from './shell-run-result.js';
+export * from './agent-run.js';
+export * from './chat-model-choice.js';
 
 // events.ts
 export type {
@@ -87,6 +116,8 @@ export type {
   AttachmentIngestItem,
   CompleteStopReason,
   ContextBudgetExhaustedDetail,
+  ToolUncertainOutcomeSignal,
+  UserQuestionAnswerAckEvent,
 } from './events.js';
 export type {
   UserQuestion,
@@ -142,8 +173,6 @@ export type {
 export { projectAgentSwarmResult } from './agent-swarm.js';
 
 // runtime-event.ts — canonical Runtime v2 event contract.
-// Subpath `@maka/core/runtime-event` is the canonical import; these barrel
-// re-exports are for convenience.
 export type {
   RuntimeEvent,
   RuntimeEventRole,
@@ -226,7 +255,7 @@ export {
 
 // execution-evidence.ts — shared cross-ledger identity and source coverage.
 // This contract references canonical facts; it does not create another fact
-// authority. Subpath `@maka/core/execution-evidence` is preferred.
+// authority.
 export type {
   ExecutionIdentityRef,
   TaskIdentityRef,
@@ -313,16 +342,6 @@ export type {
   RuntimePrefixSegmentV1,
   RuntimeBoundaryDigest,
 } from './runtime-boundary.js';
-// The following modules are intentionally type-only (or absent) in this
-// browser-consumed barrel: their value implementations depend on node:* (e.g.
-// runtime-boundary.ts and tool-args-identity.ts use node:crypto, tool-
-// ledger-scanner.ts and canonical-runtime-event.ts use node:util), which the
-// renderer cannot evaluate. Runtime code must import their values from the
-// explicit subpaths (`@maka/core/runtime-boundary`, `@maka/core/tool-args-
-// identity`, `@maka/core/tool-ledger-scanner`, `@maka/core/canonical-runtime-
-// event`, `@maka/core/tool-recovery-bundle`) so renderer imports of `@maka/core`
-// never evaluate Node-only modules before React can mount.
-
 // session.ts
 export type {
   SessionHeader,
@@ -1102,7 +1121,7 @@ export {
   normalizeUpdatePlanReminderInput,
 } from './plan-reminders.js';
 // foreign-session.ts (#1057) — untrusted Claude Code / Codex session
-// contracts + defensive parsing. Subpath @maka/core/foreign-session preferred.
+// contracts + defensive parsing.
 export type {
   ClaudeTitleCandidates,
   ClaudeTranscriptMeta,

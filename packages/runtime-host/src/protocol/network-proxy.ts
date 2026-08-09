@@ -1,5 +1,5 @@
-import type { RuntimePolicy } from '@maka/core/runtime-policy';
-import type { TestProxyResult } from '@maka/core/settings/network-settings';
+import type { RuntimePolicy } from '@maka/core';
+import type { TestProxyResult } from '@maka/core';
 import {
   requireEncodedByteLimit,
   requireExactRecord,

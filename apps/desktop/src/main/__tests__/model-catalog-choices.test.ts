@@ -6,8 +6,8 @@ import { pathToFileURL } from 'node:url';
 import { describe, it } from 'node:test';
 import { build } from 'esbuild';
 import type { ChatModelChoice, LlmConnection, SessionSummary } from '@maka/core';
-import { buildChatModelChoices } from '@maka/core/chat-model-choice';
-import { buildConnectionModelCatalogEntries } from '@maka/core/model-catalog';
+import { buildChatModelChoices } from '@maka/core';
+import { buildConnectionModelCatalogEntries } from '@maka/core';
 import {
   normalizeActiveChatModel,
   pickNewChatModel,

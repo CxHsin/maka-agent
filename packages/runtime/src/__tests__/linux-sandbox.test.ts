@@ -9,7 +9,7 @@ import {
   createReadOnlyPermissionProfile,
   createWorkspaceWritePermissionProfile,
   type PermissionProfile,
-} from '@maka/core/permission-profile';
+} from '@maka/core';
 
 import {
   LinuxBubblewrapBackend,

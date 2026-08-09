@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { normalizeMessageContent, type MessageContent } from '@maka/core/events';
+import { normalizeMessageContent, type MessageContent } from '@maka/core';
 
 export function messageContentDigest(content: MessageContent): `sha256:${string}` {
   return `sha256:${createHash('sha256')

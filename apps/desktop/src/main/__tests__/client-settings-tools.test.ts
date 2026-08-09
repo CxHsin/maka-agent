@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createDefaultSettings, mergeSettings } from '@maka/core/settings';
+import { createDefaultSettings, mergeSettings } from '@maka/core';
 import { buildClientSettingsTools } from '../client-settings-tools.js';
 
 test('the bound client confirms and applies only UI and operating-system settings', async () => {

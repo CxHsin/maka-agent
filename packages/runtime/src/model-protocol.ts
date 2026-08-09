@@ -21,7 +21,7 @@
  * for this seam.
  */
 
-import type { CacheMissInputSource } from '@maka/core/usage-stats/types';
+import type { CacheMissInputSource } from '@maka/core';
 
 // ---------------------------------------------------------------------------
 // JSON value contract

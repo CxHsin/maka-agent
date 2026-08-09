@@ -3,14 +3,14 @@ import {
   isSessionInspectDocument,
   type AgentRunInspectDocument,
   type SessionInspectDocument,
-} from '@maka/core/execution-inspect';
+} from '@maka/core';
 import {
   isSessionTrace,
   SESSION_TRACE_SCHEMA_VERSION,
   type SessionTraceCoverage,
   type TraceTotals,
   type TurnTrace,
-} from '@maka/core/session-trace';
+} from '@maka/core';
 import {
   requireCount,
   requireEncodedByteLimit,

@@ -4,10 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import type { StoredMessage } from '@maka/core';
-import {
-  ExternalSessionAdapterRegistry,
-  type ExternalSessionAdapter,
-} from '@maka/core/external-session';
+import { ExternalSessionAdapterRegistry, type ExternalSessionAdapter } from '@maka/core';
 import {
   ExternalSessionImporter,
   type ExternalSessionImportTarget,

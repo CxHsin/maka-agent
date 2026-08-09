@@ -16,18 +16,11 @@
  * StoredMessage shapes — those projections are owned by later nodes and
  * the materializer already covers the UI path.
  *
- * NOTE: imports the new `@maka/core/runtime-event` subpath. The steward
- * node re-exports it from the core barrel; until then the subpath in
- * `packages/core/package.json` is the canonical entry point.
+ * The canonical event contract is imported from the `@maka/core` public API.
  */
 
-import type {
-  StoredMessage,
-  UserMessage,
-  AssistantMessage,
-  SystemNoteMessage,
-} from '@maka/core/session';
-import { createRuntimeEventId, type RuntimeEvent } from '@maka/core/runtime-event';
+import type { StoredMessage, UserMessage, AssistantMessage, SystemNoteMessage } from '@maka/core';
+import { createRuntimeEventId, type RuntimeEvent } from '@maka/core';
 
 // ============================================================================
 // Shared context for legacy → event conversion
@@ -299,4 +292,4 @@ export function runtimeEventToStoredMessageDraft(
 }
 
 // Re-export the id helper for adapter callers that want the same default.
-export { createRuntimeEventId } from '@maka/core/runtime-event';
+export { createRuntimeEventId } from '@maka/core';

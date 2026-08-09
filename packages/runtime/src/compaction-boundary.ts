@@ -1,7 +1,4 @@
-import type {
-  CompactionDecisionDiagnostic,
-  ContextBudgetDiagnostic,
-} from '@maka/core/usage-stats/types';
+import type { CompactionDecisionDiagnostic, ContextBudgetDiagnostic } from '@maka/core';
 
 export type CompactionStage = 'priorReplay' | 'activeStep';
 export type CompactionSourceKind = 'runtimeEvents' | 'providerMessages';

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { LOCAL_MEMORY_MAX_BYTES } from '@maka/core/local-memory';
+import { LOCAL_MEMORY_MAX_BYTES } from '@maka/core';
 
 export const MEMORY_DOCUMENT_MAX_BYTES = LOCAL_MEMORY_MAX_BYTES;
 

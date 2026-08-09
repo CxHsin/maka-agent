@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import type { RootExecutionDescriptor } from '@maka/core/agent-run';
+import type { RootExecutionDescriptor } from '@maka/core';
 import { createSqliteAgentRunStore, type AdmitRootTurnInput } from '../agent-run-store.js';
 
 test('regenerate admission durably binds the immutable source Turn', async () => {

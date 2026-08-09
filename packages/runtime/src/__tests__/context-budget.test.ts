@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { describe, test } from 'node:test';
-import { encodeCanonicalRuntimeEvent } from '@maka/core/canonical-runtime-event';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import { encodeCanonicalRuntimeEvent } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import {
   ARCHIVED_TOOL_RESULT_PLACEHOLDER_KIND,
   ARCHIVED_TOOL_RESULT_REWRITE_VERSION,

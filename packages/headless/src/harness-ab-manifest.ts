@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { ThinkingLevel } from '@maka/core/model-thinking';
+import type { ThinkingLevel } from '@maka/core';
 import { buildAbRunManifest, buildRunManifestFingerprint } from './ab-manifest.js';
 import type { AbRunManifest } from './ab-types.js';
 import type { HarnessOracleAnnotation } from './harness-oracle-registry.js';

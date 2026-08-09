@@ -1,6 +1,6 @@
 import type { SessionEvent } from '@maka/core';
-import type { SkillInvocationResult } from '@maka/core/skill-invocation';
-import type { TurnOrchestration } from '@maka/core/runtime-inputs';
+import type { SkillInvocationResult } from '@maka/core';
+import type { TurnOrchestration } from '@maka/core';
 import {
   drainGoalTurn,
   type GoalTurnOutcome,

@@ -7,7 +7,7 @@ import type {
   BotReadinessState,
   UpdateAppSettingsInput,
 } from '@maka/core';
-import { tryResult } from '@maka/core/result';
+import { tryResult } from '@maka/core';
 import {
   getWechatBridgeQrCode,
   testBotChannel as testRuntimeBotChannel,

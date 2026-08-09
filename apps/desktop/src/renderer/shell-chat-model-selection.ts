@@ -1,5 +1,5 @@
 import type { ChatModelChoice, LlmConnection, SessionSummary } from '@maka/core';
-import { CODEX_SUBSCRIPTION_UNSUPPORTED_CHATGPT_MODELS } from '@maka/core/codex-model-compatibility';
+import { CODEX_SUBSCRIPTION_UNSUPPORTED_CHATGPT_MODELS } from '@maka/core';
 
 export type NewChatModel = { llmConnectionSlug: string; model: string };
 

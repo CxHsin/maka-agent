@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { AgentRunHeader, RuntimeEvent } from '@maka/core';
-import type { SessionEvent } from '@maka/core/events';
+import type { SessionEvent } from '@maka/core';
 import {
   createSessionStore,
   createSqliteAgentRunStore,

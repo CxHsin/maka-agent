@@ -4,8 +4,8 @@ import {
   type ModelInfo,
   type ProviderRuntimeAdapter,
   type ProviderType,
-} from '@maka/core/llm-connections';
-import { lookupModelProviderOverride, openAiAdapterApiProtocol } from '@maka/core/model-metadata';
+} from '@maka/core';
+import { lookupModelProviderOverride, openAiAdapterApiProtocol } from '@maka/core';
 
 export type ModelRuntimeWire =
   | 'anthropic-messages'

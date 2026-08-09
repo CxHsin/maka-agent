@@ -1,18 +1,11 @@
-import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_COUNT } from '@maka/core/attachments';
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_COUNT } from '@maka/core';
 import {
   decodeMessageContent as decodeCanonicalMessageContent,
   isCanonicalAttachmentRef,
   type MessageContent,
-} from '@maka/core/events';
-import {
-  isOrchestrationMode,
-  isTurnOrchestrationSource,
-  type TurnOrchestration,
-} from '@maka/core/orchestration';
-import {
-  decodeSkillInvocationResult,
-  type SkillInvocationResult,
-} from '@maka/core/skill-invocation';
+} from '@maka/core';
+import { isOrchestrationMode, isTurnOrchestrationSource, type TurnOrchestration } from '@maka/core';
+import { decodeSkillInvocationResult, type SkillInvocationResult } from '@maka/core';
 import { invalidProtocolFrame } from './errors.js';
 import {
   assertExactKeys,

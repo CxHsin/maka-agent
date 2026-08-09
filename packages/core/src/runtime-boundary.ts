@@ -1,7 +1,6 @@
-import * as nodeCrypto from 'node:crypto';
-import type { Hash } from 'node:crypto';
 import { decodeAgentRunHeader, type AgentRunHeader } from './agent-run.js';
 import { encodeCanonicalRuntimeEvent } from './canonical-runtime-event.js';
+import { sha256Hex } from './local-memory.js';
 import { isRecord } from './record-schema.js';
 import type { RuntimeEvent } from './runtime-event.js';
 import { stableJsonStringify } from './tool-args-identity.js';
@@ -157,10 +156,11 @@ export function digestRuntimeBoundaryManifest(
     protocol: 'runtime_boundary_cursor_v1',
     segments: canonicalSegments,
   });
-  const hash = nodeCrypto.createHash('sha256');
-  updateLengthPrefixed(hash, Buffer.from('maka.runtime-boundary-manifest.v1', 'utf8'));
-  updateLengthPrefixed(hash, Buffer.from(json, 'utf8'));
-  return `sha256:${hash.digest('hex')}`;
+  const bytes = concatBytes(
+    lengthPrefixed(utf8('maka.runtime-boundary-manifest.v1')),
+    lengthPrefixed(utf8(json)),
+  );
+  return `sha256:${sha256Hex(bytes)}`;
 }
 
 export function decodeRuntimePrefixSegment(value: unknown): RuntimePrefixSegmentV1 {
@@ -334,14 +334,15 @@ function digestCanonicalRuntimePrefix(
   identity: RuntimePrefixIdentityV1,
   rows: readonly RuntimePrefixRowV1[],
 ): RuntimeBoundaryDigest {
-  const hash = nodeCrypto.createHash('sha256');
-  updateLengthPrefixed(hash, Buffer.from('maka.runtime-prefix.v1', 'utf8'));
-  updateLengthPrefixed(hash, Buffer.from(stableJsonStringify(identity), 'utf8'));
+  const chunks = [
+    lengthPrefixed(utf8('maka.runtime-prefix.v1')),
+    lengthPrefixed(utf8(stableJsonStringify(identity))),
+  ];
   for (const row of rows) {
-    hash.update(uint64be(row.eventSeq));
-    updateLengthPrefixed(hash, Buffer.from(encodeCanonicalRuntimeEvent(row.event).json, 'utf8'));
+    chunks.push(uint64be(row.eventSeq));
+    chunks.push(lengthPrefixed(utf8(encodeCanonicalRuntimeEvent(row.event).json)));
   }
-  return `sha256:${hash.digest('hex')}`;
+  return `sha256:${sha256Hex(concatBytes(...chunks))}`;
 }
 
 function decodePrefixIdentity(value: unknown): RuntimePrefixIdentityV1 {
@@ -389,18 +390,31 @@ function decodeBoundaryDigest(value: unknown): RuntimeBoundaryDigest {
   return value as RuntimeBoundaryDigest;
 }
 
-function updateLengthPrefixed(hash: Hash, bytes: Uint8Array): void {
-  hash.update(uint64be(bytes.byteLength));
-  hash.update(bytes);
+function utf8(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
 }
 
-function uint64be(value: number): Buffer {
+function lengthPrefixed(bytes: Uint8Array): Uint8Array {
+  return concatBytes(uint64be(bytes.byteLength), bytes);
+}
+
+function uint64be(value: number): Uint8Array {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error('RuntimeEvent boundary length is not a safe integer');
   }
-  const bytes = Buffer.allocUnsafe(8);
-  bytes.writeBigUInt64BE(BigInt(value));
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigUint64(0, BigInt(value), false);
   return bytes;
+}
+
+function concatBytes(...chunks: readonly Uint8Array[]): Uint8Array {
+  const result = new Uint8Array(chunks.reduce((length, chunk) => length + chunk.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

@@ -1,4 +1,4 @@
-import type { SessionHeader } from '@maka/core/session';
+import type { SessionHeader } from '@maka/core';
 import type { ExecutionStoresWriter } from '@maka/storage/execution-stores';
 import type {
   SessionContinuitySnapshot,

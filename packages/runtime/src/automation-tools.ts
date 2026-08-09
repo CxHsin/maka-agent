@@ -16,8 +16,8 @@ import {
   AUTOMATION_PROMPT_LIMIT,
   AUTOMATION_PROMPT_MAX_CODE_UNITS,
   isAutomationTextWithinLimit,
-} from '@maka/core/automation';
-import type { AutomationStatus } from '@maka/core/automation';
+} from '@maka/core';
+import type { AutomationStatus } from '@maka/core';
 import type { MakaTool } from './tool-runtime.js';
 import type { AutomationDefinition } from './automation-state.js';
 

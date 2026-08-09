@@ -10,7 +10,7 @@ import {
   type SandboxBoundarySettlement,
   type SettleSandboxBoundaryRequest,
 } from '@maka/core';
-import { ToolOutcomeUnknownError } from '@maka/core/events';
+import { ToolOutcomeUnknownError } from '@maka/core';
 import type {
   SandboxBoundaryDecisionAckEvent,
   SandboxBoundaryRequestEvent,
@@ -24,27 +24,23 @@ import type {
   ToolStartEvent,
   ToolUncertainOutcomeSignal,
   UserQuestionRequestEvent,
-} from '@maka/core/events';
-import type { ToolCallMessage, ToolResultMessage } from '@maka/core/session';
+} from '@maka/core';
+import type { ToolCallMessage, ToolResultMessage } from '@maka/core';
 import type {
   HostedInteractionBridge,
   HostedSandboxBoundarySettlement,
   HostedUserQuestionAnswer,
   HostedUserQuestionSettlement,
-} from '@maka/core/backend-types';
-import type { AgentSpec } from '@maka/core/runtime-inputs';
-import type { PermissionMode, ToolCategory, ToolExecutionFacts } from '@maka/core/permission';
-import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
-import type { OrchestrationMode } from '@maka/core/orchestration';
-import type {
-  UserQuestion,
-  UserQuestionResponse,
-  UserQuestionResult,
-} from '@maka/core/user-question';
+} from '@maka/core';
+import type { AgentSpec } from '@maka/core';
+import type { PermissionMode, ToolCategory, ToolExecutionFacts } from '@maka/core';
+import type { RuntimeExecutionConnection } from '@maka/core';
+import type { OrchestrationMode } from '@maka/core';
+import type { UserQuestion, UserQuestionResponse, UserQuestionResult } from '@maka/core';
 import { computerUseModelCallArgs } from '@maka/core';
-import type { SessionHeader } from '@maka/core/session';
-import type { ToolInvocationRecord } from '@maka/core/usage-stats/types';
-import { redactSecrets } from '@maka/core/redaction';
+import type { SessionHeader } from '@maka/core';
+import type { ToolInvocationRecord } from '@maka/core';
+import { redactSecrets } from '@maka/core';
 import { TOOL_BOUNDARY_PROTOCOL_V1, type RuntimeEvent } from '@maka/core';
 import { serializedByteLength } from '@maka/code-mode';
 

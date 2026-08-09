@@ -19,7 +19,7 @@ import {
   type DeepResearchRunStatus,
   type DeepResearchScopeLevel,
   type DeepResearchStage,
-} from '@maka/core/deep-research-run';
+} from '@maka/core';
 import {
   requireCount,
   requireEncodedByteLimit,

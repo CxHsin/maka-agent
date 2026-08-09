@@ -6,7 +6,7 @@ import {
   projectDeepResearchEvents,
   type DeepResearchArtifactRef,
   type DeepResearchEvent,
-} from '@maka/core/deep-research-run';
+} from '@maka/core';
 import {
   decodeDeepResearchQueryResult,
   decodeRequestFrame,

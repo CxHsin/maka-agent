@@ -1,9 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import {
-  messageContentsEqual,
-  normalizeMessageContent,
-  type MessageContent,
-} from '@maka/core/events';
+import { messageContentsEqual, normalizeMessageContent, type MessageContent } from '@maka/core';
 import type {
   AdmitRootTurnInput,
   AdmitRootTurnResult,

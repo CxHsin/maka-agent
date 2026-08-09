@@ -3,9 +3,9 @@ import {
   decodeModelCallAttempt,
   MODEL_CALL_ATTEMPT_EVENT_TYPE,
   type ModelCallAttempt,
-} from '@maka/core/model-call-attempt';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import type { SessionTrace } from '@maka/core/session-trace';
+} from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
+import type { SessionTrace } from '@maka/core';
 import {
   inspectAgentRunDocument,
   inspectSessionDocument,

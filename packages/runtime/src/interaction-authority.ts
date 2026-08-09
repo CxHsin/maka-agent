@@ -5,7 +5,7 @@ import type {
   SandboxBoundaryRequestEvent,
   UserQuestionAnswerAckEvent,
   UserQuestionRequestEvent,
-} from '@maka/core/events';
+} from '@maka/core';
 import type {
   InteractionCanonicalPermissionOutcome,
   InteractionClosureReason,
@@ -17,7 +17,7 @@ import type {
   HostedSandboxBoundarySettlement,
   HostedUserQuestionAnswer,
   HostedUserQuestionSettlement,
-} from '@maka/core/backend-types';
+} from '@maka/core';
 
 export type RuntimeInteractionClosureReason = InteractionClosureReason;
 

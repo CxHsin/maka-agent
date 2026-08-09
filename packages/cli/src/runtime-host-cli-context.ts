@@ -1,5 +1,5 @@
 import { NO_REAL_CONNECTION_CODE } from '@maka/core';
-import type { ConnectionCatalogEntry, ConnectionCatalogSnapshot } from '@maka/core/runtime-policy';
+import type { ConnectionCatalogEntry, ConnectionCatalogSnapshot } from '@maka/core';
 import {
   connectOrSpawnRuntimeHost,
   readRuntimeHostConnectionCatalog,

@@ -1,6 +1,6 @@
 import type { IpcMain } from 'electron';
-import { truncateUtf8 } from '@maka/core/diagnostic-log';
-import { redactSecrets } from '@maka/core/redaction';
+import { truncateUtf8 } from '@maka/core';
+import { redactSecrets } from '@maka/core';
 import type { HostDiagnosticsResult } from '@maka/runtime-host/protocol';
 import type { DesktopDiagnosticCopyResult } from '../preload/diagnostics-contract.js';
 import {

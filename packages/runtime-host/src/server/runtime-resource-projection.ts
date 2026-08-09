@@ -4,7 +4,7 @@ import type {
   ShellRunStateResult,
   ShellRunUpdate,
   ToolResultContent,
-} from '@maka/core/events';
+} from '@maka/core';
 import {
   decodeRuntimeResourceQueryResult,
   RUNTIME_RESOURCE_PAGE_MAX_ITEMS,

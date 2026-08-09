@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { ProviderType } from '@maka/core/llm-connections';
+import type { ProviderType } from '@maka/core';
 import { TOKEN_REFRESH_SKEW_MS } from '@maka/core';
 import {
   OAUTH_MAX_TOKEN_CHARS,

@@ -98,7 +98,7 @@ import type {
   DeepResearchChangedEvent,
   DeepResearchClientProgress,
 } from '@maka/core';
-import type { SessionTrace } from '@maka/core/session-trace';
+import type { SessionTrace } from '@maka/core';
 import type {
   AgentGraphClientChangedEvent,
   AgentGraphClientSnapshot,
@@ -112,15 +112,15 @@ import type {
 import type { GoalState } from '@maka/runtime';
 import type { BundledSkillCatalogEntry, ManagedSkillSourceEntry, ManagedSkillUpdatePreview, SkillEntry, SkillGovernanceDetails } from '@maka/ui';
 import type { ConfigCategory } from '@maka/storage';
-import type { TestProxyInput } from '@maka/core/settings/network-settings';
-import type { Result } from '@maka/core/result';
+import type { TestProxyInput } from '@maka/core';
+import type { Result } from '@maka/core';
 import type { CreateSessionRequestInput } from '@maka/core';
 import type {
   McpConfigFile,
   McpServerConfig,
   McpServerStatus,
   McpTestResult,
-} from '@maka/core/mcp';
+} from '@maka/core';
 import type {
   AttachmentRef,
   InlineReference,

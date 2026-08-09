@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { userFacingText, type StoredMessage } from '@maka/core/session';
+import { userFacingText, type StoredMessage } from '@maka/core';
 import {
   GoalContinuationCoordinator,
   GoalManager,

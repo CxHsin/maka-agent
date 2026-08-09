@@ -10,7 +10,7 @@ import {
   type LlmConnection,
   type SessionHeader,
 } from '@maka/core';
-import { PROVIDER_DEFAULTS } from '@maka/core/llm-connections';
+import { PROVIDER_DEFAULTS } from '@maka/core';
 
 // The rebind-eligibility taxonomy moved to `@maka/core/session-send-projection`
 // (#1038) so the send gate and the renderer health notice share one

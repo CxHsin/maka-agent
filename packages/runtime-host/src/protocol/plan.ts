@@ -17,7 +17,7 @@ import {
   type PlanStepDefinition,
   type PlanStepStatus,
   type PlanUserControlInput,
-} from '@maka/core/plan';
+} from '@maka/core';
 import {
   requireCount,
   requireEncodedByteLimit,

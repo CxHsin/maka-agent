@@ -6,7 +6,7 @@ import { Server as McpServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import type { McpConfigFile } from '@maka/core/mcp';
+import type { McpConfigFile } from '@maka/core';
 import { buildStdioEnvironment, McpClientManager, McpToolCallError } from '../index.js';
 
 const fixturePath = fileURLToPath(new URL('../__fixtures__/stdio-server.js', import.meta.url));

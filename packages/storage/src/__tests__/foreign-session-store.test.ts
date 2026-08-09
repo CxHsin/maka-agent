@@ -4,10 +4,7 @@ import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import {
-  FOREIGN_SESSION_SCAN_MAX_SESSIONS,
-  type ForeignSessionSummary,
-} from '@maka/core/foreign-session';
+import { FOREIGN_SESSION_SCAN_MAX_SESSIONS, type ForeignSessionSummary } from '@maka/core';
 import {
   codexCwdSqlVariants,
   createForeignSessionStore,

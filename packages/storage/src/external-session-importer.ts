@@ -1,5 +1,5 @@
 import type { CreateSessionInput, SessionHeader } from '@maka/core';
-import type { ExternalAgentId, ExternalSessionAdapterRegistry } from '@maka/core/external-session';
+import type { ExternalAgentId, ExternalSessionAdapterRegistry } from '@maka/core';
 import type { SessionAuthorityStore } from './session-store.js';
 
 export type ExternalSessionImportTarget = Omit<CreateSessionInput, 'cwd' | 'name'> & {

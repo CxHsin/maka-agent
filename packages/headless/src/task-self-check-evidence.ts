@@ -2,8 +2,8 @@ import {
   EXECUTION_EVIDENCE_REF_SCHEMA_VERSION,
   validateExecutionEvidenceRef,
   type ExecutionEvidenceRef,
-} from '@maka/core/execution-evidence';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+} from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import type {
   HeavyTaskSelfCheckEvidenceLinkedEvent,
   HeavyTaskSelfCheckRecordedEvent,

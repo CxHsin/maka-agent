@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import type { BackendStopMode } from '@maka/core/backend-types';
+import type { BackendStopMode } from '@maka/core';
 import {
   agentRunMatchesHostedRootExecution,
   type AgentRunHeader,
   type RootExecutionDescriptor,
-} from '@maka/core/agent-run';
+} from '@maka/core';
 import {
   INLINE_REFERENCE_MAX_COUNT,
   messageContentsEqual,
@@ -13,13 +13,10 @@ import {
   type AttachmentRef,
   type MessageContent,
   type SessionEvent,
-} from '@maka/core/events';
-import type { SessionHeader, StoredMessage } from '@maka/core/session';
-import type { UserMessageInput } from '@maka/core/runtime-inputs';
-import {
-  decodeSkillInvocationResult,
-  type SkillInvocationResult,
-} from '@maka/core/skill-invocation';
+} from '@maka/core';
+import type { SessionHeader, StoredMessage } from '@maka/core';
+import type { UserMessageInput } from '@maka/core';
+import { decodeSkillInvocationResult, type SkillInvocationResult } from '@maka/core';
 import {
   agentGraphIdForRootSession,
   classifyTerminalRuntimeLedger,

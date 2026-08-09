@@ -1,4 +1,4 @@
-import type { AgentRunHeader } from '@maka/core/agent-run';
+import type { AgentRunHeader } from '@maka/core';
 import { classifyTerminalRuntimeLedger } from '@maka/runtime';
 import type { ExecutionStoresWriter } from '@maka/storage/execution-stores';
 import type { TurnSnapshot } from '../protocol/index.js';

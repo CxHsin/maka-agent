@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { UserQuestion, UserQuestionResult } from '@maka/core/user-question';
+import type { UserQuestion, UserQuestionResult } from '@maka/core';
 
 import type { MakaTool } from './tool-runtime.js';
 

@@ -2,9 +2,9 @@ import { createTestToolRuntime } from './execution-boundary-test-helpers.js';
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { createWorkspaceWritePermissionProfile, type SandboxBoundarySettlement } from '@maka/core';
-import type { HostedInteractionBridge } from '@maka/core/backend-types';
-import type { SessionEvent } from '@maka/core/events';
-import type { SessionHeader } from '@maka/core/session';
+import type { HostedInteractionBridge } from '@maka/core';
+import type { SessionEvent } from '@maka/core';
+import type { SessionHeader } from '@maka/core';
 
 import { buildAskUserQuestionTool } from '../ask-user-question-tool.js';
 import { AsyncEventQueue } from '../async-queue.js';

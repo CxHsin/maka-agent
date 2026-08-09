@@ -1,6 +1,6 @@
-import { isCollaborationMode } from '@maka/core/collaboration';
-import { isOrchestrationMode } from '@maka/core/orchestration';
-import { isThinkingLevel } from '@maka/core/model-thinking';
+import { isCollaborationMode } from '@maka/core';
+import { isOrchestrationMode } from '@maka/core';
+import { isThinkingLevel } from '@maka/core';
 import {
   AUTOMATION_CRON_EXPRESSION_LIMIT,
   AUTOMATION_LAST_ERROR_LIMIT,
@@ -12,7 +12,7 @@ import {
   type AutomationExecutionTemplate,
   type AutomationPendingFire,
   type AutomationSchedule,
-} from '@maka/core/automation';
+} from '@maka/core';
 import {
   acquireOperationalStateDatabase,
   type OperationalStateDatabaseLease,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { createDefaultSettings, mergeSettings } from "@maka/core/settings";
-import { SENSITIVE_PLACEHOLDER } from "@maka/core/settings/network-settings";
+import { createDefaultSettings, mergeSettings } from "@maka/core";
+import { SENSITIVE_PLACEHOLDER } from "@maka/core";
 import {
   botTestErrorMessage,
   buildSettingsUpdateResult,

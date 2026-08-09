@@ -15,8 +15,8 @@ export interface HistoryCompactReplayOptions {
   historyCompactProtocol?: 'legacy_v1' | 'checkpoint_v2';
 }
 
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import type { ContextBudgetDiagnostic } from '@maka/core/usage-stats/types';
+import type { RuntimeEvent } from '@maka/core';
+import type { ContextBudgetDiagnostic } from '@maka/core';
 import {
   allNonEmpty,
   boundText,

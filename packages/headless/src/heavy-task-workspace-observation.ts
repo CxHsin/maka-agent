@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { posix as pathPosix } from 'node:path';
-import type { WorkspaceRevisionRef } from '@maka/core/execution-evidence';
+import type { WorkspaceRevisionRef } from '@maka/core';
 import type { IsolatedToolExecutor } from './isolation.js';
 import type {
   HeavyTaskWorkspaceObservationEntry,

@@ -29,8 +29,7 @@
  * replay contract of their provider (V0.1 text-only replay cannot use
  * them; Anthropic replay can re-use signed thinking, etc.).
  *
- * NOTE: imports the new `@maka/core/runtime-event` subpath. The steward
- * node re-exports it from the core barrel.
+ * The canonical event contract is imported from the `@maka/core` public API.
  */
 
 import {
@@ -41,13 +40,13 @@ import {
   type RuntimeEventTextContent,
   type RuntimeEventContent,
   type RuntimeEventRole,
-} from '@maka/core/runtime-event';
+} from '@maka/core';
 import {
   formatAttachmentResourceRef,
   normalizeShellToolResultContent,
   normalizeToolResultContentForRead,
 } from '@maka/core';
-import type { AttachmentRef, QuoteRef } from '@maka/core/events';
+import type { AttachmentRef, QuoteRef } from '@maka/core';
 import type { ModelMessage, UserContent, UserModelMessage } from './model-protocol.js';
 import { projectBashToolResultForModel } from './bash-model-output.js';
 import { projectFileWriteToolResultForModel } from './file-tool-model-output.js';

@@ -1,4 +1,4 @@
-import type { AutomationDefinition } from '@maka/core/automation';
+import type { AutomationDefinition } from '@maka/core';
 import {
   createSqliteAutomationAuthority,
   type AutomationAuthorityRepository,

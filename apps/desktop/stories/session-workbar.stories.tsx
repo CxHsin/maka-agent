@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import type { ArtifactRecord, Task } from '@maka/core';
-import type { SessionTrace } from '@maka/core/session-trace';
+import type { SessionTrace } from '@maka/core';
 import { ToastProvider } from '@maka/ui';
 import { SessionWorkbar } from '../src/renderer/session-workbar';
 import {

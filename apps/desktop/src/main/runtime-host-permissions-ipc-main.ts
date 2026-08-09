@@ -7,7 +7,7 @@ import {
   type AppSettings,
   type LlmConnection,
 } from "@maka/core";
-import type { UsageLogRow } from "@maka/core/usage-stats/types";
+import type { UsageLogRow } from "@maka/core";
 import type { BotRegistry } from "@maka/runtime";
 import {
   buildCapabilitySnapshotCollection,

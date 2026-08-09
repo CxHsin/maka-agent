@@ -53,7 +53,7 @@
  *   - `truncated: false` when no cap hit
  */
 
-import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core/events';
+import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core';
 import type { ToolOutputChunk } from './materialize.js';
 import { redactSecrets } from './redact.js';
 import type { UiLocale } from '@maka/core';

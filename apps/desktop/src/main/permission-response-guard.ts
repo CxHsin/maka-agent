@@ -6,7 +6,7 @@ import type {
   TurnOrchestration,
   UserQuestionResponse,
 } from '@maka/core';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
+import type { SandboxBoundaryResponse } from '@maka/core';
 import {
   isCanonicalStorageRef,
   isOrchestrationMode,

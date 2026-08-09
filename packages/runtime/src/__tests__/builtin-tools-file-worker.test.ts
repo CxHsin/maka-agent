@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, parse } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 import { createManagedExecutionBoundary, createWorkspaceWritePermissionProfile } from '@maka/core';
-import { createReadOnlyPermissionProfile } from '@maka/core/permission-profile';
+import { createReadOnlyPermissionProfile } from '@maka/core';
 
 import { buildBuiltinTools } from '../builtin-tools.js';
 import type { FilesystemWorkerExecuteInput } from '../filesystem-worker/client.js';

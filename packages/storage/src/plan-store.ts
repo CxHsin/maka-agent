@@ -31,7 +31,7 @@ import {
   isPlanTextWithinLimit,
   planEncodedByteLength,
   worstCasePlanExecution,
-} from '@maka/core/plan';
+} from '@maka/core';
 import { chainWrite } from './write-queue.js';
 import {
   acquireOperationalStateDatabase,

@@ -5,7 +5,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { isDeepStrictEqual } from 'node:util';
-import { redactSecrets } from '@maka/core/redaction';
+import { redactSecrets } from '@maka/core';
 import {
   isMcpStdioConfig,
   type McpCallResult,
@@ -15,7 +15,7 @@ import {
   type McpServerStatus,
   type McpTestResult,
   type McpToolDescriptor,
-} from '@maka/core/mcp';
+} from '@maka/core';
 
 const DEFAULT_TIMEOUTS = {
   remoteConnectMs: 30_000,

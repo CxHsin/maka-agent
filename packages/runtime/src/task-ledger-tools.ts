@@ -10,7 +10,7 @@ import {
   isTerminalTaskStatus,
   renderSafeTaskLedgerText,
   type TaskLedgerStore,
-} from '@maka/core/task-ledger';
+} from '@maka/core';
 import type { MakaTool } from './tool-runtime.js';
 
 export const TASK_CREATE_TOOL_NAME = 'task_create';

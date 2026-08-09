@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { setImmediate as delayImmediate } from 'node:timers/promises';
 import test from 'node:test';
 import type { SessionEvent, SessionHeader, ShellRunUpdate, StoredMessage } from '@maka/core';
-import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core/events';
+import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core';
 import { PiAgentBackend, type PiAgentTransport } from '@maka/runtime';
 import {
   decodeHostFrame,

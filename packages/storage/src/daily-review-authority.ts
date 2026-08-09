@@ -8,7 +8,7 @@ import {
   type DailyReviewArchive,
   type DailyReviewArchiveSummary,
   type DailyReviewConfig,
-} from '@maka/core/daily-review';
+} from '@maka/core';
 import { acquireOperationalStateDatabase } from './operational-state-store.js';
 import {
   assertStorageRootLease,

@@ -1,5 +1,5 @@
 import type { BotAttachmentKind, BotChannelSettings } from '@maka/core';
-import { generalizedErrorMessage } from '@maka/core/redaction';
+import { generalizedErrorMessage } from '@maka/core';
 import { BaseBotAdapter, botReadinessFromSettings } from './base-adapter.js';
 import type { BotPlatform, BotSendOptions, BotStatus, SendCapable } from './types.js';
 import { proxiedFetch } from './proxied-fetch.js';

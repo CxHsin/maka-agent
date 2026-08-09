@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import type { UsageRange, UsageStats } from '@maka/core';
-import type { SessionHeader } from '@maka/core/session';
+import type { SessionHeader } from '@maka/core';
 import { OPERATIONAL_STATE_DATABASE_NAME } from './operational-state-store.js';
 import { createSqliteSessionMetadataStore } from './sqlite-session-metadata-store.js';
 

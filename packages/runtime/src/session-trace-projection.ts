@@ -1,9 +1,5 @@
-import {
-  dedupeModelCallAttempts,
-  groupModelCallAttempts,
-  type ModelCallAttempt,
-} from '@maka/core/model-call-attempt';
-import { TERMINAL_RUNTIME_EVENT_STATUSES, type RuntimeEvent } from '@maka/core/runtime-event';
+import { dedupeModelCallAttempts, groupModelCallAttempts, type ModelCallAttempt } from '@maka/core';
+import { TERMINAL_RUNTIME_EVENT_STATUSES, type RuntimeEvent } from '@maka/core';
 import {
   emptyTraceTotals,
   mergeTraceTotals,
@@ -16,7 +12,7 @@ import {
   type TraceStep,
   type TraceTotals,
   type TurnTrace,
-} from '@maka/core/session-trace';
+} from '@maka/core';
 
 /**
  * Builds the per-session causal trace the Inspector renders (#1625).

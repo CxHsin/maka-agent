@@ -8,8 +8,8 @@ import {
   RuntimePolicyDomainDecodeError,
   type ConnectionVersionBasis,
   type ModelDiscoverySource,
-} from '@maka/core/runtime-policy';
-import type { ModelInfo, ProviderType } from '@maka/core/llm-connections';
+} from '@maka/core';
+import type { ModelInfo, ProviderType } from '@maka/core';
 import {
   requireCount,
   requireEntityId,

@@ -4,7 +4,7 @@ import { open, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mock, test } from 'node:test';
-import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
+import type { RuntimeExecutionConnection } from '@maka/core';
 import {
   serializeOAuthSubscriptionTokens,
   type OAuthSubscriptionTokens,

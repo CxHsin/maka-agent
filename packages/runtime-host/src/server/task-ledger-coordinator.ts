@@ -9,7 +9,7 @@ import {
   type TaskLedgerMutationContext,
   type TaskLedgerStore,
   type TaskOwner,
-} from '@maka/core/task-ledger';
+} from '@maka/core';
 import {
   authenticateInteractiveTaskLedgerWriter,
   type InteractiveTaskLedgerWriter,

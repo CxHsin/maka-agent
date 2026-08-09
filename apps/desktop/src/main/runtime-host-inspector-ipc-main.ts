@@ -1,5 +1,5 @@
 import type { ipcMain as electronIpcMain } from "electron";
-import { tryResult } from "@maka/core/result";
+import { tryResult } from "@maka/core";
 import type { DesktopRuntimeHostClient } from "./runtime-host-client.js";
 
 export function registerRuntimeHostInspectorIpc(deps: {

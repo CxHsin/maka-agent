@@ -14,7 +14,7 @@ import {
   type InteractionRequest,
   type InteractionSandboxBoundaryAnswer,
   type InteractionSandboxBoundaryRequest,
-} from '@maka/core/interaction';
+} from '@maka/core';
 import { assertExactKeys, requireEntityId, requireRecord } from './codec.js';
 import { invalidProtocolFrame } from './errors.js';
 import { defineOperation } from './operation-spec.js';

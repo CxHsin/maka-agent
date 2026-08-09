@@ -9,11 +9,7 @@ import {
   createWorkspaceWritePermissionProfile,
   MAX_READ_IMAGE_BYTES,
 } from '@maka/core';
-import {
-  canWritePath,
-  createReadOnlyPermissionProfile,
-  type PermissionProfile,
-} from '@maka/core/permission-profile';
+import { canWritePath, createReadOnlyPermissionProfile, type PermissionProfile } from '@maka/core';
 
 import {
   FilesystemWorkerClient,

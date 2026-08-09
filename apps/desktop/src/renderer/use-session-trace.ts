@@ -4,7 +4,7 @@ import {
   generalizedErrorMessageChinese,
   type UiLocale,
 } from '@maka/core';
-import type { SessionTrace } from '@maka/core/session-trace';
+import type { SessionTrace } from '@maka/core';
 import { createTraceRefreshCoalescer } from './session-trace-refresh.js';
 
 interface SessionTraceSnapshot {

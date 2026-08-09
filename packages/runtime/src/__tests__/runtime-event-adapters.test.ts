@@ -12,7 +12,7 @@
 
 import { describe, test } from 'node:test';
 import { expect } from '../test-helpers.js';
-import type { AttachmentRef } from '@maka/core/events';
+import type { AttachmentRef } from '@maka/core';
 import type {
   UserMessage,
   AssistantMessage,
@@ -23,8 +23,8 @@ import type {
   PermissionDecisionMessage,
   TurnStateMessage,
   StoredMessage,
-} from '@maka/core/session';
-import type { RuntimeEvent, RuntimeEventContent } from '@maka/core/runtime-event';
+} from '@maka/core';
+import type { RuntimeEvent, RuntimeEventContent } from '@maka/core';
 import {
   storedMessageToRuntimeEvent,
   storedMessageToRuntimeEvents,

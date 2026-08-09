@@ -1,5 +1,5 @@
 import type { RuntimeEvent } from '@maka/core';
-import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
+import type { RuntimeExecutionConnection } from '@maka/core';
 import { applyRuntimeEventContextBudget } from './context-budget.js';
 import {
   buildDefaultContextBudgetPolicy,

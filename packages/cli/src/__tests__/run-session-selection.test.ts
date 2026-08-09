@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import type { SessionSummary } from '@maka/core/session';
+import type { SessionSummary } from '@maka/core';
 import { selectMakaRunSession } from '../run-session-selection.js';
 
 describe('maka run session selection', () => {

@@ -7,7 +7,7 @@ import {
   createReadOnlyPermissionProfile,
   createWorkspaceWritePermissionProfile,
   type PermissionProfile,
-} from '@maka/core/permission-profile';
+} from '@maka/core';
 
 import { SandboxManager } from '../sandbox/sandbox-manager.js';
 import { LinuxBubblewrapBackend } from '../sandbox/linux-sandbox.js';

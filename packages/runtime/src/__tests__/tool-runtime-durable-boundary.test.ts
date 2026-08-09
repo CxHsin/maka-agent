@@ -2,7 +2,7 @@ import { createTestToolRuntime } from './execution-boundary-test-helpers.js';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { LlmConnection, SessionEvent, SessionHeader, StoredMessage } from '@maka/core';
-import { ToolOutcomeUnknownError } from '@maka/core/events';
+import { ToolOutcomeUnknownError } from '@maka/core';
 import type {
   RuntimeCommitSink,
   ToolOutcomeCommit,

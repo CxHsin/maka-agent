@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { type RuntimeEvent, type WorkspaceBaselineAuthorityInput } from '@maka/core';
-import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
+import { canonicalToolArgsHash } from '@maka/core';
 import {
   createSqliteRuntimeStore,
   type SqliteRuntimeStoreFailpoint,

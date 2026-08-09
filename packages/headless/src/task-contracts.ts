@@ -1,4 +1,4 @@
-import type { ExecutionEvidenceRef, WorkspaceRevisionRef } from '@maka/core/execution-evidence';
+import type { ExecutionEvidenceRef, WorkspaceRevisionRef } from '@maka/core';
 import type { ProductToolSurfaceIdentity } from '@maka/runtime';
 import type { ResultRecord, TaskVerification, VerifierSpec } from './contracts.js';
 

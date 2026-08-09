@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import type { AgentRunInspectDocument } from '@maka/runtime';
 import {
   MAKA_AHE_EVIDENCE_EXPORT_SOURCE_LABEL,

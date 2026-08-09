@@ -11,7 +11,7 @@ import type {
   TaskLedgerStore,
   TaskOwner,
 } from '@maka/core';
-import type { SessionEvent } from '@maka/core/events';
+import type { SessionEvent } from '@maka/core';
 import { zodSchema } from 'ai';
 import { buildBuiltinTools } from '../builtin-tools.js';
 import {

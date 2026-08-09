@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { McpConfigFile, McpServerStatus } from '@maka/core/mcp';
+import type { McpConfigFile, McpServerStatus } from '@maka/core';
 import { registerMcpIpcMain } from '../mcp-ipc-main.js';
 
 test('MCP IPC commits config before publishing capabilities and emitting status', async () => {

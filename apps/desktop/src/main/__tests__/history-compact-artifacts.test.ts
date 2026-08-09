@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import {
   applyRuntimeEventHistoryCompact,
   buildHistoryCompactBlockFromSummary,

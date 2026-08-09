@@ -3,13 +3,13 @@ import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import type { StoredMessage } from '@maka/core';
-import { sanitizeForeignTitle } from '@maka/core/foreign-session';
+import { sanitizeForeignTitle } from '@maka/core';
 import type {
   ExternalMakaSession,
   ExternalSessionAdapter,
   ExternalSessionQuery,
   ExternalSessionSummary,
-} from '@maka/core/external-session';
+} from '@maka/core';
 
 export const CODEX_SESSION_ADAPTER_ID = 'codex';
 export const CODEX_ROLLOUT_MAX_BYTES = 64 * 1024 * 1024;

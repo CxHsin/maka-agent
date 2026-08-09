@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { constantTimeStringEqual, parsePastedAuthorization } from '@maka/core/oauth-subscription';
+import { constantTimeStringEqual, parsePastedAuthorization } from '@maka/core';
 import {
   buildOAuthLoginAuthorization,
   createProxiedFetchTransport,

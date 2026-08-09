@@ -19,7 +19,7 @@ import {
   type ComputerUseErrorCode,
   type ComputerUseWindowIdentity,
 } from '@maka/core';
-import { redactSecrets } from '@maka/core/redaction';
+import { redactSecrets } from '@maka/core';
 import { renderObservationForModel } from './computer-use-observation-text.js';
 import type { MakaTool } from './tool-runtime.js';
 import {

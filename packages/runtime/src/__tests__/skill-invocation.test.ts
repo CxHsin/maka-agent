@@ -16,7 +16,7 @@ import {
   type HostCapabilities,
   type LoadedSkillInstructions,
 } from '../skills.js';
-import { SKILL_INVOCATION_NAME_MAX_BYTES } from '@maka/core/skill-invocation';
+import { SKILL_INVOCATION_NAME_MAX_BYTES } from '@maka/core';
 import { skillInvocationInlineReferences } from '../skill-invocation-receipt.js';
 
 describe('skill invocation', () => {

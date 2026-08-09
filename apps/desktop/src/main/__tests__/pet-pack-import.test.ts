@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { PET_PACK_SCHEMA_V1 } from '@maka/core/pet';
+import { PET_PACK_SCHEMA_V1 } from '@maka/core';
 import { createSettingsStore } from '@maka/storage';
 import { createPetPackStore } from '@maka/storage/pet-pack-store';
 import {

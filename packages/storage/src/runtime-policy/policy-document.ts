@@ -8,7 +8,7 @@ import {
   type RuntimePolicy,
   type RuntimePolicyMutation,
   type RuntimePolicySnapshot,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import { deepFreeze, nextRevision, record, revision } from './codec.js';
 import {
   codecError,

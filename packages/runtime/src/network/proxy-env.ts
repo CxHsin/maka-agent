@@ -1,5 +1,5 @@
 import { buildProxyUrl, bracketIfIpv6 } from './proxy-parser.js';
-import type { ProxySettings } from '@maka/core/settings/network-settings';
+import type { ProxySettings } from '@maka/core';
 
 export function getEnvWithProxy(base: NodeJS.ProcessEnv, proxy: ProxySettings): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = { ...base };

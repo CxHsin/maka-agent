@@ -5,20 +5,20 @@ import {
   type ModelInfo,
   type ProviderType,
 } from '@maka/core';
-import { PROVIDER_DEFAULTS, connectionEnabledModelIds } from '@maka/core/llm-connections';
-import { buildConnectionModelCatalogEntries } from '@maka/core/model-catalog';
+import { PROVIDER_DEFAULTS, connectionEnabledModelIds } from '@maka/core';
+import { buildConnectionModelCatalogEntries } from '@maka/core';
 import {
   normalizeRelayModelProfiles,
   pruneRelayModelProfiles,
   type RelayModelProfile,
   type ThinkingLevel,
-} from '@maka/core/model-thinking';
-import { isWiredOAuthProvider } from '@maka/core/provider-registry';
+} from '@maka/core';
+import { isWiredOAuthProvider } from '@maka/core';
 import {
   providerAuthRequiresSecret,
   providerAuthSupportsApiKey,
   providerSupportsModelDiscovery,
-} from '@maka/core/llm-connections';
+} from '@maka/core';
 import { useMountedRef, useToast, useUiLocale } from '@maka/ui';
 import { getProviderSettingsCopy } from '../locales/settings-provider-copy';
 import { connectionChipStatus } from './provider-connection-status';

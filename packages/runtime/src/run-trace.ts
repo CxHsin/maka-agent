@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { generalizedErrorMessage, redactSecrets } from '@maka/core/redaction';
+import { generalizedErrorMessage, redactSecrets } from '@maka/core';
 import type {
   CacheMissInputSource,
   ContextBudgetDiagnostic,
@@ -7,7 +7,7 @@ import type {
   PromptSegmentEstimate,
   ToolSchemaChangeReason,
   ToolAvailabilityDiagnostic,
-} from '@maka/core/usage-stats/types';
+} from '@maka/core';
 import type { SandboxRunTraceProjection } from './sandbox/diagnostics.js';
 
 export type RunTracePhase =

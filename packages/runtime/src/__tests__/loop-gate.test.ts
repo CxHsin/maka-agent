@@ -2,9 +2,9 @@ import { createTestToolRuntime } from './execution-boundary-test-helpers.js';
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { z } from 'zod';
-import type { SessionEvent, ToolResultContent } from '@maka/core/events';
-import type { SessionHeader, StoredMessage } from '@maka/core/session';
-import type { ToolInvocationRecord } from '@maka/core/usage-stats/types';
+import type { SessionEvent, ToolResultContent } from '@maka/core';
+import type { SessionHeader, StoredMessage } from '@maka/core';
+import type { ToolInvocationRecord } from '@maka/core';
 
 import {
   ToolRuntime,

@@ -11,14 +11,14 @@ import {
   defaultEnabledModelIdsWhenOmitted,
   PROVIDER_DEFAULTS,
   providerAuthRequiresSecret,
-} from '@maka/core/llm-connections';
-import { normalizeRelayModelProfiles } from '@maka/core/model-thinking';
+} from '@maka/core';
+import { normalizeRelayModelProfiles } from '@maka/core';
 import type {
   ConnectionCatalogEntry,
   ConnectionCatalogSnapshot,
   CredentialLocator,
-} from '@maka/core/runtime-policy';
-import { normalizeRequestHeaderUpdates } from '@maka/core/runtime-policy';
+} from '@maka/core';
+import { normalizeRequestHeaderUpdates } from '@maka/core';
 import type { ConnectionTestRunResult } from '@maka/runtime-host/protocol';
 import type { DesktopRuntimeHostClient } from './runtime-host-client.js';
 import {

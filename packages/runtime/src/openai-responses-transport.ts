@@ -1,4 +1,4 @@
-import { redactSecrets } from '@maka/core/redaction';
+import { redactSecrets } from '@maka/core';
 import type { OpenAIComputerRequest } from './openai-computer-codec.js';
 import type { OpenAIComputerTransport } from './openai-computer-loop.js';
 

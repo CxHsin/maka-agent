@@ -1,5 +1,5 @@
 import { RetryError } from 'ai';
-import { isAuthenticationErrorText } from '@maka/core/redaction';
+import { isAuthenticationErrorText } from '@maka/core';
 
 /**
  * Structured provider error identifiers that mean the INPUT exceeded the

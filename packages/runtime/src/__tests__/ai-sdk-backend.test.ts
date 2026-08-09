@@ -13,14 +13,14 @@ import type {
   SessionHeader,
   StorageRef,
 } from '@maka/core';
-import { encodeCanonicalRuntimeEvent } from '@maka/core/canonical-runtime-event';
-import type { SessionEvent } from '@maka/core/events';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import { encodeCanonicalRuntimeEvent } from '@maka/core';
+import type { SessionEvent } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import { createSessionEventMapMemory, mapSessionEventToRuntimeEvent } from '../ai-sdk-flow.js';
 import { projectRuntimeEventsToStoredMessages } from '../runtime-event-read-model.js';
 import { materializeSession } from '../materializer.js';
 import type { InvocationContext } from '../invocation-context.js';
-import type { AssistantMessage, StoredMessage, ToolResultMessage } from '@maka/core/session';
+import type { AssistantMessage, StoredMessage, ToolResultMessage } from '@maka/core';
 import { z } from 'zod';
 import {
   AiSdkBackend,
@@ -75,7 +75,7 @@ import type {
   ProviderRequestAttemptRecord,
   ProviderRequestCaptureRecord,
 } from '../provider-request-telemetry.js';
-import { decodeModelCallAttempt, type ModelCallAttempt } from '@maka/core/model-call-attempt';
+import { decodeModelCallAttempt, type ModelCallAttempt } from '@maka/core';
 import { buildLlmHistorySummarizer } from '../history-compact-summarizer.js';
 import { createToolResultArchiveCapability } from '../tool-result-archive-capability.js';
 import {

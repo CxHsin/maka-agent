@@ -69,7 +69,7 @@ import {
   withHarnessAbRunLock,
 } from '#harness-ab-run';
 import { DEFAULT_HEADLESS_SYSTEM_PROMPT } from '@maka/headless';
-import { thinkingVariantsForModel } from '@maka/core/model-thinking';
+import { thinkingVariantsForModel } from '@maka/core';
 import {
   assertHarnessAbReportCompleted,
   buildHarnessAbReport,

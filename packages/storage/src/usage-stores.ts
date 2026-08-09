@@ -5,8 +5,8 @@ import type {
   UsageLogRow,
   UsageQuery,
   UsageSummaryV2,
-} from '@maka/core/usage-stats/types';
-import type { ModelCallAttempt } from '@maka/core/model-call-attempt';
+} from '@maka/core';
+import type { ModelCallAttempt } from '@maka/core';
 import { throwDeduplicatedFailures } from './failure-utils.js';
 import {
   createSqliteModelCallLedger,

@@ -5,7 +5,7 @@ import {
   type ExecutionEvidenceRef,
   type ExecutionLogCoverage,
   type TargetSnapshotRef,
-} from '@maka/core/execution-evidence';
+} from '@maka/core';
 import type { MakaChangeAuditRecord } from './change-audit.js';
 
 export const MAKA_AHE_TARGET_PROTOCOL_VERSION_V1 = 'maka.ahe-target.v1' as const;

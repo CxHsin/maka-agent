@@ -30,13 +30,13 @@
  * `RuntimeRunner -> AiSdkFlow` without a flag day.
  */
 
-import type { AttachmentRef, QuoteRef } from '@maka/core/events';
-import type { SteeringLease } from '@maka/core/backend-types';
-import type { StoredMessage } from '@maka/core/session';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import type { RuntimeContinuationMetadata } from '@maka/core/backend-types';
-import type { EffectiveOrchestration } from '@maka/core/orchestration';
-import type { ToolMode } from '@maka/core/tool-mode';
+import type { AttachmentRef, QuoteRef } from '@maka/core';
+import type { SteeringLease } from '@maka/core';
+import type { StoredMessage } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
+import type { RuntimeContinuationMetadata } from '@maka/core';
+import type { EffectiveOrchestration } from '@maka/core';
+import type { ToolMode } from '@maka/core';
 import type { InvocationContext } from './invocation-context.js';
 
 export type { InvocationContext } from './invocation-context.js';
@@ -149,12 +149,8 @@ export type RunnableAgentFlow = Pick<AgentFlow, 'run'>;
  */
 export interface AgentFlowControl {
   stop(reason: 'user_stop' | 'redirect'): Promise<void>;
-  respondToSandboxBoundary(
-    response: import('@maka/core/sandbox-boundary').SandboxBoundaryResponse,
-  ): Promise<void>;
-  respondToUserQuestion(
-    response: import('@maka/core/user-question').UserQuestionResponse,
-  ): Promise<void>;
+  respondToSandboxBoundary(response: import('@maka/core').SandboxBoundaryResponse): Promise<void>;
+  respondToUserQuestion(response: import('@maka/core').UserQuestionResponse): Promise<void>;
   dispose(): Promise<void>;
 }
 

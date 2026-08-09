@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import type { IpcMain } from 'electron';
-import { decodePetPackManifest, type PetPackManifestV1 } from '@maka/core/pet';
+import { decodePetPackManifest, type PetPackManifestV1 } from '@maka/core';
 import {
   createPetPackStore,
   PET_PACK_MANIFEST_FILE,

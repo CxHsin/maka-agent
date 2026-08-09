@@ -4,7 +4,7 @@ import {
   type WebSearchErrorReason,
   type WebSearchResponse,
   type WebSearchResultRow,
-} from '@maka/core/web-search';
+} from '@maka/core';
 import {
   requireEncodedByteLimit,
   requireExactRecord,

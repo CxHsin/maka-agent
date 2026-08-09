@@ -12,7 +12,7 @@ import {
   type DailyReviewConfig,
   type DailyReviewRange,
   type DailyReviewSummary,
-} from '@maka/core/daily-review';
+} from '@maka/core';
 import {
   requireCount,
   requireEncodedByteLimit,

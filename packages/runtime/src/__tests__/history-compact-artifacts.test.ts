@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { describe, test } from 'node:test';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import { buildHistoryCompactBlockFromSummary } from '../context-budget.js';
 import type { HistoryCompactWriteInput } from '../ai-sdk-compaction-contract.js';
 import {

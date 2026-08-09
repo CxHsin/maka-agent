@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { describe, test } from 'node:test';
 import type { AgentRunHeader, SessionHeader } from '@maka/core';
-import type { AutomationDefinition, AutomationPendingFire } from '@maka/core/automation';
+import type { AutomationDefinition, AutomationPendingFire } from '@maka/core';
 import {
   DEFER_WINDOW_MS,
   RuntimeHostedRootConflictError,

@@ -3,7 +3,7 @@ import { SocksClient } from 'socks';
 import { isIP } from 'node:net';
 import { connect as tlsConnect } from 'node:tls';
 import { buildProxyUrl } from './proxy-parser.js';
-import type { ProxySettings } from '@maka/core/settings/network-settings';
+import type { ProxySettings } from '@maka/core';
 
 export function buildProxyDispatcher(proxy: ProxySettings): Agent | ProxyAgent {
   if (proxy.type === 'socks5') return buildSocks5Dispatcher(proxy);

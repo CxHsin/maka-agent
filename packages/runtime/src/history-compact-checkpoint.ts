@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
-import type { ExecutionLogCoverage } from '@maka/core/execution-evidence';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { ExecutionLogCoverage } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import { stableStringify } from './request-shape.js';
 
 export const HISTORY_COMPACT_SOURCE_POLICY_VERSION =

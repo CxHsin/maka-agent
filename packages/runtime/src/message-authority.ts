@@ -1,6 +1,6 @@
-import type { BackendStopMode, SteeringLease } from '@maka/core/backend-types';
-import type { RootExecutionDescriptor } from '@maka/core/agent-run';
-import type { MessageContent, SessionEvent } from '@maka/core/events';
+import type { BackendStopMode, SteeringLease } from '@maka/core';
+import type { RootExecutionDescriptor } from '@maka/core';
+import type { MessageContent, SessionEvent } from '@maka/core';
 
 export interface RuntimeMessageRunIdentity {
   readonly sessionId: string;

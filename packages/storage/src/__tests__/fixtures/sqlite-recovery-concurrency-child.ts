@@ -5,7 +5,7 @@ import {
   type ToolRecoveryFactEnvelope,
   type WorkspaceBaselineAuthorityInput,
 } from '@maka/core';
-import { createRuntimeBoundaryCursor, runtimePrefixSegment } from '@maka/core/runtime-boundary';
+import { createRuntimeBoundaryCursor, runtimePrefixSegment } from '@maka/core';
 import { createSqliteRuntimeStore } from '../../sqlite-runtime-store.js';
 import { acquireOperationalStateDatabase } from '../../operational-state-store.js';
 import {

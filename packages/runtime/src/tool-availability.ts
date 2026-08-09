@@ -1,4 +1,4 @@
-import type { ToolAvailabilityDiagnostic } from '@maka/core/usage-stats/types';
+import type { ToolAvailabilityDiagnostic } from '@maka/core';
 import { z } from 'zod';
 
 import { estimateTokens } from './context-budget-helpers.js';

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { lookupModelMetadata } from '@maka/core/model-metadata';
-import type { ProviderType } from '@maka/core/llm-connections';
+import { lookupModelMetadata } from '@maka/core';
+import type { ProviderType } from '@maka/core';
 import { GENERATED_MODEL_PRICING } from '../telemetry/model-pricing.generated.js';
 
 const LOCAL_SUPPLEMENT_PROVIDER_TYPES = new Set(['zai-coding-plan', 'MiniMax-cn']);

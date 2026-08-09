@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import type { SessionEvent, ShellRunUpdate } from '@maka/core/events';
-import type { StoredMessage } from '@maka/core/session';
+import type { SessionEvent, ShellRunUpdate } from '@maka/core';
+import type { StoredMessage } from '@maka/core';
 import {
   encodeProtocolFrame,
   RUNTIME_HOST_MAX_FRAME_BYTES,

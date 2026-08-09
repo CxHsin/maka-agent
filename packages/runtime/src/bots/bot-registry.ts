@@ -5,8 +5,8 @@ import {
   type BotChatSettings,
   type BotProvider,
 } from '@maka/core';
-import { generalizedErrorMessage } from '@maka/core/redaction';
-import { BOT_PROVIDERS } from '@maka/core/settings';
+import { generalizedErrorMessage } from '@maka/core';
+import { BOT_PROVIDERS } from '@maka/core';
 import { DingTalkBotBridge } from './dingtalk-bridge.js';
 import { FeishuBotBridge } from './feishu-bridge.js';
 import { DiscordBotBridge } from './discord-bridge.js';

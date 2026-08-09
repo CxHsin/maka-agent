@@ -1,17 +1,17 @@
-import { isCollaborationMode, type CollaborationMode } from '@maka/core/collaboration';
-import { isOrchestrationMode, type OrchestrationMode } from '@maka/core/orchestration';
-import { isPermissionMode, type PermissionMode } from '@maka/core/permission';
-import { isSessionStartMode, type SessionStartMode } from '@maka/core/explore-agent';
+import { isCollaborationMode, type CollaborationMode } from '@maka/core';
+import { isOrchestrationMode, type OrchestrationMode } from '@maka/core';
+import { isPermissionMode, type PermissionMode } from '@maka/core';
+import { isSessionStartMode, type SessionStartMode } from '@maka/core';
 import {
   isSessionBlockedReason,
   isSessionStatus,
   type SessionBlockedReason,
   type SessionStatus,
   type SessionSubagentProjection,
-} from '@maka/core/session';
-import { isThinkingLevel, type ThinkingLevel } from '@maka/core/model-thinking';
-import type { ExecutionBoundarySummary } from '@maka/core/sandbox-boundary';
-export type { ExecutionBoundarySummary } from '@maka/core/sandbox-boundary';
+} from '@maka/core';
+import { isThinkingLevel, type ThinkingLevel } from '@maka/core';
+import type { ExecutionBoundarySummary } from '@maka/core';
+export type { ExecutionBoundarySummary } from '@maka/core';
 import {
   assertAllowedKeys,
   requireCount,
@@ -25,7 +25,7 @@ import {
 import { invalidProtocolFrame } from './errors.js';
 import { defineOperation } from './operation-spec.js';
 
-export type { SessionSubagentProjection } from '@maka/core/session';
+export type { SessionSubagentProjection } from '@maka/core';
 
 export const SESSION_CATALOG_PAGE_MAX_ITEMS = 32;
 export const SESSION_CATALOG_RESULT_MAX_BYTES = 48 * 1024;

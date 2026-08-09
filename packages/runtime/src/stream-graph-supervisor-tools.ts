@@ -15,7 +15,7 @@ import {
   type AgentGraphScheduledWork,
   type AgentGraphStoppedTarget,
   type AgentGraphWorkTarget,
-} from '@maka/core/agent-graph-schedule';
+} from '@maka/core';
 import { stableHash } from './request-shape.js';
 import type { AgentGraphSupervisorObservation } from './stream-graph-dispatch.js';
 import type {

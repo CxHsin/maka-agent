@@ -1,6 +1,5 @@
-import * as nodeUtil from 'node:util';
 import type { RuntimeEvent } from './runtime-event.js';
-import { canonicalToolArgsHash } from './tool-args-identity.js';
+import { canonicalToolArgsHash, strictJsonEqual } from './tool-args-identity.js';
 
 export type ToolLedgerLane =
   | 'ordinary'
@@ -199,7 +198,7 @@ export function validateToolLedgerTransition(input: {
       candidates.push(candidate);
       continue;
     }
-    if (!nodeUtil.isDeepStrictEqual(prior, candidate)) {
+    if (!strictJsonEqual(prior, candidate)) {
       return { ok: false, code: 'duplicate_event_id', eventId: candidate.id };
     }
   }

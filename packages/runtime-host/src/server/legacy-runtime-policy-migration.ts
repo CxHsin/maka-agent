@@ -8,15 +8,15 @@ import {
   PROVIDER_DEFAULTS,
   providerSupportsModelDiscovery,
   type LlmConnection,
-} from '@maka/core/llm-connections';
+} from '@maka/core';
 import type {
   ConnectionCatalogEntry,
   ConnectionModelDiscoveryResult,
   ConnectionTestSummary,
   CredentialLocator,
   RuntimePolicy,
-} from '@maka/core/runtime-policy';
-import type { AppSettings } from '@maka/core/settings';
+} from '@maka/core';
+import type { AppSettings } from '@maka/core';
 import { createConnectionStore } from '@maka/storage/connection-store';
 import { createFileCredentialStore } from '@maka/storage/credential-store';
 import type { RuntimePolicyStoresWriter } from '@maka/storage/runtime-policy-stores';

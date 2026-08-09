@@ -1,11 +1,11 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
+import type { RuntimeExecutionConnection } from '@maka/core';
 import type {
   PrefixChangeReason,
   ToolSchemaChangeReason,
   ToolAvailabilityDiagnostic,
-} from '@maka/core/usage-stats/types';
+} from '@maka/core';
 import type { ModelMessage } from './model-protocol.js';
 import { toJSONSchema } from 'zod';
 

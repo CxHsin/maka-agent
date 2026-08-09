@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import type { SandboxBoundaryRequest } from '@maka/core';
-import type { SandboxBoundaryRequestEvent, UserQuestionRequestEvent } from '@maka/core/events';
+import type { SandboxBoundaryRequestEvent, UserQuestionRequestEvent } from '@maka/core';
 import {
   bindRuntimeInteractionRun,
   RuntimeInteractionAdmissionRejectedError,

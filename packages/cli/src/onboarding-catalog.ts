@@ -1,8 +1,4 @@
-import {
-  CATALOG_PROVIDER_TYPES,
-  PROVIDER_DEFAULTS,
-  providerAuthSupportsApiKey,
-} from '@maka/core/llm-connections';
+import { CATALOG_PROVIDER_TYPES, PROVIDER_DEFAULTS, providerAuthSupportsApiKey } from '@maka/core';
 import type { OnboardableProvider } from './pi-tui-contracts.js';
 
 export function listApiKeyOnboardableProviders(): OnboardableProvider[] {

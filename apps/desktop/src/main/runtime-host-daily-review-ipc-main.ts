@@ -4,8 +4,8 @@ import {
   normalizeDailyReviewConfig,
   type DailyReviewConfig,
   type DailyReviewRange,
-} from "@maka/core/daily-review";
-import { tryResult } from "@maka/core/result";
+} from "@maka/core";
+import { tryResult } from "@maka/core";
 import { saveMarkdownViaDialog } from "./markdown-save-main.js";
 import type { createMainWindowController } from "./main-window.js";
 import type { DesktopRuntimeHostClient } from "./runtime-host-client.js";

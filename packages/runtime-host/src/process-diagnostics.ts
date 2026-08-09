@@ -1,5 +1,5 @@
-import { DiagnosticLogBuffer } from '@maka/core/diagnostic-log';
-import { installConsoleDiagnosticLogCapture } from '@maka/core/node-diagnostic-log';
+import { DiagnosticLogBuffer } from '@maka/core';
+import { installConsoleDiagnosticLogCapture } from '@maka/core/node';
 import {
   HOST_DIAGNOSTIC_LOG_MAX_ENTRIES,
   HOST_DIAGNOSTIC_LOG_MAX_ENTRY_BYTES,

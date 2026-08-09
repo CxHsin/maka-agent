@@ -2,7 +2,7 @@ import {
   normalizeRelayModelProfiles,
   type RelayModelProfile,
   type RelayModelProfiles,
-} from '@maka/core/model-thinking';
+} from '@maka/core';
 
 /**
  * Reseed decision for the relay-profile editor's local draft. The editor is

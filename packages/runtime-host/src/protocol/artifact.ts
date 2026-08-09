@@ -10,9 +10,9 @@ import {
   type ArtifactStatus,
   isArtifactTurnKey,
   isCanonicalArtifactEntityId,
-} from '@maka/core/artifacts';
-import { MAX_ATTACHMENT_BYTES } from '@maka/core/attachments';
-import { isCanonicalAttachmentRef, type AttachmentRef } from '@maka/core/events';
+} from '@maka/core';
+import { MAX_ATTACHMENT_BYTES } from '@maka/core';
+import { isCanonicalAttachmentRef, type AttachmentRef } from '@maka/core';
 import { requireCount, requireEntityId, requireExactRecord, requireRecord } from './codec.js';
 import { invalidProtocolFrame } from './errors.js';
 import { defineOperation } from './operation-spec.js';

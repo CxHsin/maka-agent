@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { ExecutionLogCursor } from '@maka/core/execution-evidence';
+import type { ExecutionLogCursor } from '@maka/core';
 import { acquireOperationalStateDatabase, type OperationalStateDatabaseLease } from '@maka/storage';
 import {
   assertStorageRootLease,

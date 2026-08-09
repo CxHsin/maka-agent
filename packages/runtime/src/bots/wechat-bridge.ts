@@ -1,5 +1,5 @@
 import type { BotChannelSettings } from '@maka/core';
-import { generalizedErrorMessage } from '@maka/core/redaction';
+import { generalizedErrorMessage } from '@maka/core';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { BaseBotAdapter, botReadinessFromSettings } from './base-adapter.js';

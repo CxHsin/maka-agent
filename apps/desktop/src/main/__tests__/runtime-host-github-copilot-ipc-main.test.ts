@@ -5,7 +5,7 @@ import type {
   ConnectionCatalogEntry,
   ConnectionCatalogSnapshot,
   CredentialStatus,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import {
   registerRuntimeHostGitHubCopilotIpc,
   type RuntimeHostGitHubCopilotIpcDeps,

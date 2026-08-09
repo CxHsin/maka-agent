@@ -1,4 +1,4 @@
-import type { SessionHeader } from '@maka/core/session';
+import type { SessionHeader } from '@maka/core';
 import { agentGraphIdForRootSession } from '@maka/runtime';
 
 export interface SandboxBoundaryGraphWakeHeaderReader {

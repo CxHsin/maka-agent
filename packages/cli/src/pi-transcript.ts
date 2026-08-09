@@ -6,14 +6,10 @@ import type {
   SessionEvent,
   ToolOutputStream,
   ToolResultContent,
-} from '@maka/core/events';
-import {
-  STEP_LIMIT_NOTICE_TEXT,
-  type StoredMessage,
-  type SystemNoteMessage,
-} from '@maka/core/session';
-import type { ContextBudgetDiagnostic } from '@maka/core/usage-stats/types';
-import type { ThinkingLevel } from '@maka/core/model-thinking';
+} from '@maka/core';
+import { STEP_LIMIT_NOTICE_TEXT, type StoredMessage, type SystemNoteMessage } from '@maka/core';
+import type { ContextBudgetDiagnostic } from '@maka/core';
+import type { ThinkingLevel } from '@maka/core';
 import {
   isActiveShellRunStatus,
   mergeShellRunStateWithDiagnostics,

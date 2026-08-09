@@ -8,8 +8,8 @@ import {
   type ArtifactSource,
   isArtifactTurnKey,
   isCanonicalArtifactEntityId,
-} from '@maka/core/artifacts';
-import { isDeepResearchArtifactRole } from '@maka/core/deep-research-run';
+} from '@maka/core';
+import { isDeepResearchArtifactRole } from '@maka/core';
 import { ARTIFACT_PUBLICATION_STAGING_PATTERN } from './artifact-storage-layout.js';
 
 const ARTIFACT_KIND_SET = new Set<ArtifactKind>(ARTIFACT_KINDS);

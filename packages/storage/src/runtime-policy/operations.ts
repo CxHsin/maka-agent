@@ -11,9 +11,9 @@ import type {
   RuntimePolicy,
   RequestHeaderUpdate,
   SavedRequestHeaders,
-} from '@maka/core/runtime-policy';
-import type { ProviderAuthActionAvailability } from '@maka/core/provider-auth';
-import type { ProviderDefaults } from '@maka/core/llm-connections';
+} from '@maka/core';
+import type { ProviderAuthActionAvailability } from '@maka/core';
+import type { ProviderDefaults } from '@maka/core';
 
 declare const operationTicketBrand: unique symbol;
 

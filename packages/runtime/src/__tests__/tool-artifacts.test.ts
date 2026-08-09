@@ -1,7 +1,7 @@
 import { createTestToolRuntime } from './execution-boundary-test-helpers.js';
 import { describe, test } from 'node:test';
 import type { LlmConnection, SessionHeader } from '@maka/core';
-import type { SessionEvent } from '@maka/core/events';
+import type { SessionEvent } from '@maka/core';
 import {
   deriveToolArtifactCandidates,
   extractStdoutRedirectPath,

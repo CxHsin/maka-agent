@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'n
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { applySandboxBoundaryExpansion } from '@maka/core';
-import { createWorkspaceWritePermissionProfile } from '@maka/core/permission-profile';
+import { createWorkspaceWritePermissionProfile } from '@maka/core';
 import { LinuxBubblewrapBackend, linuxExecutableRoots } from '../sandbox/linux-sandbox.js';
 import { detectLinuxSandboxCapability } from '../sandbox/linux-capability.js';
 import { SandboxManager } from '../sandbox/sandbox-manager.js';

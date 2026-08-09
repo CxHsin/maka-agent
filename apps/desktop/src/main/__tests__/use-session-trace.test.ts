@@ -5,9 +5,9 @@ import {
   SESSION_TRACE_SCHEMA_VERSION,
   emptyTraceTotals,
   type SessionTrace,
-} from '@maka/core/session-trace';
-import type { SessionEvent } from '@maka/core/events';
-import type { Result } from '@maka/core/result';
+} from '@maka/core';
+import type { SessionEvent } from '@maka/core';
+import type { Result } from '@maka/core';
 import { cleanupFakeDom, installReactRenderer } from './fake-dom.js';
 import {
   TRACE_REFRESH_DEBOUNCE_MS,

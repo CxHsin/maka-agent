@@ -1,7 +1,7 @@
 import { posix } from 'node:path';
 import { readdirSync } from 'node:fs';
 
-import type { PermissionProfile } from '@maka/core/permission-profile';
+import type { PermissionProfile } from '@maka/core';
 
 import {
   detectLinuxSandboxCapability,

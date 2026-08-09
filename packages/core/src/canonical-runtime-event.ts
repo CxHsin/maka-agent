@@ -1,7 +1,6 @@
-import * as nodeUtil from 'node:util';
 import type { RuntimeEvent } from './runtime-event.js';
 import { decodeRuntimeEvent } from './runtime-event.js';
-import { stableJsonStringify } from './tool-args-identity.js';
+import { stableJsonStringify, strictJsonEqual } from './tool-args-identity.js';
 
 export interface CanonicalRuntimeEventEncoding {
   event: RuntimeEvent;
@@ -26,7 +25,7 @@ export function encodeCanonicalRuntimeEvent(value: unknown): CanonicalRuntimeEve
     throw new Error('RuntimeEvent is not losslessly serializable', { cause });
   }
   const event = decodeRuntimeEvent(JSON.parse(json));
-  if (!nodeUtil.isDeepStrictEqual(decoded, event)) {
+  if (!strictJsonEqual(decoded, event)) {
     throw new Error('RuntimeEvent is not losslessly serializable');
   }
   return { event, json };

@@ -1,4 +1,4 @@
-import type { PricingConfig } from '@maka/core/usage-stats/types';
+import type { PricingConfig } from '@maka/core';
 import { getBuiltinPricing } from './builtin-pricing.js';
 
 export function buildPricingLookup(

@@ -93,4 +93,12 @@ describe('canonical RuntimeEvent encoding', () => {
       /RuntimeEvent is not losslessly serializable/,
     );
   });
+
+  test('rejects negative zero because JSON would read it back as positive zero', () => {
+    const event = baseEvent({ ts: -0 });
+    assert.throws(
+      () => encodeCanonicalRuntimeEvent(event),
+      /RuntimeEvent is not losslessly serializable/,
+    );
+  });
 });

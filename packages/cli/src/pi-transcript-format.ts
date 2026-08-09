@@ -4,7 +4,7 @@ import {
   wrapTextWithAnsi,
   type MarkdownTheme,
 } from '@earendil-works/pi-tui';
-import type { ToolResultContent } from '@maka/core/events';
+import type { ToolResultContent } from '@maka/core';
 import { projectAgentSwarmResult, ptyHumanTerminalText, type ShellOutput } from '@maka/core';
 import { ansi } from './tui-ansi.js';
 

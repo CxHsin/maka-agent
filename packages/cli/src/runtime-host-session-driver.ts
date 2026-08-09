@@ -10,14 +10,14 @@ import {
   type ShellRunUpdate,
   type StoredMessage,
 } from '@maka/core';
-import type { OrchestrationMode } from '@maka/core/orchestration';
-import type { PermissionMode } from '@maka/core/permission';
-import type { CreateSessionInput } from '@maka/core/runtime-inputs';
-import { executionBoundaryDisplayMode } from '@maka/core/sandbox-boundary';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
-import type { ThinkingLevel } from '@maka/core/model-thinking';
-import type { SkillInvocationResult } from '@maka/core/skill-invocation';
-import type { UserQuestionResponse } from '@maka/core/user-question';
+import type { OrchestrationMode } from '@maka/core';
+import type { PermissionMode } from '@maka/core';
+import type { CreateSessionInput } from '@maka/core';
+import { executionBoundaryDisplayMode } from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
+import type { ThinkingLevel } from '@maka/core';
+import type { SkillInvocationResult } from '@maka/core';
+import type { UserQuestionResponse } from '@maka/core';
 import type { ContextDiagnostics } from '@maka/runtime';
 import {
   isRuntimeHostTerminalTurn as isTerminalTurn,

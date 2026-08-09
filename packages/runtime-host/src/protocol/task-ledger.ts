@@ -12,7 +12,7 @@ import {
   type Task,
   type TaskOwner,
   validateTaskEvidence,
-} from '@maka/core/task-ledger';
+} from '@maka/core';
 import { requireEntityId, requireExactRecord, requireRecord } from './codec.js';
 import { invalidProtocolFrame } from './errors.js';
 import { defineOperation } from './operation-spec.js';

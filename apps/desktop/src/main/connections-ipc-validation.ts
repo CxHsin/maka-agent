@@ -5,8 +5,8 @@ import {
   type CreateConnectionInput,
   type UpdateConnectionInput,
 } from '@maka/core';
-import { PROVIDER_DEFAULTS } from '@maka/core/llm-connections';
-import { normalizeRelayModelProfiles } from '@maka/core/model-thinking';
+import { PROVIDER_DEFAULTS } from '@maka/core';
+import { normalizeRelayModelProfiles } from '@maka/core';
 
 const IPC_CONNECTION_SLUG_MAX_LENGTH = 64;
 const IPC_CONNECTION_SECRET_MAX_LENGTH = 4096;

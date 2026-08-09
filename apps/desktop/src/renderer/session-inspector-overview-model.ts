@@ -3,7 +3,7 @@ import type {
   TraceModelAttempt,
   TraceModelCallStep,
   TurnTrace,
-} from '@maka/core/session-trace';
+} from '@maka/core';
 
 /**
  * Overview view model for the Inspector panel's summary sections.

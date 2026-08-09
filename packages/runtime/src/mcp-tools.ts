@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { jsonSchema } from 'ai';
-import type { McpCallResult, McpToolDescriptor } from '@maka/core/mcp';
-import type { ToolCategory } from '@maka/core/permission';
-import type { ToolRecoveryMode } from '@maka/core/runtime-event';
+import type { McpCallResult, McpToolDescriptor } from '@maka/core';
+import type { ToolCategory } from '@maka/core';
+import type { ToolRecoveryMode } from '@maka/core';
 import type { ToolResultContentPart, ToolResultOutput } from './model-protocol.js';
 import type { MakaTool } from './tool-runtime.js';
 

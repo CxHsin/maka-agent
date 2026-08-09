@@ -3,8 +3,8 @@ import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
-import type { SessionEvent } from '@maka/core/events';
-import type { SessionSummary } from '@maka/core/session';
+import type { SessionEvent } from '@maka/core';
+import type { SessionSummary } from '@maka/core';
 import {
   decodeActivationRequest,
   parseMakaActivateArgs,

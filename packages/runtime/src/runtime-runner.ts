@@ -30,8 +30,8 @@ import {
   type RuntimeEvent,
   type RuntimeEventStatus,
   type ToolBoundaryProtocol,
-} from '@maka/core/runtime-event';
-import { decodeRuntimeBoundaryCursor } from '@maka/core/runtime-boundary';
+} from '@maka/core';
+import { decodeRuntimeBoundaryCursor } from '@maka/core';
 import { digestProviderReplay } from './continuation-replay.js';
 import {
   buildRuntimeEventModelReplayPlan,
@@ -52,7 +52,7 @@ import {
   type RuntimeContinuationStartAdmissionProof,
 } from './runtime-continuation-admission.js';
 import type { RuntimeContinuation } from './runtime-resume.js';
-import type { TurnOrigin } from '@maka/core/runtime-inputs';
+import type { TurnOrigin } from '@maka/core';
 
 // ============================================================================
 // RuntimeGate — narrow preflight seam

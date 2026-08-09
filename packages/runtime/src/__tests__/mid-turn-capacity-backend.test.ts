@@ -4,9 +4,9 @@ import { setImmediate as flushMacrotask } from 'node:timers/promises';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider';
 import type { LlmConnection, SessionHeader } from '@maka/core';
-import type { SessionEvent } from '@maka/core/events';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import type { AgentBackend, BackendSendInput } from '@maka/core/backend-types';
+import type { SessionEvent } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
+import type { AgentBackend, BackendSendInput } from '@maka/core';
 import { z } from 'zod';
 import { AiSdkBackend } from '../ai-sdk-backend.js';
 import { buildDefaultContextBudgetPolicy } from '../context-budget-policy.js';
@@ -19,10 +19,10 @@ import type { InvocationContext } from '../invocation-context.js';
 import { applyRuntimeEventContextBudget } from '../context-budget.js';
 import { evaluateHistoryCompactCheckpointReplay } from '../history-compact.js';
 import type { HistoryCompactCheckpoint } from '../history-compact-checkpoint.js';
-import type { ContextBudgetDiagnostic } from '@maka/core/usage-stats/types';
+import type { ContextBudgetDiagnostic } from '@maka/core';
 import { HistoryCompactSummarizerError } from '../history-compact-error.js';
 import { buildLlmHistorySummarizer } from '../history-compact-summarizer.js';
-import { decodeModelCallAttempt, type ModelCallAttempt } from '@maka/core/model-call-attempt';
+import { decodeModelCallAttempt, type ModelCallAttempt } from '@maka/core';
 import {
   createTestAiSdkBackend,
   testToolResultArchive,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import { canonicalToolArgsHash } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import {
   buildInterruptedCodeModeOutcomeCommits,
   resolveRuntimeRecovery,

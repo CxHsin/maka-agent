@@ -8,9 +8,9 @@ import type {
   PendingMemoryExtractionFailure,
   SettleMemoryExtractionFailureRequest,
   SettleMemoryExtractionFailureResult,
-} from '@maka/core/long-term-memory';
-import { redactSecrets } from '@maka/core/redaction';
-import type { SessionHeader } from '@maka/core/session';
+} from '@maka/core';
+import { redactSecrets } from '@maka/core';
+import type { SessionHeader } from '@maka/core';
 import { z } from 'zod';
 import {
   fitMemoryExtractionEvidence,

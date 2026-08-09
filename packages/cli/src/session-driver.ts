@@ -1,14 +1,14 @@
 import { realpath } from 'node:fs/promises';
-import type { QueueEnqueueOutcome, SessionEvent } from '@maka/core/events';
-import type { OrchestrationMode } from '@maka/core/orchestration';
-import type { PermissionMode } from '@maka/core/permission';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
-import type { SessionSummary, StoredMessage } from '@maka/core/session';
-import type { ThinkingLevel } from '@maka/core/model-thinking';
-import type { TurnOrchestration } from '@maka/core/runtime-inputs';
-import type { UserQuestionResponse } from '@maka/core/user-question';
+import type { QueueEnqueueOutcome, SessionEvent } from '@maka/core';
+import type { OrchestrationMode } from '@maka/core';
+import type { PermissionMode } from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
+import type { SessionSummary, StoredMessage } from '@maka/core';
+import type { ThinkingLevel } from '@maka/core';
+import type { TurnOrchestration } from '@maka/core';
+import type { UserQuestionResponse } from '@maka/core';
 import type { ContextDiagnostics } from '@maka/runtime';
-import type { SkillInvocationResult } from '@maka/core/skill-invocation';
+import type { SkillInvocationResult } from '@maka/core';
 
 export interface MakaSessionMoveResult {
   previousCwd: string;

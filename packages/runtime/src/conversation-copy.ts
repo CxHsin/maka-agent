@@ -14,7 +14,7 @@ import {
   isEmittedAgentRunEventType,
   isSessionInlineRun,
 } from '@maka/core';
-import { TOOL_RECOVERY_DECISION_FACT_KIND } from '@maka/core/tool-recovery-fact';
+import { TOOL_RECOVERY_DECISION_FACT_KIND } from '@maka/core';
 import {
   buildHistoryCompactCheckpoint,
   matchHistoryCompactCheckpointPrefix,

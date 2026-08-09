@@ -10,7 +10,7 @@ import {
   catalogToolByName,
   unknownBoundToolNames,
   type ToolHostId,
-} from '@maka/core/tool-catalog';
+} from '@maka/core';
 import type { HostCapabilities } from './skills-context.js';
 import type { ToolGroup } from './tool-availability.js';
 import type { MakaTool } from './tool-runtime.js';

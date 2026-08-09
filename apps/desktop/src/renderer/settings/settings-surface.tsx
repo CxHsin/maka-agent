@@ -27,7 +27,7 @@ import type {
   UsageRange,
   UsageStats,
 } from '@maka/core';
-import { createDefaultSettings } from '@maka/core/settings';
+import { createDefaultSettings } from '@maka/core';
 import { useMountedRef, useToast, useUiLocale } from '@maka/ui';
 import { ProvidersPanel } from './providers-panel';
 import { SubagentSettingsPage } from './subagent-settings-page';

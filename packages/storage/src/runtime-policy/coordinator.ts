@@ -31,14 +31,14 @@ import {
   type SetCredentialInput,
   type SetDefaultConnectionTargetInput,
   type UpdateCatalogConnectionInput,
-} from '@maka/core/runtime-policy';
-import { deriveProviderAuthContract, type ProviderAuthAction } from '@maka/core/provider-auth';
+} from '@maka/core';
+import { deriveProviderAuthContract, type ProviderAuthAction } from '@maka/core';
 import {
   deriveConnectionSlug,
   effectiveBaseUrl,
   PROVIDER_DEFAULTS,
   type ProviderType,
-} from '@maka/core/llm-connections';
+} from '@maka/core';
 import { deepFreeze } from './codec.js';
 import {
   catalogSnapshot,

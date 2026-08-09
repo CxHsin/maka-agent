@@ -6,7 +6,7 @@ import {
   type NormalizedMessage,
 } from '@larksuiteoapi/node-sdk';
 import type { BotChannelSettings } from '@maka/core';
-import { generalizedErrorMessage } from '@maka/core/redaction';
+import { generalizedErrorMessage } from '@maka/core';
 import { BaseBotAdapter, botReadinessFromSettings } from './base-adapter.js';
 import type { BotSendOptions, BotStatus, SendCapable } from './types.js';
 

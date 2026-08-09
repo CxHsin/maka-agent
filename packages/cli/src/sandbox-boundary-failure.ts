@@ -1,4 +1,4 @@
-import type { SessionEvent } from '@maka/core/events';
+import type { SessionEvent } from '@maka/core';
 import type { InvocationResult } from '@maka/runtime';
 
 export type SandboxBoundaryFailureReason = 'sandbox_boundary_required' | 'requires_bypass';

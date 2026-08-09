@@ -1,5 +1,5 @@
 import type { PipeShellOutput } from '@maka/core';
-import { redactSecrets } from '@maka/core/redaction';
+import { redactSecrets } from '@maka/core';
 
 import { BashTailBuffer } from './bash-tail-buffer.js';
 import { BASH_MAX_RETAINED_CHARS, shellTailValueWithUnsafeDropMarker } from './shell-exec.js';

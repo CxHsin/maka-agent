@@ -8,8 +8,8 @@ import { MockLanguageModelV4 } from 'ai/test';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { expect } from '../test-helpers.js';
-import type { RuntimeEvent, RuntimeEventContent } from '@maka/core/runtime-event';
-import { decodeModelCallAttempt, type ModelCallAttempt } from '@maka/core/model-call-attempt';
+import type { RuntimeEvent, RuntimeEventContent } from '@maka/core';
+import { decodeModelCallAttempt, type ModelCallAttempt } from '@maka/core';
 import { ProviderRequestTracker } from '../provider-request-telemetry.js';
 import type { HistoryCompactSummaryInput } from '../ai-sdk-compaction-contract.js';
 import {

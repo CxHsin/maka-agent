@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import type { SteeringLease } from '@maka/core/backend-types';
+import type { SteeringLease } from '@maka/core';
 import {
   aggregateMessageContents,
   messageContentsEqual,
   normalizeMessageContent,
   type MessageContent,
-} from '@maka/core/events';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+} from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import {
   RuntimeMessageAuthorityInvariantError,
   type RuntimeMessageAuthority,

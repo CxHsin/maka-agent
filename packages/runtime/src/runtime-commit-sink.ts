@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { RuntimeEvent, ToolRecoveryMode } from '@maka/core';
-import { canonicalToolArgsHash as canonicalToolArgsHashCore } from '@maka/core/tool-args-identity';
+import { canonicalToolArgsHash as canonicalToolArgsHashCore } from '@maka/core';
 
 export type { ToolRecoveryMode } from '@maka/core';
 

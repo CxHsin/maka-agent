@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { createDefaultBotChannel } from '@maka/core/settings';
+import { createDefaultBotChannel } from '@maka/core';
 import {
   BaseBotAdapter,
   botReadinessFromSettings,

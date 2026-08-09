@@ -5,7 +5,7 @@ import {
   normalizeWebSearchLimit,
   normalizeWebSearchQuery,
 } from '@maka/core';
-import { SENSITIVE_PLACEHOLDER } from '@maka/core/settings/network-settings';
+import { SENSITIVE_PLACEHOLDER } from '@maka/core';
 import type { DesktopRuntimeHostClient } from './runtime-host-client.js';
 
 type RuntimeHostWebSearchClient = Pick<

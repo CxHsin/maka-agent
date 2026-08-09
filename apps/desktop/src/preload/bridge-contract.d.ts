@@ -79,21 +79,21 @@ import type {
   LocalMemoryEntryPreview,
   PetPackManifestV1,
 } from '@maka/core';
-import type { SessionTrace } from '@maka/core/session-trace';
-import type { TestProxyInput } from '@maka/core/settings/network-settings';
+import type { SessionTrace } from '@maka/core';
+import type { TestProxyInput } from '@maka/core';
 import type { ExternalSessionImportIpcResult } from './external-session-import-result.js';
 import type {
   DesktopDiagnosticCopyResult,
   DesktopErrorDiagnosticInput,
 } from './diagnostics-contract.js';
-import type { Result } from '@maka/core/result';
+import type { Result } from '@maka/core';
 import type { CreateSessionRequestInput } from '@maka/core';
 import type {
   McpConfigFile,
   McpServerConfig,
   McpServerStatus,
   McpTestResult,
-} from '@maka/core/mcp';
+} from '@maka/core';
 import type {
   AgentGraphClientChangedEvent,
   AgentGraphClientSnapshot,

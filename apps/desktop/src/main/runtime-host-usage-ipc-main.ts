@@ -1,14 +1,14 @@
 import type { ipcMain as electronIpcMain } from "electron";
-import { tryResult } from "@maka/core/result";
+import { tryResult } from "@maka/core";
 import {
   normalizePricingConfig,
   normalizePricingModelKey,
-} from "@maka/core/usage-stats/pricing";
+} from "@maka/core";
 import type {
   PricingConfig,
   UsageGroupBy,
   UsageQuery,
-} from "@maka/core/usage-stats/types";
+} from "@maka/core";
 import type { UsageQueryResult } from "@maka/runtime-host/protocol";
 import type { DesktopRuntimeHostClient } from "./runtime-host-client.js";
 

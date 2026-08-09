@@ -1,5 +1,5 @@
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import type { StoredMessage } from '@maka/core/session';
+import type { RuntimeEvent } from '@maka/core';
+import type { StoredMessage } from '@maka/core';
 import {
   isHardRuntimeEventReadModelDiagnostic,
   projectRuntimeEventsToStoredMessages,

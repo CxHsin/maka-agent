@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import net from 'node:net';
 import { afterEach, describe, test } from 'node:test';
-import { PROXY_DEFAULTS, type ProxySettings } from '@maka/core/settings/network-settings';
+import { PROXY_DEFAULTS, type ProxySettings } from '@maka/core';
 import {
   CONNECTION_EFFECT_ERROR_BODY_MAX_BYTES,
   CONNECTION_EFFECT_JSON_BODY_MAX_BYTES,

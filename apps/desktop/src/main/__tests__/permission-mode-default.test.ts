@@ -16,7 +16,7 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import type { AppSettings } from '@maka/core';
-import { createDefaultSettings } from '@maka/core/settings';
+import { createDefaultSettings } from '@maka/core';
 import { resolveDefaultPermissionMode } from '../permission-mode-default.js';
 
 describe('resolveDefaultPermissionMode', () => {

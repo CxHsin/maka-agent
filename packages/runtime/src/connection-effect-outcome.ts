@@ -1,4 +1,4 @@
-import type { ModelDiscoverySource, ModelInfo, ProviderType } from '@maka/core/llm-connections';
+import type { ModelDiscoverySource, ModelInfo, ProviderType } from '@maka/core';
 
 export interface ConnectionEffectConnection {
   readonly providerType: ProviderType;

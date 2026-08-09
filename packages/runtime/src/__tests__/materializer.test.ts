@@ -14,7 +14,7 @@ import type {
   PermissionDecisionMessage,
   TokenUsageMessage,
   SystemNoteMessage,
-} from '@maka/core/session';
+} from '@maka/core';
 import {
   materializeSession,
   applyAppendedMessage,

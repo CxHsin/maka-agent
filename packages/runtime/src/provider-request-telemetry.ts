@@ -3,8 +3,8 @@ import {
   type ModelCallAttempt,
   type ModelCallKind,
   type ModelCallUsageBasis,
-} from '@maka/core/model-call-attempt';
-import type { PricingConfig } from '@maka/core/usage-stats/types';
+} from '@maka/core';
+import type { PricingConfig } from '@maka/core';
 import {
   capturePreparedProviderRequest,
   type PreparedProviderRequestCapture,

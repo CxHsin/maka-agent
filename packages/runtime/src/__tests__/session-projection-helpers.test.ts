@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import { expect } from '../test-helpers.js';
-import type { StoredMessage } from '@maka/core/session';
+import type { StoredMessage } from '@maka/core';
 import {
   buildStatusPatch,
   buildTurnStateMessage,

@@ -2,8 +2,8 @@ import {
   TOOL_OUTPUT_DELTA_MAX_CHARS,
   type ToolOutputDeltaEvent,
   type ToolOutputStream,
-} from '@maka/core/events';
-import { redactSecrets } from '@maka/core/redaction';
+} from '@maka/core';
+import { redactSecrets } from '@maka/core';
 
 const REDACTION_TAIL_CHARS = 256;
 

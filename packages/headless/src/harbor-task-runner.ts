@@ -4,12 +4,8 @@ import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { writeFile } from 'node:fs/promises';
 import { basename, delimiter, join } from 'node:path';
 import { promisify } from 'node:util';
-import {
-  PROVIDER_DEFAULTS,
-  providerAuthRequiresSecret,
-  type ProviderType,
-} from '@maka/core/llm-connections';
-import type { ThinkingLevel } from '@maka/core/model-thinking';
+import { PROVIDER_DEFAULTS, providerAuthRequiresSecret, type ProviderType } from '@maka/core';
+import type { ThinkingLevel } from '@maka/core';
 import { fetchGitHubCopilotModels, isSupportedGitHubCopilotAccountToken } from '@maka/runtime';
 import {
   selectHarborCellTokenSummary,

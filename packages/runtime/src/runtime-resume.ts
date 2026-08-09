@@ -6,14 +6,14 @@ import {
   type RuntimeEvent,
   type RuntimeEventFunctionCallContent,
   type RuntimeEventFunctionResponseContent,
-} from '@maka/core/runtime-event';
+} from '@maka/core';
 import type {
   ContinuationClaimV1,
   ImmutableRuntimePrefixV1,
   RuntimeBoundaryCursorV1,
   RuntimeBoundaryDigest,
-} from '@maka/core/runtime-boundary';
-import type { AgentRunHeader } from '@maka/core/agent-run';
+} from '@maka/core';
+import type { AgentRunHeader } from '@maka/core';
 import type { ContinuationClaimStateV1 } from '@maka/core';
 import { isDeepStrictEqual } from 'node:util';
 import {

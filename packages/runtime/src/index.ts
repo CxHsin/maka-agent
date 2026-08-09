@@ -143,8 +143,14 @@ export {
   AGENT_GRAPH_READINESS_SCHEMA_VERSION,
   buildAgentGraphReadinessSnapshot,
 } from './stream-graph-readiness.js';
-export { claimAgentGraphRunnableIntent } from './stream-graph-admission.js';
+export {
+  claimAgentGraphRunnableIntent,
+  fingerprintAgentGraphRunnableIntent,
+} from './stream-graph-admission.js';
 export type { ClaimAgentGraphRunnableIntentInput } from './stream-graph-admission.js';
+export * from './network/proxy-test.js';
+export * from './model-runtime.js';
+export * from './file-write-lock.js';
 export { runAgentGraphToQuiescence } from './stream-graph-dispatch.js';
 export type {
   AgentGraphDispatchFailure,
@@ -403,7 +409,7 @@ export {
   renderInterruptedPlanContext,
 } from './plan-mode.js';
 export { terminateChildProcessTree } from './process-tree-terminator.js';
-export type { AttachmentByteReader } from '@maka/core/attachments';
+export type { AttachmentByteReader } from '@maka/core';
 export type {
   AgentBackend,
   BackendCompactHistoryInput,
@@ -1370,7 +1376,7 @@ export {
   SESSION_INSPECT_DOCUMENT_VERSION,
   isAgentRunInspectDocument,
   isSessionInspectDocument,
-} from '@maka/core/execution-inspect';
+} from '@maka/core';
 export type {
   AgentRunInspectCompactionCheckpoint,
   AgentRunInspectDocument,
@@ -1381,7 +1387,7 @@ export type {
   ExecutionInspectSeverity,
   SessionInspectDocument,
   SessionInspectSummary,
-} from '@maka/core/execution-inspect';
+} from '@maka/core';
 export type {
   InspectSessionDocumentOptions,
   SessionHeaderReader,

@@ -1,4 +1,4 @@
-import { ExternalSessionAdapterRegistry } from '@maka/core/external-session';
+import { ExternalSessionAdapterRegistry } from '@maka/core';
 import { CodexSessionAdapter, type CodexSessionAdapterOptions } from './codex-session-adapter.js';
 
 export interface ExternalSessionAdapterOptions {

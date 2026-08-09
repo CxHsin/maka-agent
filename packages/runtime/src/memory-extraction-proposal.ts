@@ -8,9 +8,9 @@ import {
   type MemoryScopeType,
   type MemoryStatementType,
   type MemoryTemporalType,
-} from '@maka/core/long-term-memory';
-import { redactSecrets } from '@maka/core/redaction';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+} from '@maka/core';
+import { redactSecrets } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import { z } from 'zod';
 import {
   renderMemoryExtractionEvidence,

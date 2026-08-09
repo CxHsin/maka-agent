@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createDefaultRuntimePolicy } from '@maka/core/runtime-policy';
+import { createDefaultRuntimePolicy } from '@maka/core';
 import { registerRuntimeHostMemoryIpc } from '../runtime-host-memory-ipc-main.js';
 
 test('restarts the complete Memory projection when its component revisions differ', async () => {

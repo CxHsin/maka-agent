@@ -1,4 +1,4 @@
-import type { ToolOutputStream, ToolResultContent } from '@maka/core/events';
+import type { ToolOutputStream, ToolResultContent } from '@maka/core';
 import {
   formatQuietJsonValue,
   formatToolInvocationLine,

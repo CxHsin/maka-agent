@@ -4,7 +4,7 @@ import {
   planUserControlMutationInput,
   type PlanEvent,
   type PlanMutationResult,
-} from '@maka/core/plan';
+} from '@maka/core';
 import type { SessionManager } from '@maka/runtime';
 import {
   isSessionNotFoundError,

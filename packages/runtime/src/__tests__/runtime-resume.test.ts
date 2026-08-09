@@ -1,13 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import {
-  buildImmutableRuntimePrefix,
-  type ImmutableRuntimePrefixV1,
-} from '@maka/core/runtime-boundary';
-import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import type { AgentRunHeader } from '@maka/core/agent-run';
+import { buildImmutableRuntimePrefix, type ImmutableRuntimePrefixV1 } from '@maka/core';
+import { canonicalToolArgsHash } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
+import type { AgentRunHeader } from '@maka/core';
 
 import { buildContinuationReplayPlan } from '../continuation-replay.js';
 import { PROVIDER_REPLAY_PROJECTION_VERSION } from '../model-history.js';

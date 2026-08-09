@@ -9,13 +9,13 @@
  * injected as host callbacks.
  */
 
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import type {
   BackendCompactHistoryInput,
   BackendCompactHistoryResult,
   BackendSendInput,
-} from '@maka/core/backend-types';
-import type { ContextBudgetDiagnostic } from '@maka/core/usage-stats/types';
+} from '@maka/core';
+import type { ContextBudgetDiagnostic } from '@maka/core';
 
 import type { AiSdkCompactionCapabilities } from './ai-sdk-compaction-contract.js';
 import {
@@ -73,7 +73,7 @@ import {
 } from './semantic-compact.js';
 import { collectStaleToolResultArchiveCandidates } from './tool-result-archive.js';
 
-import type { ContextBudgetExhaustedDetail, SessionEvent } from '@maka/core/events';
+import type { ContextBudgetExhaustedDetail, SessionEvent } from '@maka/core';
 import type { AsyncEventQueue } from './async-queue.js';
 import type { MakaTool } from './tool-runtime.js';
 import {
@@ -82,7 +82,7 @@ import {
   type RuntimeEventModelReplayPlan,
 } from './model-history.js';
 import { toolSchemaCharsForDiagnostics } from './request-shape.js';
-import type { ModelCallKind } from '@maka/core/model-call-attempt';
+import type { ModelCallKind } from '@maka/core';
 import type { ProviderRequestTracker } from './provider-request-telemetry.js';
 import {
   estimateNextRequestTokens,

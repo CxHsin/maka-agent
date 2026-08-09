@@ -1,4 +1,4 @@
-import type { LlmCallRecord } from '@maka/core/usage-stats/types';
+import type { LlmCallRecord } from '@maka/core';
 import type { NormalizedUsage } from '../model-protocol.js';
 
 type LlmCallUsageFields = Pick<

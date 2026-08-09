@@ -3,11 +3,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import {
-  comparePricingModelKeys,
-  PRICING_MODEL_KEY_MAX_CHARS,
-} from '@maka/core/usage-stats/pricing';
-import type { PricingConfig, UsageBucket } from '@maka/core/usage-stats/types';
+import { comparePricingModelKeys, PRICING_MODEL_KEY_MAX_CHARS } from '@maka/core';
+import type { PricingConfig, UsageBucket } from '@maka/core';
 import {
   resolveRootControlNamespace,
   resolveStorageRoot,

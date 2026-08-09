@@ -11,7 +11,7 @@ import {
   type RuntimeEvent,
   type WorkspaceBaselineAuthorityInput,
 } from '@maka/core';
-import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
+import { canonicalToolArgsHash } from '@maka/core';
 import { createConversationOperationalStateStore } from '../conversation-operational-state.js';
 import {
   createSqliteRuntimeStore,

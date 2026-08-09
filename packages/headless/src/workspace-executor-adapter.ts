@@ -16,7 +16,7 @@ import type {
   WorkspaceWriteFileResult,
   WorkspaceWriteLockKeyInput,
   WorkspaceWriteLockKeyResult,
-} from '@maka/runtime/workspace-executor';
+} from '@maka/runtime';
 import { posix as pathPosix } from 'node:path';
 import { isPathInside } from '@maka/runtime';
 import type { IsolatedToolExecutor } from './isolation.js';

@@ -16,10 +16,10 @@ import {
   type TUI,
 } from '@earendil-works/pi-tui';
 import type { UserQuestionOption } from '@maka/core';
-import type { PermissionMode } from '@maka/core/permission';
-import type { ThinkingLevel } from '@maka/core/model-thinking';
+import type { PermissionMode } from '@maka/core';
+import type { ThinkingLevel } from '@maka/core';
 import type { InvocableSkillEntry } from '@maka/runtime';
-import { PROVIDER_DEFAULTS, type ModelInfo, type ProviderType } from '@maka/core/llm-connections';
+import { PROVIDER_DEFAULTS, type ModelInfo, type ProviderType } from '@maka/core';
 import type { ModelChoice, OnboardingProviderEntry } from './pi-tui-contracts.js';
 import { skillInvocationPrefixAt } from './skill-token.js';
 import { ansi, editorTheme, selectListTheme, stripAnsi } from './tui-ansi.js';

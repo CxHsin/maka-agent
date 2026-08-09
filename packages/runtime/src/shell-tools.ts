@@ -12,10 +12,10 @@ import {
   TERMINAL_MOUSE_SCROLL_DIRECTIONS,
   type TerminalInputAction,
 } from '@maka/core';
-import { redactSecrets } from '@maka/core/redaction';
-import type { ToolResultContent } from '@maka/core/events';
-import type { ToolExecutionFacts } from '@maka/core/permission';
-import type { SandboxBoundaryExpansion } from '@maka/core/sandbox-boundary';
+import { redactSecrets } from '@maka/core';
+import type { ToolResultContent } from '@maka/core';
+import type { ToolExecutionFacts } from '@maka/core';
+import type { SandboxBoundaryExpansion } from '@maka/core';
 import type { MakaTool, MakaToolContext } from './tool-runtime.js';
 import type { SandboxType } from './sandbox/types.js';
 import { isLikelySandboxDenial } from './sandbox/detect.js';

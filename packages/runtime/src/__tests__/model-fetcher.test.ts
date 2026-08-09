@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { after, describe, test } from 'node:test';
 import type { LlmConnection } from '@maka/core';
-import { PROVIDER_DEFAULTS } from '@maka/core/llm-connections';
+import { PROVIDER_DEFAULTS } from '@maka/core';
 import {
   fetchProviderModels,
   ProviderModelDiscoveryHttpError,

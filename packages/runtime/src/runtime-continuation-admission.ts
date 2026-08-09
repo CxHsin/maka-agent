@@ -1,4 +1,4 @@
-import { TOOL_BOUNDARY_PROTOCOL_V1, type ToolBoundaryProtocol } from '@maka/core/runtime-event';
+import { TOOL_BOUNDARY_PROTOCOL_V1, type ToolBoundaryProtocol } from '@maka/core';
 
 declare const runtimeContinuationStartAdmissionProofBrand: unique symbol;
 

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { MAX_ATTACHMENT_BYTES } from '@maka/core/attachments';
+import { MAX_ATTACHMENT_BYTES } from '@maka/core';
 import { openInteractiveArtifactStoreForWrite } from '@maka/storage/artifact-stores';
 import { resolveStorageRoot, tryAcquireInteractiveRootOwner } from '@maka/storage/root-authority';
 import { createHostExecutionArtifactServices } from '../server/execution-artifacts.js';

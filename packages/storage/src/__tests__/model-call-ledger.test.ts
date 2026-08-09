@@ -3,10 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import {
-  MODEL_CALL_ATTEMPT_SCHEMA_VERSION,
-  type ModelCallAttempt,
-} from '@maka/core/model-call-attempt';
+import { MODEL_CALL_ATTEMPT_SCHEMA_VERSION, type ModelCallAttempt } from '@maka/core';
 import {
   createSqliteModelCallLedger,
   ModelCallLedgerClosedError,

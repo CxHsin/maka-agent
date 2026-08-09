@@ -1,5 +1,5 @@
-import type { ToolResultContent } from '@maka/core/events';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { ToolResultContent } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import type { ExecutionRuntimeEventWriter } from '@maka/storage/execution-stores';
 
 const OUTCOME_UNKNOWN_TEXT =

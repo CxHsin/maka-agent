@@ -1,6 +1,6 @@
-import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
-import { lookupModelMetadata } from '@maka/core/model-metadata';
-import { relayModelProfile } from '@maka/core/model-thinking';
+import type { RuntimeExecutionConnection } from '@maka/core';
+import { lookupModelMetadata } from '@maka/core';
+import { relayModelProfile } from '@maka/core';
 import type { ContextBudgetPolicy } from './context-budget.js';
 import { finitePositive } from './context-budget-helpers.js';
 

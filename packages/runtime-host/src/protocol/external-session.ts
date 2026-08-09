@@ -1,4 +1,4 @@
-import type { ExternalSessionSummary } from '@maka/core/external-session';
+import type { ExternalSessionSummary } from '@maka/core';
 import {
   requireCount,
   requireEncodedByteLimit,

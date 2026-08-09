@@ -48,7 +48,7 @@ into the canonical Runtime-backed harness.
 The canonical operator commands are:
 
 ```text
-npm run e2e:computer-use-real
-npm run e2e:computer-use-process-restart
-npm run e2e:computer-use-real-model
+npm run e2e:computer-use -- real
+npm run e2e:computer-use -- process-restart
+npm run e2e:computer-use -- real-model
 ```

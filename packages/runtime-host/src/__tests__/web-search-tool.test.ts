@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createDefaultRuntimePolicy } from '@maka/core/runtime-policy';
+import { createDefaultRuntimePolicy } from '@maka/core';
 import type { MakaToolContext, ProxiedFetchProxy } from '@maka/runtime';
 import type {
   ResolveWebSearchExecutionResult,

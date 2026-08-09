@@ -1,5 +1,5 @@
 import { botDisplayLabel, type BotChannelSettings, type BotProvider } from '@maka/core';
-import { generalizedErrorMessage } from '@maka/core/redaction';
+import { generalizedErrorMessage } from '@maka/core';
 import { WebClient } from '@slack/web-api';
 import type { BotTestResult } from './types.js';
 import { proxiedFetch } from './proxied-fetch.js';

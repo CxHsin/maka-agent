@@ -56,7 +56,7 @@ import {
   type ForeignSessionDigest,
   type ForeignSessionSource,
   type ForeignSessionSummary,
-} from '@maka/core/foreign-session';
+} from '@maka/core';
 
 export interface ForeignSessionScanOptions {
   /** Only sessions whose recorded cwd equals this path (after realpath-free

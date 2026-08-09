@@ -33,8 +33,8 @@ import {
   type WorkspaceProjectionRebuildResult,
   type WorkspaceVersionRecordV1,
 } from '@maka/core';
-import { canonicalToolArgsHash, stableJsonStringify } from '@maka/core/tool-args-identity';
-import { encodeCanonicalRuntimeEvent } from '@maka/core/canonical-runtime-event';
+import { canonicalToolArgsHash, stableJsonStringify } from '@maka/core';
+import { encodeCanonicalRuntimeEvent } from '@maka/core';
 import {
   scanToolLedger,
   ToolLedgerCorruptionError,
@@ -42,18 +42,15 @@ import {
   validateGenericToolLedgerAppend,
   validateToolLedgerEventLane,
   validateToolLedgerTransition,
-} from '@maka/core/tool-ledger-scanner';
+} from '@maka/core';
 import {
   buildImmutableRuntimePrefix,
   decodeContinuationClaim,
   type ContinuationClaimV1,
   type ImmutableRuntimePrefixV1,
   type RuntimeBoundaryDigest,
-} from '@maka/core/runtime-boundary';
-import {
-  assertToolRecoveryEventBundle,
-  interpretScannedToolRecovery,
-} from '@maka/core/tool-recovery-bundle';
+} from '@maka/core';
+import { assertToolRecoveryEventBundle, interpretScannedToolRecovery } from '@maka/core';
 import {
   configureSqliteRuntimeDatabase,
   migrateSqliteRuntimeDatabase,

@@ -8,7 +8,7 @@ import {
   type McpRemoteServerConfig,
   type McpServerConfig,
   type McpStdioServerConfig,
-} from '@maka/core/mcp';
+} from '@maka/core';
 
 const MAX_SERVERS = 100;
 const MAX_ID_LENGTH = 128;

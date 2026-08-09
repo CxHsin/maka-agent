@@ -1,6 +1,6 @@
-import { classifyToolUse } from '@maka/core/permission';
-import type { CollaborationMode } from '@maka/core/collaboration';
-import type { PlanExecution, PlanProposal } from '@maka/core/plan';
+import { classifyToolUse } from '@maka/core';
+import type { CollaborationMode } from '@maka/core';
+import type { PlanExecution, PlanProposal } from '@maka/core';
 
 import type { MakaTool } from './tool-runtime.js';
 

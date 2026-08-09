@@ -2,7 +2,7 @@ import type { AppSettings, UpdateAppSettingsInput } from '@maka/core';
 import {
   reconcileConnectionAfterEnabledModelsChange,
   type LlmConnection,
-} from '@maka/core/llm-connections';
+} from '@maka/core';
 import {
   type ConfigBundle,
   type ConfigCategory,

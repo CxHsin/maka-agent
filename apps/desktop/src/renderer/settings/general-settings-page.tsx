@@ -15,8 +15,8 @@ import type {
   NetworkProxySettings,
   UpdateAppSettingsResult,
 } from "@maka/core";
-import type { TestProxyInput } from "@maka/core/settings/network-settings";
-import { buildChatModelChoices } from "@maka/core/chat-model-choice";
+import type { TestProxyInput } from "@maka/core";
+import { buildChatModelChoices } from "@maka/core";
 import {
   Button,
   FormLayout,

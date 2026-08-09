@@ -17,8 +17,8 @@
 // scroll — the same contract as the Skills page (#2236).
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { McpConfigFile, McpServerConfig, McpServerStatus } from '@maka/core/mcp';
-import { isMcpStdioConfig } from '@maka/core/mcp';
+import type { McpConfigFile, McpServerConfig, McpServerStatus } from '@maka/core';
+import { isMcpStdioConfig } from '@maka/core';
 import {
   Banner,
   Button,

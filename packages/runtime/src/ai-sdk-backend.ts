@@ -38,7 +38,7 @@ import type {
   AttachmentRef,
   QuoteRef,
   ContextBudgetExhaustedDetail,
-} from '@maka/core/events';
+} from '@maka/core';
 import type {
   StoredMessage,
   AssistantMessage,
@@ -50,23 +50,20 @@ import type {
   SystemNoteMessage,
   BackendKind,
   SessionHeader,
-} from '@maka/core/session';
+} from '@maka/core';
 import type {
   AgentBackend,
   BackendCompactHistoryInput,
   BackendCompactHistoryResult,
   BackendSendInput,
   HostedInteractionBridge,
-} from '@maka/core/backend-types';
-import type { AgentSpec } from '@maka/core/runtime-inputs';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
-import type { UserQuestionResponse } from '@maka/core/user-question';
-import { DEFAULT_TOOL_MODE, isToolMode, type ToolMode } from '@maka/core/tool-mode';
-import {
-  resolveEffectiveOrchestration,
-  type EffectiveOrchestration,
-} from '@maka/core/orchestration';
+} from '@maka/core';
+import type { AgentSpec } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
+import type { UserQuestionResponse } from '@maka/core';
+import { DEFAULT_TOOL_MODE, isToolMode, type ToolMode } from '@maka/core';
+import { resolveEffectiveOrchestration, type EffectiveOrchestration } from '@maka/core';
 import type { PlanToolResult } from './plan-tools.js';
 import {
   bindToolResultArchiveDecoder,
@@ -76,18 +73,14 @@ import {
   YIELD_AGENT_GRAPH_TOOL_NAME,
   type YieldAgentGraphToolResult,
 } from './stream-graph-supervisor-tools.js';
-import type { AttachmentByteReader } from '@maka/core/attachments';
+import type { AttachmentByteReader } from '@maka/core';
 import {
   MAX_PROVIDER_IMAGE_REQUEST_BYTES,
   PROVIDER_IMAGE_BUDGET_EXCEEDED_MESSAGE,
 } from '@maka/core';
-import { stripUndefinedDeep } from '@maka/core/tool-args-identity';
-import type {
-  LlmCallRecord,
-  PricingConfig,
-  ToolInvocationRecord,
-} from '@maka/core/usage-stats/types';
-import type { ContextBudgetDiagnostic, PromptSegmentEstimate } from '@maka/core/usage-stats/types';
+import { stripUndefinedDeep } from '@maka/core';
+import type { LlmCallRecord, PricingConfig, ToolInvocationRecord } from '@maka/core';
+import type { ContextBudgetDiagnostic, PromptSegmentEstimate } from '@maka/core';
 import { DEFAULT_CODE_MODE_LIMITS, executeCodeCell } from '@maka/code-mode';
 import type {
   JSONValue,
@@ -183,7 +176,7 @@ import {
   toolSchemaCharsForDiagnostics,
   type RequestShapeDiagnostic,
 } from './request-shape.js';
-import type { ModelCallAttempt, ModelCallKind } from '@maka/core/model-call-attempt';
+import type { ModelCallAttempt, ModelCallKind } from '@maka/core';
 import {
   ProviderRequestTracker,
   type ModelCallAccountingInput,
@@ -439,7 +432,7 @@ export type {
   AgentBackend,
   BackendCompactHistoryInput,
   BackendCompactHistoryResult,
-} from '@maka/core/backend-types';
+} from '@maka/core';
 
 export const INVALID_TOOL_NAME = 'invalid';
 

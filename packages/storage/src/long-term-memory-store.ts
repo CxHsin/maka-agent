@@ -5,7 +5,7 @@ import type {
   MemoryItemStore,
   MemoryItemWrite,
   SearchMemoryItemsByKeyRequest,
-} from '@maka/core/long-term-memory';
+} from '@maka/core';
 import {
   assertStorageRootLease,
   runWithStorageRootLease,

@@ -1,5 +1,5 @@
-import type { AgentRunHeader } from '@maka/core/agent-run';
-import { sessionRevisionFamilyId, type SessionHeader } from '@maka/core/session';
+import type { AgentRunHeader } from '@maka/core';
+import { sessionRevisionFamilyId, type SessionHeader } from '@maka/core';
 import {
   agentGraphIdForRootSession,
   type AgentGraphCoordinator,

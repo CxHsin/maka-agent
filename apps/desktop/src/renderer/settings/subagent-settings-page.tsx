@@ -26,8 +26,8 @@ import {
   type ThinkingLevel,
   type UpdateAppSettingsResult,
 } from '@maka/core';
-import { connectionEnabledModelIds } from '@maka/core/llm-connections';
-import { thinkingVariantsForConnection } from '@maka/core/model-thinking';
+import { connectionEnabledModelIds } from '@maka/core';
+import { thinkingVariantsForConnection } from '@maka/core';
 import {
   Badge,
   Button,

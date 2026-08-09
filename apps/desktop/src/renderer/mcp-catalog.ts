@@ -1,5 +1,5 @@
 import type { UiLocale } from '@maka/core';
-import type { McpServerConfig } from '@maka/core/mcp';
+import type { McpServerConfig } from '@maka/core';
 
 export type McpCatalogId =
   | 'dingtalk' | 'feishu' | 'slack' | 'line' | 'notion' | 'macos-apps' | 'google-calendar'

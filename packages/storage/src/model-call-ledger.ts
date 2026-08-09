@@ -2,7 +2,7 @@ import {
   decodeModelCallAttempt,
   modelCallAttemptsFromRunEvents,
   type ModelCallAttempt,
-} from '@maka/core/model-call-attempt';
+} from '@maka/core';
 import {
   acquireOperationalStateDatabase,
   type OperationalStateDatabaseLease,

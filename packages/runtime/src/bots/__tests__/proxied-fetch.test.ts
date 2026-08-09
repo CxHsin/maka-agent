@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { getEventListeners } from 'node:events';
 import { createServer } from 'node:http';
 import net from 'node:net';
-import { PROXY_DEFAULTS } from '@maka/core/settings/network-settings';
+import { PROXY_DEFAULTS } from '@maka/core';
 import { setActiveProxy } from '../../network/active-proxy-state.js';
 import { proxiedFetch } from '../proxied-fetch.js';
 

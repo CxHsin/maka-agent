@@ -1,19 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { buildSideConversationSystemPromptFragment, isSideConversationSession } from '@maka/core';
-import {
-  buildDeepResearchSystemPromptFragment,
-  isDeepResearchSession,
-} from '@maka/core/explore-agent';
-import { resolveModelVisionSupport } from '@maka/core/model-metadata';
-import { relayModelProfile } from '@maka/core/model-thinking';
-import { activePlanExecution, type PlanSessionState, type PlanStore } from '@maka/core/plan';
-import type { ModelCallAttempt } from '@maka/core/model-call-attempt';
-import type { RuntimePolicy } from '@maka/core/runtime-policy';
+import { buildDeepResearchSystemPromptFragment, isDeepResearchSession } from '@maka/core';
+import { resolveModelVisionSupport } from '@maka/core';
+import { relayModelProfile } from '@maka/core';
+import { activePlanExecution, type PlanSessionState, type PlanStore } from '@maka/core';
+import type { ModelCallAttempt } from '@maka/core';
+import type { RuntimePolicy } from '@maka/core';
 import {
   filterModelVisibleTaskLedgerTasks,
   renderTaskLedgerPromptText,
   type TaskLedgerStore,
-} from '@maka/core/task-ledger';
+} from '@maka/core';
 import {
   AiSdkBackend,
   buildAskUserQuestionTool,

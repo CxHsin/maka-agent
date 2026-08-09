@@ -24,7 +24,7 @@
 
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core/events';
+import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core';
 import {
   TOOL_STREAM_MAX_CHUNKS,
   TOOL_STREAM_MAX_CHUNK_CHARS,

@@ -13,7 +13,7 @@ import type {
   SetCredentialInput,
   SetDefaultConnectionTargetInput,
   UpdateCatalogConnectionInput,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import {
   assertStorageRootLease,
   runWithStorageRootLease,

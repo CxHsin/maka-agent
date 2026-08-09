@@ -23,7 +23,7 @@ import {
   parseSwarmCommand,
   resolveUiLocale,
 } from '@maka/core';
-import { hasSettledInitialOnboarding } from '@maka/core/onboarding-milestone';
+import { hasSettledInitialOnboarding } from '@maka/core';
 import {
   AutomationsPage,
   DailyReviewPage,

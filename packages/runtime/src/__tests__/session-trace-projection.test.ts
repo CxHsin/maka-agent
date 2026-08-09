@@ -5,11 +5,8 @@
  */
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  MODEL_CALL_ATTEMPT_SCHEMA_VERSION,
-  type ModelCallAttempt,
-} from '@maka/core/model-call-attempt';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import { MODEL_CALL_ATTEMPT_SCHEMA_VERSION, type ModelCallAttempt } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import { projectSessionTrace } from '../session-trace-projection.js';
 
 function attempt(overrides: Partial<ModelCallAttempt> = {}): ModelCallAttempt {

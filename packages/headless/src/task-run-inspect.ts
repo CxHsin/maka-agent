@@ -4,14 +4,14 @@ import type {
   ExecutionIdentityRef,
   ExecutionLogCoverage,
   WorkspaceRevisionRef,
-} from '@maka/core/execution-evidence';
+} from '@maka/core';
 import {
   inspectAgentRunReadModel,
   type AgentRunInspectReader,
   type AgentRunInspectDiagnostic,
   type AgentRunInspectSourceHealth,
   type RuntimeEventInspectReader,
-} from '@maka/runtime/agent-run-inspect';
+} from '@maka/runtime';
 import {
   validateHistoryCompactCheckpointShape,
   type HistoryCompactCheckpoint,

@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { isActiveShellRunStatus } from '@maka/core/shell-run';
+import { isActiveShellRunStatus } from '@maka/core';
 import { ShellRunProcessManager } from '@maka/runtime';
 import {
   resolveRootControlNamespace,

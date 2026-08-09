@@ -3,7 +3,7 @@ import {
   GOAL_REASON_TEXT_LIMIT,
   isGoalStatus,
   type GoalStatus,
-} from '@maka/core/goal';
+} from '@maka/core';
 import {
   requireCount,
   requireEncodedByteLimit,

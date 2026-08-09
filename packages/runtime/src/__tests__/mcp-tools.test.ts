@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createManagedExecutionBoundary, createWorkspaceWritePermissionProfile } from '@maka/core';
-import type { McpCallResult, McpToolDescriptor } from '@maka/core/mcp';
+import type { McpCallResult, McpToolDescriptor } from '@maka/core';
 import { buildMcpTools, mcpProxyToolName, type McpToolProvider } from '../mcp-tools.js';
 
 test('buildMcpTools projects discovery, permissions, abort, and rich model output', async () => {

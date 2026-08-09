@@ -3,8 +3,8 @@ import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { AGENT_GRAPH_INTENT_CLAIM_SCHEMA_VERSION } from '@maka/core/agent-graph-control';
-import type { RootExecutionDescriptor } from '@maka/core/agent-run';
+import { AGENT_GRAPH_INTENT_CLAIM_SCHEMA_VERSION } from '@maka/core';
+import type { RootExecutionDescriptor } from '@maka/core';
 import { createSqliteAgentRunStore, type AdmitRootTurnInput } from '../agent-run-store.js';
 
 describe('claimed agent graph root admission', () => {

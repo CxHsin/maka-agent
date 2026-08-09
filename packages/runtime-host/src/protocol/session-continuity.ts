@@ -1,7 +1,7 @@
-import { TOOL_ACTIVITY_KINDS, TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core/events';
-import type { ToolResultPreviewContent } from '@maka/core/events';
-import { decodeToolResultPreviewContent } from '@maka/core/tool-result-preview';
-import type { ToolActivityKind } from '@maka/core/events';
+import { TOOL_ACTIVITY_KINDS, TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core';
+import type { ToolResultPreviewContent } from '@maka/core';
+import { decodeToolResultPreviewContent } from '@maka/core';
+import type { ToolActivityKind } from '@maka/core';
 import {
   assertExactKeys,
   requireCount,

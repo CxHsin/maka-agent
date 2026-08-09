@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { generalizedErrorMessage } from '@maka/core/redaction';
-import type { ToolInvocationRecord } from '@maka/core/usage-stats/types';
+import { generalizedErrorMessage } from '@maka/core';
+import type { ToolInvocationRecord } from '@maka/core';
 import type { TelemetryRepoLite } from './types.js';
 
 const ARGS_SUMMARY_MAX = 512;

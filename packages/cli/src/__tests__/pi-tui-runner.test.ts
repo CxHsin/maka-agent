@@ -19,7 +19,7 @@ import {
   type ThinkingLevel,
   type UserQuestionResponse,
 } from '@maka/core';
-import type { SkillInvocationResult } from '@maka/core/skill-invocation';
+import type { SkillInvocationResult } from '@maka/core';
 import {
   SessionActivityRegistry,
   type ContextDiagnostics,
@@ -47,7 +47,7 @@ import type {
   OnboardingSaveResult,
   OnboardingVerifyResult,
 } from '../pi-tui-contracts.js';
-import type { ModelInfo, ProviderType } from '@maka/core/llm-connections';
+import type { ModelInfo, ProviderType } from '@maka/core';
 import { runMakaPiTui as runMakaPiTuiImpl, type MakaPiTuiInput } from '../pi-tui-runner.js';
 import { AUTO_RECAP_IDLE_MS } from '../session-recap.js';
 import { _setColorLevelForTesting } from '../tui-ansi.js';

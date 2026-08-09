@@ -1,4 +1,4 @@
-import { RuntimePolicyDomainDecodeError } from '@maka/core/runtime-policy';
+import { RuntimePolicyDomainDecodeError } from '@maka/core';
 
 export type RuntimePolicyStoreErrorCode =
   | 'invalid_document'

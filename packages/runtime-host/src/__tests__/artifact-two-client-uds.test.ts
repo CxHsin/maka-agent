@@ -5,7 +5,7 @@ import { link, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'no
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { ARTIFACT_ENTITY_ID_MAX_CHARS } from '@maka/core/artifacts';
+import { ARTIFACT_ENTITY_ID_MAX_CHARS } from '@maka/core';
 import { openInteractiveArtifactStoreForWrite } from '@maka/storage/artifact-stores';
 import { openInteractiveExecutionStoresForWrite } from '@maka/storage/execution-stores';
 import {

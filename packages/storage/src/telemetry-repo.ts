@@ -5,7 +5,7 @@ import type {
   UsageLogRow,
   UsageQuery,
   UsageSummaryV2,
-} from '@maka/core/usage-stats/types';
+} from '@maka/core';
 import {
   type PersistedLlmCallRecord,
   type PersistedToolInvocationRecord,

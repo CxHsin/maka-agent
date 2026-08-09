@@ -3,7 +3,7 @@ import {
   type PermissionMode,
   type PolicyDecision,
   type ToolCategory,
-} from '@maka/core/permission';
+} from '@maka/core';
 import { SUBAGENT_PROFILES, type SubagentPreset, type SubagentProfile } from '@maka/core';
 import type { MakaTool } from './tool-runtime.js';
 

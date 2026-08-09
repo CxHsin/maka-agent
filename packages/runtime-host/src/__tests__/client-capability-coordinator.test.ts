@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { ToolOutcomeUnknownError } from '@maka/core/events';
-import type { McpCallResult } from '@maka/core/mcp';
+import { ToolOutcomeUnknownError } from '@maka/core';
+import type { McpCallResult } from '@maka/core';
 import {
   ClientCapabilityInvocationError,
   HostClientCapabilityCoordinator,

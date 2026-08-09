@@ -1,8 +1,5 @@
-import type {
-  AgentGraphIntentClaimResult,
-  AgentGraphIntentClaimStore,
-} from '@maka/core/agent-graph-control';
-import { AGENT_GRAPH_INTENT_CLAIM_SCHEMA_VERSION } from '@maka/core/agent-graph-control';
+import type { AgentGraphIntentClaimResult, AgentGraphIntentClaimStore } from '@maka/core';
+import { AGENT_GRAPH_INTENT_CLAIM_SCHEMA_VERSION } from '@maka/core';
 import { stableHash } from './request-shape.js';
 import type { AgentGraphRunnableIntent } from './stream-graph-readiness.js';
 

@@ -4,7 +4,7 @@ import {
   type LocalMemoryEntryStatus,
   type LocalMemoryScope,
   type LocalMemorySource,
-} from '@maka/core/local-memory';
+} from '@maka/core';
 import {
   requireCount,
   requireEntityId,

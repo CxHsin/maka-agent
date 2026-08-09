@@ -1,4 +1,4 @@
-import type { ArtifactRecord } from '@maka/core/artifacts';
+import type { ArtifactRecord } from '@maka/core';
 
 export interface ArtifactMetadataRepository {
   ready(): Promise<void>;

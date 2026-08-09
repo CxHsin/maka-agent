@@ -1,11 +1,11 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import type { IpcMain } from 'electron';
 import type { AppSettings, LlmConnection, UpdateAppSettingsInput } from '@maka/core';
-import { PROVIDER_DEFAULTS } from '@maka/core/llm-connections';
+import { PROVIDER_DEFAULTS } from '@maka/core';
 import type {
   ConnectionCatalogEntry,
   CredentialLocator,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import {
   applyConfigImport,
   type ConfigTransferDeps,

@@ -1,6 +1,6 @@
 import { generateText } from 'ai';
 import type { LlmConnection } from '@maka/core';
-import { getAIModel } from '@maka/runtime/model-factory';
+import { getAIModel } from '@maka/runtime';
 
 interface OneShotCompletionInput {
   connection: LlmConnection;

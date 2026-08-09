@@ -2,7 +2,7 @@ import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, rm } from 
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { ArtifactRecord } from '@maka/core/artifacts';
+import type { ArtifactRecord } from '@maka/core';
 import { decodeArtifactRecordJsons } from './artifact-metadata-codec.js';
 import { withArtifactWriterLock } from './artifact-writer-lock.js';
 import {

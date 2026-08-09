@@ -6,13 +6,13 @@ import {
   runtimeGateFromCallback,
   type RuntimeGate,
 } from '../runtime-runner.js';
-import type { AttachmentRef } from '@maka/core/events';
+import type { AttachmentRef } from '@maka/core';
 import type {
   InvocationContext,
   InvocationProviders,
   InvocationRequest,
 } from '../invocation-context.js';
-import type { RuntimeEvent, RuntimeEventStatus } from '@maka/core/runtime-event';
+import type { RuntimeEvent, RuntimeEventStatus } from '@maka/core';
 import type { AgentFlow, FlowInput, RunnableAgentFlow } from '../agent-flow.js';
 
 // ============================================================================

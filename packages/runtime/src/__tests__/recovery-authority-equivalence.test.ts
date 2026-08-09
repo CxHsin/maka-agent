@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { RuntimeEvent } from '@maka/core';
-import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
+import { canonicalToolArgsHash } from '@maka/core';
 import { createSqliteRuntimeStore } from '@maka/storage';
 import { resolveRuntimeRecovery } from '../recovery-resolver.js';
 import { buildResumePlanFromRuntimeEvents } from '../runtime-resume.js';

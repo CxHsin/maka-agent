@@ -1,5 +1,5 @@
 import type { IpcMain } from 'electron';
-import type { McpConfigFile, McpServerConfig, McpServerStatus } from '@maka/core/mcp';
+import type { McpConfigFile, McpServerConfig, McpServerStatus } from '@maka/core';
 import type { McpClientManager } from '@maka/mcp';
 import type { McpConfigStore } from '@maka/storage';
 

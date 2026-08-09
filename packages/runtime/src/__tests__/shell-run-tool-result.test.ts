@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { type PtyShellOutput, type RuntimeEvent, type ShellRunRecord } from '@maka/core';
-import { encodeCanonicalRuntimeEvent } from '@maka/core/canonical-runtime-event';
+import { encodeCanonicalRuntimeEvent } from '@maka/core';
 import { createSessionStore } from '@maka/storage';
 
 import {

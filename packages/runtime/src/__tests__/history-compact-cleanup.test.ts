@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import { buildHistoryCompactBlockFromSummary } from '../context-budget.js';
 import { cleanupLegacyHistoryCompactArtifacts } from '../history-compact-cleanup.js';
 import { persistHistoryCompactBlocksToArtifacts } from '../history-compact-artifacts.js';

@@ -41,7 +41,7 @@ import {
   type SearchMemoryItemsByKeyRequest,
   type SettleMemoryExtractionFailureRequest,
   type SettleMemoryExtractionFailureResult,
-} from '@maka/core/long-term-memory';
+} from '@maka/core';
 import {
   assertSupportedSqliteLongTermMemorySchemaVersion,
   configureSqliteLongTermMemoryDatabase,

@@ -5,7 +5,7 @@ import {
   renderSafeTaskLedgerText,
   renderTaskLedgerPromptText,
   type Task,
-} from '@maka/core/task-ledger';
+} from '@maka/core';
 import type { MakaTool } from '@maka/runtime';
 import { z } from 'zod';
 

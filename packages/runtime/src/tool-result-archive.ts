@@ -1,6 +1,6 @@
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import { createHash } from 'node:crypto';
-import type { ContextBudgetDiagnostic } from '@maka/core/usage-stats/types';
+import type { ContextBudgetDiagnostic } from '@maka/core';
 import type {
   ArchivedToolResultSourceRef,
   ArchivedToolResultReason,

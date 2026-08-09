@@ -1,6 +1,6 @@
-import type { ThinkingLevel } from '@maka/core/model-thinking';
-import type { PermissionMode } from '@maka/core/permission';
-import type { SessionSummary } from '@maka/core/session';
+import type { ThinkingLevel } from '@maka/core';
+import type { PermissionMode } from '@maka/core';
+import type { SessionSummary } from '@maka/core';
 
 export interface MakaRunSessionSelectionInput {
   sessions: readonly SessionSummary[];

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { localDayBoundsAt, type DailyReviewArchive } from '@maka/core/daily-review';
+import { localDayBoundsAt, type DailyReviewArchive } from '@maka/core';
 import { openInteractiveDailyReviewAuthorityForWrite } from '@maka/storage/daily-review-authority';
 import { resolveStorageRoot, tryAcquireInteractiveRootOwner } from '@maka/storage/root-authority';
 import { openInteractiveUsageStoresForWrite } from '@maka/storage/usage-stores';

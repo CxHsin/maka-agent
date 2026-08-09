@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { AttachmentRef, ShellRunUpdate } from "@maka/core/events";
-import type { PlanSessionState, PlanUserControlInput } from "@maka/core/plan";
+import type { AttachmentRef, ShellRunUpdate } from "@maka/core";
+import type { PlanSessionState, PlanUserControlInput } from "@maka/core";
 import {
   decodeStoredMessageForRead,
   type StoredMessage,
-} from "@maka/core/session";
-import type { Task } from "@maka/core/task-ledger";
+} from "@maka/core";
+import type { Task } from "@maka/core";
 import type {
   ConnectionCatalogEntry,
   ConnectionCatalogSnapshot,
@@ -14,16 +14,16 @@ import type {
   CredentialStatus,
   RuntimePolicy,
   RuntimePolicyMutation,
-} from "@maka/core/runtime-policy";
+} from "@maka/core";
 import {
   canonicalPricingConfigsEqual,
   comparePricingModelKeys,
-} from "@maka/core/usage-stats/pricing";
-import type { PricingConfig } from "@maka/core/usage-stats/types";
+} from "@maka/core";
+import type { PricingConfig } from "@maka/core";
 import {
   isSessionTrace,
   type SessionTrace,
-} from "@maka/core/session-trace";
+} from "@maka/core";
 import {
   type ClientCapabilityProvider,
   type DirectRequestOperationKey,

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ToolOutcomeUnknownError } from '@maka/core/events';
+import { ToolOutcomeUnknownError } from '@maka/core';
 import {
   CLIENT_CAPABILITY_MAX_RESULT_BYTES,
   CLIENT_CAPABILITY_RESULT_CHUNK_MAX_BYTES,

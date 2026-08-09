@@ -2,7 +2,7 @@ import type {
   ExternalSessionAdapter,
   ExternalSessionAdapterRegistry,
   ExternalSessionSummary,
-} from '@maka/core/external-session';
+} from '@maka/core';
 import type { CreateSessionInput, SessionHeader, StoredMessage } from '@maka/core';
 import type { SessionCatalogRecord } from '@maka/storage/execution-stores';
 import { ExternalSessionImporter } from '@maka/storage/external-sessions';

@@ -1,4 +1,4 @@
-import type { ProxySettings } from '@maka/core/settings/network-settings';
+import type { ProxySettings } from '@maka/core';
 
 let activeProxy: ProxySettings | null = null;
 

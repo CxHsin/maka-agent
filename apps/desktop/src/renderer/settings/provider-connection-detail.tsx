@@ -11,13 +11,13 @@ import {
   Text,
   VStack,
 } from '@astryxdesign/core';
-import { PROVIDER_DEFAULTS } from '@maka/core/llm-connections';
+import { PROVIDER_DEFAULTS } from '@maka/core';
 import {
   DECLARABLE_RELAY_THINKING_LEVELS,
   THINKING_LEVELS,
   type RelayModelProfile,
   type ThinkingLevel,
-} from '@maka/core/model-thinking';
+} from '@maka/core';
 import {
   Button,
   NumberInput,

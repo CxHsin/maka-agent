@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 
 /**
  * Cross-block shared pure helpers for the context-budget / history-compact /

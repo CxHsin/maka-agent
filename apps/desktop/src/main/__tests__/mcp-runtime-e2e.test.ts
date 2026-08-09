@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { McpClientManager } from '@maka/mcp';
-import { buildMcpTools } from '@maka/runtime/mcp-tools';
+import { buildMcpTools } from '@maka/runtime';
 
 const fixturePath = fileURLToPath(new URL('../../../../../packages/mcp/dist/__fixtures__/stdio-server.js', import.meta.url));
 

@@ -1,4 +1,4 @@
-import type { ProxySettings } from '@maka/core/settings/network-settings';
+import type { ProxySettings } from '@maka/core';
 import { Agent, fetch as undiciFetch, type Dispatcher } from 'undici';
 import type { ConnectionEffectFetch } from '../connection-effect-fetch.js';
 import { matchesBypassList } from './bypass-matcher.js';

@@ -15,8 +15,8 @@ import {
   type SessionStore,
 } from '@maka/runtime';
 import type { BackendKind, SessionEvent, SessionHeader } from '@maka/core';
-import type { BackendSendInput } from '@maka/core/backend-types';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
+import type { BackendSendInput } from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
 import { createSessionStore, openRuntimeEventReadPersistence } from '@maka/storage';
 import type { Config, Task } from '../contracts.js';
 import type { HeadlessBackendContext } from '../isolation.js';

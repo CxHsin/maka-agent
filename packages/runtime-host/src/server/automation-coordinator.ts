@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentRunHeader } from '@maka/core/agent-run';
-import { messageContentsEqual } from '@maka/core/events';
-import type { SessionHeader } from '@maka/core/session';
+import type { AgentRunHeader } from '@maka/core';
+import { messageContentsEqual } from '@maka/core';
+import type { SessionHeader } from '@maka/core';
 import type {
   AutomationDefinition,
   AutomationExecutionTemplate,
   AutomationPendingFire,
-} from '@maka/core/automation';
+} from '@maka/core';
 import {
   AutomationManager,
   buildAutomationAuthorityTool,

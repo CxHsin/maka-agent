@@ -10,7 +10,7 @@ import type {
   DeepResearchScopeLevel,
   DeepResearchStep,
   DeepResearchStore,
-} from '@maka/core/deep-research-run';
+} from '@maka/core';
 import {
   assertStorageRootLease,
   runWithStorageRootLease,

@@ -13,13 +13,10 @@ import type {
   SessionEvent,
   SessionHeader,
 } from '@maka/core';
-import type { BackendSendInput, BackendStopMode } from '@maka/core/backend-types';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
+import type { BackendSendInput, BackendStopMode } from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
 import { createSessionStore } from '@maka/storage';
-import {
-  MODEL_CALL_ATTEMPT_SCHEMA_VERSION,
-  type ModelCallAttempt,
-} from '@maka/core/model-call-attempt';
+import { MODEL_CALL_ATTEMPT_SCHEMA_VERSION, type ModelCallAttempt } from '@maka/core';
 import {
   BackendRegistry,
   PiAgentBackend,

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createDefaultSettings } from '@maka/core/settings';
+import { createDefaultSettings } from '@maka/core';
 import { createClientSettingsEffects } from '../client-settings-effects.js';
 
 test('applies each client settings snapshot once across local writes and file watcher echoes', async () => {

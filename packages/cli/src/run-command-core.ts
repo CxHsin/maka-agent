@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import type { SessionEvent } from '@maka/core/events';
-import { isThinkingLevel, type ThinkingLevel } from '@maka/core/model-thinking';
-import type { CreateSessionInput, UserMessageInput } from '@maka/core/runtime-inputs';
-import type { ExecutionBoundaryReadModel } from '@maka/core/sandbox-boundary';
-import type { SessionSummary } from '@maka/core/session';
-import { normalizeUserSessionName } from '@maka/core/session-name';
+import type { SessionEvent } from '@maka/core';
+import { isThinkingLevel, type ThinkingLevel } from '@maka/core';
+import type { CreateSessionInput, UserMessageInput } from '@maka/core';
+import type { ExecutionBoundaryReadModel } from '@maka/core';
+import type { SessionSummary } from '@maka/core';
+import { normalizeUserSessionName } from '@maka/core';
 import { selectMakaRunSession } from './run-session-selection.js';
 import { sessionEventSandboxBoundaryFailureReason } from './sandbox-boundary-failure.js';
 import { resolveMakaWorkspaceRoot } from './workspace-root.js';

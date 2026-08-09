@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, realpath, stat, readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
-import type { SessionEvent } from '@maka/core/events';
-import type { PermissionMode } from '@maka/core/permission';
-import type { CreateSessionInput, UserMessageInput } from '@maka/core/runtime-inputs';
-import type { SessionSummary } from '@maka/core/session';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import { redactSecrets } from '@maka/core/redaction';
+import type { SessionEvent } from '@maka/core';
+import type { PermissionMode } from '@maka/core';
+import type { CreateSessionInput, UserMessageInput } from '@maka/core';
+import type { SessionSummary } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
+import { redactSecrets } from '@maka/core';
 import { assertSessionBundleRootLayout } from '@maka/storage';
 import { readRuntimeHostSessions } from '@maka/runtime-host/client';
 import { connectRuntimeHostCli, resolveRuntimeHostCliTarget } from './runtime-host-cli-context.js';

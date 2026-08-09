@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ConnectionCatalogEntry, ConnectionCatalogSnapshot } from '@maka/core/runtime-policy';
+import type { ConnectionCatalogEntry, ConnectionCatalogSnapshot } from '@maka/core';
 import { SessionActivityRegistry, type InvocableSkillEntry } from '@maka/runtime';
 import {
   readRuntimeHostInvocableSkills,

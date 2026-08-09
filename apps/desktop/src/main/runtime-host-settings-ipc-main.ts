@@ -10,12 +10,12 @@ import type {
   CredentialLocator,
   CredentialStatus,
   RuntimePolicy,
-} from "@maka/core/runtime-policy";
-import { SENSITIVE_PLACEHOLDER } from "@maka/core/settings/network-settings";
+} from "@maka/core";
+import { SENSITIVE_PLACEHOLDER } from "@maka/core";
 import type {
   ProxySettings,
   TestProxyInput,
-} from "@maka/core/settings/network-settings";
+} from "@maka/core";
 import type { SettingsStore } from "@maka/storage";
 import {
   buildSettingsUpdateResult,

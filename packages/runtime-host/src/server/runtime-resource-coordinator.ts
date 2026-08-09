@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { userInfo } from 'node:os';
-import type { ShellRunSnapshotResult, ShellRunUpdate, ToolResultContent } from '@maka/core/events';
-import { isActiveShellRunStatus } from '@maka/core/shell-run';
+import type { ShellRunSnapshotResult, ShellRunUpdate, ToolResultContent } from '@maka/core';
+import { isActiveShellRunStatus } from '@maka/core';
 import {
   type BackgroundTaskStopper,
   type PtyControlWriter,

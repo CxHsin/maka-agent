@@ -1,4 +1,4 @@
-import type { Revision } from '@maka/core/runtime-policy';
+import type { Revision } from '@maka/core';
 import { codecError, type CodecSource } from './errors.js';
 
 export function record(

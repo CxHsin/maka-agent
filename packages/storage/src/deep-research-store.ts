@@ -18,7 +18,7 @@ import {
   type DeepResearchScopeLevel,
   type DeepResearchStep,
   type DeepResearchStore,
-} from '@maka/core/deep-research-run';
+} from '@maka/core';
 import { assertSafeSessionId } from './session-store.js';
 import { chainWrite } from './write-queue.js';
 import {
@@ -26,7 +26,7 @@ import {
   type OperationalStateDatabaseLease,
 } from './operational-state-store.js';
 
-export type { DeepResearchStore } from '@maka/core/deep-research-run';
+export type { DeepResearchStore } from '@maka/core';
 
 export interface CreateDeepResearchStoreOptions {
   newId?: () => string;

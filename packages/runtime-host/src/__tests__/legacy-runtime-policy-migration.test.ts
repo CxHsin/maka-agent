@@ -3,7 +3,7 @@ import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createDefaultRuntimePolicy } from '@maka/core/runtime-policy';
+import { createDefaultRuntimePolicy } from '@maka/core';
 import {
   createConnectionStore,
   createFileCredentialStore,

@@ -15,11 +15,11 @@ import {
   decodeCanonicalToolResultContent,
   TOOL_OUTPUT_DELTA_MAX_CHARS,
 } from '@maka/core';
-import type { BackendSendInput } from '@maka/core/backend-types';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
-import { redactSecrets } from '@maka/core/redaction';
+import type { BackendSendInput } from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
+import { redactSecrets } from '@maka/core';
 
-import type { AgentBackend } from '@maka/core/backend-types';
+import type { AgentBackend } from '@maka/core';
 import type { AppendMessageFn } from './ai-sdk-backend.js';
 
 export interface PiAgentBackendInput {

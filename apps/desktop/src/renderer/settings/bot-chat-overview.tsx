@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { ICON_SIZE, ChevronRight } from '@maka/ui/icons';
 import type { BotChannelSettings, BotProvider } from '@maka/core';
 import type { BotStatus } from '@maka/runtime';
-import { BOT_PROVIDERS } from '@maka/core/settings';
+import { BOT_PROVIDERS } from '@maka/core';
 import { EmptyState, Item, StatusDot } from '@astryxdesign/core';
 import { Button, RelativeTime, useUiLocale, Banner } from '@maka/ui';
 import { deriveBotChannelViewState } from './bot-settings-view-model';

@@ -6,7 +6,7 @@ import type {
   RequestPlanRevisionInput,
   SubmitPlanProposalInput,
   UpdatePlanExecutionInput,
-} from '@maka/core/plan';
+} from '@maka/core';
 import {
   assertStorageRootLease,
   runWithStorageRootLease,

@@ -8,11 +8,11 @@ import {
   AgentGraphScheduleClosedError,
   AgentGraphScheduleRevisionConflictError,
   type AgentGraphScheduleUpdateRequest,
-} from '@maka/core/agent-graph-schedule';
+} from '@maka/core';
 import {
   AGENT_GRAPH_INTENT_CLAIM_SCHEMA_VERSION,
   type AgentGraphIntentClaimRequest,
-} from '@maka/core/agent-graph-control';
+} from '@maka/core';
 import {
   AgentGraphScheduleUpdateConflictError,
   createSqliteSessionMetadataStore,

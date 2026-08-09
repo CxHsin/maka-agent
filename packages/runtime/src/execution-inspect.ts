@@ -10,8 +10,8 @@ import {
   type ExecutionInspectDiagnostic,
   type ExecutionInspectSeverity,
   type SessionInspectDocument,
-} from '@maka/core/execution-inspect';
-import type { ExecutionLogCoverage } from '@maka/core/execution-evidence';
+} from '@maka/core';
+import type { ExecutionLogCoverage } from '@maka/core';
 import {
   inspectAgentRunReadModel,
   type AgentRunInspectReader,

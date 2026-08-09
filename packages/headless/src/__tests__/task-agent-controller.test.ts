@@ -19,8 +19,8 @@ import {
   type SessionEvent,
   type SessionHeader,
 } from '@maka/core';
-import type { BackendSendInput } from '@maka/core/backend-types';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
+import type { BackendSendInput } from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
 import {
   createSessionStore,
   createSqliteAgentRunStore,

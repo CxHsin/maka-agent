@@ -1,4 +1,4 @@
-import { SHELL_RUN_ACTIVE_STATUSES } from "@maka/core/shell-run";
+import { SHELL_RUN_ACTIVE_STATUSES } from "@maka/core";
 import type { DesktopRuntimeHostClient } from "./runtime-host-client.js";
 
 type RuntimeHostActivityClient = Pick<

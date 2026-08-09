@@ -1,13 +1,10 @@
-import type { ErrorEvent, CompleteEvent } from '@maka/core/events';
+import type { ErrorEvent, CompleteEvent } from '@maka/core';
 import { openai } from '@ai-sdk/openai';
 import { anthropic } from '@ai-sdk/anthropic';
-import {
-  providerAuthRequiresSecret,
-  type RuntimeExecutionConnection,
-} from '@maka/core/llm-connections';
-import { lookupModelMetadata } from '@maka/core/model-metadata';
-import { generalizedErrorMessage } from '@maka/core/redaction';
-import type { CacheMissInputSource } from '@maka/core/usage-stats/types';
+import { providerAuthRequiresSecret, type RuntimeExecutionConnection } from '@maka/core';
+import { lookupModelMetadata } from '@maka/core';
+import { generalizedErrorMessage } from '@maka/core';
+import type { CacheMissInputSource } from '@maka/core';
 import { rawFinishReasonString } from './model-protocol.js';
 import type {
   ModelMessage,

@@ -1,4 +1,4 @@
-import { WEB_SEARCH_DEFAULT_LIMIT } from '@maka/core/web-search';
+import { WEB_SEARCH_DEFAULT_LIMIT } from '@maka/core';
 import type { OperationOutcome, WebSearchExecuteInput } from '../protocol/index.js';
 import type { WebSearchOperationHandlerMap } from './operation-dispatcher.js';
 import type { HostWebSearchService } from './web-search-tool.js';

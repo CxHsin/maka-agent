@@ -14,8 +14,8 @@ import {
   RECOMMENDED_PROVIDER_TYPES,
   type ProviderCatalogGroup,
   type ProviderType,
-} from '@maka/core/provider-registry';
-import { PROVIDER_DEFAULTS } from '@maka/core/llm-connections';
+} from '@maka/core';
+import { PROVIDER_DEFAULTS } from '@maka/core';
 import { Button, TextInput, useUiLocale } from '@maka/ui';
 import { AddProviderForm } from './provider-add-form';
 import { ProviderLogo, providerDisplay } from './provider-display';

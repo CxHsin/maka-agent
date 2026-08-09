@@ -3,8 +3,8 @@ import { before, describe, test } from 'node:test';
 import { visibleWidth } from '@earendil-works/pi-tui';
 import { _setColorLevelForTesting } from '../tui-ansi.js';
 import type { PipeShellOutput, PtyShellOutput, ShellRunToolResult } from '@maka/core';
-import type { SessionEvent, ToolResultContent } from '@maka/core/events';
-import type { StoredMessage } from '@maka/core/session';
+import type { SessionEvent, ToolResultContent } from '@maka/core';
+import type { StoredMessage } from '@maka/core';
 import {
   appendUserPrompt,
   applyShellRunViewUpdateToTranscript,

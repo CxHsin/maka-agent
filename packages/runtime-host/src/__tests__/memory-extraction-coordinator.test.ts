@@ -3,9 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import { createDefaultRuntimePolicy } from '@maka/core/runtime-policy';
-import type { SessionHeader } from '@maka/core/session';
+import type { RuntimeEvent } from '@maka/core';
+import { createDefaultRuntimePolicy } from '@maka/core';
+import type { SessionHeader } from '@maka/core';
 import {
   openInteractiveLongTermMemoryStoreForWrite,
   type InteractiveLongTermMemoryWriter,

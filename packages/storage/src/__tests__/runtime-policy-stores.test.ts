@@ -25,8 +25,8 @@ import {
   type CredentialVersionBasis,
   type MutateRuntimePolicyInput,
   type RuntimePolicy,
-} from '@maka/core/runtime-policy';
-import { PROVIDER_DEFAULTS } from '@maka/core/llm-connections';
+} from '@maka/core';
+import { PROVIDER_DEFAULTS } from '@maka/core';
 import {
   createHeadlessRootLease,
   resolveStorageRoot,

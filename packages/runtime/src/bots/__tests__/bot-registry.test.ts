@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { createDefaultBotChannel } from '@maka/core/settings';
+import { createDefaultBotChannel } from '@maka/core';
 import type { BotChatSettings, BotProvider } from '@maka/core';
 import { BotRegistry } from '../bot-registry.js';
 import type { BotStatus } from '../types.js';

@@ -26,12 +26,8 @@ import {
   type RuntimeInteractionRunClosureReason,
   type RuntimeMessageAuthority,
 } from '@maka/runtime';
-import type {
-  AgentBackend,
-  BackendCompactHistoryInput,
-  BackendSendInput,
-} from '@maka/core/backend-types';
-import type { SessionEvent } from '@maka/core/events';
+import type { AgentBackend, BackendCompactHistoryInput, BackendSendInput } from '@maka/core';
+import type { SessionEvent } from '@maka/core';
 import type { MakaTool } from '@maka/runtime';
 import {
   openInteractiveExecutionStoresForWrite,

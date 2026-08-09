@@ -9,7 +9,7 @@ import {
   prepareStorageRootControlDirectory,
   resolveStorageRoot,
 } from '@maka/storage/root-authority';
-import { decodeStoredMessageForRead } from '@maka/core/session';
+import { decodeStoredMessageForRead } from '@maka/core';
 import {
   connectRuntimeHost,
   RuntimeHostSubscriptionError,

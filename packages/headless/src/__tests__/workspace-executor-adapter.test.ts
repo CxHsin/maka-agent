@@ -5,7 +5,7 @@ import {
   isolatedToolExecutorToWorkspaceExecutor,
 } from '../workspace-executor-adapter.js';
 import type { IsolatedToolExecutor } from '../isolation.js';
-import type { WorkspaceExecutor, WorkspaceWriteExecutor } from '@maka/runtime/workspace-executor';
+import type { WorkspaceExecutor, WorkspaceWriteExecutor } from '@maka/runtime';
 
 describe('isolatedToolExecutorToWorkspaceExecutor', () => {
   test('defaults to conservative local-impact facts unless isolation is explicitly asserted', async () => {

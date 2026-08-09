@@ -1,5 +1,5 @@
 import type { ProviderRetryEvent, SessionEvent, StoredMessage, UiLocale } from '@maka/core';
-import { materializeToolResultPreviewForActivity } from '@maka/core/tool-result-preview';
+import { materializeToolResultPreviewForActivity } from '@maka/core';
 import { applyAssistantComplete, applyAssistantDelta } from './assistant-stream.js';
 import { projectToolActivityArgs, toolResultActivityStatus } from '@maka/core';
 import { isInFlightToolStatus } from '@maka/core';

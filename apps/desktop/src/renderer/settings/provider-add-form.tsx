@@ -7,13 +7,13 @@ import {
   PROVIDER_DEFAULTS,
   deriveConnectionSlug,
   validateSlug,
-} from '@maka/core/llm-connections';
-import { isWiredOAuthProvider } from '@maka/core/provider-registry';
+} from '@maka/core';
+import { isWiredOAuthProvider } from '@maka/core';
 import {
   providerAuthRequiresSecret,
   providerAuthSupportsApiKey,
   providerSupportsModelDiscovery,
-} from '@maka/core/llm-connections';
+} from '@maka/core';
 import { Banner, HStack, VStack } from '@astryxdesign/core';
 import { Collapsible } from '@astryxdesign/core/Collapsible';
 import {

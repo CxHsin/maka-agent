@@ -10,7 +10,7 @@ import {
   type AutomationKind,
   type AutomationSchedule,
   type AutomationStatus,
-} from '@maka/core/automation';
+} from '@maka/core';
 import {
   requireCount,
   requireEncodedByteLimit,

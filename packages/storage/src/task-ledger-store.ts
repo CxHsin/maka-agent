@@ -26,7 +26,7 @@ import {
   type TaskLedgerMutationContext,
   type TaskLedgerStore,
   type TaskOwner,
-} from '@maka/core/task-ledger';
+} from '@maka/core';
 import { chainWrite } from './write-queue.js';
 import { assertSafeSessionId } from './session-store.js';
 import { registerTaskLedgerCanonicalReader } from './task-ledger-store-internal.js';
@@ -35,7 +35,7 @@ import {
   type OperationalStateDatabaseLease,
 } from './operational-state-store.js';
 
-export type { TaskLedgerStore } from '@maka/core/task-ledger';
+export type { TaskLedgerStore } from '@maka/core';
 
 export interface ConversationTaskLedgerCopyInput {
   readonly sourceSessionId: string;

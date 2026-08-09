@@ -6,8 +6,8 @@ import {
   validateExecutionEvidenceRef,
   type ExecutionEvidenceRef,
   type ExecutionLogCoverage,
-} from '@maka/core/execution-evidence';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+} from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import type { AgentRunInspectDocument } from '@maka/runtime';
 import {
   MAKA_AHE_EXECUTION_LINEAGE_SCHEMA_VERSION,

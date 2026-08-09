@@ -1,18 +1,12 @@
-import type {
-  AgentGraphIntentClaim,
-  AgentGraphIntentClaimResult,
-} from '@maka/core/agent-graph-control';
+import type { AgentGraphIntentClaim, AgentGraphIntentClaimResult } from '@maka/core';
 import {
   AgentGraphScheduleRevisionConflictError,
   type AgentGraphScheduleControlStore,
   type AgentGraphScheduleUpdate,
   type AgentGraphScheduleUpdateSource,
-} from '@maka/core/agent-graph-schedule';
-import type {
-  AgentGraphOperatorProvision,
-  AgentGraphProvisionedEdge,
-} from '@maka/core/agent-graph-topology';
-import type { SessionEvent } from '@maka/core/events';
+} from '@maka/core';
+import type { AgentGraphOperatorProvision, AgentGraphProvisionedEdge } from '@maka/core';
+import type { SessionEvent } from '@maka/core';
 import { claimAgentGraphRunnableIntent } from './stream-graph-admission.js';
 import type {
   AgentGraphDispatchedActivation,

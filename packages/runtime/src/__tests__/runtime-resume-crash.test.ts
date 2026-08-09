@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { describe, test } from 'node:test';
 
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import { createSqliteAgentRunStore, createWorkspaceRuntimeStore } from '@maka/storage';
 
 import {

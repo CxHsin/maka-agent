@@ -6,8 +6,8 @@ import {
   type TaskSubmissionReadinessDimension,
   type TaskSubmissionReadinessSnapshot,
 } from '@maka/core';
-import { providerAuthRequiresSecret } from '@maka/core/llm-connections';
-import type { ConnectionCatalogEntry, ConnectionCatalogSnapshot } from '@maka/core/runtime-policy';
+import { providerAuthRequiresSecret } from '@maka/core';
+import type { ConnectionCatalogEntry, ConnectionCatalogSnapshot } from '@maka/core';
 import type { RuntimeHostConnection } from '@maka/runtime-host/client';
 
 export interface RuntimeHostCliTaskReadinessInput {

@@ -7,7 +7,7 @@ import type {
   ConnectionCatalogEntry,
   ConnectionCatalogEntryDraft,
   CredentialStatus,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import {
   serializeOAuthSubscriptionTokens,
   type ConnectionEffectFetchTransport,

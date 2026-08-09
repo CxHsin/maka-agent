@@ -4,13 +4,13 @@ import {
   providerAuthSupportsApiKey,
   type LlmConnection,
   type ModelInfo,
-} from '@maka/core/llm-connections';
-import { generalizedErrorMessage } from '@maka/core/redaction';
+} from '@maka/core';
+import { generalizedErrorMessage } from '@maka/core';
 import {
   CONNECTION_CATALOG_MAX_MODELS_PER_CONNECTION,
   CONNECTION_MODEL_ID_MAX_LENGTH,
   normalizeConnectionModelDiscoveryResult,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import { anthropicV1Url, googleApiUrl } from './provider-urls.js';
 import { claudeSubscriptionHeaders, openAiCodexHeaders } from './subscription-auth.js';
 import {

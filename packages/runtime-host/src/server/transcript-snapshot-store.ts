@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { StoredMessage } from '@maka/core/session';
+import type { StoredMessage } from '@maka/core';
 import {
   SESSION_TRANSCRIPT_CHUNK_MAX_BYTES,
   type SessionTranscriptCursor,

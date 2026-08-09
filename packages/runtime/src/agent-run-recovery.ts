@@ -3,7 +3,7 @@ import {
   isSandboxBoundaryRestartClosure,
 } from '@maka/core';
 import type { AgentRunEvent, AgentRunHeader, SandboxBoundaryRequest } from '@maka/core';
-import type { UserMessageInput } from '@maka/core/runtime-inputs';
+import type { UserMessageInput } from '@maka/core';
 
 export interface AgentRunRecoveryDecision {
   runId: string;

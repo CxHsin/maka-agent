@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import type { LlmConnection } from '@maka/core/llm-connections';
+import type { LlmConnection } from '@maka/core';
 import {
   CONFIG_TRANSFER_SCHEMA_VERSION,
   buildConfigBundle,

@@ -14,15 +14,15 @@ import {
   isSessionInlineRun,
   isTerminalRuntimeEvent,
 } from '@maka/core';
-import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
-import { buildImmutableRuntimePrefix, decodeContinuationClaim } from '@maka/core/runtime-boundary';
+import { canonicalToolArgsHash } from '@maka/core';
+import { buildImmutableRuntimePrefix, decodeContinuationClaim } from '@maka/core';
 import type {
   CreateSandboxBoundaryRequest,
   SandboxBoundaryRequest,
   SandboxBoundaryResponse,
   SandboxBoundarySettlement,
   SettleSandboxBoundaryRequest,
-} from '@maka/core/sandbox-boundary';
+} from '@maka/core';
 import type {
   CreateSessionInput,
   ExecutionBoundary,
@@ -50,8 +50,8 @@ import type {
   StoredMessage,
   TurnRecord,
 } from '@maka/core';
-import type { BackendSendInput, BackendStopMode } from '@maka/core/backend-types';
-import { PlanConflictError, emptyPlanSessionState, type PlanStore } from '@maka/core/plan';
+import type { BackendSendInput, BackendStopMode } from '@maka/core';
+import { PlanConflictError, emptyPlanSessionState, type PlanStore } from '@maka/core';
 import { expect } from '../test-helpers.js';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { createTestAiSdkBackend } from './execution-boundary-test-helpers.js';
@@ -76,7 +76,7 @@ import {
 } from '../runtime-kernel.js';
 import { FAKE_ASK_USER_QUESTION_PROMPT, FakeBackend } from '../fake-backend.js';
 import { RuntimeReadModel, RuntimeReadModelError } from '../runtime-read-model.js';
-import type { AgentBackend } from '@maka/core/backend-types';
+import type { AgentBackend } from '@maka/core';
 import type { MakaTool } from '../tool-runtime.js';
 import type { ShellRunProcessManager } from '../shell-run-manager.js';
 import type { InvocationResult } from '../invocation-context.js';
@@ -87,7 +87,7 @@ import {
   type HistoryCompactCheckpoint,
 } from '../history-compact-checkpoint.js';
 import { buildLlmHistorySummarizer } from '../history-compact-summarizer.js';
-import { decodeModelCallAttempt, type ModelCallAttempt } from '@maka/core/model-call-attempt';
+import { decodeModelCallAttempt, type ModelCallAttempt } from '@maka/core';
 import {
   AGENT_WORKSPACE_WORKTREE,
   IMPLEMENTATION_AGENT_DEFINITION,

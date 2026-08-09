@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { createDefaultSettings, mergeSettings } from '@maka/core/settings';
+import { createDefaultSettings, mergeSettings } from '@maka/core';
 import {
   getTavilyCredentialSource,
   getTavilyEnvApiKey,

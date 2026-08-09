@@ -3,7 +3,7 @@ import type {
   MutateRuntimePolicyInput,
   RuntimePolicy,
   RuntimePolicySnapshot,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import type { MakaTool } from '@maka/runtime';
 import { z } from 'zod';
 

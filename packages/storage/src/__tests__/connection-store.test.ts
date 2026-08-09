@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { PROVIDER_DEFAULTS, type LlmConnection } from '@maka/core/llm-connections';
+import { PROVIDER_DEFAULTS, type LlmConnection } from '@maka/core';
 import { createConnectionStore } from '../connection-store.js';
 
 describe('FileConnectionStore', () => {

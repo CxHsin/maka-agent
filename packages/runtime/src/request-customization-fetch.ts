@@ -1,8 +1,4 @@
-import {
-  normalizeRequestBodyOverlay,
-  normalizeRequestHeaders,
-  type JsonObject,
-} from '@maka/core/runtime-policy';
+import { normalizeRequestBodyOverlay, normalizeRequestHeaders, type JsonObject } from '@maka/core';
 
 export interface RequestCustomization {
   readonly headers?: Readonly<Record<string, string>>;

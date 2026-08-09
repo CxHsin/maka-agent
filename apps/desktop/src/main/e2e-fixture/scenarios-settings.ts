@@ -4,7 +4,7 @@ import type {
   LlmConnection,
   E2eFixtureScenario,
 } from '@maka/core';
-import { createDefaultSettings } from '@maka/core/settings';
+import { createDefaultSettings } from '@maka/core';
 import { createSqlitePlanReminderStore } from '@maka/storage';
 import { writeJson } from './seed-helpers.js';
 import { createDailyReviewArchiveStore } from '../daily-review-archive-store.js';

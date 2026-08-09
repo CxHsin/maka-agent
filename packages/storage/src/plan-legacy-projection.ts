@@ -18,7 +18,7 @@ import {
   isPlanProposalLifecycleAdmissible,
   planEncodedByteLength,
   worstCasePlanExecution,
-} from '@maka/core/plan';
+} from '@maka/core';
 
 /**
  * Embedded Plan Mode predates the Host wire bounds. Keep its immutable event

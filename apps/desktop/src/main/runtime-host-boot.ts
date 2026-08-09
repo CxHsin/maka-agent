@@ -13,7 +13,7 @@ import {
 import {
   PROVIDER_DEFAULTS,
   providerAuthRequiresSecret,
-} from "@maka/core/llm-connections";
+} from "@maka/core";
 import {
   BotRegistry,
   buildMcpTools,

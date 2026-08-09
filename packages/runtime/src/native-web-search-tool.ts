@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { resolveHostedWebSearchCapability } from '@maka/core/model-web-search';
-import type { HostedWebSearchAdapter } from '@maka/core/model-web-search';
-import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
+import { resolveHostedWebSearchCapability } from '@maka/core';
+import type { HostedWebSearchAdapter } from '@maka/core';
+import type { RuntimeExecutionConnection } from '@maka/core';
 import type { WebSearchSettings } from '@maka/core';
 import type { MakaTool } from './tool-runtime.js';
 

@@ -6,7 +6,7 @@ import {
   type ProxiedFetchProxy,
   type ProxiedFetchTransport,
 } from '@maka/runtime';
-import type { WebSearchResponse } from '@maka/core/web-search';
+import type { WebSearchResponse } from '@maka/core';
 import type {
   ResolveWebSearchExecutionInput,
   RuntimePolicyOperationCoordinator,

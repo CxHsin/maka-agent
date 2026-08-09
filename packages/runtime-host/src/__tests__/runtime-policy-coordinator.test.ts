@@ -8,8 +8,8 @@ import type {
   ConnectionCatalogEntryDraft,
   ConnectionCatalogSnapshot,
   CredentialLocator,
-} from '@maka/core/runtime-policy';
-import { REQUEST_BODY_OVERLAY_MAX_BYTES } from '@maka/core/runtime-policy';
+} from '@maka/core';
+import { REQUEST_BODY_OVERLAY_MAX_BYTES } from '@maka/core';
 import { FAKE_ASK_USER_QUESTION_PROMPT, FakeBackend, type MakaToolContext } from '@maka/runtime';
 import { openInteractiveExecutionStoresForWrite } from '@maka/storage/execution-stores';
 import { openInteractiveRuntimePolicyStoresForWrite } from '@maka/storage/runtime-policy-stores';

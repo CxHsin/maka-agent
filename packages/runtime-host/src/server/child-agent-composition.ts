@@ -1,4 +1,4 @@
-import type { TaskLedgerStore } from '@maka/core/task-ledger';
+import type { TaskLedgerStore } from '@maka/core';
 import {
   AiSdkBackend,
   buildBuiltinTools,

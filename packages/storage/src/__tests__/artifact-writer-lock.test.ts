@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
-import type { ArtifactRecord } from '@maka/core/artifacts';
+import type { ArtifactRecord } from '@maka/core';
 import {
   openHeadlessArtifactStoreForWrite as openHeadlessArtifactStoreForWriteRaw,
   type HeadlessArtifactStoreWriter,

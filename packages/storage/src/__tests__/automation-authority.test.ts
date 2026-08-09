@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, test } from 'node:test';
-import type { AutomationDefinition, AutomationPendingFire } from '@maka/core/automation';
+import type { AutomationDefinition, AutomationPendingFire } from '@maka/core';
 import {
   authenticateInteractiveAutomationAuthorityWriter,
   openInteractiveAutomationAuthorityForWrite,

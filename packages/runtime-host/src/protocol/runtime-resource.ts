@@ -3,8 +3,8 @@ import {
   type ShellRunSnapshotResult,
   type ShellRunUpdate,
   type ShellRunUpdateOwnership,
-} from '@maka/core/events';
-import { decodeCanonicalShellToolResultContent } from '@maka/core/shell-run-result';
+} from '@maka/core';
+import { decodeCanonicalShellToolResultContent } from '@maka/core';
 import {
   requireCount,
   requireEncodedByteLimit,

@@ -1,5 +1,5 @@
-import type { SessionHeader } from '@maka/core/session';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { SessionHeader } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import type { InteractiveLongTermMemoryWriter } from '@maka/storage/long-term-memory-store';
 import type { RuntimePolicyReader } from '@maka/storage/runtime-policy-stores';
 import {

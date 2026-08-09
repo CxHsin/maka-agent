@@ -25,14 +25,14 @@ import {
   type RemoveCatalogConnectionInput,
   type SetDefaultConnectionTargetInput,
   type UpdateCatalogConnectionInput,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import {
   deriveConnectionSlug,
   PROVIDER_DEFAULTS,
   reconcileConnectionAfterModelFetch,
-} from '@maka/core/llm-connections';
-import { modelIdAliasesForProvider } from '@maka/core/model-metadata';
-import { pruneRelayModelProfiles } from '@maka/core/model-thinking';
+} from '@maka/core';
+import { modelIdAliasesForProvider } from '@maka/core';
+import { pruneRelayModelProfiles } from '@maka/core';
 import { deepFreeze, nextRevision, record, revision, unique } from './codec.js';
 import {
   codecError,

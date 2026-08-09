@@ -12,7 +12,7 @@ import type {
   StoredMessage,
 } from '@maka/core';
 import { decodeCanonicalToolResultContent, isSessionInlineRun } from '@maka/core';
-import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
+import { canonicalToolArgsHash } from '@maka/core';
 import {
   createSqliteAgentRunStore,
   createSqliteRuntimeStore,

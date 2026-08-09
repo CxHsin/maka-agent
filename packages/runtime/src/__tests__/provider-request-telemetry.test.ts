@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { decodeModelCallAttempt, type ModelCallAttempt } from '@maka/core/model-call-attempt';
+import { decodeModelCallAttempt, type ModelCallAttempt } from '@maka/core';
 import * as telemetry from '../provider-request-telemetry.js';
 
 describe('strict provider-request usage', () => {

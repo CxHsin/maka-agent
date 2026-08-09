@@ -1,5 +1,5 @@
-import type { ActiveInteractionRequestEvent, SessionEvent } from '@maka/core/events';
-import type { StoredMessage } from '@maka/core/session';
+import type { ActiveInteractionRequestEvent, SessionEvent } from '@maka/core';
+import type { StoredMessage } from '@maka/core';
 import type {
   InteractionPendingSnapshot,
   SessionContinuitySnapshot,

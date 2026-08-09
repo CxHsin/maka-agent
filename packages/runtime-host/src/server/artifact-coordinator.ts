@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { attachmentKindFromMimeType } from '@maka/core/attachments';
-import type { AttachmentRef } from '@maka/core/events';
-import type { ArtifactRecord } from '@maka/core/artifacts';
+import { attachmentKindFromMimeType } from '@maka/core';
+import type { AttachmentRef } from '@maka/core';
+import type { ArtifactRecord } from '@maka/core';
 import {
   authenticateInteractiveArtifactStoreWriter,
   sanitizeArtifactName,

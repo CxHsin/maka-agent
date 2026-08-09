@@ -4,7 +4,7 @@ import type {
   AgentGraphIntentClaim,
   AgentGraphIntentClaimRequest,
   AgentGraphIntentClaimStore,
-} from '@maka/core/agent-graph-control';
+} from '@maka/core';
 import {
   claimAgentGraphRunnableIntent,
   fingerprintAgentGraphRunnableIntent,

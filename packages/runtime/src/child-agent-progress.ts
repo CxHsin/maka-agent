@@ -1,4 +1,4 @@
-import type { SessionEvent } from '@maka/core/events';
+import type { SessionEvent } from '@maka/core';
 import type { MakaToolContext } from './tool-runtime.js';
 
 export const CHILD_AGENT_PROGRESS_MAX_EVENTS = 64;

@@ -1,8 +1,4 @@
-import {
-  PROXY_DEFAULTS,
-  type ProxySettings,
-  type ProxyType,
-} from '@maka/core/settings/network-settings';
+import { PROXY_DEFAULTS, type ProxySettings, type ProxyType } from '@maka/core';
 
 export function parseProxyConfig(input: unknown): ProxySettings {
   if (!input || typeof input !== 'object') return { ...PROXY_DEFAULTS };

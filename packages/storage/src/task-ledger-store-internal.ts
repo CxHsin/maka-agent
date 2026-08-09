@@ -1,4 +1,4 @@
-import type { Task, TaskLedgerListOptions, TaskLedgerStore } from '@maka/core/task-ledger';
+import type { Task, TaskLedgerListOptions, TaskLedgerStore } from '@maka/core';
 
 export interface TaskLedgerCanonicalReader {
   list(sessionId: string, options?: TaskLedgerListOptions): Promise<Task[]>;

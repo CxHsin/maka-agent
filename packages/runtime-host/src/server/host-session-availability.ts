@@ -1,5 +1,5 @@
-import type { RootExecutionDescriptor } from '@maka/core/agent-run';
-import type { SessionHeader } from '@maka/core/session';
+import type { RootExecutionDescriptor } from '@maka/core';
+import type { SessionHeader } from '@maka/core';
 
 const WORKTREE_CHILD_UNAVAILABLE_REASON =
   'Worktree child Sessions must be continued through their parent agent.';

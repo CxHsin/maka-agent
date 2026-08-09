@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import { taskAttemptExecutionEvidence } from '../task-execution-lineage.js';
 
 describe('taskAttemptExecutionEvidence', () => {

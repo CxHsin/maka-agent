@@ -1,4 +1,4 @@
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import type { ModelMessage } from './model-protocol.js';
 
 export interface MemoryExtractionEventEntry {

@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import type { DailyReviewArchive, DailyReviewSummary, PlanReminder } from '@maka/core';
-import type { McpConfigFile, McpServerStatus } from '@maka/core/mcp';
+import type { McpConfigFile, McpServerStatus } from '@maka/core';
 import {
   AutomationsPage,
   DailyReviewPage,

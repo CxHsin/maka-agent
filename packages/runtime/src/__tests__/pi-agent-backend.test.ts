@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import type { BackendKind, SessionEvent, SessionHeader, StoredMessage } from '@maka/core';
-import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core/events';
+import { TOOL_OUTPUT_DELTA_MAX_CHARS } from '@maka/core';
 import { createSessionStore } from '@maka/storage';
 
 import {

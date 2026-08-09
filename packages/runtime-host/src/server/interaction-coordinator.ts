@@ -1,15 +1,12 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { SandboxBoundaryRequestEvent, UserQuestionRequestEvent } from '@maka/core/events';
+import type { SandboxBoundaryRequestEvent, UserQuestionRequestEvent } from '@maka/core';
 import {
   isInteractionAnswerValidForRequest,
   projectInteractionSandboxBoundaryRequest,
   projectInteractionQuestionRequest,
   type InteractionCanonicalOutcome,
-} from '@maka/core/interaction';
-import type {
-  SandboxBoundaryRequest,
-  SandboxBoundarySettlement,
-} from '@maka/core/sandbox-boundary';
+} from '@maka/core';
+import type { SandboxBoundaryRequest, SandboxBoundarySettlement } from '@maka/core';
 import {
   RuntimeInteractionAdmissionRejectedError,
   RuntimeInteractionFailStopError,

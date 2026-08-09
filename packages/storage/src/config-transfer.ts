@@ -1,4 +1,4 @@
-import type { LlmConnection } from '@maka/core/llm-connections';
+import type { LlmConnection } from '@maka/core';
 
 /**
  * Config import / export — Alma-style selective bundle.

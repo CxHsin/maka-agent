@@ -2,11 +2,8 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as timerDelay } from 'node:timers/promises';
 import { deriveTurnRecords, DurableStoreWriteError, isTerminalRuntimeEvent } from '@maka/core';
-import {
-  ToolLedgerCorruptionError,
-  ToolLedgerRejectionError,
-} from '@maka/core/tool-ledger-scanner';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
+import { ToolLedgerCorruptionError, ToolLedgerRejectionError } from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
 import type {
   AgentRunEvent,
   AgentRunHeader,
@@ -20,8 +17,8 @@ import type {
   StoredMessage,
   TurnRecord,
 } from '@maka/core';
-import type { BackendSendInput } from '@maka/core/backend-types';
-import type { SessionEvent } from '@maka/core/events';
+import type { BackendSendInput } from '@maka/core';
+import type { SessionEvent } from '@maka/core';
 import { expect } from '../test-helpers.js';
 import { AgentRun } from '../agent-run.js';
 import {
@@ -30,7 +27,7 @@ import {
   type BackendFactoryContext,
   type SessionStore,
 } from '../session-manager.js';
-import type { AgentBackend } from '@maka/core/backend-types';
+import type { AgentBackend } from '@maka/core';
 import {
   buildRecoveredTerminalRuntimeEvent,
   buildSyntheticTerminalRuntimeEvent,

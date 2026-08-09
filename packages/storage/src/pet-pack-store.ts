@@ -18,7 +18,7 @@ import {
   PetManifestValidationError,
   type PetPackManifestV1,
   type PetSpriteFormat,
-} from '@maka/core/pet';
+} from '@maka/core';
 
 export const PET_PACK_DIRECTORY = 'pets/v1';
 export const PET_PACK_MANIFEST_FILE = 'pet.json';

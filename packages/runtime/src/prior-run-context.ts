@@ -1,6 +1,6 @@
 import type { AgentRunHeader, AgentRunStore, RuntimeEvent, RuntimeEventStore } from '@maka/core';
 import { isSessionInlineRun, isTerminalRuntimeEvent } from '@maka/core';
-import type { StoredMessage } from '@maka/core/session';
+import type { StoredMessage } from '@maka/core';
 import { buildRuntimeEventModelReplayPlan } from './model-history.js';
 import { backfillRuntimeEventsFromStoredMessages } from './runtime-event-backfill.js';
 import { classifyRuntimeEventTerminalFact } from './runtime-event-read-model.js';

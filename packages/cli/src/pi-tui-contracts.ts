@@ -1,6 +1,6 @@
-import type { ForeignSessionDigest, ForeignSessionSummary } from '@maka/core/foreign-session';
-import type { ModelInfo, ProviderType } from '@maka/core/llm-connections';
-import type { ThinkingLevel } from '@maka/core/model-thinking';
+import type { ForeignSessionDigest, ForeignSessionSummary } from '@maka/core';
+import type { ModelInfo, ProviderType } from '@maka/core';
+import type { ThinkingLevel } from '@maka/core';
 import type { MakaPiTuiTurnActivity } from './pi-tui-turn.js';
 
 export interface ModelChoice {

@@ -1,4 +1,4 @@
-import { parseLocalMemoryMarkdown, type LocalMemoryEntryPreview } from '@maka/core/local-memory';
+import { parseLocalMemoryMarkdown, type LocalMemoryEntryPreview } from '@maka/core';
 import type {
   MemoryBackupSnapshot,
   MemoryBundleSnapshot,

@@ -22,14 +22,14 @@ import {
   GOAL_REASON_TEXT_LIMIT,
   type GoalStatus,
   type GoalTextLimit,
-} from '@maka/core/goal';
+} from '@maka/core';
 
 export {
   GOAL_CONDITION_TEXT_LIMIT,
   GOAL_REASON_TEXT_LIMIT,
   type GoalStatus,
   type GoalTextLimit,
-} from '@maka/core/goal';
+} from '@maka/core';
 
 /** Terminal statuses — a goal in one of these states will not continue. */
 export const TERMINAL_GOAL_STATUSES: ReadonlySet<GoalStatus> = new Set<GoalStatus>([

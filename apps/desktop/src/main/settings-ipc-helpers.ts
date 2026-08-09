@@ -15,7 +15,7 @@ import {
   SENSITIVE_PLACEHOLDER,
   maskSensitive,
   type TestProxyResult,
-} from "@maka/core/settings/network-settings";
+} from "@maka/core";
 import type { BotTestResult } from "@maka/runtime";
 import { collectPersonalizationWarnings } from "@maka/runtime";
 import { getTavilyCredentialSource } from "./web-search/credentials.js";

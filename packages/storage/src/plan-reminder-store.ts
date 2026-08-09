@@ -13,7 +13,7 @@ import {
   planReminderScheduleStartAt,
   type PlanReminder,
   type PlanReminderRunRecord,
-} from '@maka/core/plan-reminders';
+} from '@maka/core';
 import {
   acquireOperationalStateDatabase,
   type OperationalStateDatabaseLease,

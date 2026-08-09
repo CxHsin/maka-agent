@@ -1,5 +1,5 @@
 import type { AgentRunHeader } from '@maka/core';
-import { failureClassFromCompleteStopReason, type SessionEvent } from '@maka/core/events';
+import { failureClassFromCompleteStopReason, type SessionEvent } from '@maka/core';
 import type {
   SessionBlockedReason,
   SessionHeader,
@@ -7,7 +7,7 @@ import type {
   StoredMessage,
   TurnRecord,
   TurnStateMessage,
-} from '@maka/core/session';
+} from '@maka/core';
 
 export type TurnStateLineage = Partial<
   Pick<

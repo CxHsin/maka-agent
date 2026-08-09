@@ -1,6 +1,6 @@
 import { basename, extname, isAbsolute, resolve } from 'node:path';
-import type { ArtifactKind, ArtifactRecord, ArtifactSource } from '@maka/core/artifacts';
-import { generalizedErrorMessage } from '@maka/core/redaction';
+import type { ArtifactKind, ArtifactRecord, ArtifactSource } from '@maka/core';
+import { generalizedErrorMessage } from '@maka/core';
 
 export interface ToolArtifactCandidate {
   kind: ArtifactKind;

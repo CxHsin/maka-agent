@@ -11,11 +11,11 @@ import type {
   AutomationExecutionTemplate,
   AutomationKind,
   AutomationSchedule,
-} from '@maka/core/automation';
-import { AUTOMATION_LAST_ERROR_LIMIT, truncateAutomationText } from '@maka/core/automation';
-import { compileCronExpression } from '@maka/core/cron-expression';
+} from '@maka/core';
+import { AUTOMATION_LAST_ERROR_LIMIT, truncateAutomationText } from '@maka/core';
+import { compileCronExpression } from '@maka/core';
 
-export { matchesCronField } from '@maka/core/cron-expression';
+export { matchesCronField } from '@maka/core';
 
 export type {
   AutomationDefinition,
@@ -23,7 +23,7 @@ export type {
   AutomationKind,
   AutomationSchedule,
   AutomationStatus,
-} from '@maka/core/automation';
+} from '@maka/core';
 
 export interface AutomationManagerDeps {
   generateId: () => string;

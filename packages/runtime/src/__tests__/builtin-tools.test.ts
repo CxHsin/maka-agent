@@ -16,10 +16,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
 import { applySandboxBoundaryExpansion, SHELL_RUN_ID_MAX_CHARS } from '@maka/core';
-import {
-  createWorkspaceWritePermissionProfile,
-  type PermissionProfile,
-} from '@maka/core/permission-profile';
+import { createWorkspaceWritePermissionProfile, type PermissionProfile } from '@maka/core';
 import { expect } from '../test-helpers.js';
 import { buildBuiltinTools } from '../builtin-tools.js';
 import { SandboxManager } from '../sandbox/sandbox-manager.js';

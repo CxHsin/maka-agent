@@ -3,13 +3,9 @@ import type {
   ConnectionModelDiscoveryResult,
   ConnectionTestErrorClass,
   ConnectionTestSummary,
-} from '@maka/core/runtime-policy';
-import { parseRequestHeaders } from '@maka/core/runtime-policy';
-import {
-  PROVIDER_DEFAULTS,
-  deriveConnectionSlug,
-  providerAuthSupportsApiKey,
-} from '@maka/core/llm-connections';
+} from '@maka/core';
+import { parseRequestHeaders } from '@maka/core';
+import { PROVIDER_DEFAULTS, deriveConnectionSlug, providerAuthSupportsApiKey } from '@maka/core';
 import {
   createConnectionEffectFetchTransport,
   createRequestCustomizationFetch,

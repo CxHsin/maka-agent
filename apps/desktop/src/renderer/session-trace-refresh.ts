@@ -1,4 +1,4 @@
-import type { SessionEvent } from '@maka/core/events';
+import type { SessionEvent } from '@maka/core';
 
 /**
  * When a live session's trace is worth re-reading (#1625).

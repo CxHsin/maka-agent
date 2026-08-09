@@ -4,8 +4,8 @@ import {
   buildImmutableRuntimePrefix,
   createRuntimeBoundaryCursor,
   runtimePrefixSegment,
-} from '@maka/core/runtime-boundary';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+} from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import type { RunnableAgentFlow } from '../agent-flow.js';
 import { buildContinuationReplayPlan } from '../continuation-replay.js';
 import { createRuntimeContinuationStartAdmissionProof } from '../runtime-continuation-admission.js';

@@ -28,11 +28,8 @@ import {
   canUserDeleteArtifact,
   isArtifactTurnKey,
   isCanonicalArtifactEntityId,
-} from '@maka/core/artifacts';
-import {
-  isDeepResearchArtifactRole,
-  type DeepResearchArtifactRole,
-} from '@maka/core/deep-research-run';
+} from '@maka/core';
+import { isDeepResearchArtifactRole, type DeepResearchArtifactRole } from '@maka/core';
 import { publishMarkerFile, readBoundedMarkerFile } from './marker-file.js';
 import {
   ARTIFACT_PUBLICATION_STAGING_PATTERN,

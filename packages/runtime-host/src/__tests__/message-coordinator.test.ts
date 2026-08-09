@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { MessageContent } from '@maka/core/events';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { MessageContent } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
 import type {
   MessageOperationReceipt,
   MessageReceiptStore,

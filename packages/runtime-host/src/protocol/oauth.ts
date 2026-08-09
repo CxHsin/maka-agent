@@ -5,7 +5,7 @@ import {
   requireShapedRecord,
   requireString,
 } from './codec.js';
-import type { QuotaSnapshot, QuotaWindow } from '@maka/core/oauth-subscription';
+import type { QuotaSnapshot, QuotaWindow } from '@maka/core';
 import { invalidProtocolFrame } from './errors.js';
 import { defineOperation } from './operation-spec.js';
 

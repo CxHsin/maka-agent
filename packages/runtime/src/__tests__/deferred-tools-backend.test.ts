@@ -5,7 +5,7 @@ import { MockLanguageModelV4, convertArrayToReadableStream } from 'ai/test';
 import type { LanguageModelV4StreamPart, LanguageModelV4Usage } from '@ai-sdk/provider';
 import type { LlmConnection, SessionEvent, SessionHeader } from '@maka/core';
 import type { RunTraceEvent } from '../run-trace.js';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 
 import { AiSdkBackend } from '../ai-sdk-backend.js';
 import type { MakaTool } from '../tool-runtime.js';

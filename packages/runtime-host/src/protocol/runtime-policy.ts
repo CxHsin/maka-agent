@@ -45,11 +45,11 @@ import {
   type SetCredentialInput,
   type SetDefaultConnectionTargetInput,
   type UpdateCatalogConnectionInput,
-} from '@maka/core/runtime-policy';
-import { normalizeRelayModelProfiles, type RelayModelProfile } from '@maka/core/model-thinking';
+} from '@maka/core';
+import { normalizeRelayModelProfiles, type RelayModelProfile } from '@maka/core';
 // The client subgraph cannot import core subpaths directly (dependency
 // boundary); the wire types it needs are re-exported through this file.
-export type { RelayModelProfile, RelayModelProfiles } from '@maka/core/model-thinking';
+export type { RelayModelProfile, RelayModelProfiles } from '@maka/core';
 import { requireExactRecord, requireShapedRecord, requireRecord } from './codec.js';
 import { invalidProtocolFrame } from './errors.js';
 import { defineOperation } from './operation-spec.js';

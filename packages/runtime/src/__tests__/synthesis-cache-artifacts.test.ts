@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { describe, test } from 'node:test';
 import type { ArtifactRecord, ArtifactTextReadResult } from '@maka/core';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import {
   loadSynthesisCacheBlocksFromArtifacts,
   persistSynthesisCacheBlocksToArtifacts,

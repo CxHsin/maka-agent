@@ -1,9 +1,9 @@
-import type { ProviderType } from '@maka/core/llm-connections';
+import type { ProviderType } from '@maka/core';
 import {
   normalizeRelayModelProfiles,
   pruneRelayModelProfiles,
   type RelayModelProfiles,
-} from '@maka/core/model-thinking';
+} from '@maka/core';
 
 /**
  * The one write-side check every connection-store boundary applies to a

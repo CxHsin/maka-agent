@@ -14,8 +14,8 @@ import {
   type ShellRunSnapshotResult,
   type ShellRunUpdate,
 } from '@maka/core';
-import type { ToolResultContent } from '@maka/core/events';
-import { redactSecrets } from '@maka/core/redaction';
+import type { ToolResultContent } from '@maka/core';
+import { redactSecrets } from '@maka/core';
 
 import {
   BASH_MAX_LIVE_EMIT_CHARS,

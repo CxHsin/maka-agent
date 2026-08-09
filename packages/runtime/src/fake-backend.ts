@@ -6,12 +6,9 @@ import type {
   HostedSandboxBoundarySettlement,
   HostedUserQuestionAnswer,
   HostedUserQuestionSettlement,
-} from '@maka/core/backend-types';
-import type {
-  SandboxBoundaryResponse,
-  SandboxBoundarySettlement,
-} from '@maka/core/sandbox-boundary';
-import type { UserQuestionResponse } from '@maka/core/user-question';
+} from '@maka/core';
+import type { SandboxBoundaryResponse, SandboxBoundarySettlement } from '@maka/core';
+import type { UserQuestionResponse } from '@maka/core';
 import {
   RuntimeInteractionInvariantError,
   type RuntimeUserQuestionClosureReason,

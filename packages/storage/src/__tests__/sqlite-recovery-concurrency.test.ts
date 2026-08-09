@@ -8,8 +8,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import type { RuntimeEvent } from '@maka/core';
-import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
-import { scanToolLedger } from '@maka/core/tool-ledger-scanner';
+import { canonicalToolArgsHash } from '@maka/core';
+import { scanToolLedger } from '@maka/core';
 import {
   SQLITE_RUNTIME_SCHEMA_VERSION,
   createSqliteRuntimeStore,

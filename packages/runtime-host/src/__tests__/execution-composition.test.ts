@@ -4,18 +4,15 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import type {
-  AgentGraphIntentClaim,
-  AgentGraphIntentClaimRequest,
-} from '@maka/core/agent-graph-control';
-import type { ShellRunRecord } from '@maka/core/shell-run';
+import type { AgentGraphIntentClaim, AgentGraphIntentClaimRequest } from '@maka/core';
+import type { ShellRunRecord } from '@maka/core';
 import {
   FAKE_ASK_USER_QUESTION_PROMPT,
   LOCAL_READ_AGENT_DEFINITION,
   SessionManager,
 } from '@maka/runtime';
-import { fingerprintAgentGraphRunnableIntent } from '@maka/runtime/stream-graph-admission';
-import type { AgentGraphRunnableIntent } from '@maka/runtime/stream-graph-readiness';
+import { fingerprintAgentGraphRunnableIntent } from '@maka/runtime';
+import type { AgentGraphRunnableIntent } from '@maka/runtime';
 import { createAgentGraphControlStore } from '@maka/storage/agent-graph-control-store';
 import { openInteractiveExecutionStoresForWrite } from '@maka/storage/execution-stores';
 import {

@@ -5,8 +5,8 @@ import {
   OPENCODE_FREE_DEFAULT_ENABLED_MODELS,
   OPENCODE_FREE_DEFAULT_MODEL,
   type ProviderType,
-} from '@maka/core/llm-connections';
-import type { ConnectionCatalogEntry } from '@maka/core/runtime-policy';
+} from '@maka/core';
+import type { ConnectionCatalogEntry } from '@maka/core';
 import type { RuntimePolicyStoresWriter } from '@maka/storage/runtime-policy-stores';
 
 const JOURNAL_FILE = '.runtime-host-bootstrap.json';

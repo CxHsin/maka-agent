@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { open, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
-import { MAX_ATTACHMENT_BYTES } from '@maka/core/attachments';
+import { MAX_ATTACHMENT_BYTES } from '@maka/core';
 import {
   createToolResultArchiveCapability,
   isPathInside,

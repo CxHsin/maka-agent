@@ -4,7 +4,7 @@ import {
   type ConnectionTestErrorClass,
   type ConnectionTestResult,
   type LlmConnection,
-} from '@maka/core/llm-connections';
+} from '@maka/core';
 import { anthropicV1Url, googleApiUrl } from './provider-urls.js';
 import { resolveModelRuntime } from './model-runtime.js';
 import { claudeSubscriptionHeaders } from './subscription-auth.js';

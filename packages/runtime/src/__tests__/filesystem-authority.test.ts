@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExecutionBoundary } from '@maka/core';
-import { createWorkspaceWritePermissionProfile } from '@maka/core/permission-profile';
+import { createWorkspaceWritePermissionProfile } from '@maka/core';
 import { expect } from '../test-helpers.js';
 import { buildBuiltinTools } from '../builtin-tools.js';
 import { SandboxCommandError } from '../sandbox/errors.js';

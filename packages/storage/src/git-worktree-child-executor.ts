@@ -9,7 +9,7 @@ import {
   type ProvisionSubagentWorktreeInput,
   type SubagentWorkspaceBinding,
   type SubagentWorktreeExecutor,
-} from '@maka/core/subagent-workspace';
+} from '@maka/core';
 import { resolveProjectLocation } from './project-catalog.js';
 
 const execFileAsync = promisify(execFile);

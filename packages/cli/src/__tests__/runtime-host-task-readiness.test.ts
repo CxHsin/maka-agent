@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { ConnectionCatalogSnapshot } from '@maka/core/runtime-policy';
+import type { ConnectionCatalogSnapshot } from '@maka/core';
 import type { RuntimeHostConnection } from '@maka/runtime-host/client';
 import {
   formatRuntimeHostCliTaskBlockers,

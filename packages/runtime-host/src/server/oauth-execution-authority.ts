@@ -1,5 +1,5 @@
-import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
-import type { CredentialLocator } from '@maka/core/runtime-policy';
+import type { RuntimeExecutionConnection } from '@maka/core';
+import type { CredentialLocator } from '@maka/core';
 import {
   buildSubscriptionModelFetch,
   isOAuthSubscriptionProvider,

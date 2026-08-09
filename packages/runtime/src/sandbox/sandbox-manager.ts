@@ -1,4 +1,4 @@
-import type { PermissionProfile } from '@maka/core/permission-profile';
+import type { PermissionProfile } from '@maka/core';
 
 import type {
   SandboxBackend,

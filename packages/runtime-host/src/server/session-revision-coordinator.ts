@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { isDeepResearchSession } from '@maka/core/explore-agent';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import type { CreateSessionInput } from '@maka/core/runtime-inputs';
+import { isDeepResearchSession } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
+import type { CreateSessionInput } from '@maka/core';
 import {
   sessionRevisionFamilyId,
   type SessionConversationCopy,
   type SessionHeader,
   type StoredMessage,
-} from '@maka/core/session';
+} from '@maka/core';
 import {
   archivedToolResultContainsConversationOwnedReferences,
   cloneConversationRuntimeLedger,

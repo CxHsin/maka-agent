@@ -7,7 +7,7 @@ import {
   type SessionEvent,
   type SessionHeader,
 } from '@maka/core';
-import { scanToolLedger } from '@maka/core/tool-ledger-scanner';
+import { scanToolLedger } from '@maka/core';
 import { z } from 'zod';
 
 import { createSessionEventMapMemory, mapSessionEventToRuntimeEvent } from '../ai-sdk-flow.js';

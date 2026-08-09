@@ -1,10 +1,6 @@
 import { parseProxyConfig } from './proxy-parser.js';
 import { buildProxyDispatcher } from './proxy-dispatcher.js';
-import type {
-  ProxySettings,
-  TestProxyInput,
-  TestProxyResult,
-} from '@maka/core/settings/network-settings';
+import type { ProxySettings, TestProxyInput, TestProxyResult } from '@maka/core';
 import { fetch, type Dispatcher } from 'undici';
 
 const DEFAULT_PROBE_URL = 'https://icanhazip.com';

@@ -1,4 +1,4 @@
-import type { PricingConfig } from '@maka/core/usage-stats/types';
+import type { PricingConfig } from '@maka/core';
 
 export interface CostInput {
   inputTokens: number;

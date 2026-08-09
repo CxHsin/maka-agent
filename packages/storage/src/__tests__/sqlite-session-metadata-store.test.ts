@@ -14,7 +14,7 @@ import {
   type SandboxBoundarySettlement,
   type SessionHeader,
 } from '@maka/core';
-import type { AgentGraphOperatorProvisionRequest } from '@maka/core/agent-graph-topology';
+import type { AgentGraphOperatorProvisionRequest } from '@maka/core';
 import {
   createSqliteSessionMetadataStore,
   SessionMetadataConflictError,

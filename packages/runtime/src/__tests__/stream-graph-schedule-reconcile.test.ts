@@ -1,12 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import type {
-  AgentGraphScheduleControlStore,
-  AgentGraphScheduleUpdateRequest,
-} from '@maka/core/agent-graph-schedule';
-import type { AgentGraphIntentClaimStore } from '@maka/core/agent-graph-control';
-import type { AgentGraphOperatorProvision } from '@maka/core/agent-graph-topology';
-import type { SessionHeader } from '@maka/core/session';
+import type { AgentGraphScheduleControlStore, AgentGraphScheduleUpdateRequest } from '@maka/core';
+import type { AgentGraphIntentClaimStore } from '@maka/core';
+import type { AgentGraphOperatorProvision } from '@maka/core';
+import type { SessionHeader } from '@maka/core';
 import { createSqliteSessionMetadataStore } from '@maka/storage';
 import type {
   AgentGraphIntentExecutor,

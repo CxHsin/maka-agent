@@ -1,6 +1,6 @@
-import type { SessionEvent } from '@maka/core/events';
-import { createWorkspaceWritePermissionProfile } from '@maka/core/permission-profile';
-import type { SessionSummary } from '@maka/core/session';
+import type { SessionEvent } from '@maka/core';
+import { createWorkspaceWritePermissionProfile } from '@maka/core';
+import type { SessionSummary } from '@maka/core';
 import {
   runMakaTextCliCore,
   type MakaRunContext,

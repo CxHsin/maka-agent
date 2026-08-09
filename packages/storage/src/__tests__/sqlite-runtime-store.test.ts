@@ -5,18 +5,15 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 import type { RuntimeEvent } from '@maka/core';
-import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
+import { canonicalToolArgsHash } from '@maka/core';
 import {
   buildImmutableRuntimePrefix,
   createRuntimeBoundaryCursor,
   runtimePrefixSegment,
   type ContinuationClaimV1,
   type ImmutableRuntimePrefixV1,
-} from '@maka/core/runtime-boundary';
-import {
-  ToolLedgerCorruptionError,
-  ToolLedgerRejectionError,
-} from '@maka/core/tool-ledger-scanner';
+} from '@maka/core';
+import { ToolLedgerCorruptionError, ToolLedgerRejectionError } from '@maka/core';
 import {
   SQLITE_RUNTIME_SCHEMA_VERSION,
   createSqliteRuntimeStore,

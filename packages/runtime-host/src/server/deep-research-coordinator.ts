@@ -1,6 +1,6 @@
-import { projectDeepResearchEvents, type DeepResearchRun } from '@maka/core/deep-research-run';
-import { projectDeepResearchClientProgress } from '@maka/core/deep-research-client-progress';
-import { isDeepResearchSession } from '@maka/core/explore-agent';
+import { projectDeepResearchEvents, type DeepResearchRun } from '@maka/core';
+import { projectDeepResearchClientProgress } from '@maka/core';
+import { isDeepResearchSession } from '@maka/core';
 import { buildDeepResearchTools, type MakaTool } from '@maka/runtime';
 import {
   authenticateInteractiveArtifactStoreWriter,

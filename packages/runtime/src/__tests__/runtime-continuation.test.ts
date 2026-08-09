@@ -6,9 +6,9 @@ import {
   createRuntimeBoundaryCursor,
   runtimePrefixSegment,
   type ImmutableRuntimePrefixV1,
-} from '@maka/core/runtime-boundary';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import type { AgentRunHeader } from '@maka/core/agent-run';
+} from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
+import type { AgentRunHeader } from '@maka/core';
 
 import type { FlowInput } from '../agent-flow.js';
 import type { InvocationContext } from '../invocation-context.js';

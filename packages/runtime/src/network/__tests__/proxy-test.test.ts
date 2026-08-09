@@ -2,7 +2,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { expect } from '../../test-helpers.js';
-import { PROXY_DEFAULTS } from '@maka/core/settings/network-settings';
+import { PROXY_DEFAULTS } from '@maka/core';
 import { testProxyConnection } from '../proxy-test.js';
 
 describe('testProxyConnection', () => {

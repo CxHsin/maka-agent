@@ -9,7 +9,7 @@ import {
   type BotReadinessState,
 } from '@maka/core';
 import type { BotStatus } from '@maka/runtime';
-import { MAX_ALLOWED_USER_IDS, parseAllowedUserIdsFromText } from '@maka/core/settings';
+import { MAX_ALLOWED_USER_IDS, parseAllowedUserIdsFromText } from '@maka/core';
 import { Card, MetadataList, MetadataListItem, SegmentedControl, SegmentedControlItem, StatusDot, Text, VStack } from '@astryxdesign/core';
 import {
   BOT_BRAND,

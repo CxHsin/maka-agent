@@ -1,17 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { decodeStoredMessageForRecovery, type BackendKind } from '@maka/core/session';
+import { decodeStoredMessageForRecovery, type BackendKind } from '@maka/core';
 import type { AgentRunHeader } from '@maka/core';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
-import type { SessionEvent } from '@maka/core/events';
-import type { BackendSendInput, BackendSessionEvent } from '@maka/core/backend-types';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
-import {
-  decodeRuntimeEvent,
-  isTerminalRuntimeEvent,
-  isPartialRuntimeEvent,
-} from '@maka/core/runtime-event';
+import type { SandboxBoundaryResponse } from '@maka/core';
+import type { SessionEvent } from '@maka/core';
+import type { BackendSendInput, BackendSessionEvent } from '@maka/core';
+import type { RuntimeEvent } from '@maka/core';
+import { decodeRuntimeEvent, isTerminalRuntimeEvent, isPartialRuntimeEvent } from '@maka/core';
 
 import {
   AiSdkFlow,
@@ -20,7 +16,7 @@ import {
   createSessionEventMapMemory,
 } from '../ai-sdk-flow.js';
 import { flowSupportsControl } from '../agent-flow.js';
-import type { AgentBackend } from '@maka/core/backend-types';
+import type { AgentBackend } from '@maka/core';
 import { RuntimeRunner } from '../runtime-runner.js';
 import type { InvocationContext } from '../invocation-context.js';
 import {

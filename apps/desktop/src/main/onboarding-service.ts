@@ -41,8 +41,8 @@ import {
   type SessionSummary,
   type SessionSendProjection,
 } from '@maka/core';
-import { buildChatModelChoices } from '@maka/core/chat-model-choice';
-import type { LlmConnection } from '@maka/core/llm-connections';
+import { buildChatModelChoices } from '@maka/core';
+import type { LlmConnection } from '@maka/core';
 
 export interface OnboardingSnapshot {
   state: OnboardingState;

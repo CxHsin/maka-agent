@@ -16,7 +16,7 @@ import type {
   QueueUpdateEvent,
   SessionEvent,
   TokenUsageEvent,
-} from '@maka/core/events';
+} from '@maka/core';
 import type {
   SessionBlockedReason,
   SessionHeader,
@@ -25,16 +25,13 @@ import type {
   SystemNoteMessage,
   TurnRecord,
   TurnStateMessage,
-} from '@maka/core/session';
+} from '@maka/core';
 import { isDeepStrictEqual } from 'node:util';
-import type { ChildAgentTurnInput, UserMessageInput } from '@maka/core/runtime-inputs';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
-import {
-  resolveEffectiveOrchestration,
-  type EffectiveOrchestration,
-} from '@maka/core/orchestration';
-import type { UserQuestionResponse } from '@maka/core/user-question';
-import { DEFAULT_TOOL_MODE, type ToolMode } from '@maka/core/tool-mode';
+import type { ChildAgentTurnInput, UserMessageInput } from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
+import { resolveEffectiveOrchestration, type EffectiveOrchestration } from '@maka/core';
+import type { UserQuestionResponse } from '@maka/core';
+import { DEFAULT_TOOL_MODE, type ToolMode } from '@maka/core';
 import {
   AgentRun,
   ContinuationStartCommitError,
@@ -45,7 +42,7 @@ import {
   type RuntimeContinuationFailpoint,
 } from './agent-run.js';
 import { AiSdkFlow, mapSessionEventToRuntimeEvent } from './ai-sdk-flow.js';
-import type { AgentBackend, SteeringLease } from '@maka/core/backend-types';
+import type { AgentBackend, SteeringLease } from '@maka/core';
 import type { MakaTool } from './tool-runtime.js';
 import type {
   InvocationContext,

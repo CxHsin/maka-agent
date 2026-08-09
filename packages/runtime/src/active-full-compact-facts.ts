@@ -1,5 +1,5 @@
 import type { ModelMessage } from './model-protocol.js';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import { estimateTokens } from './context-budget-helpers.js';
 import { serializeToolResultForArchive } from './tool-result-archive.js';
 

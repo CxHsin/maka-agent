@@ -12,13 +12,13 @@
  * minted inside a flow stay 1:1 with the invocation that produced them.
  */
 
-import type { AttachmentRef, InlineReference, QuoteRef } from '@maka/core/events';
-import type { SteeringLease } from '@maka/core/backend-types';
-import type { RuntimeEvent, RuntimeEventStatus } from '@maka/core/runtime-event';
-import type { StoredMessage } from '@maka/core/session';
-import type { RuntimeContinuationMetadata } from '@maka/core/backend-types';
-import type { EffectiveOrchestration } from '@maka/core/orchestration';
-import type { ToolMode } from '@maka/core/tool-mode';
+import type { AttachmentRef, InlineReference, QuoteRef } from '@maka/core';
+import type { SteeringLease } from '@maka/core';
+import type { RuntimeEvent, RuntimeEventStatus } from '@maka/core';
+import type { StoredMessage } from '@maka/core';
+import type { RuntimeContinuationMetadata } from '@maka/core';
+import type { EffectiveOrchestration } from '@maka/core';
+import type { ToolMode } from '@maka/core';
 
 // ============================================================================
 // InvocationSource

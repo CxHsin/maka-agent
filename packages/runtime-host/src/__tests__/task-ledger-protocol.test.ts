@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import type { Task } from '@maka/core/task-ledger';
+import type { Task } from '@maka/core';
 import { RuntimeHostProtocolError } from '../protocol/errors.js';
 import {
   decodeTaskLedgerQueryInput,

@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, delimiter, join } from 'node:path';
-import { PROVIDER_DEFAULTS, type ProviderType } from '@maka/core/llm-connections';
-import type { ThinkingLevel } from '@maka/core/model-thinking';
+import { PROVIDER_DEFAULTS, type ProviderType } from '@maka/core';
+import type { ThinkingLevel } from '@maka/core';
 import {
   FixedPromptBudgetExhaustedError,
   type HarborVerifierOutcome,

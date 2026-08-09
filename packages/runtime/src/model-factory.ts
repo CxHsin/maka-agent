@@ -11,15 +11,15 @@ import {
   type SharedV4ProviderMetadata,
   type SharedV4ProviderOptions,
 } from '@ai-sdk/provider';
-import { type RuntimeExecutionConnection } from '@maka/core/llm-connections';
-import type { ProviderRuntimeAdapter } from '@maka/core/llm-connections';
-import type { ThinkingLevel } from '@maka/core/model-thinking';
+import { type RuntimeExecutionConnection } from '@maka/core';
+import type { ProviderRuntimeAdapter } from '@maka/core';
+import type { ThinkingLevel } from '@maka/core';
 import {
   resolveThinkingLevel,
   thinkingOptionsForModel,
   thinkingVariantsForConnection,
   type ThinkingOptions,
-} from '@maka/core/model-thinking';
+} from '@maka/core';
 import {
   createOpenAiChatReasoningTransport,
   createOpenAiChatReasoningTransportState,

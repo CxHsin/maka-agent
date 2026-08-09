@@ -1,5 +1,5 @@
 import type { UiLocale } from '@maka/core';
-import type { McpConfigFile, McpServerConfig } from '@maka/core/mcp';
+import type { McpConfigFile, McpServerConfig } from '@maka/core';
 import { getMcpCopy } from './locales/mcp-copy.js';
 
 export function parseMcpImport(source: string, locale: UiLocale = 'zh'): McpConfigFile {

@@ -1,7 +1,7 @@
 import { type SessionEvent, type StoredMessage } from '@maka/core';
-import type { CreateSessionInput, UserMessageInput } from '@maka/core/runtime-inputs';
-import type { ExecutionBoundaryReadModel } from '@maka/core/sandbox-boundary';
-import type { SessionSummary } from '@maka/core/session';
+import type { CreateSessionInput, UserMessageInput } from '@maka/core';
+import type { ExecutionBoundaryReadModel } from '@maka/core';
+import type { SessionSummary } from '@maka/core';
 import {
   readRuntimeHostSessions,
   RuntimeHostOperationError,

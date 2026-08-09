@@ -25,8 +25,8 @@ import type {
   QueueEnqueueOutcome,
   ShellRunUpdate,
   MessageContent,
-} from '@maka/core/events';
-import { messageContentsEqual, normalizeMessageContent } from '@maka/core/events';
+} from '@maka/core';
+import { messageContentsEqual, normalizeMessageContent } from '@maka/core';
 import type {
   SessionHeader,
   SessionBlockedReason,
@@ -39,7 +39,7 @@ import type {
   PermissionDecisionMessage,
   SystemNoteMessage,
   BackendKind,
-} from '@maka/core/session';
+} from '@maka/core';
 import type {
   AgentSpec,
   ChildAgentTurnInput,
@@ -49,11 +49,11 @@ import type {
   ReviseBeforeTurnInput,
   UserMessageInput,
   SessionListFilter,
-} from '@maka/core/runtime-inputs';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
-import type { UserQuestionResponse } from '@maka/core/user-question';
-import type { PermissionMode } from '@maka/core/permission';
-import { DEFAULT_TOOL_MODE } from '@maka/core/tool-mode';
+} from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
+import type { UserQuestionResponse } from '@maka/core';
+import type { PermissionMode } from '@maka/core';
+import { DEFAULT_TOOL_MODE } from '@maka/core';
 import type {
   CreateSandboxBoundaryRequest,
   ExecutionBoundary,
@@ -61,8 +61,8 @@ import type {
   SandboxBoundarySettlement,
   SettleSandboxBoundaryRequest,
 } from '@maka/core';
-import type { CollaborationMode } from '@maka/core/collaboration';
-import type { OrchestrationMode } from '@maka/core/orchestration';
+import type { CollaborationMode } from '@maka/core';
+import type { OrchestrationMode } from '@maka/core';
 import {
   PLAN_USER_ABANDON_REASON,
   PLAN_USER_CANCEL_REASON,
@@ -71,7 +71,7 @@ import {
   type PlanMutationResult,
   type PlanSessionState,
   type PlanStore,
-} from '@maka/core/plan';
+} from '@maka/core';
 import {
   DEFAULT_SESSION_NAME,
   DEEP_RESEARCH_SESSION_LABEL,
@@ -139,10 +139,10 @@ import {
   terminalRunStatusFromRuntimeEvent,
 } from './terminal-run-commit.js';
 
-import type { AgentBackend, BackendStopMode } from '@maka/core/backend-types';
+import type { AgentBackend, BackendStopMode } from '@maka/core';
 import type { MakaTool } from './tool-runtime.js';
 import type { RunTraceRecorder } from './run-trace.js';
-import type { ModelCallAttempt } from '@maka/core/model-call-attempt';
+import type { ModelCallAttempt } from '@maka/core';
 import type {
   ProviderRequestAttemptRecord,
   ProviderRequestCaptureLedgerRecord,

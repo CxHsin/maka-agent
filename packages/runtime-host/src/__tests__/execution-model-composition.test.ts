@@ -16,9 +16,9 @@ import {
   type ModelCallKind,
   type RuntimeEvent,
 } from '@maka/core';
-import { createDefaultRuntimePolicy } from '@maka/core/runtime-policy';
-import type { PlanSessionState, PlanStore } from '@maka/core/plan';
-import type { TaskLedgerStore } from '@maka/core/task-ledger';
+import { createDefaultRuntimePolicy } from '@maka/core';
+import type { PlanSessionState, PlanStore } from '@maka/core';
+import type { TaskLedgerStore } from '@maka/core';
 import {
   serializeOAuthSubscriptionTokens,
   type OAuthSubscriptionTokens,

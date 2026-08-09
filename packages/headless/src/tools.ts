@@ -14,7 +14,7 @@ import {
   projectEffectiveProductToolSurface,
   validateImageBytes,
 } from '@maka/runtime';
-import { withFileWriteLock } from '@maka/runtime/file-write-lock';
+import { withFileWriteLock } from '@maka/runtime';
 import { createHash } from 'node:crypto';
 import { posix as pathPosix } from 'node:path';
 import { z } from 'zod';

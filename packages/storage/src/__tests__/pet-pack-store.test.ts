@@ -3,7 +3,7 @@ import { mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { PET_PACK_SCHEMA_V1 } from '@maka/core/pet';
+import { PET_PACK_SCHEMA_V1 } from '@maka/core';
 import {
   PET_PACK_DIRECTORY,
   PET_PACK_MANIFEST_FILE,

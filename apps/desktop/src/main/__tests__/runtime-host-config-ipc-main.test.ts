@@ -3,8 +3,8 @@ import test from 'node:test';
 import type {
   ConnectionCatalogEntry,
   ConnectionCatalogSnapshot,
-} from '@maka/core/runtime-policy';
-import type { LlmConnection } from '@maka/core/llm-connections';
+} from '@maka/core';
+import type { LlmConnection } from '@maka/core';
 import { saveConnection } from '../runtime-host-config-ipc-main.js';
 
 function existingConnection(overrides: Partial<ConnectionCatalogEntry> = {}): ConnectionCatalogEntry {

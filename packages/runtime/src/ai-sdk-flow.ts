@@ -35,20 +35,12 @@ import {
   normalizeMessageContent,
   type CompleteEvent,
   type SessionEvent,
-} from '@maka/core/events';
-import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
-import type { UserQuestionResponse } from '@maka/core/user-question';
-import {
-  isTerminalRuntimeEvent,
-  type RuntimeEvent,
-  type RuntimeEventStatus,
-} from '@maka/core/runtime-event';
+} from '@maka/core';
+import type { SandboxBoundaryResponse } from '@maka/core';
+import type { UserQuestionResponse } from '@maka/core';
+import { isTerminalRuntimeEvent, type RuntimeEvent, type RuntimeEventStatus } from '@maka/core';
 
-import type {
-  AgentBackend,
-  BackendSessionEvent,
-  HostedInteractionBridge,
-} from '@maka/core/backend-types';
+import type { AgentBackend, BackendSessionEvent, HostedInteractionBridge } from '@maka/core';
 import { type AgentFlow, type AgentFlowControl, type FlowInput } from './agent-flow.js';
 import type { InvocationContext } from './invocation-context.js';
 

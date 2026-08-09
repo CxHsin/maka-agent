@@ -1,6 +1,6 @@
 import type { IBuffer, IDisposable } from '@xterm/headless';
 import type { PtyShellOutput, TerminalInputState, TerminalMouseEncoding } from '@maka/core';
-import { redactSecrets } from '@maka/core/redaction';
+import { redactSecrets } from '@maka/core';
 
 import type { PtyStack } from './pty-stack.js';
 

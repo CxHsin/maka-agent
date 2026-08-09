@@ -6,7 +6,7 @@ import type {
   CredentialStatus,
   MutateRuntimePolicyResult,
   RuntimePolicySnapshot,
-} from '@maka/core/runtime-policy';
+} from '@maka/core';
 import type { MakaTool } from '@maka/runtime';
 import {
   authenticateRuntimePolicyStoresWriter,

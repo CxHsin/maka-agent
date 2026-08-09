@@ -6,7 +6,7 @@ import type {
   PlanProposal,
   PlanStepStatus,
   PlanStore,
-} from '@maka/core/plan';
+} from '@maka/core';
 import {
   PLAN_MAX_FILES_PER_STEP,
   PLAN_MAX_RISKS,
@@ -16,7 +16,7 @@ import {
   isCanonicalPlanEntityId,
   isPlanProposalLifecycleAdmissible,
   isPlanTextWithinLimit,
-} from '@maka/core/plan';
+} from '@maka/core';
 
 import type { MakaTool } from './tool-runtime.js';
 

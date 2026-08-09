@@ -1,6 +1,6 @@
-import { DiagnosticLogBuffer, truncateUtf8 } from '@maka/core/diagnostic-log';
-import { installConsoleDiagnosticLogCapture } from '@maka/core/node-diagnostic-log';
-import { redactSecrets } from '@maka/core/redaction';
+import { DiagnosticLogBuffer, truncateUtf8 } from '@maka/core';
+import { installConsoleDiagnosticLogCapture } from '@maka/core/node';
+import { redactSecrets } from '@maka/core';
 import type { HostDiagnosticsResult } from '@maka/runtime-host/protocol';
 import type { DesktopErrorDiagnosticInput } from '../preload/diagnostics-contract.js';
 

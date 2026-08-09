@@ -99,12 +99,12 @@ import {
 } from './history-compact.js';
 
 import type { ModelMessage } from './model-protocol.js';
-import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { RuntimeEvent } from '@maka/core';
 import type {
   CompactionDecisionDiagnostic,
   ContextBudgetDiagnostic,
   PromptSegmentEstimate,
-} from '@maka/core/usage-stats/types';
+} from '@maka/core';
 import {
   compactionDecisionDiagnosticPatch,
   historyCompactBlockToCompactionBoundary,

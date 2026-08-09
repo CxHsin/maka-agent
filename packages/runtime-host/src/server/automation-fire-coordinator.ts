@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { agentRunMatchesHostedRootExecution, type AgentRunHeader } from '@maka/core/agent-run';
-import type { AutomationDefinition, AutomationPendingFire } from '@maka/core/automation';
-import type { MessageContent } from '@maka/core/events';
-import type { SessionHeader } from '@maka/core/session';
+import { agentRunMatchesHostedRootExecution, type AgentRunHeader } from '@maka/core';
+import type { AutomationDefinition, AutomationPendingFire } from '@maka/core';
+import type { MessageContent } from '@maka/core';
+import type { SessionHeader } from '@maka/core';
 import {
   DEFER_WINDOW_MS,
   evaluateAutomationCanFire,

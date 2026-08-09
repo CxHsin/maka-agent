@@ -11,11 +11,8 @@ import {
   type SessionEvent,
   type SessionHeader,
 } from '@maka/core';
-import type {
-  HostedInteractionBridge,
-  HostedSandboxBoundarySettlement,
-} from '@maka/core/backend-types';
-import type { SandboxBoundaryRequestEvent } from '@maka/core/events';
+import type { HostedInteractionBridge, HostedSandboxBoundarySettlement } from '@maka/core';
+import type { SandboxBoundaryRequestEvent } from '@maka/core';
 
 import {
   buildRequestSandboxBoundaryTool,

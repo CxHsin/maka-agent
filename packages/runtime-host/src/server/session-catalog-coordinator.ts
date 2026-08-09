@@ -1,20 +1,20 @@
 import { createHash } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
-import { isModelExplicitlyUnsupportedForChat } from '@maka/core/model-catalog';
-import { thinkingVariantsForConnection } from '@maka/core/model-thinking';
+import { isModelExplicitlyUnsupportedForChat } from '@maka/core';
+import { thinkingVariantsForConnection } from '@maka/core';
 import {
   executionBoundaryDisplayMode,
   type ExecutionBoundary,
   type ExecutionBoundarySummary,
-} from '@maka/core/sandbox-boundary';
-import type { CreateSessionInput } from '@maka/core/runtime-inputs';
-import { DEFAULT_SESSION_NAME, normalizeUserSessionName } from '@maka/core/session-name';
+} from '@maka/core';
+import type { CreateSessionInput } from '@maka/core';
+import { DEFAULT_SESSION_NAME, normalizeUserSessionName } from '@maka/core';
 import {
   isSessionStartModeLabel as isExecutionSemanticLabel,
   sessionStartModeSpec,
-} from '@maka/core/explore-agent';
-import type { SessionHeader } from '@maka/core/session';
+} from '@maka/core';
+import type { SessionHeader } from '@maka/core';
 import {
   isSessionNotFoundError,
   SessionMetadataConflictError,

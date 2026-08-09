@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import type { ArtifactRecord } from '@maka/core/artifacts';
+import type { ArtifactRecord } from '@maka/core';
 import {
   ARTIFACT_INGEST_CHUNK_MAX_BYTES,
   ARTIFACT_MIME_TYPE_MAX_BYTES,

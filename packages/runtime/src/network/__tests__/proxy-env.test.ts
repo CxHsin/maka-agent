@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import { expect } from '../../test-helpers.js';
-import { PROXY_DEFAULTS } from '@maka/core/settings/network-settings';
+import { PROXY_DEFAULTS } from '@maka/core';
 import { buildNoProxy, getEnvWithProxy } from '../proxy-env.js';
 
 describe('getEnvWithProxy', () => {

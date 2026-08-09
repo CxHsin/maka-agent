@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { generalizedErrorMessage } from '@maka/core/redaction';
-import type { LlmCallRecord, PricingConfig } from '@maka/core/usage-stats/types';
+import { generalizedErrorMessage } from '@maka/core';
+import type { LlmCallRecord, PricingConfig } from '@maka/core';
 import { computeCost } from './cost.js';
 import type { TelemetryRepoLite } from './types.js';
 

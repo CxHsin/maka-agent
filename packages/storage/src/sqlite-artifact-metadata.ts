@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
-import type { ArtifactRecord } from '@maka/core/artifacts';
+import type { ArtifactRecord } from '@maka/core';
 import type { ArtifactMetadataRepository } from './artifact-metadata-repository.js';
 import { decodeArtifactRecordJsons } from './artifact-metadata-codec.js';
 import {

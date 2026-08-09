@@ -49,6 +49,13 @@ export async function purgeAccessCredentialDeliveries(controlDirectory: string):
   );
 }
 
+export function discardAccessCredentialDelivery(
+  controlDirectory: string,
+  deliveryId: string,
+): Promise<void> {
+  return rm(deliveryPath(controlDirectory, deliveryId), { force: true });
+}
+
 export async function consumeAccessCredentialDelivery(
   rootPath: string,
   deliveryId: string,

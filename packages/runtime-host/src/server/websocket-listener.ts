@@ -109,6 +109,7 @@ class RuntimeHostWebSocketListener implements RuntimeHostListener {
   readonly #transports: Set<WebSocketTransport>;
   readonly #onUpgrade: (request: IncomingMessage, socket: Duplex, head: Buffer) => void;
   #closeTask: Promise<void> | undefined;
+  #serverCloseTask: Promise<void> | undefined;
   #cleanupTask: Promise<void> | undefined;
 
   constructor(
@@ -128,16 +129,20 @@ class RuntimeHostWebSocketListener implements RuntimeHostListener {
   closeAdmission(): Promise<void> {
     if (!this.#closeTask) {
       this.#server.off('upgrade', this.#onUpgrade);
-      this.#closeTask = closeServer(this.#server);
+      this.#serverCloseTask = closeServer(this.#server);
+      void this.#serverCloseTask.catch(() => undefined);
+      this.#server.closeAllConnections();
+      this.#closeTask = Promise.resolve();
     }
     return this.#closeTask;
   }
 
   cleanup(): Promise<void> {
     this.#cleanupTask ??= (async () => {
+      await this.closeAdmission();
       for (const transport of this.#transports) transport.abort();
       await closeWebSocketServer(this.#webSocketServer);
-      await this.closeAdmission();
+      await this.#serverCloseTask;
     })();
     return this.#cleanupTask;
   }
@@ -176,7 +181,8 @@ function respond(response: ServerResponse, status: number, body: string): void {
 
 function upgradeTargetsPath(request: IncomingMessage, expectedPath: string): boolean {
   if (request.method !== 'GET' || !request.url) return false;
-  return new URL(request.url, 'http://runtime-host.invalid').pathname === expectedPath;
+  const url = new URL(request.url, 'http://runtime-host.invalid');
+  return url.pathname === expectedPath && url.search === '';
 }
 
 function originAccepted(origin: string | undefined, allowedOrigins: readonly string[] | undefined) {

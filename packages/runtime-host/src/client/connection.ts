@@ -1208,8 +1208,8 @@ function requireRemoteWebSocketUrl(value: string): URL {
   if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
     throw new Error('Remote Runtime Host URL must use ws or wss');
   }
-  if (url.username || url.password || url.hash) {
-    throw new Error('Remote Runtime Host URL must not contain credentials or a fragment');
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('Remote Runtime Host URL must not contain credentials, a query, or a fragment');
   }
   if (
     url.protocol === 'ws:' &&

@@ -13,10 +13,12 @@ import {
 import type { OperationOutcome } from '../protocol/operations.js';
 import {
   createAccessCredentialDelivery,
+  discardAccessCredentialDelivery,
   purgeAccessCredentialDeliveries,
 } from '../control/access-credential-delivery.js';
 import {
   ACCESS_FILE_NAME,
+  assertAccessCredentialFileCapacity,
   createAccessCredentialFile,
   issuedAccessGrants,
   readAccessCredentialFile,
@@ -109,12 +111,19 @@ class FileRuntimeHostAccessAuthority implements RuntimeHostAccessAuthority {
         canUseHostPaths: input.canUseHostPaths,
         createdAt: new Date().toISOString(),
       };
-      await this.#commit(createAccessCredentialFile([...this.#file.credentials, stored]));
+      const nextFile = createAccessCredentialFile([...this.#file.credentials, stored]);
+      assertAccessCredentialFileCapacity(nextFile);
       const deliveryId = await createAccessCredentialDelivery(
         this.#controlDirectory,
         credentialId,
         credential,
       );
+      try {
+        await this.#commit(nextFile);
+      } catch (error) {
+        await discardAccessCredentialDelivery(this.#controlDirectory, deliveryId);
+        throw error;
+      }
       return {
         credentialId,
         deliveryId,

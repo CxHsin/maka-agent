@@ -56,6 +56,15 @@ test('one Local IPC owner and one authenticated WebSocket Client control the sam
     );
     const url = host.websocketEndpoints[0];
     assert.ok(url);
+    await assert.rejects(
+      connectRemoteRuntimeHost({
+        url: `${url}?route=forbidden`,
+        credential,
+        surface: 'tui',
+        protocol: PROTOCOL,
+      }),
+      /must not contain credentials, a query, or a fragment/u,
+    );
 
     const wrongRoot = await connectRemoteRuntimeHost({
       url,
@@ -78,6 +87,11 @@ test('one Local IPC owner and one authenticated WebSocket Client control the sam
     remote = connected.connection;
     assert.equal(remote.rootId, local.rootId);
     assert.equal(remote.hostEpoch, local.hostEpoch);
+    await assert.rejects(
+      remote.request('host.diagnostics.query', {}),
+      (error: unknown) =>
+        error instanceof RuntimeHostOperationError && error.code === 'unauthorized',
+    );
 
     const created = await local.request('session.create', {
       sessionId: 'shared-session',

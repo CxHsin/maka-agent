@@ -32,6 +32,13 @@ export class RuntimeHostAccessInputError extends Error {
   }
 }
 
+export class RuntimeHostAccessCapacityError extends Error {
+  constructor() {
+    super('Runtime Host access credential storage is full');
+    this.name = 'RuntimeHostAccessCapacityError';
+  }
+}
+
 export function createAccessCredentialFile(
   credentials: readonly StoredAccessCredential[],
 ): AccessCredentialFile {
@@ -40,6 +47,21 @@ export function createAccessCredentialFile(
 
 export function issuedAccessGrants(grants: readonly OperationKey[]): readonly OperationKey[] {
   return validateGrants([...new Set<OperationKey>(['host.status', ...grants])]);
+}
+
+export function assertAccessCredentialFileCapacity(file: AccessCredentialFile): void {
+  const fullyRevoked = createAccessCredentialFile(
+    file.credentials.map((credential) =>
+      credential.status === 'revoked'
+        ? credential
+        : {
+            ...credential,
+            status: 'revoked',
+            revokedAt: '9999-12-31T23:59:59.999Z',
+          },
+    ),
+  );
+  serializeAccessCredentialFile(fullyRevoked);
 }
 
 export async function readAccessCredentialFile(path: string): Promise<AccessCredentialFile> {
@@ -68,11 +90,12 @@ export async function writeAccessCredentialFile(
   path: string,
   file: AccessCredentialFile,
 ): Promise<void> {
+  const contents = serializeAccessCredentialFile(file);
   const tempPath = `${path}.${randomUUID()}.tmp`;
   try {
     const handle = await open(tempPath, 'wx', 0o600);
     try {
-      await handle.writeFile(`${JSON.stringify(file, null, 2)}\n`, 'utf8');
+      await handle.writeFile(contents, 'utf8');
       await handle.sync();
     } finally {
       await handle.close();
@@ -84,6 +107,14 @@ export async function writeAccessCredentialFile(
     await rm(tempPath, { force: true });
     throw error;
   }
+}
+
+function serializeAccessCredentialFile(file: AccessCredentialFile): string {
+  const contents = `${JSON.stringify(file, null, 2)}\n`;
+  if (Buffer.byteLength(contents) > ACCESS_FILE_MAX_BYTES) {
+    throw new RuntimeHostAccessCapacityError();
+  }
+  return contents;
 }
 
 function decodeAccessFile(value: unknown): AccessCredentialFile {

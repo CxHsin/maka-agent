@@ -2685,10 +2685,10 @@ function AppShellContent({
                 />
               ) : null}
               <ChatSurfaceLayout
-                // Session switch remounts the layout so scroll / new-message
-                // state cannot leak. Composer draft is keyed by session id
-                // outside ChatLayout, so remount does not drop it.
-                key={activeId ?? 'no-session'}
+                // Stay mounted across session switches. Remounting would drop the
+                // Composer draft Map (drafts are not hosted outside this tree).
+                // Stock ChatLayout has no conversationKey; accept that scroll /
+                // new-message state is owned by content swaps, not a hard remount.
                 hidden={navSelection.section !== 'sessions'}
                 composer={
                   <>

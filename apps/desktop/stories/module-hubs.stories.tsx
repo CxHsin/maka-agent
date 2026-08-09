@@ -909,9 +909,12 @@ export const ExtensionsSkillsScrollContainment: Story = {
       canvasElement,
       '[aria-label="技能视图"]',
     );
+    // Stock Astryx List does not forward aria-label; this story only needs a
+    // stable handle on the installed rows to find the overflowing scroller
+    // (#2236 header containment), not a List a11y contract deleted in #2574.
     const rows = await waitForStorySelector<HTMLElement>(
       canvasElement,
-      '[aria-label="技能列表"]',
+      '.maka-module-page-rows',
     );
     // The scroller is whichever ancestor of the rows actually overflows —
     // asserting through the DOM, not through a class name the layout could

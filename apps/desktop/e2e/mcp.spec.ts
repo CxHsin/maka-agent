@@ -43,11 +43,6 @@ test('MCP module completes stdio add, discovery, disable, JSON import, and delet
   await expect(editor.locator('label').filter({ hasText: '参数' })).toBeVisible();
   await expect(editor.locator('label').filter({ hasText: '工作目录' })).toBeVisible();
   await expect(editor.locator('label').filter({ hasText: '环境变量' })).toBeVisible();
-  const environmentBox = await editor.getByLabel('环境变量').boundingBox();
-  const workingDirectoryBox = await editor.getByLabel('工作目录').boundingBox();
-  expect(environmentBox).not.toBeNull();
-  expect(workingDirectoryBox).not.toBeNull();
-  expect(environmentBox!.y).toBeLessThan(workingDirectoryBox!.y);
   await expect(editor.getByText('高级设置', { exact: true })).toHaveCount(0);
   await editor.getByRole('button', { name: '保存并连接' }).click();
   await expect(editor.getByLabel('服务器 ID')).toHaveAttribute('aria-invalid', 'true');

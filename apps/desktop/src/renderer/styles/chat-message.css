@@ -83,6 +83,44 @@
   gap: var(--space-1);
 }
 
+/* Expanded activity headers stay reachable while their own detail is being
+   read. Native sticky positioning keeps the header in the transcript flow,
+   so it leaves naturally at the card boundary and does not disturb ChatLayout
+   scroll anchoring while reasoning or tool output continues to stream. */
+.maka-turn :is(.maka-deep-thinking, .maka-tool-activity-card) {
+  --maka-activity-sticky-top: var(--space-2);
+  --maka-activity-header-height: var(--h-control-sm);
+}
+
+.maka-turn .maka-activity-card-header[aria-expanded="true"],
+.maka-turn .maka-tool-activity-card > [role="button"][aria-expanded="true"],
+.maka-turn .maka-tool-activity-card [data-slot="chat-tool-call-row"][aria-expanded="true"] {
+  position: sticky;
+  top: var(--maka-activity-sticky-top);
+  z-index: var(--z-sticky);
+  background: var(--surface-raised);
+  border-radius: var(--radius-element);
+  box-shadow: 0 var(--border-width-hairline) 0 var(--border-soft);
+}
+
+/* A call detail inside an expanded tool group forms a second, bounded sticky
+   tier. The group remains available to collapse the whole run; the lower row
+   collapses only the detail currently being read. */
+.maka-turn
+  .maka-tool-activity-card
+  > [role="button"][aria-expanded="true"]
+  ~ div
+  [data-slot="chat-tool-call-row"][aria-expanded="true"] {
+  top: calc(var(--maka-activity-sticky-top) + var(--maka-activity-header-height));
+}
+
+/* Astryx clips the animated group body with overflow:hidden. `clip` preserves
+   that visual boundary without becoming a scroll ancestor that captures the
+   nested sticky row. */
+.maka-turn .maka-tool-activity-card > [role="button"] + div > div {
+  overflow: clip;
+}
+
 /* Cursor for tool/reasoning disclosure triggers is owned by
    styles/native-cursor.css (role=button + default !important). */
 
@@ -139,7 +177,7 @@
 @media (hover: hover) {
   .maka-turn .astryx-chat-tool-calls [role="button"]:hover,
   .maka-turn .astryx-chat-reasoning [role="button"]:hover {
-    background-color: var(--color-overlay-hover);
+    background-color: var(--foreground-5);
     border-radius: var(--radius-element);
   }
 }

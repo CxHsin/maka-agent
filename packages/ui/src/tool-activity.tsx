@@ -315,7 +315,13 @@ export function ToolTrow({
   // A group's own +/- is the whole turn's, not the last call's: a run of five
   // Edits collapses to one line, and "what did this turn change" is the
   // question that line has to answer. Per-call counts stay on the rows inside.
-  return <ChatToolCalls calls={calls} {...diffStats(items.flatMap(itemDiffs))} />;
+  return (
+    <ChatToolCalls
+      className="maka-tool-activity-card"
+      calls={calls}
+      {...diffStats(items.flatMap(itemDiffs))}
+    />
+  );
 }
 
 function standardToolCall(item: ToolActivityItem, locale: UiLocale): ChatToolCallItem {

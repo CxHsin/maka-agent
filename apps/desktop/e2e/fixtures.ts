@@ -308,6 +308,7 @@ export const test = base.extend<{
   modelPickerLongWindow: Page;
   sandboxBoundaryWindow: Page;
   readOnlyBoundaryWindow: Page;
+  activityCardWindow: Page;
   sessionWorkbarWindow: Page;
   artifactPaneWindow: Page;
   botSettingsWindow: Page;
@@ -386,6 +387,21 @@ export const test = base.extend<{
   readOnlyBoundaryWindow: async ({}, use) => {
     await withE2eWindow(
       { seed: false, readinessSelector: COMPOSER_INPUT, e2eFixtureScenario: 'deep-research-progress', locale: 'zh' },
+      use,
+    );
+  },
+  // A committed reasoning + multi-tool transcript. Geometry specs amplify the
+  // existing detail height in the browser; the production projection and
+  // disclosure components remain the fixture's rendering path.
+  activityCardWindow: async ({}, use) => {
+    await withE2eWindow(
+      {
+        seed: false,
+        readinessSelector: '.maka-deep-thinking',
+        e2eFixtureScenario: 'turn-narrative',
+        locale: 'zh',
+        showWindow: true,
+      },
       use,
     );
   },

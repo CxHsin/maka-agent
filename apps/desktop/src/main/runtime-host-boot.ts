@@ -258,7 +258,9 @@ const mcpCapabilityPublisher = createCapabilityRevisionPublisher(() =>
 let settingsBotsIpc: SettingsBotsIpcHandle | undefined;
 const botRegistry = new BotRegistry({
   onIncomingMessage: (message: BotIncomingMessage) => {
-    void owner?.handleBotIncomingMessage(message);
+    void owner
+      ?.handleBotIncomingMessage(message)
+      .catch((error) => console.error("[runtime-host] bot message failed:", error));
   },
   onStatusChange: (status) => {
     mainWindowController.send("settings:bots:statusChanged", status);

@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { IpcMain } from "electron";
-import { RuntimeHostOperationError } from "@maka/runtime-host/client";
+import {
+  RuntimeHostOperationError,
+  RuntimeHostRequestInterruptedError,
+} from "@maka/runtime-host/client";
 import { RuntimeHostReconnectingIpcMain } from "../runtime-host-reconnecting-ipc-main.js";
 
 test("holds an invocation across a Runtime Host candidate replacement", async () => {
   const ipc = ipcHarness();
   const router = new RuntimeHostReconnectingIpcMain(ipc);
-  router.handle("sessions:list", async () => "first");
+  router.handleReconnectableRead("sessions:list", async () => "first");
   assert.equal(await ipc.invoke("sessions:list"), "first");
 
   router.removeHandler("sessions:list");
@@ -19,12 +22,12 @@ test("holds an invocation across a Runtime Host candidate replacement", async ()
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(settled, false);
 
-  router.handle("sessions:list", async () => "replacement");
+  router.handleReconnectableRead("sessions:list", async () => "replacement");
   assert.equal(await waiting, "replacement");
 
   router.removeHandler("sessions:list");
   const failed = deferred();
-  router.handle("sessions:list", async () => {
+  router.handleReconnectableRead("sessions:list", async () => {
     await failed.promise;
     throw new RuntimeHostOperationError(
       "session.catalog.query",
@@ -34,9 +37,20 @@ test("holds an invocation across a Runtime Host candidate replacement", async ()
   });
   const draining = ipc.invoke("sessions:list");
   router.removeHandler("sessions:list");
-  router.handle("sessions:list", async () => "after-drain");
+  router.handleReconnectableRead("sessions:list", async () => "after-drain");
   failed.resolve();
   assert.equal(await draining, "after-drain");
+
+  router.removeHandler("sessions:list");
+  router.handleReconnectableRead("sessions:list", async () => {
+    throw new RuntimeHostRequestInterruptedError(
+      "session.catalog.query",
+      "query",
+      "dispatched",
+      "timeout",
+    );
+  });
+  await assert.rejects(() => ipc.invoke("sessions:list"), /was interrupted/);
 
   router.close();
   assert.equal(ipc.size, 0);

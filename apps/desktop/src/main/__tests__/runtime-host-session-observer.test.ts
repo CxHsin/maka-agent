@@ -6,6 +6,7 @@ import type {
   SessionContinuitySnapshot,
   SubscriptionFrame,
 } from "@maka/runtime-host/protocol";
+import { RuntimeHostSubscriptionError } from "@maka/runtime-host/client";
 import type { DesktopRuntimeHostSession } from "../runtime-host-client.js";
 import { RuntimeHostSessionObservationRegistry } from "../runtime-host-session-observation-registry.js";
 import {
@@ -146,11 +147,11 @@ test("restores renderer observation after the Host connection is replaced", asyn
   const observations = new RuntimeHostSessionObservationRegistry();
   const target = eventTarget(10);
 
-  await observations.attach(firstObserver);
+  assert.deepEqual(await observations.attach(firstObserver), []);
   await observations.observe("session-1", "observer-1", target);
   observations.detach(firstObserver);
   await firstObserver.close();
-  await observations.attach(secondObserver);
+  assert.deepEqual(await observations.attach(secondObserver), ["session-1"]);
   await waitFor(() => target.events.length === 1);
 
   secondEvents.push(deltaFrame(1, 5, " again"));
@@ -188,6 +189,40 @@ test("restores renderer observation after the Host connection is replaced", asyn
 
   await observations.close();
   await secondObserver.close();
+});
+
+test("does not publish a terminal error while an owner-managed connection is replaced", async () => {
+  let rejectFrame!: (error: Error) => void;
+  let closeCount = 0;
+  const events: AsyncIterable<SubscriptionFrame> = {
+    [Symbol.asyncIterator]: () => ({
+      next: () =>
+        new Promise<IteratorResult<SubscriptionFrame>>((_resolve, reject) => {
+          rejectFrame = reject;
+        }),
+    }),
+  };
+  const observer = new RuntimeHostSessionObserver({
+    client: {
+      openSession: async () => ({
+        snapshot: continuitySnapshot(),
+        transcript: Promise.resolve([]),
+        events,
+        async close() {
+          closeCount += 1;
+        },
+      }),
+    },
+    emitSessionsChanged() {},
+    recoverConnectionClosed: true,
+  });
+  const target = eventTarget(11);
+  await observer.observe("session-1", "observer-1", target);
+
+  rejectFrame(new RuntimeHostSubscriptionError("connection_closed", "Host restarted"));
+  await waitFor(() => closeCount === 1);
+  assert.equal(target.events.some((event) => event.type === "error"), false);
+  await observer.close();
 });
 
 test("keeps a native Turn watched without a renderer and releases it at terminal", async () => {

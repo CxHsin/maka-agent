@@ -3,14 +3,7 @@ import {
   RuntimeHostOperationError,
   RuntimeHostRequestInterruptedError,
 } from "@maka/runtime-host/client";
-
-const RECONNECTABLE_READ_CHANNELS = new Set([
-  "onboarding:getSnapshot",
-  "sessions:list",
-  "skills:listInvocable",
-]);
-
-type IpcHandler = Parameters<IpcMain["handle"]>[1];
+import type { IpcHandler, ReconnectableReadIpcMain } from "./ipc-reconnect-policy.js";
 
 interface HandlerWaiter {
   readonly resolve: (handler: IpcHandler) => void;
@@ -19,6 +12,7 @@ interface HandlerWaiter {
 
 interface HandlerSlot {
   readonly waiters: Set<HandlerWaiter>;
+  readonly reconnectableRead: boolean;
   handler?: IpcHandler;
 }
 
@@ -26,7 +20,7 @@ interface HandlerSlot {
  * Keeps Electron IPC admission stable while a Runtime Host candidate is replaced.
  */
 export class RuntimeHostReconnectingIpcMain
-  implements Pick<IpcMain, "handle" | "removeHandler">
+  implements ReconnectableReadIpcMain
 {
   readonly #ipcMain: Pick<IpcMain, "handle" | "removeHandler">;
   readonly #slots = new Map<string, HandlerSlot>();
@@ -37,17 +31,28 @@ export class RuntimeHostReconnectingIpcMain
   }
 
   handle(channel: string, listener: IpcHandler): void {
+    this.#handle(channel, listener, false);
+  }
+
+  handleReconnectableRead(channel: string, listener: IpcHandler): void {
+    this.#handle(channel, listener, true);
+  }
+
+  #handle(channel: string, listener: IpcHandler, reconnectableRead: boolean): void {
     if (this.#closed) {
       throw new Error("Desktop Runtime Host IPC router is closed");
     }
     let slot = this.#slots.get(channel);
     if (!slot) {
-      const created: HandlerSlot = { waiters: new Set() };
+      const created: HandlerSlot = { waiters: new Set(), reconnectableRead };
       this.#ipcMain.handle(channel, (event, ...args) =>
-        this.#dispatch(channel, created, event, args),
+        this.#dispatch(created, event, args),
       );
       this.#slots.set(channel, created);
       slot = created;
+    }
+    if (slot.reconnectableRead !== reconnectableRead) {
+      throw new Error(`Desktop Runtime Host IPC policy changed: ${channel}`);
     }
     if (slot.handler) {
       throw new Error(`Desktop Runtime Host IPC handler already exists: ${channel}`);
@@ -76,7 +81,6 @@ export class RuntimeHostReconnectingIpcMain
   }
 
   async #dispatch(
-    channel: string,
     slot: HandlerSlot,
     event: Parameters<IpcHandler>[0],
     args: readonly unknown[],
@@ -87,7 +91,7 @@ export class RuntimeHostReconnectingIpcMain
         return await handler(event, ...args);
       } catch (error) {
         if (
-          !RECONNECTABLE_READ_CHANNELS.has(channel) ||
+          !slot.reconnectableRead ||
           !isReconnectableReadFailure(error)
         ) {
           throw error;
@@ -116,6 +120,7 @@ function isReconnectableReadFailure(error: unknown): boolean {
   return (
     (error instanceof RuntimeHostOperationError &&
       error.code === "host_draining") ||
-    (error instanceof RuntimeHostRequestInterruptedError && error.retryable)
+    (error instanceof RuntimeHostRequestInterruptedError &&
+      error.reason === "connection_lost")
   );
 }

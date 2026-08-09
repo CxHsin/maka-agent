@@ -7,6 +7,7 @@ import type {
 import type { BotRegistry } from "@maka/runtime";
 import {
   connectOrSpawnRuntimeHost,
+  waitForRuntimeHostReady,
   type ConnectOrSpawnRuntimeHostInput,
   type ConnectOrSpawnRuntimeHostResult,
   type RuntimeHostConnection,
@@ -41,8 +42,9 @@ import {
 } from "./runtime-host-session-execution-ipc-main.js";
 import { RuntimeHostSessionObservationRegistry } from "./runtime-host-session-observation-registry.js";
 import { RuntimeHostSessionObserver } from "./runtime-host-session-observer.js";
+import type { IpcHandler, ReconnectableReadIpcMain } from "./ipc-reconnect-policy.js";
 
-type CandidateIpcMain = Pick<IpcMain, "handle" | "removeHandler">;
+type CandidateIpcMain = ReconnectableReadIpcMain & Pick<IpcMain, "removeHandler">;
 
 export interface DesktopRuntimeHostCandidateDeps {
   readonly ipcMain: CandidateIpcMain;
@@ -210,6 +212,7 @@ export async function startDesktopRuntimeHostCandidate(
     await waitForRuntimeHostReady(
       connection.connection,
       input.electionDeadlineMs ?? 45_000,
+      input.signal,
     );
     return {
       kind: "ready",
@@ -222,25 +225,6 @@ export async function startDesktopRuntimeHostCandidate(
   } catch (error) {
     await connection.connection.close().catch(() => undefined);
     throw error;
-  }
-}
-
-async function waitForRuntimeHostReady(
-  connection: RuntimeHostConnection,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (true) {
-    const status = await connection.status(Math.max(1, deadline - Date.now()));
-    if (status.state === "ready") return;
-    if (status.state === "draining")
-      throw new Error("Runtime Host drained before becoming ready");
-    const remaining = deadline - Date.now();
-    if (remaining <= 0)
-      throw new Error("Runtime Host did not become ready before the deadline");
-    await new Promise((resolve) =>
-      setTimeout(resolve, Math.min(25, remaining)),
-    );
   }
 }
 
@@ -324,11 +308,10 @@ export async function createDesktopRuntimeHostCandidate(
         outcome === "completed"
           ? deps.completeComputerUseTurn(sessionId)
           : deps.nativeCapabilities.releaseComputerUseSession(sessionId),
+      recoverConnectionClosed: observationRegistry !== undefined,
       ...(deps.now ? { now: deps.now } : {}),
     });
     observer = sessionObserver;
-    await sessionObservations.attach(sessionObserver);
-    observationsAttached = true;
     domains = registerRuntimeHostSessionDomainsIpc(
       {
         client,
@@ -342,6 +325,11 @@ export async function createDesktopRuntimeHostCandidate(
       ipc,
     );
     closeSessionDomains = domains.close;
+    const restoredSessionIds = await sessionObservations.attach(sessionObserver);
+    observationsAttached = true;
+    for (const sessionId of restoredSessionIds) {
+      deps.emitSessionsChanged("message-appended", sessionId);
+    }
     const watchComputerUseTurn = (sessionId: string, turnId: string): void => {
       void sessionObserver
         .watchTurn(sessionId, turnId)
@@ -516,7 +504,7 @@ function connectInput(
   };
 }
 
-class ScopedIpcMain implements Pick<IpcMain, "handle"> {
+class ScopedIpcMain implements ReconnectableReadIpcMain {
   readonly #ipcMain: CandidateIpcMain;
   readonly #channels = new Set<string>();
   #closed = false;
@@ -526,6 +514,14 @@ class ScopedIpcMain implements Pick<IpcMain, "handle"> {
   }
 
   handle(channel: string, listener: Parameters<IpcMain["handle"]>[1]): void {
+    this.#handle(channel, listener, false);
+  }
+
+  handleReconnectableRead(channel: string, listener: IpcHandler): void {
+    this.#handle(channel, listener, true);
+  }
+
+  #handle(channel: string, listener: IpcHandler, reconnectableRead: boolean): void {
     if (this.#closed)
       throw new Error("Desktop Runtime Host candidate IPC is closed");
     if (this.#channels.has(channel)) {
@@ -533,7 +529,11 @@ class ScopedIpcMain implements Pick<IpcMain, "handle"> {
         `Desktop Runtime Host candidate registered duplicate IPC: ${channel}`,
       );
     }
-    this.#ipcMain.handle(channel, listener);
+    if (reconnectableRead && this.#ipcMain.handleReconnectableRead) {
+      this.#ipcMain.handleReconnectableRead(channel, listener);
+    } else {
+      this.#ipcMain.handle(channel, listener);
+    }
     this.#channels.add(channel);
   }
 

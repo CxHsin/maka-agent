@@ -30,13 +30,13 @@ export class RuntimeHostSessionObservationRegistry {
     this.#onError = onError;
   }
 
-  async attach(source: SessionObservationSource): Promise<void> {
+  async attach(source: SessionObservationSource): Promise<string[]> {
     this.#assertOpen();
     if (this.#source && this.#source !== source) {
       throw new Error("Runtime Host Session observations are already attached");
     }
     this.#source = source;
-    await Promise.all(
+    const restored = await Promise.all(
       [...this.#registrations].map(async ([observerId, registration]) => {
         try {
           await source.observe(
@@ -44,11 +44,14 @@ export class RuntimeHostSessionObservationRegistry {
             observerId,
             registration.target,
           );
+          return registration.sessionId;
         } catch (error) {
           if (this.#source === source) this.#onError(error);
+          return undefined;
         }
       }),
     );
+    return [...new Set(restored.filter((sessionId): sessionId is string => !!sessionId))];
   }
 
   detach(source: SessionObservationSource): void {

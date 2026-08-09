@@ -6,6 +6,7 @@ import {
   createRuntimeHostReconnectingConnection,
   readRuntimeHostConnectionCatalog,
   RuntimeHostPermanentReconnectError,
+  waitForRuntimeHostReady,
   type RuntimeHostConnection,
 } from '@maka/runtime-host/client';
 import { RUNTIME_HOST_PROTOCOL_VERSION, type ClientSurface } from '@maka/runtime-host/protocol';
@@ -65,7 +66,7 @@ export async function connectRuntimeHostCli(
       throw new Error(`Runtime Host startup failed: ${connected.reason}`);
     }
     try {
-      await waitForReady(connected.connection);
+      await waitForRuntimeHostReady(connected.connection, 45_000, signal);
       return connected.connection;
     } catch (error) {
       await connected.connection.close().catch(() => undefined);
@@ -115,16 +116,4 @@ export function resolveRuntimeHostCliTarget(
     throw new Error(`Runtime Host model is unavailable for ${connection.slug}: ${model ?? ''}`);
   }
   return { connection, model };
-}
-
-async function waitForReady(connection: RuntimeHostConnection): Promise<void> {
-  const deadline = Date.now() + 45_000;
-  while (true) {
-    const status = await connection.status(Math.max(1, deadline - Date.now()));
-    if (status.state === 'ready') return;
-    if (status.state === 'draining') throw new Error('Runtime Host drained before becoming ready');
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error('Runtime Host did not become ready before the deadline');
-    await new Promise((resolve) => setTimeout(resolve, Math.min(25, remaining)));
-  }
 }

@@ -258,11 +258,12 @@ export class RuntimeHostSessionChannel {
         this.#failedSubscriptions.add(subscription);
         if (!this.#ready) return;
         if (this.#recoveryTask) {
-          void this.#recoveryTask.finally(() => {
+          const schedule = () => {
             if (this.#subscription === subscription && !this.#closing) {
               this.#scheduleRecovery(subscription);
             }
-          });
+          };
+          void this.#recoveryTask.then(schedule, schedule);
         } else {
           this.#scheduleRecovery(subscription);
         }
@@ -368,6 +369,22 @@ export class RuntimeHostSessionChannel {
       const copy = structuredClone(pending);
       if (this.#activated) this.#onInteractionPending(copy);
       else this.#pendingOpenedInteractions.push(copy);
+    }
+
+    if (
+      previousRoot &&
+      !isTerminalTurn(previousRoot) &&
+      (!root || root.runId !== previousRoot.runId)
+    ) {
+      const terminalEvents = this.#projector.seedStoredTerminal(previousRoot.turnId, this.messages);
+      if (terminalEvents.length === 0) {
+        throw new RuntimeHostSubscriptionError(
+          'projection_revision_invalid',
+          `Runtime Host replacement omitted the terminal record for Turn ${previousRoot.turnId}`,
+        );
+      }
+      for (const event of terminalEvents) this.#emit(event);
+      this.#queue(previousRoot.turnId).finish();
     }
 
     if (root && !isTerminalTurn(root)) {

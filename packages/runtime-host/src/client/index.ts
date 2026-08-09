@@ -31,6 +31,7 @@ export {
   type RuntimeHostSessionSubscription,
   type RuntimeHostSubscriptionFailureReason,
 } from './session-subscription.js';
+export { waitForRuntimeHostReady } from './wait-for-ready.js';
 export {
   RuntimeHostCatalogReadError,
   readRuntimeHostConnectionCatalog,

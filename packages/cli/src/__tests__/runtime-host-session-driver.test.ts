@@ -333,6 +333,10 @@ describe('Runtime Host Maka Session driver', () => {
       userMessage('turn-2', 'Fast follow up'),
       assistantMessage('turn-2', 'Done'),
     ]);
+    const text = await nextEvent(attached.events);
+    assert.equal(text.type, 'text_complete');
+    if (text.type !== 'text_complete') assert.fail('Expected the durable assistant answer');
+    assert.equal(text.text, 'Done');
     assert.equal((await nextEvent(attached.events)).type, 'complete');
   });
 
@@ -907,6 +911,88 @@ describe('Runtime Host Maka Session driver', () => {
     replacement.push(deltaFrame(1, 'turn-1', 11, '!', 'subscription-2'));
     assert.equal((await nextEvent(switched.activeTurn.events)).text, '!');
   });
+
+  test('recovers the complete terminal answer when a Turn finishes during reconnect', async () => {
+    const initial = new FakeSubscription(
+      continuitySnapshot(),
+      Promise.resolve([assistantMessage('turn-1', 'Hello')]),
+    );
+    const replacement = new FakeSubscription(
+      continuitySnapshot({
+        projectionRevision: 2,
+        rootTurn: completedTurn('turn-1', 'run-1'),
+      }),
+      Promise.resolve([
+        assistantMessage('turn-1', 'Hello world'),
+        turnStateMessage('turn-1', 'completed'),
+      ]),
+      'subscription-2',
+    );
+    const connection = new FakeConnection([initial, replacement], true);
+    const driver = createRuntimeHostMakaSessionDriver({
+      connection: connection.value,
+      cwd: '/tmp',
+      llmConnectionSlug: 'openai-main',
+      model: 'gpt-5',
+      now: () => 50,
+    });
+    const switched = await driver.switchSession('session-1');
+    assert.ok(switched.activeTurn);
+
+    initial.fail(new RuntimeHostSubscriptionError('connection_closed', 'connection lost'));
+    const text = await nextEvent(switched.activeTurn.events);
+    assert.equal(text.type, 'text_complete');
+    assert.equal(text.text, 'Hello world');
+    assert.equal((await nextEvent(switched.activeTurn.events)).type, 'complete');
+    assert.equal((await switched.activeTurn.events[Symbol.asyncIterator]().next()).done, true);
+  });
+
+  test('settles an attached Turn before publishing its reconnect-gap successor', async () => {
+    const initial = new FakeSubscription(
+      continuitySnapshot(),
+      Promise.resolve([assistantMessage('turn-1', 'Working')]),
+    );
+    const replacementMessages = [
+      assistantMessage('turn-1', 'Finished'),
+      turnStateMessage('turn-1', 'completed'),
+      userMessage('turn-2', 'Continue'),
+      assistantMessage('turn-2', 'Continuing'),
+    ];
+    const replacement = new FakeSubscription(
+      continuitySnapshot({
+        projectionRevision: 3,
+        rootTurn: runningTurn('turn-2', 'run-2'),
+      }),
+      Promise.resolve(replacementMessages),
+      'subscription-2',
+    );
+    const successor = new FakeSubscription(
+      continuitySnapshot({
+        projectionRevision: 3,
+        rootTurn: runningTurn('turn-2', 'run-2'),
+      }),
+      Promise.resolve(replacementMessages),
+      'subscription-3',
+    );
+    const connection = new FakeConnection([initial, replacement, successor], true);
+    const driver = createRuntimeHostMakaSessionDriver({
+      connection: connection.value,
+      cwd: '/tmp',
+      llmConnectionSlug: 'openai-main',
+      model: 'gpt-5',
+      now: () => 50,
+    });
+    const switched = await driver.switchSession('session-1');
+    assert.ok(switched.activeTurn);
+    const started = deferred<MakaAttachedSessionTurn>();
+    driver.subscribeStartedTurns!((turn) => started.resolve(turn));
+
+    initial.fail(new RuntimeHostSubscriptionError('connection_closed', 'connection lost'));
+    assert.equal((await nextEvent(switched.activeTurn.events)).type, 'text_complete');
+    assert.equal((await nextEvent(switched.activeTurn.events)).type, 'complete');
+    assert.equal((await switched.activeTurn.events[Symbol.asyncIterator]().next()).done, true);
+    assert.equal((await started.promise).turnId, 'turn-2');
+  });
 });
 
 class FakeConnection {
@@ -1153,6 +1239,20 @@ function assistantMessage(turnId: string, text: string): StoredMessage {
 
 function userMessage(turnId: string, text: string): StoredMessage {
   return { type: 'user', id: `user-${turnId}`, turnId, ts: 9, text };
+}
+
+function turnStateMessage(
+  turnId: string,
+  status: 'completed' | 'failed' | 'aborted',
+): StoredMessage {
+  return {
+    type: 'turn_state',
+    id: `state-${turnId}`,
+    turnId,
+    ts: 80,
+    status,
+    partialOutputRetained: true,
+  };
 }
 
 function deltaFrame(

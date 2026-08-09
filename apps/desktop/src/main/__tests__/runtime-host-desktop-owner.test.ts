@@ -14,13 +14,20 @@ test('replaces a disconnected generation without falling back to embedded Runtim
   const queue = [ready(first.candidate), ready(second.candidate)];
   let starts = 0;
   let resolveSecondStart!: () => void;
+  let releaseSecond!: () => void;
   const secondStarted = new Promise<void>((resolve) => {
     resolveSecondStart = resolve;
+  });
+  const secondReleased = new Promise<void>((resolve) => {
+    releaseSecond = resolve;
   });
   const owner = await startRuntimeHostDesktopOwner({} as DesktopRuntimeHostCandidateStartInput, {
     startCandidate: async () => {
       starts += 1;
-      if (starts === 2) resolveSecondStart();
+      if (starts === 2) {
+        resolveSecondStart();
+        await secondReleased;
+      }
       const result = queue.shift();
       assert.ok(result);
       return result;
@@ -29,9 +36,13 @@ test('replaces a disconnected generation without falling back to embedded Runtim
 
   first.disconnect();
   await secondStarted;
+  const botMessage = owner.handleBotIncomingMessage({ text: 'hello' } as BotIncomingMessage);
+  const stop = owner.stopSession('session-1');
   await new Promise<void>((resolve) => setImmediate(resolve));
-  await owner.handleBotIncomingMessage({ text: 'hello' } as BotIncomingMessage);
-  await owner.stopSession('session-1');
+  assert.equal(second.botMessages, 0);
+  assert.deepEqual(second.stoppedSessions, []);
+  releaseSecond();
+  await Promise.all([botMessage, stop]);
 
   assert.equal(first.botMessages, 0);
   assert.equal(second.botMessages, 1);

@@ -1042,8 +1042,20 @@ export async function createExecutionRuntimeHostComposition(
     });
     const externalSessions = new HostExternalSessionCoordinator({
       adapters: createExternalSessionAdapterRegistry(),
+      admission: sessionAdmission,
       sessions: stores.sessionStore,
       resolveTarget: () => sessionCatalog.resolveExternalSessionImportTarget(),
+      prepareImportedSessionHistory: (sessionId) =>
+        requireSessionManager(manager).prepareImportedSessionHistory(sessionId),
+      discardImportedSession: async (sessionId) => {
+        const outcomes = await Promise.allSettled([
+          stores.purgeConversationOperationalState(sessionId),
+          stores.sessionStore.remove(sessionId),
+        ]);
+        for (const outcome of outcomes) {
+          if (outcome.status === 'rejected') throw outcome.reason;
+        }
+      },
       requestDrain: context.requestDrain,
     });
     const plans = new HostPlanCoordinator({
@@ -1139,6 +1151,7 @@ export async function createExecutionRuntimeHostComposition(
         await skills.recover();
         await openedArtifactStore.recover();
         await sessionRetirement.recover();
+        await externalSessions.recover();
         const sessions = await stores.sessionStore.listForRecovery();
         await worktreeChildExecutor.recover(
           sessions.flatMap((session) =>

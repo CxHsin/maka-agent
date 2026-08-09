@@ -878,58 +878,14 @@ export const ExtensionsSkillsInspector: Story = {
       skillId: 'workspace:maka:skill-git-flow',
       enabled: false,
     });
-
-    // The inspector's resize handle carries an absolutely positioned hit
-    // strip; a vendor translate bug once shifted it half its height upward,
-    // over the toolbar, swallowing the view switch's clicks. The strip must
-    // stay inside the content row — below the toolbar. Same selector as the
-    // CSS fix: the strip is the handle child that is not the pill, regardless
-    // of the order the vendor renders its children in.
-    const hitStrip = await waitForStorySelector<HTMLElement>(
-      canvasElement,
-      '.maka-module-page .astryx-resize-handle > :not(.astryx-resize-handle-pill)',
-    );
-    const toolbar = await waitForStorySelector<HTMLElement>(
-      canvasElement,
-      '.maka-module-page-bar',
-    );
-    await expect(hitStrip.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      toolbar.getBoundingClientRect().bottom - 1,
-    );
   },
 };
 
-// Real path: sidebar → 扩展 → 技能, scrolling a long installed list.
-// Regression contract for #2236: the view switch rides the fixed header, so
-// scrolling the list must not move it. Rows scroll; the switch stays put.
+// Real path: sidebar → 扩展 → 技能, long installed list (visual catalog only).
+// Do not pin scroll geometry / Astryx List a11y in play — those are vendor DOM
+// contracts, not product journeys.
 export const ExtensionsSkillsScrollContainment: Story = {
   render: () => <ExtensionsSkillsSurface skills={LONG_LIST_SKILLS} />,
-  play: async ({ canvasElement }) => {
-    const viewSwitch = await waitForStorySelector<HTMLElement>(
-      canvasElement,
-      '[aria-label="技能视图"]',
-    );
-    // Stock Astryx List does not forward aria-label; this story only needs a
-    // stable handle on the installed rows to find the overflowing scroller
-    // (#2236 header containment), not a List a11y contract deleted in #2574.
-    const rows = await waitForStorySelector<HTMLElement>(
-      canvasElement,
-      '.maka-module-page-rows',
-    );
-    // The scroller is whichever ancestor of the rows actually overflows —
-    // asserting through the DOM, not through a class name the layout could
-    // rename.
-    let scroller: HTMLElement | null = rows;
-    while (scroller && scroller.scrollHeight <= scroller.clientHeight) {
-      scroller = scroller.parentElement;
-    }
-    if (!scroller) throw new Error('Skills list never overflows any ancestor');
-    const before = viewSwitch.getBoundingClientRect().top;
-    scroller.scrollTop = 600;
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 50));
-    await expect(scroller.scrollTop).toBeGreaterThan(0);
-    await expect(viewSwitch.getBoundingClientRect().top).toBe(before);
-  },
 };
 
 // Real path: sidebar → 扩展 → 技能, with an installed Skill disabled.

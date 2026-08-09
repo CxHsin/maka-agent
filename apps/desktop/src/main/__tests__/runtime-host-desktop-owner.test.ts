@@ -40,29 +40,71 @@ test('replaces a disconnected generation without falling back to embedded Runtim
   assert.equal(second.closeCalls, 1);
 });
 
-test('reports exhausted reconnect attempts as fatal and never starts a fallback', { timeout: 10_000 }, async () => {
+test('keeps reconnecting with bounded backoff until the Desktop adapter is restored', async () => {
   const first = candidateHarness();
+  const replacement = candidateHarness();
   let starts = 0;
+  const delays: number[] = [];
+  let resolveRestored!: () => void;
+  const restored = new Promise<void>((resolve) => {
+    resolveRestored = resolve;
+  });
+  const owner = await startRuntimeHostDesktopOwner({} as DesktopRuntimeHostCandidateStartInput, {
+    startCandidate: async (): Promise<DesktopRuntimeHostCandidateStartResult> => {
+      starts += 1;
+      if (starts === 1) return ready(first.candidate);
+      if (starts < 4) return { kind: 'failed', reason: 'host_unresponsive' };
+      resolveRestored();
+      return ready(replacement.candidate);
+    },
+    reconnectBackoff: {
+      minMs: 100,
+      maxMs: 150,
+      random: () => 0.5,
+      wait: async (delayMs) => {
+        delays.push(delayMs);
+      },
+    },
+  });
+
+  first.disconnect();
+  await restored;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(starts, 4);
+  assert.deepEqual(delays, [100, 150]);
+  await owner.handleBotIncomingMessage({ text: 'restored' } as BotIncomingMessage);
+  assert.equal(replacement.botMessages, 1);
+  await owner.close();
+});
+
+test('stops reconnecting when the replacement Host is incompatible', async () => {
+  const first = candidateHarness();
   let reportFatal!: (error: Error) => void;
   const fatalReported = new Promise<Error>((resolve) => {
     reportFatal = resolve;
   });
   const owner = await startRuntimeHostDesktopOwner({} as DesktopRuntimeHostCandidateStartInput, {
-    startCandidate: async (): Promise<DesktopRuntimeHostCandidateStartResult> => {
-      starts += 1;
-      return starts === 1
+    startCandidate: async () =>
+      first.closeCalls === 0
         ? ready(first.candidate)
-        : { kind: 'failed', reason: 'host_unresponsive' };
-    },
-    onFatalError: (error) => {
-      reportFatal(error);
-    },
+        : {
+            kind: 'incompatible',
+            handshake: {
+              kind: 'incompatible',
+              hostEpoch: 'replacement-host',
+              protocolMin: 1,
+              protocolMax: 1,
+              compatibilityEpoch: 1,
+              state: 'ready',
+              replacement: 'wait_for_idle_exit',
+            },
+          },
+    onFatalError: reportFatal,
   });
 
-  first.disconnect();
+  await first.candidate.close();
   const fatal = await fatalReported;
-  assert.equal(starts, 4);
-  assert.match(fatal.message, /host_unresponsive/);
+  assert.match(fatal.message, /incompatible/);
   await owner.close();
 });
 

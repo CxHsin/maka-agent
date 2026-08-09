@@ -39,6 +39,7 @@ import {
   registerRuntimeHostSessionExecutionIpc,
   type RuntimeHostSessionExecutionIpcDeps,
 } from "./runtime-host-session-execution-ipc-main.js";
+import { RuntimeHostSessionObservationRegistry } from "./runtime-host-session-observation-registry.js";
 import { RuntimeHostSessionObserver } from "./runtime-host-session-observer.js";
 
 type CandidateIpcMain = Pick<IpcMain, "handle" | "removeHandler">;
@@ -99,6 +100,7 @@ export interface DesktopRuntimeHostCandidateStartInput extends DesktopRuntimeHos
   readonly connectTimeoutMs?: number;
   readonly handshakeTimeoutMs?: number;
   readonly candidateEntrypoint?: string | URL;
+  readonly signal?: AbortSignal;
 }
 
 export type DesktopRuntimeHostCandidateStartResult =
@@ -127,6 +129,8 @@ class DesktopRuntimeHostCandidateImpl implements DesktopRuntimeHostCandidate {
   readonly #closeNativeCapabilities: () => Promise<void>;
   readonly #closeSessionDomains: () => Promise<void>;
   readonly #disposeClientIpc: (() => void | Promise<void>) | undefined;
+  readonly #detachSessionObservations: () => void;
+  readonly #closeSessionObservations: () => Promise<void>;
   readonly #hasRegisteredCapabilities: () => boolean;
   readonly #stopSession: (sessionId: string) => Promise<void>;
   #closeTask: Promise<void> | undefined;
@@ -139,6 +143,8 @@ class DesktopRuntimeHostCandidateImpl implements DesktopRuntimeHostCandidate {
     closeNativeCapabilities: () => Promise<void>;
     closeSessionDomains: () => Promise<void>;
     disposeClientIpc: (() => void | Promise<void>) | undefined;
+    detachSessionObservations: () => void;
+    closeSessionObservations: () => Promise<void>;
     connectionClosed: Promise<void>;
     hasRegisteredCapabilities: () => boolean;
     stopSession: (sessionId: string) => Promise<void>;
@@ -151,6 +157,8 @@ class DesktopRuntimeHostCandidateImpl implements DesktopRuntimeHostCandidate {
     this.#closeNativeCapabilities = input.closeNativeCapabilities;
     this.#closeSessionDomains = input.closeSessionDomains;
     this.#disposeClientIpc = input.disposeClientIpc;
+    this.#detachSessionObservations = input.detachSessionObservations;
+    this.#closeSessionObservations = input.closeSessionObservations;
     this.#hasRegisteredCapabilities = input.hasRegisteredCapabilities;
     this.#stopSession = input.stopSession;
     this.botIncoming = input.botIncoming;
@@ -182,7 +190,9 @@ class DesktopRuntimeHostCandidateImpl implements DesktopRuntimeHostCandidate {
 
   async #closeConnection(): Promise<void> {
     this.#ipc.close();
+    this.#detachSessionObservations();
     await this.#observer.close().catch(() => undefined);
+    await this.#closeSessionObservations().catch(() => undefined);
     if (this.#hasRegisteredCapabilities()) {
       await this.#client.unregisterClientCapabilities().catch(() => undefined);
     }
@@ -192,6 +202,7 @@ class DesktopRuntimeHostCandidateImpl implements DesktopRuntimeHostCandidate {
 
 export async function startDesktopRuntimeHostCandidate(
   input: DesktopRuntimeHostCandidateStartInput,
+  observationRegistry?: RuntimeHostSessionObservationRegistry,
 ): Promise<DesktopRuntimeHostCandidateStartResult> {
   const connection = await connectOrSpawnRuntimeHost(connectInput(input));
   if (connection.kind !== "connected") return connection;
@@ -205,6 +216,7 @@ export async function startDesktopRuntimeHostCandidate(
       candidate: await createDesktopRuntimeHostCandidate(
         connection.connection,
         input,
+        observationRegistry,
       ),
     };
   } catch (error) {
@@ -235,9 +247,14 @@ async function waitForRuntimeHostReady(
 export async function createDesktopRuntimeHostCandidate(
   connection: RuntimeHostConnection,
   deps: DesktopRuntimeHostCandidateDeps,
+  observationRegistry?: RuntimeHostSessionObservationRegistry,
 ): Promise<DesktopRuntimeHostCandidate> {
   const client = new DesktopRuntimeHostClient(connection);
   const ipc = new ScopedIpcMain(deps.ipcMain);
+  const sessionObservations =
+    observationRegistry ??
+    new RuntimeHostSessionObservationRegistry((error) => deps.onError?.(error));
+  const ownsSessionObservations = observationRegistry === undefined;
   const providers = new Set<DesktopNativeCapabilityProvider>();
   const nativeSessionIds = new Set<string>();
   const releaseNativeResources = async (
@@ -292,6 +309,7 @@ export async function createDesktopRuntimeHostCandidate(
   let observer: RuntimeHostSessionObserver | undefined;
   let closeSessionDomains: (() => Promise<void>) | undefined;
   let disposeClientIpc: (() => void | Promise<void>) | undefined;
+  let observationsAttached = false;
   let capabilitiesRegistered = false;
   try {
     let domains: RuntimeHostSessionDomainsIpcHandle | undefined;
@@ -309,6 +327,8 @@ export async function createDesktopRuntimeHostCandidate(
       ...(deps.now ? { now: deps.now } : {}),
     });
     observer = sessionObserver;
+    await sessionObservations.attach(sessionObserver);
+    observationsAttached = true;
     domains = registerRuntimeHostSessionDomainsIpc(
       {
         client,
@@ -410,6 +430,7 @@ export async function createDesktopRuntimeHostCandidate(
       {
         client,
         observer: sessionObserver,
+        observations: sessionObservations,
         attachmentApprovals: deps.attachmentApprovals,
         emitSessionsChanged: deps.emitSessionsChanged,
         stat: deps.stat,
@@ -441,15 +462,25 @@ export async function createDesktopRuntimeHostCandidate(
       closeNativeCapabilities,
       closeSessionDomains: domains.close,
       disposeClientIpc,
+      detachSessionObservations: () =>
+        sessionObservations.detach(sessionObserver),
+      closeSessionObservations: () =>
+        ownsSessionObservations
+          ? sessionObservations.close()
+          : Promise.resolve(),
       connectionClosed: connection.closed,
       hasRegisteredCapabilities: () => capabilitiesRegistered,
       stopSession,
     });
   } catch (error) {
     ipc.close();
+    if (observationsAttached && observer) sessionObservations.detach(observer);
     await Promise.resolve(disposeClientIpc?.()).catch(() => undefined);
     await closeSessionDomains?.().catch(() => undefined);
     await observer?.close().catch(() => undefined);
+    if (ownsSessionObservations) {
+      await sessionObservations.close().catch(() => undefined);
+    }
     await client.close().catch(() => undefined);
     await closeNativeCapabilities().catch(() => undefined);
     throw error;
@@ -481,6 +512,7 @@ function connectInput(
     ...(input.candidateEntrypoint === undefined
       ? {}
       : { candidateEntrypoint: input.candidateEntrypoint }),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
   };
 }
 

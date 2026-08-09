@@ -372,8 +372,14 @@ export async function runMakaPiTui(input: MakaPiTuiInput): Promise<void> {
       requestRender();
     }) ?? (() => {});
   const unsubscribeTranscriptReplacements =
-    input.driver.subscribeTranscriptReplacements?.((sessionId, turnId, messages) => {
+    input.driver.subscribeTranscriptReplacements?.((sessionId, turnId, messages, reason) => {
       if (closed || input.driver.getSessionId() !== sessionId) return;
+      if (reason === 'reconnect') {
+        replaceTranscriptWithStoredMessages(state, messages);
+        shellRunElapsedTicker.sync();
+        requestRender();
+        return;
+      }
       if (reconcileToolsWithStoredMessages(state, turnId, messages)) {
         shellRunElapsedTicker.sync();
         requestRender();

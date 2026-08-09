@@ -3,14 +3,29 @@ export {
   connectExistingRuntimeHost,
   connectRemoteRuntimeHost,
   RuntimeHostOperationError,
+  RuntimeHostRequestInterruptedError,
   type ConnectRuntimeHostInput,
   type ConnectRuntimeHostResult,
   type ConnectRemoteRuntimeHostInput,
   type ConnectRemoteRuntimeHostResult,
   type RuntimeHostConnection,
+  type RuntimeHostRequestDispatch,
+  type RuntimeHostRequestInterruptionReason,
   type RuntimeHostUnavailableReason,
   type DirectRequestOperationKey,
 } from './connection.js';
+export {
+  createRuntimeHostReconnectingConnection,
+  isRuntimeHostReconnectingConnection,
+  type RuntimeHostReconnectingConnection,
+} from './reconnecting-connection.js';
+export {
+  RuntimeHostPermanentReconnectError,
+  startRuntimeHostReconnectLifecycle,
+  type RuntimeHostReconnectBackoff,
+  type RuntimeHostReconnectLifecycle,
+  type RuntimeHostReconnectResource,
+} from './reconnect-lifecycle.js';
 export {
   RuntimeHostSubscriptionError,
   type RuntimeHostSessionSubscription,

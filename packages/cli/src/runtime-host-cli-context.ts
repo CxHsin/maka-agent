@@ -1,8 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { NO_REAL_CONNECTION_CODE } from '@maka/core';
 import type { ConnectionCatalogEntry, ConnectionCatalogSnapshot } from '@maka/core/runtime-policy';
 import {
   connectOrSpawnRuntimeHost,
+  createRuntimeHostReconnectingConnection,
   readRuntimeHostConnectionCatalog,
+  RuntimeHostPermanentReconnectError,
   type RuntimeHostConnection,
 } from '@maka/runtime-host/client';
 import { RUNTIME_HOST_PROTOCOL_VERSION, type ClientSurface } from '@maka/runtime-host/protocol';
@@ -40,26 +43,41 @@ export async function connectRuntimeHostCli(
     ),
     ...overrides,
   };
-  const connected = await deps.connectOrSpawn({
+  const clientInstanceId = randomUUID();
+  const connectInput = {
     rootPath: input.rootPath,
     surface: input.surface,
     protocol: { min: RUNTIME_HOST_PROTOCOL_VERSION, max: RUNTIME_HOST_PROTOCOL_VERSION },
+    clientInstanceId,
     candidateEntrypoint: deps.executionCandidateEntrypoint,
     ...(input.legacyConfigurationRoot
       ? { legacyConfigurationRoot: input.legacyConfigurationRoot }
       : {}),
+  } as const;
+  const connect = async (signal?: AbortSignal): Promise<RuntimeHostConnection> => {
+    const connected = await deps.connectOrSpawn({ ...connectInput, ...(signal ? { signal } : {}) });
+    if (connected.kind === 'incompatible') {
+      throw new RuntimeHostPermanentReconnectError(
+        `Runtime Host protocol is incompatible (Host ${connected.handshake.protocolMin}-${connected.handshake.protocolMax}, CLI ${RUNTIME_HOST_PROTOCOL_VERSION})`,
+      );
+    }
+    if (connected.kind === 'failed') {
+      throw new Error(`Runtime Host startup failed: ${connected.reason}`);
+    }
+    try {
+      await waitForReady(connected.connection);
+      return connected.connection;
+    } catch (error) {
+      await connected.connection.close().catch(() => undefined);
+      throw error;
+    }
+  };
+  const initialConnection = await connect();
+  const connection = await createRuntimeHostReconnectingConnection({
+    initialConnection,
+    connect,
   });
-  if (connected.kind === 'incompatible') {
-    throw new Error(
-      `Runtime Host protocol is incompatible (Host ${connected.handshake.protocolMin}-${connected.handshake.protocolMax}, CLI ${RUNTIME_HOST_PROTOCOL_VERSION})`,
-    );
-  }
-  if (connected.kind === 'failed') {
-    throw new Error(`Runtime Host startup failed: ${connected.reason}`);
-  }
-  const connection = connected.connection;
   try {
-    await waitForReady(connection);
     return {
       connection,
       catalog: await deps.readConnectionCatalog(connection),

@@ -10,7 +10,11 @@ import {
   tryAcquireInteractiveRootOwner,
 } from '@maka/storage/root-authority';
 import { readHostRegistration } from '../control/registration.js';
-import { connectRuntimeHost, type RuntimeHostConnection } from '../client/index.js';
+import {
+  connectRuntimeHost,
+  RuntimeHostRequestInterruptedError,
+  type RuntimeHostConnection,
+} from '../client/index.js';
 import {
   decodeHostFrame,
   encodeProtocolMessage,
@@ -544,6 +548,55 @@ test('an admitted operation settles without connection or residency leakage afte
   );
 });
 
+test('an admitted command reports an unknown outcome when its connection closes', async () => {
+  const commandEntered = deferred();
+  const releaseCommand = deferred();
+  await withRuntimeHost(
+    async (input) => ({
+      ok: true,
+      result: runningSnapshot(input.sessionId, input.turnId),
+    }),
+    async ({ connectClient }) => {
+      const client = await connectClient();
+      const command = client.startTurn({
+        sessionId: 'session',
+        turnId: 'interrupted-command',
+        content: { text: 'start' },
+      });
+      try {
+        await withTimeout(commandEntered.promise, 1_000, 'command was not admitted');
+        await client.close();
+        await assert.rejects(
+          command,
+          (error: unknown) =>
+            error instanceof RuntimeHostRequestInterruptedError &&
+            error.mode === 'command' &&
+            error.dispatch === 'dispatched' &&
+            error.reason === 'connection_lost' &&
+            !error.retryable,
+        );
+      } finally {
+        releaseCommand.resolve();
+        await Promise.allSettled([command]);
+      }
+    },
+    {
+      'turn.start': async (input) => {
+        commandEntered.resolve();
+        await releaseCommand.promise;
+        return {
+          ok: true,
+          result: {
+            kind: 'started',
+            turn: runningSnapshot(input.sessionId, input.turnId),
+            skillInvocation: { loaded: [], failed: [], receipts: [] },
+          },
+        };
+      },
+    },
+  );
+});
+
 test('a duplicate active request id tears down only the offending connection', async () => {
   const handlerEntered = deferred();
   const releaseHandler = deferred();
@@ -879,6 +932,7 @@ interface RuntimeHostTestFixture {
 async function withRuntimeHost(
   queryTurn: TurnQueryHandler,
   run: (fixture: RuntimeHostTestFixture) => Promise<void>,
+  handlerOverrides: Partial<RuntimeHostComposition['handlers']> = {},
 ): Promise<void> {
   const base = await mkdtemp(join(tmpdir(), 'maka-runtime-host-continuity-'));
   const root = join(base, 'root');
@@ -893,7 +947,7 @@ async function withRuntimeHost(
     owner,
     idleGraceMs: 10_000,
     compositionFactory: async () => ({
-      handlers: createHandlers(queryTurn),
+      handlers: { ...createHandlers(queryTurn), ...handlerOverrides },
       beginDrain() {},
       async recover() {},
       async close() {},

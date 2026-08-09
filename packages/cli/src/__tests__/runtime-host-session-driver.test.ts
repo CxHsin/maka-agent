@@ -9,6 +9,7 @@ import type {
   DirectRequestOperationKey,
   RuntimeHostSessionSubscription,
 } from '@maka/runtime-host/client';
+import { RuntimeHostSubscriptionError } from '@maka/runtime-host/client';
 import type {
   InteractionPendingSnapshot,
   OperationInput,
@@ -132,6 +133,37 @@ describe('Runtime Host Maka Session driver', () => {
       startOffset: 5,
       text: ' world',
     });
+  });
+
+  test('restarts initial hydration when the first connection closes during transcript load', async () => {
+    const transcript = deferred<StoredMessage[]>();
+    const initial = new FakeSubscription(continuitySnapshot(), transcript.promise);
+    const replacementMessages = [assistantMessage('turn-1', 'Canonical replacement')];
+    const replacement = new FakeSubscription(
+      continuitySnapshot({ projectionRevision: 2 }),
+      Promise.resolve(replacementMessages),
+      'subscription-2',
+    );
+    const connection = new FakeConnection([initial, replacement], true);
+    const driver = createRuntimeHostMakaSessionDriver({
+      connection: connection.value,
+      cwd: '/tmp',
+      llmConnectionSlug: 'openai-main',
+      model: 'gpt-5',
+    });
+
+    const switching = driver.switchSession('session-1');
+    await waitFor(() => initial.nextCalls > 0);
+    const disconnected = new RuntimeHostSubscriptionError(
+      'connection_closed',
+      'connection closed during initial hydration',
+    );
+    initial.fail(disconnected);
+    transcript.reject(disconnected);
+
+    const switched = await switching;
+    assert.deepEqual(switched.messages, replacementMessages);
+    assert.equal(connection.openedSubscriptions, 2);
   });
 
   test('drains the active cut when its turn completes during transcript load', async () => {
@@ -840,6 +872,41 @@ describe('Runtime Host Maka Session driver', () => {
 
     assert.deepEqual(await replacement.promise, durableMessages);
   });
+
+  test('resnapshots an active Session after reconnect and continues its live stream', async () => {
+    const initial = new FakeSubscription(
+      continuitySnapshot(),
+      Promise.resolve([assistantMessage('turn-1', 'Hello')]),
+    );
+    const replacement = new FakeSubscription(
+      continuitySnapshot({ projectionRevision: 2 }),
+      Promise.resolve([assistantMessage('turn-1', 'Hello world')]),
+      'subscription-2',
+    );
+    const connection = new FakeConnection([initial, replacement], true);
+    const driver = createRuntimeHostMakaSessionDriver({
+      connection: connection.value,
+      cwd: '/tmp',
+      llmConnectionSlug: 'openai-main',
+      model: 'gpt-5',
+      now: () => 50,
+    });
+    const switched = await driver.switchSession('session-1');
+    assert.ok(switched.activeTurn);
+    const transcript = deferred<StoredMessage[]>();
+    driver.subscribeTranscriptReplacements!((_sessionId, _turnId, messages, reason) => {
+      assert.equal(reason, 'reconnect');
+      transcript.resolve(messages);
+    });
+
+    initial.fail(
+      new RuntimeHostSubscriptionError('connection_closed', 'connection lost during active Turn'),
+    );
+    assert.deepEqual(await transcript.promise, [assistantMessage('turn-1', 'Hello world')]);
+    assert.equal(connection.openedSubscriptions, 2);
+    replacement.push(deltaFrame(1, 'turn-1', 11, '!', 'subscription-2'));
+    assert.equal((await nextEvent(switched.activeTurn.events)).text, '!');
+  });
 });
 
 class FakeConnection {
@@ -851,8 +918,12 @@ class FakeConnection {
   skillStartBlocked = false;
   readonly value: RuntimeHostMakaSessionDriverInput['connection'];
 
-  constructor(private readonly subscriptions: FakeSubscription[]) {
+  constructor(
+    private readonly subscriptions: FakeSubscription[],
+    reconnecting = false,
+  ) {
     this.value = {
+      ...(reconnecting ? { reconnecting: true as const } : {}),
       hostEpoch: 'host-1',
       request: <K extends DirectRequestOperationKey>(operation: K, input: OperationInput<K>) =>
         this.request(operation, input),
@@ -953,9 +1024,13 @@ class FakeSubscription implements RuntimeHostSessionSubscription, AsyncIterator<
   readonly hostEpoch = 'host-1';
   readonly subscriptionId: string;
   readonly #frames: SubscriptionFrame[] = [];
-  readonly #waiters: Array<(result: IteratorResult<SubscriptionFrame>) => void> = [];
+  readonly #waiters: Array<{
+    resolve(result: IteratorResult<SubscriptionFrame>): void;
+    reject(error: Error): void;
+  }> = [];
   nextCalls = 0;
   #closed = false;
+  #failure: Error | undefined;
 
   constructor(
     readonly snapshot: SessionContinuitySnapshot,
@@ -973,14 +1048,20 @@ class FakeSubscription implements RuntimeHostSessionSubscription, AsyncIterator<
     this.nextCalls += 1;
     const frame = this.#frames.shift();
     if (frame) return Promise.resolve({ done: false, value: frame });
+    if (this.#failure) return Promise.reject(this.#failure);
     if (this.#closed) return Promise.resolve({ done: true, value: undefined });
-    return new Promise((resolve) => this.#waiters.push(resolve));
+    return new Promise((resolve, reject) => this.#waiters.push({ resolve, reject }));
   }
 
   push(frame: SubscriptionFrame): void {
     const waiter = this.#waiters.shift();
-    if (waiter) waiter({ done: false, value: frame });
+    if (waiter) waiter.resolve({ done: false, value: frame });
     else this.#frames.push(frame);
+  }
+
+  fail(error: Error): void {
+    this.#failure = error;
+    for (const waiter of this.#waiters.splice(0)) waiter.reject(error);
   }
 
   async loadTranscript<T>(decodeMessage: (value: unknown) => T): Promise<T[]> {
@@ -989,7 +1070,9 @@ class FakeSubscription implements RuntimeHostSessionSubscription, AsyncIterator<
 
   async close(): Promise<void> {
     this.#closed = true;
-    for (const waiter of this.#waiters.splice(0)) waiter({ done: true, value: undefined });
+    for (const waiter of this.#waiters.splice(0)) {
+      waiter.resolve({ done: true, value: undefined });
+    }
   }
 }
 
@@ -1170,12 +1253,18 @@ function sequenceIds(...ids: string[]): () => string {
   return () => ids[index++] ?? `id-${index}`;
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: unknown): void;
+} {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((settle) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((settle, fail) => {
     resolve = settle;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

@@ -55,8 +55,8 @@ export const RUNTIME_HOST_PROTOCOL_VERSION = 0 as const;
 // The wire version remains v0 before the first release. This independent epoch
 // lets a new Client retire a stale same-version Host whose closed schema is no
 // longer safe to use.
-// 10: request header operations and transport-safe credential export changed the closed schema.
-export const RUNTIME_HOST_COMPATIBILITY_EPOCH = 10 as const;
+// 11: authenticated root identity and admission authorization changed the closed schema.
+export const RUNTIME_HOST_COMPATIBILITY_EPOCH = 11 as const;
 // A legal sandbox-boundary expansion can consume 64 KiB before its Interaction
 // envelope and independently bounded justification are added. Keep transport
 // capacity large enough to represent that domain value; narrower surfaces such
@@ -89,6 +89,7 @@ export interface ClientHello {
 
 export interface HostAccepted {
   kind: 'accepted';
+  rootId: string;
   hostEpoch: string;
   connectionId: string;
   selectedProtocol: number;
@@ -187,6 +188,7 @@ export function decodeHostFrame(value: unknown): HostFrame {
   if (frame.kind === 'accepted') {
     return {
       kind: 'accepted',
+      rootId: requireId(frame.rootId, 'rootId'),
       hostEpoch: requireId(frame.hostEpoch, 'hostEpoch'),
       connectionId: requireId(frame.connectionId, 'connectionId'),
       selectedProtocol: requireProtocolVersion(frame.selectedProtocol, 'selectedProtocol'),

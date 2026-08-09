@@ -29,7 +29,8 @@ export class RuntimeHostTransportError extends Error {
       | 'read_eof'
       | 'read_timeout'
       | 'concurrent_read'
-      | 'inbound_queue_full',
+      | 'inbound_queue_full'
+      | 'outbound_queue_full',
     message: string,
     options?: ErrorOptions,
   ) {

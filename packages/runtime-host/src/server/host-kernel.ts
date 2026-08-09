@@ -34,6 +34,11 @@ import {
   type OperationResidency,
   type OperationHandlerMap,
 } from './operation-dispatcher.js';
+import {
+  issueAccessCredential,
+  revokeAccessCredential,
+  type RuntimeHostAccessAuthority,
+} from './access-authority.js';
 import type { SessionContinuityService } from './session-continuity-service.js';
 import type { ClientCapabilityService } from './client-capability-service.js';
 import type { HostConfigurationChangeService } from './configuration-change-service.js';
@@ -98,6 +103,7 @@ interface RuntimeHostKernelCommonOptions {
   shutdownGraceMs?: number;
   compositionFactory?: RuntimeHostCompositionFactory;
   listenerSetFactory?: RuntimeHostListenerSetFactory;
+  accessAuthority?: RuntimeHostAccessAuthority;
 }
 
 export type RuntimeHostLifecycleMode = 'ephemeral' | 'service';
@@ -120,6 +126,10 @@ export class RuntimeHostKernel {
   readonly #handshakingTransports = new Set<RuntimeHostMessageTransport>();
   readonly #acceptedTransports = new Set<RuntimeHostMessageTransport>();
   readonly #connectionSessions = new Set<RuntimeHostConnectionSession>();
+  readonly #transportAuthorities = new Map<
+    RuntimeHostMessageTransport,
+    RuntimeHostListenerConnection['authority']
+  >();
   readonly #operationDrainWaiters = new Set<() => void>();
   readonly #residencyDrainWaiters = new Set<() => void>();
   readonly #lifecycle: RuntimeHostLifecycle;
@@ -142,6 +152,7 @@ export class RuntimeHostKernel {
   #terminationRequired: RuntimeHostProcessTerminationRequiredError | undefined;
   #resolveClosed!: () => void;
   #rejectClosed!: (error: unknown) => void;
+  readonly #unsubscribeAccessRevocations: (() => void) | undefined;
 
   private constructor(options: RuntimeHostKernelOptions) {
     this.#lifecycle = normalizeLifecycle(options);
@@ -154,6 +165,9 @@ export class RuntimeHostKernel {
     this.#handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
     this.#shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
     this.#options = options;
+    this.#unsubscribeAccessRevocations = options.accessAuthority?.subscribeRevocations(
+      (credentialId) => this.#revokeCredentialConnections(credentialId),
+    );
     this.#operationHandlers = this.#createOperationHandlers(
       createUnavailableDomainOperationHandlers(),
     );
@@ -202,6 +216,10 @@ export class RuntimeHostKernel {
     return this.#acceptedTransports.size;
   }
 
+  get websocketEndpoints(): readonly string[] {
+    return this.#listeners?.websocketEndpoints ?? [];
+  }
+
   close(): Promise<void> {
     this.#requestDrain();
     return this.closed;
@@ -223,6 +241,7 @@ export class RuntimeHostKernel {
       rootId: this.#options.owner.capability.rootId,
       hostEpoch: this.hostEpoch,
       accept: (connection) => this.#accept(connection),
+      isReady: () => this.#state === 'ready' && !this.#shutdownRequested,
     });
     await this.#publishRegistration();
     const compositionFactory = this.#options.compositionFactory;
@@ -263,9 +282,11 @@ export class RuntimeHostKernel {
 
   #accept(connection: RuntimeHostListenerConnection): void {
     const { transport } = connection;
+    this.#transportAuthorities.set(transport, connection.authority);
     this.#handshakingTransports.add(transport);
     void this.#serveConnection(connection).finally(() => {
       this.#handshakingTransports.delete(transport);
+      this.#transportAuthorities.delete(transport);
     });
   }
 
@@ -358,6 +379,7 @@ export class RuntimeHostKernel {
     this.#cancelIdle();
     return {
       kind: 'accepted',
+      rootId: this.#options.owner.capability.rootId,
       hostEpoch: this.hostEpoch,
       connectionId: randomUUID(),
       selectedProtocol,
@@ -371,6 +393,12 @@ export class RuntimeHostKernel {
       throw new Error('Runtime Host connection residency underflow');
     }
     this.#settleLifecycleAfterWork();
+  }
+
+  #revokeCredentialConnections(credentialId: string): void {
+    for (const [transport, authority] of this.#transportAuthorities) {
+      if (authority.credentialId === credentialId) transport.abort();
+    }
   }
 
   async #beginOperation(
@@ -495,6 +523,10 @@ export class RuntimeHostKernel {
             logs: runtimeHostLogBuffer.snapshot(),
           },
         }),
+        'access.credential.issue': async (input) =>
+          issueAccessCredential(this.#options.accessAuthority, input),
+        'access.credential.revoke': async (input) =>
+          revokeAccessCredential(this.#options.accessAuthority, input),
       },
       domainHandlers,
     );
@@ -612,6 +644,7 @@ export class RuntimeHostKernel {
 
   async #closeResources(): Promise<void> {
     const errors: unknown[] = [];
+    this.#unsubscribeAccessRevocations?.();
     // Stop new admissions before any asynchronous shutdown bookkeeping. The
     // shutdown deadline may expire while publishing the draining registration;
     // leaving the listener open in that case strands an unreachable, ref'ed
@@ -662,6 +695,7 @@ export class RuntimeHostKernel {
 
   async #abortStartup(): Promise<void> {
     this.#state = 'draining';
+    this.#unsubscribeAccessRevocations?.();
     for (const transport of this.#handshakingTransports) transport.abort();
     for (const transport of this.#acceptedTransports) transport.abort();
     await this.#listeners?.closeAdmission().catch(() => undefined);

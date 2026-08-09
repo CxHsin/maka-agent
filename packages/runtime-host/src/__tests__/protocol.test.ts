@@ -47,8 +47,10 @@ describe('Runtime Host bootstrap protocol', () => {
 
   test('keeps the experimental protocol at v0 with the declared authority operations', () => {
     assert.equal(RUNTIME_HOST_PROTOCOL_VERSION, 0);
-    assert.equal(RUNTIME_HOST_COMPATIBILITY_EPOCH, 10);
+    assert.equal(RUNTIME_HOST_COMPATIBILITY_EPOCH, 11);
     assert.deepEqual(Object.keys(HOST_OPERATION_SPECS).sort(), [
+      'access.credential.issue',
+      'access.credential.revoke',
       'agent.graph.operator.query',
       'agent.graph.query',
       'agent.graph.stop',
@@ -727,6 +729,7 @@ describe('Runtime Host bootstrap protocol', () => {
     );
     const accepted = {
       kind: 'accepted' as const,
+      rootId: 'a'.repeat(64),
       hostEpoch: 'epoch-1',
       connectionId: 'connection-1',
       selectedProtocol: RUNTIME_HOST_PROTOCOL_VERSION,

@@ -1,6 +1,10 @@
 import { startLocalIpcRuntimeHostListener } from './local-ipc-listener.js';
 import type { RuntimeHostMessageTransport } from '../transport/message-transport.js';
 import type { RuntimeHostConnectionAuthority } from './connection-authority.js';
+import {
+  startRuntimeHostWebSocketListener,
+  type StartRuntimeHostWebSocketListenerOptions,
+} from './websocket-listener.js';
 
 export interface RuntimeHostListenerConnection {
   readonly transport: RuntimeHostMessageTransport;
@@ -19,6 +23,7 @@ export type RuntimeHostListenerKind = 'local_ipc' | 'websocket';
 export interface RuntimeHostListenerSet {
   readonly listeners: readonly RuntimeHostListener[];
   readonly localEndpoint: string;
+  readonly websocketEndpoints: readonly string[];
   closeAdmission(): Promise<void>;
   cleanup(): Promise<void>;
 }
@@ -27,6 +32,7 @@ export interface RuntimeHostListenerSetFactoryInput {
   readonly rootId: string;
   readonly hostEpoch: string;
   readonly accept: (connection: RuntimeHostListenerConnection) => void;
+  readonly isReady: () => boolean;
 }
 
 export type RuntimeHostListenerSetFactory = (
@@ -40,6 +46,25 @@ export async function startLocalRuntimeHostListenerSet(
   return createRuntimeHostListenerSet(local);
 }
 
+export async function startRuntimeHostServiceListenerSet(
+  input: RuntimeHostListenerSetFactoryInput,
+  websocket: Omit<StartRuntimeHostWebSocketListenerOptions, 'accept' | 'isReady'>,
+): Promise<RuntimeHostListenerSet> {
+  const local = await startLocalIpcRuntimeHostListener(input);
+  try {
+    const remote = await startRuntimeHostWebSocketListener({
+      ...websocket,
+      accept: input.accept,
+      isReady: input.isReady,
+    });
+    return createRuntimeHostListenerSet(local, [remote]);
+  } catch (error) {
+    await local.closeAdmission().catch(() => undefined);
+    await local.cleanup().catch(() => undefined);
+    throw error;
+  }
+}
+
 export function createRuntimeHostListenerSet(
   local: RuntimeHostListener & { readonly kind: 'local_ipc' },
   additional: readonly RuntimeHostListener[] = [],
@@ -48,6 +73,11 @@ export function createRuntimeHostListenerSet(
   return {
     listeners,
     localEndpoint: local.endpoint,
+    websocketEndpoints: Object.freeze(
+      additional
+        .filter((listener) => listener.kind === 'websocket')
+        .map((listener) => listener.endpoint),
+    ),
     closeAdmission: () => settleListeners(listeners, (listener) => listener.closeAdmission()),
     cleanup: () => settleListeners([...listeners].reverse(), (listener) => listener.cleanup()),
   };

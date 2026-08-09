@@ -153,8 +153,8 @@ describe('Usage/Pricing client response correlation', () => {
       skip: process.platform === 'win32',
     }, async () => {
       await withProtocolPeer(
-        async (transport, hostEpoch) => {
-          const request = await acceptConnectionAndReadRequest(transport, hostEpoch);
+        async (transport, hostEpoch, rootId) => {
+          const request = await acceptConnectionAndReadRequest(transport, hostEpoch, rootId);
           assert.equal(request.operation, mismatch.operation);
           await writeHostFrame(transport, {
             requestId: request.requestId,
@@ -178,8 +178,8 @@ describe('Usage/Pricing client response correlation', () => {
     skip: process.platform === 'win32',
   }, async () => {
     await withProtocolPeer(
-      async (transport, hostEpoch) => {
-        const request = await acceptConnectionAndReadRequest(transport, hostEpoch);
+      async (transport, hostEpoch, rootId) => {
+        const request = await acceptConnectionAndReadRequest(transport, hostEpoch, rootId);
         assert.equal(request.operation, 'usage.query');
         assert.deepEqual(request.input, {
           kind: 'logs',
@@ -251,7 +251,7 @@ function requestUnchecked(
 }
 
 async function withProtocolPeer(
-  serve: (transport: FramedTransport, hostEpoch: string) => Promise<void>,
+  serve: (transport: FramedTransport, hostEpoch: string, rootId: string) => Promise<void>,
   run: (connection: RuntimeHostConnection) => Promise<void>,
 ): Promise<void> {
   const base = await mkdtemp(join(tmpdir(), 'maka-usage-pricing-correlation-'));
@@ -270,7 +270,10 @@ async function withProtocolPeer(
     rejectServer = reject;
   });
   const server = createServer((socket) => {
-    void serve(new FramedTransport(socket), hostEpoch).then(resolveServer, rejectServer);
+    void serve(new FramedTransport(socket), hostEpoch, capability.rootId).then(
+      resolveServer,
+      rejectServer,
+    );
   });
   try {
     await listen(server, endpoint.path);
@@ -312,11 +315,13 @@ async function withProtocolPeer(
 async function acceptConnectionAndReadRequest(
   transport: FramedTransport,
   hostEpoch: string,
+  rootId: string,
 ): Promise<RequestFrame> {
   const hello = decodeClientFrame(await transport.read(REQUEST_TIMEOUT_MS));
   assert.ok('kind' in hello && hello.kind === 'hello');
   await writeHostFrame(transport, {
     kind: 'accepted',
+    rootId,
     hostEpoch,
     connectionId: 'usage-pricing-correlation',
     selectedProtocol: RUNTIME_HOST_PROTOCOL_VERSION,

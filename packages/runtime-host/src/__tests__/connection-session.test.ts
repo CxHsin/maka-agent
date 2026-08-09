@@ -26,6 +26,7 @@ import { RuntimeHostKernel, type RuntimeHostComposition } from '../server/index.
 import { LOCAL_OWNER_CONNECTION_AUTHORITY } from '../server/connection-authority.js';
 import { RuntimeHostConnectionSession } from '../server/connection-session.js';
 import {
+  createUnavailableAccessAuthorityOperationHandlers,
   createUnavailableDomainOperationHandlers,
   type OperationHandlerMap,
 } from '../server/operation-dispatcher.js';
@@ -357,6 +358,7 @@ test('connection reset while operation admission is pending does not execute the
       },
     }),
     ...UNUSED_HOST_DIAGNOSTICS_HANDLER,
+    ...createUnavailableAccessAuthorityOperationHandlers(),
     ...createHandlers(async (input) => {
       handlerCalls += 1;
       return {
@@ -600,6 +602,7 @@ test('an in-flight status does not consume the final domain request slot', async
       };
     },
     ...UNUSED_HOST_DIAGNOSTICS_HANDLER,
+    ...createUnavailableAccessAuthorityOperationHandlers(),
     ...createHandlers(async (input) => {
       const index = Number(input.turnId.slice('turn-'.length));
       domainEntered[index]?.resolve();
@@ -695,6 +698,7 @@ test('evicting one slow subscription keeps sibling subscriptions and requests us
       },
     }),
     ...UNUSED_HOST_DIAGNOSTICS_HANDLER,
+    ...createUnavailableAccessAuthorityOperationHandlers(),
     ...createHandlers(async (input) => ({
       ok: true,
       result: runningSnapshot(input.sessionId, input.turnId),
@@ -928,6 +932,7 @@ async function openHalfClosedDispatchedSession(
         },
       }),
       ...UNUSED_HOST_DIAGNOSTICS_HANDLER,
+      ...createUnavailableAccessAuthorityOperationHandlers(),
       ...createHandlers(async (input) => {
         handlerEntered.resolve();
         await releaseHandler.promise;

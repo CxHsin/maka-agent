@@ -33,6 +33,11 @@ import type {
   SessionCatalogChangeConnection,
 } from './session-catalog-change-service.js';
 import type { RuntimeHostConnectionAuthority } from './connection-authority.js';
+import {
+  authorizeClientCapabilityFrame,
+  authorizeRuntimeHostOperation,
+  hasRuntimeHostOperationGrant,
+} from './connection-authority.js';
 
 type AcceptedConnectionContext = Omit<ConnectionContext, 'acquireResidency' | 'principal'> & {
   readonly clientInstanceId: string;
@@ -122,7 +127,14 @@ export class RuntimeHostConnectionSession {
       const frame = decodeClientFrame(await this.#options.transport.read(0));
       if ('kind' in frame) {
         if (isClientCapabilityClientFrameKind(frame.kind)) {
-          this.#ensureClientCapabilities()?.accept(frame as ClientCapabilityClientFrame);
+          const capabilityFrame = frame as ClientCapabilityClientFrame;
+          if (
+            !authorizeClientCapabilityFrame(this.#options.connection.authority, capabilityFrame)
+          ) {
+            this.#teardown();
+            return;
+          }
+          this.#ensureClientCapabilities()?.accept(capabilityFrame);
           continue;
         }
         throw new Error('Unexpected handshake frame after acceptance');
@@ -155,6 +167,13 @@ export class RuntimeHostConnectionSession {
   }
 
   async #handleRequest(frame: RequestFrame): Promise<void> {
+    if (!authorizeRuntimeHostOperation(this.#options.connection.authority, frame)) {
+      if (this.#closed) return;
+      await this.#writer.enqueue(
+        operationFailureResponse(frame, 'unauthorized', 'Runtime Host operation is not authorized'),
+      ).flushed;
+      return;
+    }
     const admission = await this.#options.beginOperation(frame);
     if (typeof admission === 'string') {
       if (this.#closed) return;
@@ -262,6 +281,9 @@ export class RuntimeHostConnectionSession {
   }
 
   #attachConfigurationChanges(): void {
+    if (!hasRuntimeHostOperationGrant(this.#options.connection.authority, 'runtime.policy.query')) {
+      return;
+    }
     const service = this.#options.resolveConfigurationChanges?.();
     if (!service || this.#configurationChanges) return;
     this.#configurationChanges = service.attachConnection(this.#options.connection.connectionId, {
@@ -287,6 +309,11 @@ export class RuntimeHostConnectionSession {
   }
 
   #attachSessionCatalogChanges(): void {
+    if (
+      !hasRuntimeHostOperationGrant(this.#options.connection.authority, 'session.catalog.query')
+    ) {
+      return;
+    }
     const service = this.#options.resolveSessionCatalogChanges?.();
     if (!service || this.#sessionCatalogChanges) return;
     this.#sessionCatalogChanges = service.attachConnection(this.#options.connection.connectionId, {

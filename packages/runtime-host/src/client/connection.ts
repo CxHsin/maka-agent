@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { connect } from 'node:net';
 import { performance } from 'node:perf_hooks';
+import WebSocket from 'ws';
 import {
   discoverMarkedStorageRoot,
   prepareStorageRootControlDirectory,
@@ -37,6 +38,7 @@ import {
   HOST_OPERATION_SPECS,
   RUNTIME_HOST_COMPATIBILITY_EPOCH,
   RUNTIME_HOST_MAX_IN_FLIGHT_DOMAIN_REQUESTS,
+  RUNTIME_HOST_MAX_MESSAGE_BYTES,
   type OperationInput,
   type OperationKey,
   type OperationOutput,
@@ -71,6 +73,7 @@ import {
 } from '../protocol/index.js';
 import { FramedTransport, RuntimeHostTransportError } from '../transport/framed-transport.js';
 import type { RuntimeHostMessageTransport } from '../transport/message-transport.js';
+import { WebSocketTransport } from '../transport/websocket-transport.js';
 import type { OperationSpec } from '../protocol/operation-spec.js';
 import {
   ClientSessionSubscription,
@@ -84,6 +87,8 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 500;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 2_000;
 const DEFAULT_LIVENESS_INTERVAL_MS = 2_000;
 const DEFAULT_LIVENESS_TIMEOUT_MS = 2_000;
+const MAX_WEBSOCKET_FRAGMENTS = 256;
+const MAX_WEBSOCKET_BUFFERED_CHUNKS = 256;
 
 export interface ConnectRuntimeHostInput {
   rootPath: string;
@@ -134,6 +139,28 @@ export type ConnectRuntimeHostResult =
       registration?: HostRegistration;
     };
 
+export interface ConnectRemoteRuntimeHostInput {
+  readonly url: string;
+  readonly credential: string;
+  readonly expectedRootId?: string;
+  readonly surface: ClientSurface;
+  readonly protocol: ProtocolRange;
+  readonly clientInstanceId?: string;
+  readonly connectTimeoutMs?: number;
+  readonly handshakeTimeoutMs?: number;
+  readonly livenessIntervalMs?: number;
+  readonly onLivenessProbe?: () => void;
+}
+
+export type ConnectRemoteRuntimeHostResult =
+  | { kind: 'connected'; connection: RuntimeHostConnection }
+  | { kind: 'incompatible'; handshake: HostIncompatible }
+  | { kind: 'draining' }
+  | {
+      kind: 'unavailable';
+      reason: 'connect_failed' | 'handshake_failed' | 'root_mismatch';
+    };
+
 type ConnectResolvedRuntimeHostResult =
   | ConnectRuntimeHostResult
   | {
@@ -157,6 +184,7 @@ interface ConnectResolvedRuntimeHostInput
 }
 
 export interface RuntimeHostConnection {
+  readonly rootId: string;
   readonly hostEpoch: string;
   readonly connectionId: string;
   readonly selectedProtocol: number;
@@ -257,6 +285,7 @@ interface QueuedDomainFrame {
 type RequestTimeoutScope = 'request' | 'connection';
 
 class RuntimeHostConnectionImpl implements RuntimeHostConnection {
+  readonly rootId: string;
   readonly hostEpoch: string;
   readonly connectionId: string;
   readonly selectedProtocol: number;
@@ -280,6 +309,7 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
   constructor(
     transport: RuntimeHostMessageTransport,
     accepted: {
+      rootId: string;
       hostEpoch: string;
       connectionId: string;
       selectedProtocol: number;
@@ -291,6 +321,7 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
     this.#livenessIntervalMs = options?.livenessIntervalMs ?? DEFAULT_LIVENESS_INTERVAL_MS;
     this.#onLivenessProbe = options?.onLivenessProbe;
     this.#transport = transport;
+    this.rootId = accepted.rootId;
     this.hostEpoch = accepted.hostEpoch;
     this.connectionId = accepted.connectionId;
     this.selectedProtocol = accepted.selectedProtocol;
@@ -898,10 +929,58 @@ export async function connectExistingRuntimeHost(
   );
 }
 
-function normalizeConnectRuntimeHostInput(input: ConnectRuntimeHostInput): {
+export async function connectRemoteRuntimeHost(
+  input: ConnectRemoteRuntimeHostInput,
+): Promise<ConnectRemoteRuntimeHostResult> {
+  const normalized = normalizeConnectRuntimeHostInput(input);
+  const url = requireRemoteWebSocketUrl(input.url);
+  let transport: WebSocketTransport;
+  try {
+    transport = await openWebSocketTransport(url, input.credential, normalized.connectTimeoutMs);
+  } catch {
+    return { kind: 'unavailable', reason: 'connect_failed' };
+  }
+  const timer = setTimeout(() => {
+    transport.abort(new Error('Timed out handshaking with Runtime Host'));
+  }, normalized.handshakeTimeoutMs);
+  try {
+    const result = await exchangeRuntimeHostHandshake({
+      transport,
+      surface: input.surface,
+      protocol: input.protocol,
+      clientInstanceId: normalized.clientInstanceId,
+      expectedRootId: input.expectedRootId,
+      livenessIntervalMs: normalized.livenessIntervalMs,
+      onLivenessProbe: input.onLivenessProbe,
+    });
+    if (result.kind === 'connected') return result;
+    transport.abort();
+    return result.kind === 'incompatible' ? result : { kind: 'draining' };
+  } catch (error) {
+    transport.abort();
+    if (error instanceof RuntimeHostRootMismatchError) {
+      return { kind: 'unavailable', reason: 'root_mismatch' };
+    }
+    return { kind: 'unavailable', reason: 'handshake_failed' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeConnectRuntimeHostInput(
+  input: Pick<
+    ConnectRuntimeHostInput,
+    | 'protocol'
+    | 'clientInstanceId'
+    | 'connectTimeoutMs'
+    | 'handshakeTimeoutMs'
+    | 'livenessIntervalMs'
+  >,
+): {
   clientInstanceId: string;
   connectTimeoutMs: number;
   handshakeTimeoutMs: number;
+  livenessIntervalMs: number;
 } {
   validateProtocolRange(input.protocol);
   return {
@@ -913,6 +992,10 @@ function normalizeConnectRuntimeHostInput(input: ConnectRuntimeHostInput): {
     handshakeTimeoutMs: requireTimeout(
       input.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS,
       'handshakeTimeoutMs',
+    ),
+    livenessIntervalMs: requireTimeout(
+      input.livenessIntervalMs ?? DEFAULT_LIVENESS_INTERVAL_MS,
+      'livenessIntervalMs',
     ),
   };
 }
@@ -1011,61 +1094,34 @@ export async function connectResolvedRuntimeHost(
           max: Math.min(Number.MAX_SAFE_INTEGER, registration.protocolMax + 1),
         }
       : input.protocol;
-    await writeClientFrame(transport, {
-      kind: 'hello',
-      clientInstanceId: input.clientInstanceId,
+    const result = await exchangeRuntimeHostHandshake({
+      transport,
       surface: input.surface,
-      protocolMin: helloProtocol.min,
-      protocolMax: helloProtocol.max,
-      compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
+      protocol: input.protocol,
+      helloProtocol,
+      clientInstanceId: input.clientInstanceId,
+      expectedHostEpoch: registration.hostEpoch,
+      expectedRootId: registration.rootId,
+      hostProtocol: { min: registration.protocolMin, max: registration.protocolMax },
+      livenessIntervalMs,
+      onLivenessProbe: input.onLivenessProbe,
     });
-    if (remainingTimeout(handshakeDeadline.at) === undefined) {
-      throw handshakeDeadline.exhaustsElection
-        ? new ElectionDeadlineElapsedError()
-        : new Error('Runtime Host handshake deadline elapsed');
-    }
-    // The phase timer owns the full hello write/read deadline and its timeout classification.
-    const handshake = decodeHostFrame(await transport.read(0));
-    if (!('kind' in handshake))
-      throw new Error('Runtime Host returned an operation response before handshake');
-    if (
-      handshake.kind !== 'accepted' &&
-      handshake.kind !== 'incompatible' &&
-      handshake.kind !== 'draining'
-    ) {
-      throw new Error('Runtime Host returned a non-handshake frame before acceptance');
-    }
-    if (handshake.hostEpoch !== registration.hostEpoch) {
-      transport.abort();
-      return { kind: 'unavailable', reason: 'epoch_mismatch', registration };
-    }
-    if (handshake.kind === 'accepted') {
-      if (staleCompatibility || handshake.compatibilityEpoch !== RUNTIME_HOST_COMPATIBILITY_EPOCH) {
-        throw new Error('Runtime Host accepted an incompatible schema epoch');
-      }
-      if (
-        handshake.selectedProtocol < input.protocol.min ||
-        handshake.selectedProtocol > input.protocol.max ||
-        handshake.selectedProtocol < registration.protocolMin ||
-        handshake.selectedProtocol > registration.protocolMax
-      ) {
-        throw new Error('Runtime Host selected a protocol outside the negotiated range');
-      }
-      return {
-        kind: 'connected',
-        registration,
-        connection: new RuntimeHostConnectionImpl(transport, handshake, {
-          livenessIntervalMs,
-          onLivenessProbe: input.onLivenessProbe,
-        }),
-      };
+    if (result.kind === 'connected') {
+      return { ...result, registration };
     }
     transport.abort();
-    if (handshake.kind === 'incompatible') return { kind: 'incompatible', handshake, registration };
-    return { kind: 'draining', registration };
+    return result.kind === 'incompatible'
+      ? { ...result, registration }
+      : { kind: 'draining', registration };
   } catch (error) {
     transport.abort();
     const failure = handshakeTimeoutError ?? error;
+    if (failure instanceof RuntimeHostEpochMismatchError) {
+      return { kind: 'unavailable', reason: 'epoch_mismatch', registration };
+    }
+    if (failure instanceof RuntimeHostRootMismatchError) {
+      return { kind: 'unavailable', reason: 'root_mismatch', registration };
+    }
     if (failure instanceof ElectionDeadlineElapsedError) {
       return { kind: 'election_deadline_elapsed', endpointConnected: true };
     }
@@ -1073,6 +1129,133 @@ export async function connectResolvedRuntimeHost(
   } finally {
     clearTimeout(handshakeTimer);
   }
+}
+
+interface ExchangeRuntimeHostHandshakeInput {
+  readonly transport: RuntimeHostMessageTransport;
+  readonly surface: ClientSurface;
+  readonly protocol: ProtocolRange;
+  readonly helloProtocol?: ProtocolRange;
+  readonly hostProtocol?: ProtocolRange;
+  readonly clientInstanceId: string;
+  readonly expectedHostEpoch?: string;
+  readonly expectedRootId?: string;
+  readonly livenessIntervalMs?: number;
+  readonly onLivenessProbe?: () => void;
+}
+
+async function exchangeRuntimeHostHandshake(
+  input: ExchangeRuntimeHostHandshakeInput,
+): Promise<
+  | { kind: 'connected'; connection: RuntimeHostConnection }
+  | { kind: 'incompatible'; handshake: HostIncompatible }
+  | { kind: 'draining' }
+> {
+  const helloProtocol = input.helloProtocol ?? input.protocol;
+  await writeClientFrame(input.transport, {
+    kind: 'hello',
+    clientInstanceId: input.clientInstanceId,
+    surface: input.surface,
+    protocolMin: helloProtocol.min,
+    protocolMax: helloProtocol.max,
+    compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
+  });
+  const handshake = decodeHostFrame(await input.transport.read(0));
+  if (!('kind' in handshake)) {
+    throw new Error('Runtime Host returned an operation response before handshake');
+  }
+  if (
+    handshake.kind !== 'accepted' &&
+    handshake.kind !== 'incompatible' &&
+    handshake.kind !== 'draining'
+  ) {
+    throw new Error('Runtime Host returned a non-handshake frame before acceptance');
+  }
+  if (input.expectedHostEpoch && handshake.hostEpoch !== input.expectedHostEpoch) {
+    throw new RuntimeHostEpochMismatchError();
+  }
+  if (handshake.kind === 'incompatible') return { kind: 'incompatible', handshake };
+  if (handshake.kind === 'draining') return { kind: 'draining' };
+  if (input.expectedRootId && handshake.rootId !== input.expectedRootId) {
+    throw new RuntimeHostRootMismatchError();
+  }
+  if (handshake.compatibilityEpoch !== RUNTIME_HOST_COMPATIBILITY_EPOCH) {
+    throw new Error('Runtime Host accepted an incompatible schema epoch');
+  }
+  if (
+    handshake.selectedProtocol < input.protocol.min ||
+    handshake.selectedProtocol > input.protocol.max ||
+    (input.hostProtocol !== undefined &&
+      (handshake.selectedProtocol < input.hostProtocol.min ||
+        handshake.selectedProtocol > input.hostProtocol.max))
+  ) {
+    throw new Error('Runtime Host selected a protocol outside the negotiated range');
+  }
+  return {
+    kind: 'connected',
+    connection: new RuntimeHostConnectionImpl(input.transport, handshake, {
+      livenessIntervalMs: input.livenessIntervalMs,
+      onLivenessProbe: input.onLivenessProbe,
+    }),
+  };
+}
+
+class RuntimeHostEpochMismatchError extends Error {}
+class RuntimeHostRootMismatchError extends Error {}
+
+function requireRemoteWebSocketUrl(value: string): URL {
+  const url = new URL(value);
+  if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+    throw new Error('Remote Runtime Host URL must use ws or wss');
+  }
+  if (url.username || url.password || url.hash) {
+    throw new Error('Remote Runtime Host URL must not contain credentials or a fragment');
+  }
+  if (
+    url.protocol === 'ws:' &&
+    url.hostname !== '127.0.0.1' &&
+    url.hostname !== '[::1]' &&
+    url.hostname !== '::1'
+  ) {
+    throw new Error('Plain remote Runtime Host WebSocket URLs must use loopback');
+  }
+  return url;
+}
+
+function openWebSocketTransport(
+  url: URL,
+  credential: string,
+  timeoutMs: number,
+): Promise<WebSocketTransport> {
+  if (!credential || /\s/u.test(credential)) {
+    return Promise.reject(new Error('Runtime Host access credential is invalid'));
+  }
+  return new Promise((resolve, reject) => {
+    const webSocketOptions = {
+      headers: { authorization: `Bearer ${credential}` },
+      handshakeTimeout: timeoutMs,
+      maxPayload: RUNTIME_HOST_MAX_MESSAGE_BYTES,
+      maxFragments: MAX_WEBSOCKET_FRAGMENTS,
+      maxBufferedChunks: MAX_WEBSOCKET_BUFFERED_CHUNKS,
+      perMessageDeflate: false,
+    };
+    const socket = new WebSocket(url, webSocketOptions);
+    const onOpen = () => {
+      cleanup();
+      resolve(new WebSocketTransport(socket));
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      socket.terminate();
+      reject(error);
+    };
+    const cleanup = () => {
+      socket.off('open', onOpen);
+      socket.off('error', onError);
+    };
+    socket.once('open', onOpen);
+    socket.once('error', onError);
+  });
 }
 
 function openTransport(

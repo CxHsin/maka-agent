@@ -27,6 +27,7 @@ export {
 export { installRuntimeHostLogCapture } from '../process-diagnostics.js';
 export {
   createRuntimeHostListenerSet,
+  startRuntimeHostServiceListenerSet,
   startLocalRuntimeHostListenerSet,
   type RuntimeHostListenerSet,
   type RuntimeHostListener,
@@ -35,6 +36,15 @@ export {
   type RuntimeHostListenerSetFactory,
   type RuntimeHostListenerSetFactoryInput,
 } from './listener-set.js';
+export {
+  startRuntimeHostWebSocketListener,
+  type RuntimeHostWebSocketTls,
+  type StartRuntimeHostWebSocketListenerOptions,
+} from './websocket-listener.js';
+export {
+  openRuntimeHostAccessAuthority,
+  type RuntimeHostAccessAuthority,
+} from './access-authority.js';
 export {
   createRuntimeHostConnectionAuthority,
   LOCAL_OWNER_CONNECTION_AUTHORITY,

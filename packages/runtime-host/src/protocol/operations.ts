@@ -1,4 +1,5 @@
 import { ARTIFACT_OPERATION_SPECS } from './artifact.js';
+import { ACCESS_AUTHORITY_OPERATION_SPECS } from './access-authority.js';
 import { AGENT_GRAPH_OPERATION_SPECS } from './agent-graph.js';
 import { AUTOMATION_OPERATION_SPECS } from './automation.js';
 import { requireExactRecord, requireId, requireRecord, requireString } from './codec.js';
@@ -117,6 +118,7 @@ export type {
   TurnStopInput,
 } from './turn.js';
 export * from './connection-effects.js';
+export * from './access-authority.js';
 export * from './configuration.js';
 export * from './deep-research.js';
 export * from './daily-review.js';
@@ -142,6 +144,7 @@ export * from './web-search.js';
 
 export const HOST_OPERATION_SPECS = composeOperationSpecMaps(
   HOST_BOOTSTRAP_OPERATION_SPECS,
+  ACCESS_AUTHORITY_OPERATION_SPECS,
   AGENT_GRAPH_OPERATION_SPECS,
   GOAL_OPERATION_SPECS,
   TURN_OPERATION_SPECS,
@@ -188,7 +191,7 @@ type InferErrorCode<Spec> =
 export type OperationInput<K extends OperationKey> = InferInput<OperationSpecMap[K]>;
 export type OperationOutput<K extends OperationKey> = InferOutput<OperationSpecMap[K]>;
 export type OperationError<K extends OperationKey> = HostOperationError<
-  InferErrorCode<OperationSpecMap[K]>
+  InferErrorCode<OperationSpecMap[K]> | 'unauthorized'
 >;
 
 export type RequestFrameFor<K extends OperationKey> = {
@@ -271,7 +274,10 @@ function decodeOperationError<C extends HostOperationErrorCode>(
   allowedCodes: readonly C[],
 ): HostOperationError<C> {
   const record = requireExactRecord(value, 'operation error', ['code', 'message']);
-  if (typeof record.code !== 'string' || !allowedCodes.includes(record.code as C)) {
+  if (
+    typeof record.code !== 'string' ||
+    (record.code !== 'unauthorized' && !allowedCodes.includes(record.code as C))
+  ) {
     throw invalidProtocolFrame('Operation returned an undeclared error code');
   }
   return {

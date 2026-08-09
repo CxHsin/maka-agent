@@ -38,8 +38,8 @@ const PROTOCOL = {
 
 test('registers a subscription before receiving a coalesced first frame', async () => {
   await withProtocolPeer(
-    async (transport, hostEpoch) => {
-      const request = await acceptConnectionAndReadOpen(transport, hostEpoch);
+    async (transport, hostEpoch, rootId) => {
+      const request = await acceptConnectionAndReadOpen(transport, hostEpoch, rootId);
       const opened = openResult(hostEpoch, 'subscription-ordered');
       await writeRawLocalIpc(
         transport,
@@ -70,8 +70,8 @@ test('registers a subscription before receiving a coalesced first frame', async 
 
 test('delivers Runtime Resource PTY frames without closing the connection', async () => {
   await withProtocolPeer(
-    async (transport, hostEpoch) => {
-      const request = await acceptConnectionAndReadOpen(transport, hostEpoch);
+    async (transport, hostEpoch, rootId) => {
+      const request = await acceptConnectionAndReadOpen(transport, hostEpoch, rootId);
       const opened = openResult(hostEpoch, 'subscription-pty');
       const frame = {
         kind: 'subscription.runtime_resource_pty_data' as const,
@@ -119,8 +119,8 @@ test('delivers Runtime Resource PTY frames without closing the connection', asyn
 
 test('isolates a sequence gap and continues requests on the same connection', async () => {
   await withProtocolPeer(
-    async (transport, hostEpoch) => {
-      const request = await acceptConnectionAndReadOpen(transport, hostEpoch);
+    async (transport, hostEpoch, rootId) => {
+      const request = await acceptConnectionAndReadOpen(transport, hostEpoch, rootId);
       const opened = openResult(hostEpoch, 'subscription-gap');
       await writeRawLocalIpc(
         transport,
@@ -153,8 +153,8 @@ test('isolates a sequence gap and continues requests on the same connection', as
 test('rejects epoch and Session correlation changes per subscription', async () => {
   for (const changed of ['epoch', 'session', 'graph'] as const) {
     await withProtocolPeer(
-      async (transport, hostEpoch) => {
-        const request = await acceptConnectionAndReadOpen(transport, hostEpoch);
+      async (transport, hostEpoch, rootId) => {
+        const request = await acceptConnectionAndReadOpen(transport, hostEpoch, rootId);
         const opened = openResult(hostEpoch, `subscription-${changed}`);
         await writeProtocolFrame(transport, {
           requestId: request.requestId,
@@ -203,8 +203,8 @@ test('rejects epoch and Session correlation changes per subscription', async () 
 test('evicts a locally slow iterator and keeps the connection usable', async () => {
   const closeObserved = deferred<void>();
   await withProtocolPeer(
-    async (transport, hostEpoch) => {
-      const request = await acceptConnectionAndReadOpen(transport, hostEpoch);
+    async (transport, hostEpoch, rootId) => {
+      const request = await acceptConnectionAndReadOpen(transport, hostEpoch, rootId);
       const opened = openResult(hostEpoch, 'subscription-slow');
       const frames = [
         encodeLocalIpcTestFrame({
@@ -239,8 +239,8 @@ test('evicts a locally slow iterator and keeps the connection usable', async () 
 
 test('ends every active subscription with connection_closed on EOF', async () => {
   await withProtocolPeer(
-    async (transport, hostEpoch) => {
-      const request = await acceptConnectionAndReadOpen(transport, hostEpoch);
+    async (transport, hostEpoch, rootId) => {
+      const request = await acceptConnectionAndReadOpen(transport, hostEpoch, rootId);
       await writeProtocolFrame(transport, {
         requestId: request.requestId,
         operation: 'subscription.open',
@@ -271,8 +271,8 @@ test('loads a canonical transcript while live frames continue on the same connec
     modelId: 'test-model',
   };
   await withProtocolPeer(
-    async (transport, hostEpoch) => {
-      const openRequest = await acceptConnectionAndReadOpen(transport, hostEpoch);
+    async (transport, hostEpoch, rootId) => {
+      const openRequest = await acceptConnectionAndReadOpen(transport, hostEpoch, rootId);
       const opened = openResult(hostEpoch, 'subscription-transcript');
       await writeProtocolFrame(transport, {
         requestId: openRequest.requestId,
@@ -333,8 +333,8 @@ test('restarts transcript loading after an expired snapshot', async () => {
   const encoded = Buffer.from(JSON.stringify(message), 'utf8');
   const splitAt = Math.floor(encoded.byteLength / 2);
   await withProtocolPeer(
-    async (transport, hostEpoch) => {
-      const openRequest = await acceptConnectionAndReadOpen(transport, hostEpoch);
+    async (transport, hostEpoch, rootId) => {
+      const openRequest = await acceptConnectionAndReadOpen(transport, hostEpoch, rootId);
       const opened = openResult(hostEpoch, 'subscription-retry');
       await writeProtocolFrame(transport, {
         requestId: openRequest.requestId,
@@ -486,7 +486,7 @@ test('forces a same-v0 pre-epoch Host through its incompatible replacement path'
 });
 
 async function withProtocolPeer(
-  serve: (transport: FramedTransport, hostEpoch: string) => Promise<void>,
+  serve: (transport: FramedTransport, hostEpoch: string, rootId: string) => Promise<void>,
   run: (connection: RuntimeHostConnection) => Promise<void>,
 ): Promise<void> {
   const base = await mkdtemp(join(tmpdir(), 'maka-runtime-host-subscription-'));
@@ -502,7 +502,10 @@ async function withProtocolPeer(
   });
   const serverTask = deferred<void>();
   const server = createServer((socket) => {
-    void serve(new FramedTransport(socket), hostEpoch).then(serverTask.resolve, serverTask.reject);
+    void serve(new FramedTransport(socket), hostEpoch, capability.rootId).then(
+      serverTask.resolve,
+      serverTask.reject,
+    );
   });
   try {
     await listen(server, endpoint.path);
@@ -544,11 +547,13 @@ async function withProtocolPeer(
 async function acceptConnectionAndReadOpen(
   transport: FramedTransport,
   hostEpoch: string,
+  rootId: string,
 ): Promise<Extract<RequestFrame, { operation: 'subscription.open' }>> {
   const hello = decodeClientFrame(await transport.read(1_000));
   assert.ok('kind' in hello && hello.kind === 'hello');
   await writeProtocolFrame(transport, {
     kind: 'accepted',
+    rootId,
     hostEpoch,
     connectionId: 'connection-1',
     selectedProtocol: RUNTIME_HOST_PROTOCOL_VERSION,

@@ -177,6 +177,8 @@ class DesktopRuntimeHostCandidateImpl implements DesktopRuntimeHostCandidate {
   }
 
   async #close(): Promise<void> {
+    this.#ipc.close();
+    this.#detachSessionObservations();
     const domainResults = await Promise.allSettled([this.#closeSessionDomains()]);
     const results = await Promise.allSettled([
       this.#botIncoming.close(),
@@ -191,8 +193,6 @@ class DesktopRuntimeHostCandidateImpl implements DesktopRuntimeHostCandidate {
   }
 
   async #closeConnection(): Promise<void> {
-    this.#ipc.close();
-    this.#detachSessionObservations();
     await this.#observer.close().catch(() => undefined);
     await this.#closeSessionObservations().catch(() => undefined);
     if (this.#hasRegisteredCapabilities()) {

@@ -189,10 +189,11 @@ class RuntimeHostReconnectLifecycleImpl<T extends RuntimeHostReconnectResource>
     if (this.#closed || this.#terminalError || this.#current || this.#reconnectTask) return;
     const task = this.#reconnect();
     this.#reconnectTask = task;
-    void task.finally(() => {
+    const finalize = () => {
       if (this.#reconnectTask === task) this.#reconnectTask = undefined;
       this.#scheduleReconnect();
-    });
+    };
+    void task.then(finalize, finalize);
   }
 
   async #reconnect(): Promise<void> {

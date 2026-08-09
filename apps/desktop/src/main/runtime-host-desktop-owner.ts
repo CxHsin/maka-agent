@@ -76,12 +76,12 @@ class RuntimeHostDesktopOwnerImpl implements RuntimeHostDesktopOwner {
   }
 
   async handleBotIncomingMessage(message: BotIncomingMessage): Promise<void> {
-    const candidate = await this.#requireLifecycle().waitForCurrent();
+    const candidate = await this.#waitForReadyCandidate();
     await candidate.botIncoming.handleBotIncomingMessage(message);
   }
 
   async stopSession(sessionId: string): Promise<void> {
-    const candidate = await this.#requireLifecycle().waitForCurrent();
+    const candidate = await this.#waitForReadyCandidate();
     await candidate.stopSession(sessionId);
   }
 
@@ -114,5 +114,14 @@ class RuntimeHostDesktopOwnerImpl implements RuntimeHostDesktopOwner {
   #requireLifecycle(): RuntimeHostReconnectLifecycle<DesktopRuntimeHostCandidate> {
     if (!this.#lifecycle) throw new Error('Desktop Runtime Host owner has not started');
     return this.#lifecycle;
+  }
+
+  async #waitForReadyCandidate(): Promise<DesktopRuntimeHostCandidate> {
+    const lifecycle = this.#requireLifecycle();
+    let candidate = await lifecycle.waitForCurrent();
+    while (candidate.client.lifecycleState !== 'ready') {
+      candidate = await lifecycle.waitForCurrent(candidate);
+    }
+    return candidate;
   }
 }

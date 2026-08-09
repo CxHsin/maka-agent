@@ -13,6 +13,7 @@
 | 文件 | 内容 |
 |---|---|
 | `agent-book-knowledge/` | 分章知识点（11 个文件，每个知识点含：核心 / 设计要点 / Maka 启示 / 可讨论问题 / 建议设计文档，并附本章金句、配套实验、思考题）。作为设计文档的论据库 |
+| `core-domain-analysis/` | **自底向上补充**：从 Maka 实际代码归纳的真实核心域（1 份框架 + 9 份域分析：权限 / shell-pty / goal-plan / connections / swarm / computer-use / 记忆 / 自动化 / skill），每份含代码地图 / 核心数据模型 / 书中要点对照 / 当前实现分析 / 目标架构 / 待讨论问题。覆盖四信条与官方八章的"有代码无文档"空白 |
 | `01-Maka-Design-Question-Checklist.zh-CN.md` | **精华版**：只收与 Agent Harness 本身相关的 68 个核心设计问题，按 Maka 四信条组织，可直接用于评审与需求澄清 |
 | `02-Maka-Design-Doc-Roadmap.zh-CN.md` | **精华版**：只收 Harness 核心的设计文档（64 篇），含 P0/P1/P2 优先级与执行顺序 |
 | `README.zh-CN.md` | 本索引 + 全书脉络 + 与 Maka 四信条的映射（中文版） |

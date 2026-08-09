@@ -13,6 +13,7 @@
 | File | Contents |
 |---|---|
 | `agent-book-knowledge/` | Per-chapter knowledge points (11 files; each knowledge point contains: core / design points / Maka implications / discussable questions / recommended design documents, plus the chapter's key quotes, companion experiments, and thought questions). Serves as the argument bank for design documents |
+| `core-domain-analysis/` | **Bottom-up complement**: real core domains induced from Maka's actual code (1 framework + 9 domain analyses: permission, shell/pty, goal/plan, connections, swarm, computer-use, memory, automation, skill), each with Code Map / Core Data Model / Book mapping / Current Implementation Analysis / Target Architecture / Open Questions. Covers the "has-code-but-no-docs" gaps in the four credos and the official eight chapters |
 | `01-Maka-Design-Question-Checklist.md` | **Essence version**: only the 68 core design questions related to the Agent Harness itself, organized by Maka's four credos, ready to use directly for review and requirements clarification |
 | `02-Maka-Design-Doc-Roadmap.md` | **Essence version**: only the core Harness design documents (64 documents), with P0/P1/P2 priorities and execution order |
 | `README.md` | This index + the book's overall structure + mapping to Maka's four credos |

@@ -125,7 +125,7 @@ without focusing it or using an always-on-top overlay layer.
 ## Native WebContent Qualification
 
 The executor pinned by `apps/desktop/bundled-tools.json` now carries source
-commit `8d43284afea580ea868f9f456a4454b9623de165`.
+commit `82988a48242f07602285c4401ec121fb64b3b54f`.
 
 The shared synthetic CUA Lab was run ten consecutive times before integration:
 
@@ -146,3 +146,8 @@ A separate live retained-element probe exercised the three refetch outcomes:
 
 This is native executor evidence, not a provider-model qualification cell. A
 future `real-runtime` web scenario must still pass the report contract above.
+
+The same source commit adds `doctor --json`. A release-binary smoke on the
+locked-screen state correctly reported permissions granted, all required native
+SPIs available, an ad-hoc non-hardened signature, and
+`metadataObservation / screenshotObservation / trustedWebContentClick = false`.

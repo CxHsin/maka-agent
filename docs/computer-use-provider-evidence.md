@@ -121,3 +121,28 @@ The run initially failed closed when the user's foreground ChatGPT window
 occluded the synthetic target. The fixture host now settles and raises its
 layer-0 window with `showInactive()` and `moveTop()` before declaring readiness,
 without focusing it or using an always-on-top overlay layer.
+
+## Native WebContent Qualification
+
+The executor pinned by `apps/desktop/bundled-tools.json` now carries source
+commit `8d43284afea580ea868f9f456a4454b9623de165`.
+
+The shared synthetic CUA Lab was run ten consecutive times before integration:
+
+- observation exposed one OOP button after unique mirror removal;
+- slider requested/readback/business oracle: `42 / 42 / 42`;
+- scroll path: semantic `ax_action`, oracle offset `76`;
+- OOP click path: `skylight_pid`;
+- DOM `MouseEvent.isTrusted`: `true`;
+- host local mouse events: one down and one up;
+- stale wrong-target count: `0`;
+- target application never became frontmost.
+
+A separate live retained-element probe exercised the three refetch outcomes:
+
+- unique replacement: action completed once, wrong target `0`;
+- missing replacement: `element_released`, no side effect;
+- ambiguous replacement: `element_changed`, no side effect.
+
+This is native executor evidence, not a provider-model qualification cell. A
+future `real-runtime` web scenario must still pass the report contract above.

@@ -1,12 +1,12 @@
 {
   "makaCu": {
     "repo": "maka-agent/maka-cu",
-    "branch": "maka/base",
-    "commit": "ca7ef80c721fdaf6e7f4af882f16b9c555f14733",
+    "branch": "codex/webcontent-native-actions",
+    "commit": "8d43284afea580ea868f9f456a4454b9623de165",
     "expectedProtocolVersion": "maka.cu/2",
     "binaryName": "maka-cu",
-    "binarySizeBytes": 2861584,
-    "binarySha256": "26d45d5243fefd993dc754d5b6bdd64c8c5ff38f3d0ccf6dbb132db89a49f2a7",
+    "binarySizeBytes": 2941808,
+    "binarySha256": "d308c036a4d67767bada3974fc0e526c40934507ee05a15d6909728d881a8a7f",
     "buildProvenance": "local-source-build",
     "signature": "adhoc",
     "hardenedRuntime": false,

@@ -18,6 +18,7 @@
 
 1. Observation authority
    - 每个可执行 observation 具有唯一 `frameId + epoch`、截图尺寸、`pid + windowId`、capture-local 坐标信息，以及适用时的 Electron page identity。
+   - WebContent/renderer 元素同时绑定 host process generation 与 actual input-owner generation；唯一真实 WebContent 元素会遮蔽同框叶子 mirror，歧义 mirror 不删除。
    - 坐标只能在产生它的截图/窗口 frame 内解释。dispatch 禁止重新选择当前全局坐标下的最高 z-order 窗口。
    - 新 observation、turn/session 结束、abort、user stop、service loss 和明确 intervention 使旧 action claim 与 keyboard ownership 失效。
 
@@ -31,6 +32,7 @@
    - semantic action 优先按稳定 token refetch；否则仅允许唯一且 identity-preserving 的匹配。缺失、歧义、越界、遮挡或 page 变化必须失败。
    - 无关 AX/DOM 内容变化不能合成 `user_intervened`。物理介入和 terminal host state 必须来自明确事件。
    - drag/zoom 两端必须属于同一个 bound window。
+   - WebContent click 只有在 host/window 与 renderer generation 都验证后才能走 `skylight_pid`；失败不得退回 AX mirror 或 JavaScript click。
 
 4. Execution ownership
    - maka-cu 是唯一 native executor；window/page discovery、semantic preparation、input dispatch 和 effect readback 均留在该边界内。
@@ -73,10 +75,10 @@
 |---|---|---|---|
 | Frame/window binding、duplicate rejection | PASS | frame state、bound-action、stale/duplicate tests | 在 Runtime slice 保留 focused tests |
 | Capture-local coordinate authority | PASS | window-local transform、scale/geometry、Retina/negative-origin tests | decoy window 下的 cumulative Desktop E2E |
-| Page identity、driver-only executor | PARTIAL | PID-owned CDP/page resolution，无 direct executor bypass | document replacement test；填充 `documentFingerprint` |
-| Semantic identity refetch | PARTIAL | unique refetch、missing/ambiguous rejection | token mismatch 不得接受 replacement control |
+| WebContent / renderer target | PASS | actual PID + start time、coalition readiness、mirror 去重、10 轮 OOP `isTrusted=true` / 单 down-up | 扩到真实 Electron/Chromium app matrix |
+| Semantic identity refetch | PASS | unique replacement 成功；missing=`element_released`；ambiguous=`element_changed`；全部零误点 | 保留跨 toolkit 录制回归 |
 | Occlusion、no foreground/pixel fallback | PASS | coordinate/semantic occlusion 与 fail-closed tests | real-window safety sentinel |
-| Fresh postcondition、effect verification | PARTIAL | mutation 后要求 fresh observation，部分 readback | 所有 advertised mutation 的 cross-layer tests |
+| Fresh postcondition、effect verification | PARTIAL | mutation 后 fresh observation；slider 业务值/readback=42；scroll tree delta + oracle=76 | 继续补 secondary action 与跨窗口业务 oracle |
 | Per-session queue、generation lease | PARTIAL | session queue/frame claim；lease 修复尚在本地 | concurrent-session 与 intervention-before-dispatch tests |
 | Physical intervention、lock、stop | FAIL | 有状态机原型，无 Desktop production event producer | 真实 host wiring 与 transition tests |
 | Service recovery、unknown outcome | PARTIAL | 本地 service abstraction 与 unit tests | restart reset、attestation、child-crash、cleanup E2E |
@@ -130,6 +132,20 @@ run loop 的进程里**永不刷新**。执行器因此看不见任何在它之�
 
 教训：在无 run loop 的进程里，AppKit 的任何"当前状态"访问器都要按缓存对待，改用
 `proc_listpids` / 窗口服务这类每次真查的接口。
+
+### WebContent 不是把事件 PID 改掉
+
+WKWebView 的 AX 树和 XPC process 不是同时出现的。只按进程名找 WebContent 会撞到别的
+应用，只把 `CGEvent.postToPid` 改投 renderer 又完全没有事件。当前闭环分三层：
+
+- XNU resource + jetsam coalition 只负责证明 host 到 WebContent 的唯一归属，并触发
+  一次 250ms bounded re-observe；
+- observation 只删除同框、同语义、唯一且为叶子的 host mirror；
+- event 仍绑定 host `CGWindowID`，通过单通道 private SkyLight 交给 WindowServer 做
+  renderer hop；actual PID/start time 是元素身份和 restart fence。
+
+教训：OOP targeting 是 process identity、window identity 和 event routing 的联合
+问题，不是一个 PID 字段。
 
 ### 上限要有时钟，截断要说出来
 

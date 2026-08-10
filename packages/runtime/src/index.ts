@@ -1566,6 +1566,8 @@ export type {
 export {
   buildScheduledTaskTool,
   buildAgentScheduledTaskCreatePayload,
+  SCHEDULED_TASK_AUTHORITY_SERVICE_ID,
+  SCHEDULED_TASK_AUTHORITY_SERVICE_VERSION,
   SCHEDULED_TASK_TOOL_NAME,
 } from './scheduled-task-tools.js';
 export type { ScheduledTaskToolAuthority } from './scheduled-task-tools.js';

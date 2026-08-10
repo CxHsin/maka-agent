@@ -1,15 +1,16 @@
 /**
  * ScheduledTask — the single product noun for "定时任务".
  *
- * One catalog, one scheduler authority (Runtime Host), multiple effects
+ * One catalog, one scheduler authority (the initiating Desktop), multiple effects
  * (local/bot notify vs agent session run). Heartbeats are intentionally
  * out of scope: they remain session-scoped Automation kind.
  */
 
 import { compileCronExpression } from './cron-expression.js';
-import type { CollaborationMode } from './collaboration.js';
-import type { OrchestrationMode } from './orchestration.js';
-import type { ThinkingLevel } from './model-thinking.js';
+import { isCollaborationMode, type CollaborationMode } from './collaboration.js';
+import { isOrchestrationMode, type OrchestrationMode } from './orchestration.js';
+import { isThinkingLevel, type ThinkingLevel } from './model-thinking.js';
+import { isPermissionMode, type PermissionMode } from './permission.js';
 import { isBotDeliveryProvider, type BotProvider } from './bot-chat-settings.js';
 import type { BackendKind } from './session.js';
 
@@ -20,7 +21,7 @@ export const SCHEDULED_TASK_CHAT_ID_MAX_CHARS = 160;
 export const SCHEDULED_TASK_RUN_HISTORY_LIMIT = 20;
 export const SCHEDULED_TASK_MAX_DELAY_MS = 366 * 24 * 60 * 60 * 1000;
 export const SCHEDULED_TASK_MIN_INTERVAL_SECONDS = 10;
-export const SCHEDULED_TASK_MAX_INTERVAL_SECONDS = 86_400;
+export const SCHEDULED_TASK_MAX_INTERVAL_SECONDS = 366 * 86_400;
 
 export const SCHEDULED_TASK_STATUSES = ['active', 'paused', 'completed', 'expired'] as const;
 export type ScheduledTaskStatus = (typeof SCHEDULED_TASK_STATUSES)[number];
@@ -33,6 +34,11 @@ export type ScheduledTaskCreatedByKind = 'user' | 'agent' | 'system';
 export type ScheduledTaskSchedule =
   | { kind: 'once'; runAt: number }
   | { kind: 'interval'; everySeconds: number; startAt: number }
+  | {
+      kind: 'calendar';
+      recurrence: 'daily' | 'weekly' | 'monthly';
+      anchorAt: number;
+    }
   | { kind: 'cron'; expression: string; startAt: number };
 
 export type ScheduledTaskEffect =
@@ -48,6 +54,7 @@ export interface ScheduledTaskExecutionTemplate {
   readonly llmConnectionSlug: string;
   readonly model: string;
   readonly thinkingLevel?: ThinkingLevel;
+  readonly permissionMode: PermissionMode;
   readonly collaborationMode: CollaborationMode;
   readonly orchestrationMode: OrchestrationMode;
 }
@@ -122,12 +129,14 @@ export function normalizeCreateScheduledTaskInput(
   if (!isObject(input)) return fail('Scheduled task input must be an object');
   const title = normalizeTitle(input.title);
   if (!title.ok) return title;
-  const intentBody = normalizeIntent(input.intentBody ?? input.intent?.body);
-  if (!intentBody.ok) return intentBody;
   const schedule = normalizeSchedule(input.schedule, now);
   if (!schedule.ok) return schedule;
   const effect = normalizeEffect(input.effect);
   if (!effect.ok) return effect;
+  const intentBody = normalizeIntent(input.intentBody ?? input.intent?.body, {
+    required: effect.value.kind === 'agent_run',
+  });
+  if (!intentBody.ok) return intentBody;
   const createdBy = normalizeCreatedBy(input.createdBy);
   if (!createdBy.ok) return createdBy;
   const maxFires = normalizeMaxFires(input.maxFires);
@@ -137,6 +146,9 @@ export function normalizeCreateScheduledTaskInput(
   const nextFireAt = computeNextFireAt(schedule.value, now);
   if (nextFireAt === null) {
     return fail('Schedule has no fire within one year from now');
+  }
+  if (expiresAt.value !== null && nextFireAt >= expiresAt.value) {
+    return fail('Schedule must fire before expiresAt');
   }
   return {
     ok: true,
@@ -165,7 +177,7 @@ export function normalizeUpdateScheduledTaskInput(
     patch.title = title.value;
   }
   if (input.intentBody !== undefined || input.intent !== undefined) {
-    const intentBody = normalizeIntent(input.intentBody ?? input.intent?.body);
+    const intentBody = normalizeIntent(input.intentBody ?? input.intent?.body, { required: false });
     if (!intentBody.ok) return intentBody;
     patch.intentBody = intentBody.value;
   }
@@ -198,11 +210,20 @@ export function computeNextFireAt(schedule: ScheduledTaskSchedule, after: number
   }
   if (schedule.kind === 'interval') {
     if (schedule.everySeconds < SCHEDULED_TASK_MIN_INTERVAL_SECONDS) return null;
-    if (schedule.startAt > after) return schedule.startAt;
+    if (schedule.startAt > after) {
+      return schedule.startAt - after <= SCHEDULED_TASK_MAX_DELAY_MS ? schedule.startAt : null;
+    }
     const stepMs = schedule.everySeconds * 1000;
     const steps = Math.floor((after - schedule.startAt) / stepMs) + 1;
     const next = schedule.startAt + steps * stepMs;
     return next - after > SCHEDULED_TASK_MAX_DELAY_MS ? null : next;
+  }
+  if (schedule.kind === 'calendar') {
+    if (schedule.anchorAt > after) {
+      return schedule.anchorAt - after <= SCHEDULED_TASK_MAX_DELAY_MS ? schedule.anchorAt : null;
+    }
+    const next = nextCalendarFireAt(schedule, after);
+    return next - after <= SCHEDULED_TASK_MAX_DELAY_MS ? next : null;
   }
   const compiled = compileCronExpression(schedule.expression, { profile: 'automation-v1' });
   if (!compiled.ok) return null;
@@ -331,10 +352,16 @@ function normalizeTitle(value: unknown): ScheduledTaskNormalizeResult<string> {
   return { ok: true, value: title };
 }
 
-function normalizeIntent(value: unknown): ScheduledTaskNormalizeResult<string> {
-  if (typeof value !== 'string') return fail('Intent body is required');
+function normalizeIntent(
+  value: unknown,
+  options: { required: boolean },
+): ScheduledTaskNormalizeResult<string> {
+  if (value === undefined || value === null) {
+    return options.required ? fail('Intent body is required') : { ok: true, value: '' };
+  }
+  if (typeof value !== 'string') return fail('Intent body must be a string');
   const body = value.trim();
-  if (!body) return fail('Intent body is required');
+  if (!body && options.required) return fail('Intent body is required');
   if ([...body].length > SCHEDULED_TASK_INTENT_MAX_CHARS) {
     return fail(`Intent body must be ${SCHEDULED_TASK_INTENT_MAX_CHARS} characters or fewer`);
   }
@@ -372,6 +399,21 @@ function normalizeSchedule(
     return {
       ok: true,
       value: { kind: 'interval', everySeconds: Math.floor(everySeconds), startAt },
+    };
+  }
+  if (value.kind === 'calendar') {
+    if (
+      value.recurrence !== 'daily' &&
+      value.recurrence !== 'weekly' &&
+      value.recurrence !== 'monthly'
+    ) {
+      return fail('calendar recurrence must be daily, weekly, or monthly');
+    }
+    const anchorAt = asFiniteNumber(value.anchorAt);
+    if (anchorAt === null) return fail('calendar schedule requires anchorAt');
+    return {
+      ok: true,
+      value: { kind: 'calendar', recurrence: value.recurrence, anchorAt },
     };
   }
   if (value.kind === 'cron') {
@@ -425,31 +467,46 @@ function normalizeExecution(
   if (!isObject(value)) return fail('agent_run requires execution template');
   if (typeof value.cwd !== 'string' || !value.cwd.trim()) return fail('execution.cwd is required');
   if (typeof value.backend !== 'string') return fail('execution.backend is required');
+  if (value.backend !== 'ai-sdk' && value.backend !== 'fake' && value.backend !== 'pi-agent') {
+    return fail('execution.backend is invalid');
+  }
   if (typeof value.llmConnectionSlug !== 'string' || !value.llmConnectionSlug.trim()) {
     return fail('execution.llmConnectionSlug is required');
   }
   if (typeof value.model !== 'string' || !value.model.trim()) {
     return fail('execution.model is required');
   }
-  if (typeof value.collaborationMode !== 'string') {
+  if (!isPermissionMode(value.permissionMode)) {
+    return fail('execution.permissionMode is required');
+  }
+  if (!isCollaborationMode(value.collaborationMode)) {
     return fail('execution.collaborationMode is required');
   }
-  if (typeof value.orchestrationMode !== 'string') {
+  if (!isOrchestrationMode(value.orchestrationMode)) {
     return fail('execution.orchestrationMode is required');
+  }
+  if (value.thinkingLevel !== undefined && !isThinkingLevel(value.thinkingLevel)) {
+    return fail('execution.thinkingLevel is invalid');
+  }
+  if (
+    value.projectId !== undefined &&
+    value.projectId !== null &&
+    typeof value.projectId !== 'string'
+  ) {
+    return fail('execution.projectId is invalid');
   }
   return {
     ok: true,
     value: {
       cwd: value.cwd,
-      ...(value.projectId === undefined ? {} : { projectId: value.projectId as string | null }),
-      backend: value.backend as BackendKind,
+      ...(value.projectId === undefined ? {} : { projectId: value.projectId }),
+      backend: value.backend,
       llmConnectionSlug: value.llmConnectionSlug,
       model: value.model,
-      ...(value.thinkingLevel === undefined
-        ? {}
-        : { thinkingLevel: value.thinkingLevel as ThinkingLevel }),
-      collaborationMode: value.collaborationMode as CollaborationMode,
-      orchestrationMode: value.orchestrationMode as OrchestrationMode,
+      ...(value.thinkingLevel === undefined ? {} : { thinkingLevel: value.thinkingLevel }),
+      permissionMode: value.permissionMode,
+      collaborationMode: value.collaborationMode,
+      orchestrationMode: value.orchestrationMode,
     },
   };
 }
@@ -505,6 +562,59 @@ function asFiniteNumber(value: unknown): number | null {
     return Number(value);
   }
   return null;
+}
+
+function nextCalendarFireAt(
+  schedule: Extract<ScheduledTaskSchedule, { kind: 'calendar' }>,
+  after: number,
+): number {
+  const anchor = new Date(schedule.anchorAt);
+  if (schedule.recurrence === 'daily') {
+    const next = new Date(after);
+    next.setHours(
+      anchor.getHours(),
+      anchor.getMinutes(),
+      anchor.getSeconds(),
+      anchor.getMilliseconds(),
+    );
+    if (next.getTime() <= after) next.setDate(next.getDate() + 1);
+    return next.getTime();
+  }
+  if (schedule.recurrence === 'weekly') {
+    const next = new Date(after);
+    next.setHours(
+      anchor.getHours(),
+      anchor.getMinutes(),
+      anchor.getSeconds(),
+      anchor.getMilliseconds(),
+    );
+    const dayDelta = (anchor.getDay() - next.getDay() + 7) % 7;
+    next.setDate(next.getDate() + dayDelta);
+    if (next.getTime() <= after) next.setDate(next.getDate() + 7);
+    return next.getTime();
+  }
+  const afterDate = new Date(after);
+  for (let offset = 0; offset <= 480; offset += 1) {
+    const candidate = addMonthsClamped(anchor, afterDate, offset);
+    if (candidate > after) return candidate;
+  }
+  return addMonthsClamped(anchor, afterDate, 481);
+}
+
+function addMonthsClamped(anchor: Date, base: Date, offset: number): number {
+  const targetMonth = base.getMonth() + offset;
+  const year = base.getFullYear() + Math.floor(targetMonth / 12);
+  const month = ((targetMonth % 12) + 12) % 12;
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return new Date(
+    year,
+    month,
+    Math.min(anchor.getDate(), lastDay),
+    anchor.getHours(),
+    anchor.getMinutes(),
+    anchor.getSeconds(),
+    anchor.getMilliseconds(),
+  ).getTime();
 }
 
 function fail(message: string): { ok: false; message: string } {

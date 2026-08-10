@@ -673,12 +673,12 @@ export interface MakaBridge {
     refreshTokens(): Promise<SubscriptionActionResult>;
     logout(): Promise<SubscriptionActionResult>;
   };
-  plans: {
+  scheduledTasks: {
     list(): Promise<PlanReminder[]>;
-    create(input: { title: string; note?: string; runAt: number | string; recurrence?: PlanReminderRecurrence; cronExpression?: string; delivery?: PlanReminderDeliveryTarget }): Promise<PlanReminder>;
+    create(input: { title: string; note?: string; runAt: number; recurrence?: PlanReminderRecurrence; cronExpression?: string; delivery?: PlanReminderDeliveryTarget }): Promise<PlanReminder>;
     update(
       id: string,
-      patch: { title?: string; note?: string; runAt?: number | string; recurrence?: PlanReminderRecurrence; cronExpression?: string; delivery?: PlanReminderDeliveryTarget; enabled?: boolean },
+      patch: { title?: string; note?: string; runAt?: number; recurrence?: PlanReminderRecurrence; cronExpression?: string; delivery?: PlanReminderDeliveryTarget },
     ): Promise<PlanReminder>;
     setEnabled(id: string, enabled: boolean): Promise<PlanReminder>;
     triggerNow(id: string): Promise<PlanReminder>;
@@ -686,7 +686,7 @@ export interface MakaBridge {
     clearRunHistory(id: string): Promise<PlanReminder>;
     delete(id: string): Promise<void>;
     subscribeChanges(
-      handler: (event: { type: 'plans_changed'; reason: string; reminderId?: string; ts: number }) => void,
+      handler: (event: { type: 'scheduled_tasks_changed'; reason: string; taskId?: string; ts: number }) => void,
     ): () => void;
     subscribeDue(handler: (reminder: PlanReminder) => void): () => void;
   };

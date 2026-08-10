@@ -1078,8 +1078,8 @@ export async function createExecutionRuntimeHostComposition(
     });
     // Unified 定时任务 catalog (agent + desktop). Heartbeat stays on Automation.
     scheduledTaskAuthority = new HostScheduledTaskAuthority({
-      workspaceRoot: context.owner.capability.canonicalPath,
       sessions: stores.sessionStore,
+      clientCapabilities,
     });
     await scheduledTaskAuthority.ready();
     scheduledTaskTool = buildScheduledTaskTool({ authority: scheduledTaskAuthority });

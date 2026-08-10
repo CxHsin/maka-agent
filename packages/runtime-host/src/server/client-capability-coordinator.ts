@@ -95,6 +95,7 @@ type SessionBindingMode = 'strict' | 'degrade';
 
 interface SessionCapabilityState {
   readonly initiatingProviderId?: string;
+  readonly serviceProviderId?: string;
   readonly sessionBindings: ReadonlyMap<string, SessionCapabilityBinding>;
   readonly turnBindings: ReadonlyMap<string, SessionCapabilityBinding>;
 }
@@ -149,6 +150,11 @@ export interface ClientCapabilityServiceInvocationInput {
   readonly input: Record<string, unknown>;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
+}
+
+export interface SessionClientCapabilityServiceInvocationInput
+  extends Omit<ClientCapabilityServiceInvocationInput, 'connectionId'> {
+  readonly sessionId: string;
 }
 
 /**
@@ -303,6 +309,7 @@ export class HostClientCapabilityCoordinator
         ...(previous?.initiatingProviderId
           ? { initiatingProviderId: previous.initiatingProviderId }
           : {}),
+        ...(previous?.serviceProviderId ? { serviceProviderId: previous.serviceProviderId } : {}),
         sessionBindings,
         turnBindings: new Map(previous?.turnBindings ?? []),
       };
@@ -386,7 +393,15 @@ export class HostClientCapabilityCoordinator
     mode: SessionBindingMode,
   ): SessionBindingSelection {
     const initiatingProviderId = this.#connections.get(initiatingConnectionId)?.provider.providerId;
+    const initiatingProvider = initiatingProviderId
+      ? this.#providers.get(initiatingProviderId)
+      : undefined;
     const previousState = this.#sessions.get(sessionId);
+    const serviceProviderId =
+      previousState?.serviceProviderId ??
+      (initiatingProvider?.current && initiatingProvider.current.servicesByContract.size > 0
+        ? initiatingProviderId
+        : undefined);
     const previous = previousState?.sessionBindings ?? new Map();
     const eligible = this.#eligibleOffersByContract();
     const next = new Map<string, SessionCapabilityBinding>();
@@ -495,6 +510,7 @@ export class HostClientCapabilityCoordinator
       ok: true,
       state: {
         ...(initiatingProviderId ? { initiatingProviderId } : {}),
+        ...(serviceProviderId ? { serviceProviderId } : {}),
         sessionBindings: next,
         turnBindings: nextTurn,
       },
@@ -656,6 +672,44 @@ export class HostClientCapabilityCoordinator
       );
     }
     return result.structuredContent as Record<string, unknown>;
+  }
+
+  async callServiceForSession(
+    input: SessionClientCapabilityServiceInvocationInput,
+  ): Promise<Record<string, unknown>> {
+    const state =
+      this.#previewSessions.getStore()?.get(input.sessionId) ?? this.#sessions.get(input.sessionId);
+    const preferred = state?.serviceProviderId;
+    const candidates = [...this.#providers.values()].filter((provider) => {
+      const connection = this.#activeConnection(provider);
+      return Boolean(
+        connection &&
+          provider.current?.servicesByContract.has(serviceContract(input.serviceId, input.version)),
+      );
+    });
+    const provider = preferred
+      ? candidates.find((candidate) => candidate.providerId === preferred)
+      : candidates.length === 1
+        ? candidates[0]
+        : undefined;
+    const connection = provider ? this.#activeConnection(provider) : undefined;
+    if (!connection) {
+      throw new ClientCapabilityInvocationError(
+        !preferred && candidates.length > 1 ? 'capability_ambiguous' : 'capability_lost',
+        !preferred && candidates.length > 1
+          ? 'Multiple Client Capability providers offer this service'
+          : 'The initiating Client Capability service is unavailable for this Session',
+      );
+    }
+    return this.callService({
+      connectionId: connection.connectionId,
+      serviceId: input.serviceId,
+      version: input.version,
+      method: input.method,
+      input: input.input,
+      ...(input.signal ? { signal: input.signal } : {}),
+      ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+    });
   }
 
   hasService(connectionId: string, serviceId: string, version: string): boolean {
@@ -1120,6 +1174,7 @@ export class HostClientCapabilityCoordinator
     if (
       state.sessionBindings.size === 0 &&
       state.turnBindings.size === 0 &&
+      !state.serviceProviderId &&
       !this.#hasCallOffers()
     ) {
       this.#sessions.delete(sessionId);
@@ -1131,7 +1186,11 @@ export class HostClientCapabilityCoordinator
   #pruneEmptySessions(): void {
     if (this.#hasCallOffers()) return;
     for (const [sessionId, state] of this.#sessions) {
-      if (state.sessionBindings.size === 0 && state.turnBindings.size === 0) {
+      if (
+        state.sessionBindings.size === 0 &&
+        state.turnBindings.size === 0 &&
+        !state.serviceProviderId
+      ) {
         this.#sessions.delete(sessionId);
       }
     }
@@ -1390,6 +1449,7 @@ function sessionCapabilityStatesEqual(
 ): boolean {
   return (
     left.initiatingProviderId === right.initiatingProviderId &&
+    left.serviceProviderId === right.serviceProviderId &&
     bindingMapsEqual(left.sessionBindings, right.sessionBindings) &&
     bindingMapsEqual(left.turnBindings, right.turnBindings)
   );

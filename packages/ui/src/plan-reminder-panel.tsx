@@ -6,7 +6,7 @@ import type { PlanReminder, PlanReminderStatus } from '@maka/core';
 import {
   generalizedErrorMessage,
   generalizedErrorMessageChinese,
-  isAgentAutomationPlanReminder,
+  isAgentScheduledTaskPlanReminder,
 } from '@maka/core';
 import {
   type PlanReminderFormSeed,
@@ -496,7 +496,7 @@ export function PlanReminderPanel(props: {
                        reminder and a healthy one identical on the row, so the
                        page could only be read by opening every entry. */
                     description={[
-                      isAgentAutomationPlanReminder(reminder) ? copy.detail.agentSource : null,
+                      isAgentScheduledTaskPlanReminder(reminder) ? copy.detail.agentSource : null,
                       runException
                         ? runStatusLabel(runException.status, locale)
                         : reminder.status === 'scheduled'

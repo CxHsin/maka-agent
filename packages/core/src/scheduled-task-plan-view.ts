@@ -98,14 +98,13 @@ function formSchedule(input: {
     return { kind: 'cron', expression: input.cronExpression, startAt: input.runAt };
   }
   if (recurrence === 'daily') {
-    return { kind: 'interval', everySeconds: 86_400, startAt: input.runAt };
+    return { kind: 'calendar', recurrence: 'daily', anchorAt: input.runAt };
   }
   if (recurrence === 'weekly') {
-    return { kind: 'interval', everySeconds: 7 * 86_400, startAt: input.runAt };
+    return { kind: 'calendar', recurrence: 'weekly', anchorAt: input.runAt };
   }
   if (recurrence === 'monthly') {
-    // Approximate month as 30d interval for the unified schedule model.
-    return { kind: 'interval', everySeconds: 30 * 86_400, startAt: input.runAt };
+    return { kind: 'calendar', recurrence: 'monthly', anchorAt: input.runAt };
   }
   return { kind: 'once', runAt: input.runAt };
 }
@@ -121,6 +120,13 @@ function mapScheduleOut(schedule: ScheduledTaskSchedule): PlanReminderSchedule {
   if (schedule.kind === 'cron') {
     return { kind: 'cron', startAt: schedule.startAt, expression: schedule.expression };
   }
+  if (schedule.kind === 'calendar') {
+    return {
+      kind: 'recurring',
+      startAt: schedule.anchorAt,
+      recurrence: schedule.recurrence,
+    };
+  }
   if (schedule.everySeconds === 86_400) {
     return { kind: 'recurring', startAt: schedule.startAt, recurrence: 'daily' };
   }
@@ -135,4 +141,10 @@ function mapScheduleOut(schedule: ScheduledTaskSchedule): PlanReminderSchedule {
     kind: 'once',
     runAt: schedule.startAt + schedule.everySeconds * 1000,
   };
+}
+
+export function isAgentScheduledTaskPlanReminder(
+  reminder: Pick<PlanReminder, 'agentOrigin'>,
+): boolean {
+  return reminder.agentOrigin !== undefined;
 }

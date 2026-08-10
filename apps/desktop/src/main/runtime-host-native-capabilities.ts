@@ -10,6 +10,8 @@ import type {
   ClientCapabilityCallResult,
   ClientCapabilityContentBlock,
   ClientCapabilityOffer,
+  ClientCapabilityServiceCallFrame,
+  ClientCapabilityServiceOffer,
 } from "@maka/runtime-host/protocol";
 import { toJSONSchema, z } from "zod";
 
@@ -45,6 +47,15 @@ export interface DesktopNativeCapabilityProviderInput {
   ) => void | Promise<void>;
   readonly oauthPresentation?: OAuthPresentationBackend;
   readonly additionalGroups?: () => readonly DesktopCapabilityGroup[];
+  readonly additionalServices?: () => readonly DesktopCapabilityService[];
+}
+
+export interface DesktopCapabilityService extends ClientCapabilityServiceOffer {
+  call(
+    method: string,
+    input: Record<string, unknown>,
+    options: { readonly signal: AbortSignal },
+  ): Promise<Record<string, unknown>>;
 }
 
 export interface DesktopNativeCapabilityProvider extends ClientCapabilityProvider {
@@ -72,6 +83,7 @@ export function createDesktopNativeCapabilityProvider(
   const oauthPresentation = input.oauthPresentation
     ? createOAuthPresentationClientProvider(input.oauthPresentation)
     : undefined;
+  const services = indexServices(oauthPresentation?.services?.() ?? [], input.additionalServices?.() ?? []);
   const releaseSessionResources = [
     input.releaseBrowserSession,
     input.releaseComputerUseSession,
@@ -98,7 +110,7 @@ export function createDesktopNativeCapabilityProvider(
 
   return {
     offers: () => offers,
-    services: () => oauthPresentation?.services?.() ?? [],
+    services: () => [...services.values()].map(({ serviceId, version }) => ({ serviceId, version })),
     call: (frame, options) => {
       if (closed)
         throw new Error("Desktop native capability provider is closed");
@@ -128,9 +140,11 @@ export function createDesktopNativeCapabilityProvider(
     callService: (frame, options) => {
       if (closed)
         throw new Error("Desktop native capability provider is closed");
-      if (!oauthPresentation?.callService) {
-        throw new Error("Desktop native capability service is not offered");
+      const service = services.get(serviceKey(frame));
+      if (service?.kind === "additional") {
+        return invokeAdditionalService(service.value, frame, options);
       }
+      if (!oauthPresentation?.callService) throw new Error("Desktop native capability service is not offered");
       return oauthPresentation.callService(frame, options);
     },
     abortSession: async (sessionId) => {
@@ -145,6 +159,43 @@ export function createDesktopNativeCapabilityProvider(
     },
     close,
   };
+}
+
+type IndexedService =
+  | { readonly kind: "oauth"; readonly serviceId: string; readonly version: string }
+  | { readonly kind: "additional"; readonly serviceId: string; readonly version: string; readonly value: DesktopCapabilityService };
+
+function indexServices(
+  oauth: readonly ClientCapabilityServiceOffer[],
+  additional: readonly DesktopCapabilityService[],
+): Map<string, IndexedService> {
+  const services = new Map<string, IndexedService>();
+  for (const service of oauth) {
+    services.set(serviceKey(service), { kind: "oauth", ...service });
+  }
+  for (const service of additional) {
+    const key = serviceKey(service);
+    if (services.has(key)) throw new Error(`Duplicate Desktop capability service: ${key}`);
+    services.set(key, { kind: "additional", ...service, value: service });
+  }
+  return services;
+}
+
+function serviceKey(
+  service: Pick<ClientCapabilityServiceOffer, "serviceId" | "version">,
+): string {
+  return `${service.serviceId}\0${service.version}`;
+}
+
+async function invokeAdditionalService(
+  service: DesktopCapabilityService,
+  frame: ClientCapabilityServiceCallFrame,
+  options: Parameters<NonNullable<ClientCapabilityProvider["callService"]>>[1],
+): Promise<Record<string, unknown>> {
+  options.signal.throwIfAborted();
+  await options.accept();
+  options.signal.throwIfAborted();
+  return service.call(frame.method, frame.input, { signal: options.signal });
 }
 
 async function closeProvider(

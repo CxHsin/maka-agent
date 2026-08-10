@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { createSqliteDeepResearchStore } from '../deep-research-store.js';
 import { acquireOperationalStateDatabase } from '../operational-state-store.js';
-import { createSqlitePlanReminderStore } from '../plan-reminder-store.js';
+import { createSqliteScheduledTaskStore } from '../scheduled-task-store.js';
 import { createSqlitePlanStore } from '../plan-store.js';
 import { createSqliteTaskLedgerStore } from '../task-ledger-store.js';
 
@@ -369,41 +369,97 @@ describe('SQLite workflow stores', () => {
     });
   });
 
-  test('persists Plan Reminders', async () => {
+  test('persists Scheduled Tasks and admits each fire once', async () => {
     await withRoot(async (root) => {
-      const store = createSqlitePlanReminderStore(root);
-      const reminder = await store.create({ title: 'Review SQLite', runAt: Date.now() + 60_000 });
+      const now = Date.now();
+      const store = createSqliteScheduledTaskStore(root);
+      const task = await store.create(
+        {
+          title: 'Review SQLite',
+          intentBody: '',
+          schedule: { kind: 'once', runAt: now + 1_000 },
+          effect: { kind: 'notify', channel: 'local' },
+          createdBy: { kind: 'user' },
+        },
+        now,
+      );
+      const claims = await Promise.all([
+        store.claimNextDue(now + 1_000),
+        store.claimNextDue(now + 1_000),
+      ]);
+      const claim = claims.find((entry) => entry !== null);
+      assert.ok(claim);
+      assert.equal(claims.filter((entry) => entry !== null).length, 1);
+      assert.equal(await store.claimNextDue(now + 1_000), null);
+      await store.settleFire(claim.id, {
+        at: now + 1_000,
+        outcome: 'ok',
+        message: 'done',
+      });
       store.close();
 
-      const reopened = createSqlitePlanReminderStore(root);
+      const reopened = createSqliteScheduledTaskStore(root);
       try {
-        assert.equal((await reopened.list())[0]?.id, reminder.id);
+        const persisted = (await reopened.list())[0];
+        assert.equal(persisted?.id, task.id);
+        assert.equal(persisted?.status, 'completed');
+        assert.equal(persisted?.fireCount, 1);
       } finally {
         reopened.close();
       }
     });
   });
 
-  test('stamps Plan Reminders with an explicit creation clock', async () => {
+  test('recovers an admitted Scheduled Task fire without replaying its side effect', async () => {
     await withRoot(async (root) => {
-      const store = createSqlitePlanReminderStore(root);
+      const now = Date.now();
+      const store = createSqliteScheduledTaskStore(root);
       try {
-        const createdAt = Date.now() - 5 * 60_000;
-        const reminder = await store.create(
-          { title: 'Seeded at a fixed clock', runAt: Date.now() + 60_000 },
-          createdAt,
+        const task = await store.create(
+          {
+            title: 'Recover exactly once',
+            intentBody: '',
+            schedule: { kind: 'interval', everySeconds: 60, startAt: now + 1_000 },
+            effect: { kind: 'notify', channel: 'local' },
+            createdBy: { kind: 'user' },
+          },
+          now,
         );
-        assert.equal(reminder.createdAt, createdAt);
-        assert.equal(reminder.updatedAt, createdAt);
-        // The injected clock also governs validation, so a runAt still ahead
-        // of wall time but behind that clock is rejected.
-        await assert.rejects(
-          store.create(
-            { title: 'Behind the injected clock', runAt: Date.now() + 60_000 },
-            Date.now() + 2 * 60_000,
-          ),
-          /must be in the future/,
-        );
+        assert.ok(await store.claimNextDue(now + 1_000));
+        const [recovered] = await store.recoverPendingFires(now + 2_000);
+        assert.equal(recovered?.id, task.id);
+        assert.equal(recovered?.fireCount, 1);
+        assert.equal(recovered?.runs[0]?.outcome, 'failed');
+        assert.ok((recovered?.nextFireAt ?? 0) > now + 2_000);
+      } finally {
+        store.close();
+      }
+    });
+  });
+
+  test('does not admit later due Scheduled Tasks before their side effects can start', async () => {
+    await withRoot(async (root) => {
+      const now = Date.now();
+      const store = createSqliteScheduledTaskStore(root);
+      try {
+        for (const title of ['First', 'Second']) {
+          await store.create(
+            {
+              title,
+              intentBody: '',
+              schedule: { kind: 'once', runAt: now + 1_000 },
+              effect: { kind: 'notify', channel: 'local' },
+              createdBy: { kind: 'user' },
+            },
+            now,
+          );
+        }
+        assert.ok(await store.claimNextDue(now + 1_000));
+        const [recovered] = await store.recoverPendingFires(now + 2_000);
+        assert.equal(recovered?.fireCount, 1);
+        const unstarted = await store.claimNextDue(now + 2_000);
+        assert.ok(unstarted);
+        assert.notEqual(unstarted.taskId, recovered?.id);
       } finally {
         store.close();
       }

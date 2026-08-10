@@ -5,7 +5,7 @@ import type {
   E2eFixtureScenario,
 } from '@maka/core';
 import { createDefaultSettings } from '@maka/core/settings';
-import { createSqlitePlanReminderStore } from '@maka/storage';
+import { createSqliteScheduledTaskStore } from '@maka/storage';
 import { writeJson } from './seed-helpers.js';
 import { createDailyReviewArchiveStore } from '../daily-review-archive-store.js';
 
@@ -193,50 +193,59 @@ export async function writePlanReminders(workspaceRoot: string, now: number): Pr
   // assertion in `plan-reminders.spec.ts` vary between runs. Seed one
   // explicit minute apart, oldest first, so 创建时间倒序 has a single answer.
   const createdAt = (index: number): number => now - (4 - index) * 60_000;
-  const store = createSqlitePlanReminderStore(workspaceRoot);
-  try {
-    await store.create(
+  const store = createSqliteScheduledTaskStore(workspaceRoot);
+  const create = (
+    title: string,
+    intentBody: string,
+    schedule: Record<string, unknown>,
+    at: number,
+  ) =>
+    store.create(
       {
-        title: '同步项目风险',
-        note: '提醒我整理 Sidebar gate、搜索接入和计划任务剩余风险。',
-        runAt: scheduledRunAt,
+        title,
+        intentBody,
+        schedule,
+        effect: { kind: 'notify', channel: 'local' },
+        createdBy: { kind: 'user' },
       },
+      at,
+    );
+  try {
+    await create(
+      '同步项目风险',
+      '提醒我整理 Sidebar gate、搜索接入和计划任务剩余风险。',
+      { kind: 'once', runAt: scheduledRunAt },
       createdAt(0),
     );
-    const paused = await store.create(
-      {
-        title: '暂停的发布检查',
-        note: '用户可以先暂停提醒，恢复后继续按原时间触发。',
-        runAt: pausedRunAt,
-      },
+    const paused = await create(
+      '暂停的发布检查',
+      '用户可以先暂停提醒，恢复后继续按原时间触发。',
+      { kind: 'once', runAt: pausedRunAt },
       createdAt(1),
     );
-    await store.setEnabled(paused.id, false);
-    const weekly = await store.create(
-      {
-        title: '每周竞品动态追踪',
-        note: '汇总同类 AI 工具的近期产品变化，提醒我复盘可对标的交互。',
-        runAt: scheduledRunAt,
-        recurrence: 'cron',
-        cronExpression: '0 10 * * 1',
-      },
+    await store.pause(paused.id, createdAt(1) + 1);
+    const weekly = await create(
+      '每周竞品动态追踪',
+      '汇总同类 AI 工具的近期产品变化，提醒我复盘可对标的交互。',
+      { kind: 'cron', startAt: scheduledRunAt, expression: '0 10 * * 1' },
       createdAt(2),
     );
-    await store.markTriggered(weekly.id, {
+    const weeklyClaim = await store.claimNow(weekly.id, scheduledRunAt);
+    await store.settleFire(weeklyClaim.id, {
       at: scheduledRunAt,
-      status: 'triggered',
+      outcome: 'ok',
       message: '已生成本周竞品动态摘要',
     });
-    const completed = await store.create(
-      {
-        title: '已触发的本地提醒',
-        runAt: scheduledRunAt,
-      },
+    const completed = await create(
+      '已触发的本地提醒',
+      '',
+      { kind: 'once', runAt: scheduledRunAt },
       createdAt(3),
     );
-    await store.markTriggered(completed.id, {
+    const completedClaim = await store.claimNow(completed.id, scheduledRunAt);
+    await store.settleFire(completedClaim.id, {
       at: scheduledRunAt,
-      status: 'triggered',
+      outcome: 'ok',
       message: '计划提醒已触发',
     });
     // The list's search / sort / filter controls only appear at eight
@@ -251,8 +260,10 @@ export async function writePlanReminders(workspaceRoot: string, now: number): Pr
       '季度收尾清点未归档会话',
       '发布前跑一轮回归',
     ].entries()) {
-      await store.create(
-        { title, runAt: scheduledRunAt + (index + 1) * 86_400_000 },
+      await create(
+        title,
+        '',
+        { kind: 'once', runAt: scheduledRunAt + (index + 1) * 86_400_000 },
         now - (8 - index) * 60_000,
       );
     }

@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 import { tmpdir } from 'node:os';
-import type { SessionHeader, StoredMessage } from '@maka/core';
+import {
+  scheduledTaskToPlanReminderView,
+  type ScheduledTask,
+  type SessionHeader,
+  type StoredMessage,
+} from '@maka/core';
 import { discoverMarkedStorageRoot } from '@maka/storage/root-authority';
 import {
   getE2eFixtureState,
@@ -639,17 +644,11 @@ describe('e2e-fixture mode', () => {
       const reminders = withRuntimeDatabase(workspaceRoot, (database) =>
         (
           database
-            .prepare('SELECT record_json AS recordJson FROM workflow_plan_reminders')
+            .prepare('SELECT record_json AS recordJson FROM workflow_scheduled_tasks')
             .all() as Array<{ recordJson: string }>
-        ).map((row) => JSON.parse(row.recordJson)) as Array<{
-        id: string;
-        title: string;
-        status: string;
-        enabled: boolean;
-        nextRunAt?: number;
-        lastRun?: { status: string; message: string };
-        createdAt: number;
-      }>,
+        ).map((row) =>
+          scheduledTaskToPlanReminderView(JSON.parse(row.recordJson) as ScheduledTask),
+        ),
       );
       // Eight, not four: the list's search / sort / filter controls only
       // appear at eight reminders, and the narrow-window geometry tests in

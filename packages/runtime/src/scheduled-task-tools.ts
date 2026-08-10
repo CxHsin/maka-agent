@@ -9,6 +9,7 @@ import { z } from 'zod';
 import {
   SCHEDULED_TASK_CRON_MAX_CHARS,
   SCHEDULED_TASK_INTENT_MAX_CHARS,
+  SCHEDULED_TASK_MAX_INTERVAL_SECONDS,
   SCHEDULED_TASK_TITLE_MAX_CHARS,
   type ScheduledTask,
   type ScheduledTaskExecutionTemplate,
@@ -16,6 +17,8 @@ import {
 import type { MakaTool } from './tool-runtime.js';
 
 export const SCHEDULED_TASK_TOOL_NAME = 'ScheduledTask';
+export const SCHEDULED_TASK_AUTHORITY_SERVICE_ID = 'maka.scheduled-task-authority';
+export const SCHEDULED_TASK_AUTHORITY_SERVICE_VERSION = '1';
 
 export interface ScheduledTaskToolAuthority {
   create(input: {
@@ -42,7 +45,7 @@ const scheduleSchema = z.union([
   }),
   z.object({
     kind: z.literal('interval'),
-    everySeconds: z.number().int().min(10).max(86_400),
+    everySeconds: z.number().int().min(10).max(SCHEDULED_TASK_MAX_INTERVAL_SECONDS),
     startAt: z.number().int().positive().optional(),
   }),
   z.object({

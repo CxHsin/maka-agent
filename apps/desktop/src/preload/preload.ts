@@ -940,40 +940,40 @@ const makaBridge = {
       return ipcRenderer.invoke('antigravity-subscription:logout');
     },
   },
-  plans: {
+  scheduledTasks: {
     list(): Promise<PlanReminder[]> {
-      return ipcRenderer.invoke('plans:list');
+      return ipcRenderer.invoke('scheduled-tasks:list');
     },
-    create(input: { title: string; note?: string; runAt: number | string; recurrence?: PlanReminderRecurrence; cronExpression?: string; delivery?: PlanReminderDeliveryTarget }): Promise<PlanReminder> {
-      return ipcRenderer.invoke('plans:create', input);
+    create(input: { title: string; note?: string; runAt: number; recurrence?: PlanReminderRecurrence; cronExpression?: string; delivery?: PlanReminderDeliveryTarget }): Promise<PlanReminder> {
+      return ipcRenderer.invoke('scheduled-tasks:create', input);
     },
-    update(id: string, patch: { title?: string; note?: string; runAt?: number | string; recurrence?: PlanReminderRecurrence; cronExpression?: string; delivery?: PlanReminderDeliveryTarget; enabled?: boolean }): Promise<PlanReminder> {
-      return ipcRenderer.invoke('plans:update', id, patch);
+    update(id: string, patch: { title?: string; note?: string; runAt?: number; recurrence?: PlanReminderRecurrence; cronExpression?: string; delivery?: PlanReminderDeliveryTarget }): Promise<PlanReminder> {
+      return ipcRenderer.invoke('scheduled-tasks:update', id, patch);
     },
     setEnabled(id: string, enabled: boolean): Promise<PlanReminder> {
-      return ipcRenderer.invoke('plans:setEnabled', id, enabled);
+      return ipcRenderer.invoke('scheduled-tasks:setEnabled', id, enabled);
     },
     triggerNow(id: string): Promise<PlanReminder> {
-      return ipcRenderer.invoke('plans:triggerNow', id);
+      return ipcRenderer.invoke('scheduled-tasks:triggerNow', id);
     },
     snooze(id: string): Promise<PlanReminder> {
-      return ipcRenderer.invoke('plans:snooze', id);
+      return ipcRenderer.invoke('scheduled-tasks:snooze', id);
     },
     clearRunHistory(id: string): Promise<PlanReminder> {
-      return ipcRenderer.invoke('plans:clearRunHistory', id);
+      return ipcRenderer.invoke('scheduled-tasks:clearRunHistory', id);
     },
     delete(id: string): Promise<void> {
-      return ipcRenderer.invoke('plans:delete', id);
+      return ipcRenderer.invoke('scheduled-tasks:delete', id);
     },
-    subscribeChanges(handler: (event: { type: 'plans_changed'; reason: string; reminderId?: string; ts: number }) => void): () => void {
-      const listener = (_event: Electron.IpcRendererEvent, payload: { type: 'plans_changed'; reason: string; reminderId?: string; ts: number }) => handler(payload);
-      ipcRenderer.on('plans:changed', listener);
-      return () => ipcRenderer.off('plans:changed', listener);
+    subscribeChanges(handler: (event: { type: 'scheduled_tasks_changed'; reason: string; taskId?: string; ts: number }) => void): () => void {
+      const listener = (_event: Electron.IpcRendererEvent, payload: { type: 'scheduled_tasks_changed'; reason: string; taskId?: string; ts: number }) => handler(payload);
+      ipcRenderer.on('scheduled-tasks:changed', listener);
+      return () => ipcRenderer.off('scheduled-tasks:changed', listener);
     },
     subscribeDue(handler: (reminder: PlanReminder) => void): () => void {
       const listener = (_event: Electron.IpcRendererEvent, payload: PlanReminder) => handler(payload);
-      ipcRenderer.on('plans:due', listener);
-      return () => ipcRenderer.off('plans:due', listener);
+      ipcRenderer.on('scheduled-tasks:fired', listener);
+      return () => ipcRenderer.off('scheduled-tasks:fired', listener);
     },
   },
   settings: {

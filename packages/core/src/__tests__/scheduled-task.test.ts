@@ -9,7 +9,10 @@ import {
   resumeScheduledTask,
   type ScheduledTask,
 } from '../scheduled-task.js';
-import { scheduledTaskToPlanReminderView } from '../scheduled-task-plan-view.js';
+import {
+  planReminderFormToCreateInput,
+  scheduledTaskToPlanReminderView,
+} from '../scheduled-task-plan-view.js';
 
 describe('scheduled-task catalog', () => {
   it('normalizes a cron agent_run create payload', () => {
@@ -26,6 +29,7 @@ describe('scheduled-task catalog', () => {
             backend: 'ai-sdk',
             llmConnectionSlug: 'default',
             model: 'test-model',
+            permissionMode: 'ask',
             collaborationMode: 'agent',
             orchestrationMode: 'default',
           },
@@ -126,5 +130,76 @@ describe('scheduled-task catalog', () => {
     assert.equal(view.title, 'Agent cron');
     assert.equal(view.agentOrigin?.kind, 'cron');
     assert.equal(view.status, 'scheduled');
+  });
+
+  it('accepts an empty note for notification tasks', () => {
+    const now = Date.UTC(2026, 0, 5, 8, 0, 0);
+    const result = normalizeCreateScheduledTaskInput(
+      planReminderFormToCreateInput({ title: 'Stand up', runAt: now + 60_000 }),
+      now,
+    );
+    assert.equal(result.ok, true);
+    if (result.ok) assert.equal(result.value.intentBody, '');
+  });
+
+  it('keeps weekly and monthly recurrences as calendar schedules', () => {
+    const runAt = new Date(2026, 0, 31, 9, 30).getTime();
+    const weekly = planReminderFormToCreateInput({
+      title: 'Weekly',
+      runAt,
+      recurrence: 'weekly',
+    });
+    const monthly = planReminderFormToCreateInput({
+      title: 'Monthly',
+      runAt,
+      recurrence: 'monthly',
+    });
+    assert.deepEqual(weekly.schedule, { kind: 'calendar', recurrence: 'weekly', anchorAt: runAt });
+    assert.deepEqual(monthly.schedule, {
+      kind: 'calendar',
+      recurrence: 'monthly',
+      anchorAt: runAt,
+    });
+    const february = computeNextFireAt(monthly.schedule as never, runAt);
+    assert.equal(new Date(february!).getDate(), 28);
+  });
+
+  it('rejects tasks whose first fire is not before expiration', () => {
+    const now = Date.UTC(2026, 0, 5, 8, 0, 0);
+    const result = normalizeCreateScheduledTaskInput(
+      {
+        title: 'Already expired before fire',
+        intentBody: '',
+        schedule: { kind: 'once', runAt: now + 60_000 },
+        effect: { kind: 'notify', channel: 'local' },
+        createdBy: { kind: 'user' },
+        expiresAt: now + 30_000,
+      },
+      now,
+    );
+    assert.deepEqual(result, { ok: false, message: 'Schedule must fire before expiresAt' });
+  });
+
+  it('rejects future recurrence anchors outside the scheduling horizon', () => {
+    const now = Date.UTC(2026, 0, 5, 8, 0, 0);
+    for (const schedule of [
+      { kind: 'interval', everySeconds: 60, startAt: now + 367 * 86_400_000 },
+      { kind: 'calendar', recurrence: 'monthly', anchorAt: now + 367 * 86_400_000 },
+    ]) {
+      const result = normalizeCreateScheduledTaskInput(
+        {
+          title: 'Too far away',
+          intentBody: '',
+          schedule,
+          effect: { kind: 'notify', channel: 'local' },
+          createdBy: { kind: 'user' },
+        },
+        now,
+      );
+      assert.deepEqual(result, {
+        ok: false,
+        message: 'Schedule has no fire within one year from now',
+      });
+    }
   });
 });

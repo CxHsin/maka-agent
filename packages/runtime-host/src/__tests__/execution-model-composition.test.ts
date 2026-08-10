@@ -921,6 +921,7 @@ test('production Host executes a canonical ai-sdk Session against a real provide
       'MakaSettingsGet',
       'MakaSettingsUpdate',
       'Read',
+      'ScheduledTask',
       'Skill',
       'SkillSearch',
       'StopBackgroundTask',

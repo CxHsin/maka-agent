@@ -143,7 +143,6 @@ export type PlanReminderUpdatePatch = {
   recurrence?: PlanReminderRecurrence;
   cronExpression?: string;
   delivery?: PlanReminderDeliveryTarget;
-  enabled?: boolean;
 };
 
 /**

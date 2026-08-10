@@ -11,7 +11,7 @@
 // delete controls all live here, where they are plain buttons with room for
 // real labels instead of six entries behind a per-row overflow menu.
 
-import { isAgentAutomationPlanReminder, type PlanReminder } from '@maka/core';
+import { isAgentScheduledTaskPlanReminder, type PlanReminder } from '@maka/core';
 import {
   Button,
   Divider,
@@ -51,7 +51,7 @@ export function PlanReminderInspector(props: {
   const locale = useUiLocale();
   const copy = getPlanReminderCopy(locale);
   const { reminder } = props;
-  const isAgentAutomation = isAgentAutomationPlanReminder(reminder);
+  const isAgentAutomation = isAgentScheduledTaskPlanReminder(reminder);
   const isCompleted = reminder.status === 'completed';
   const pending = Array.from(props.pendingActionKeys).some((key) => key.startsWith(`${reminder.id}:`));
   const key = (action: string) => props.pendingActionKeys.has(`${reminder.id}:${action}`);

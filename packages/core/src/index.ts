@@ -1152,6 +1152,7 @@ export {
   resumeScheduledTask,
 } from './scheduled-task.js';
 export {
+  isAgentScheduledTaskPlanReminder,
   planReminderFormToCreateInput,
   scheduledTaskToPlanReminderView,
 } from './scheduled-task-plan-view.js';

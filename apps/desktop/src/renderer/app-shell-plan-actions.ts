@@ -36,7 +36,6 @@ type PlanReminderPatch = {
   recurrence?: PlanReminderRecurrence;
   cronExpression?: string;
   delivery?: PlanReminderDeliveryTarget;
-  enabled?: boolean;
 };
 
 export interface AppShellPlanActions {
@@ -72,7 +71,7 @@ export function createAppShellPlanActions(deps: {
     options: { shouldShowError?: () => boolean } = {},
   ) {
     try {
-      const next = await window.maka.plans.list();
+      const next = await window.maka.scheduledTasks.list();
       setPlanReminders(next);
     } catch (error) {
       if (options.shouldShowError?.() ?? true) {
@@ -117,20 +116,20 @@ export function createAppShellPlanActions(deps: {
     refreshPlanReminders,
     createPlanReminder(input) {
       return runPlanReminderMutation({
-        run: () => window.maka.plans.create(input),
+        run: () => window.maka.scheduledTasks.create(input),
         successTitle: copy.created,
         successDetail: input.title,
         errorTitle: copy.createFailed,
         errorFallback: copy.createFallback,
         errorMessage: (error) =>
-          errorMessage(error).includes("PLAN_REMINDER_INCOGNITO_ACTIVE")
+          errorMessage(error).includes("SCHEDULED_TASK_INCOGNITO_ACTIVE")
             ? copy.createIncognitoBlocked
             : undefined,
       });
     },
     updatePlanReminder(id, patch) {
       return runPlanReminderMutation({
-        run: () => window.maka.plans.update(id, patch),
+        run: () => window.maka.scheduledTasks.update(id, patch),
         successTitle: copy.saved,
         successDetail: patch.title,
         errorTitle: copy.saveFailed,
@@ -139,7 +138,7 @@ export function createAppShellPlanActions(deps: {
     },
     async togglePlanReminder(id, enabled) {
       await runPlanReminderMutation({
-        run: () => window.maka.plans.setEnabled(id, enabled),
+        run: () => window.maka.scheduledTasks.setEnabled(id, enabled),
         successTitle: enabled ? copy.enabled : copy.paused,
         errorTitle: copy.updateFailed,
         errorFallback: copy.updateFallback,
@@ -148,7 +147,7 @@ export function createAppShellPlanActions(deps: {
     async triggerPlanReminderNow(id) {
       const reminder = getPlanReminders().find((entry) => entry.id === id);
       await runPlanReminderMutation({
-        run: () => window.maka.plans.triggerNow(id),
+        run: () => window.maka.scheduledTasks.triggerNow(id),
         successTitle: copy.triggered,
         successDetail: reminder?.title,
         errorTitle: copy.triggerFailed,
@@ -158,7 +157,7 @@ export function createAppShellPlanActions(deps: {
     async snoozePlanReminder(id) {
       const reminder = getPlanReminders().find((entry) => entry.id === id);
       await runPlanReminderMutation({
-        run: () => window.maka.plans.snooze(id),
+        run: () => window.maka.scheduledTasks.snooze(id),
         successTitle: copy.snoozed,
         successDetail: reminder?.title,
         errorTitle: copy.snoozeFailed,
@@ -176,7 +175,7 @@ export function createAppShellPlanActions(deps: {
       });
       if (!ok) return;
       await runPlanReminderMutation({
-        run: () => window.maka.plans.clearRunHistory(id),
+        run: () => window.maka.scheduledTasks.clearRunHistory(id),
         successTitle: copy.cleared,
         successDetail: reminder?.title,
         errorTitle: copy.clearFailed,
@@ -194,7 +193,7 @@ export function createAppShellPlanActions(deps: {
       });
       if (!ok) return;
       await runPlanReminderMutation({
-        run: () => window.maka.plans.delete(id),
+        run: () => window.maka.scheduledTasks.delete(id),
         successTitle: copy.deleted,
         errorTitle: copy.deleteFailed,
         errorFallback: copy.deleteFallback,

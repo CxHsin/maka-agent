@@ -1,8 +1,8 @@
 /**
  * Sole scheduler for the unified ScheduledTask catalog.
  *
- * Host agent tools write the same SQLite store; this service is the only
- * process that advances due fires (notify toast/bot, or agent_run via Host).
+ * Host agent tools call this Desktop authority through a reverse Client
+ * Capability; this is the only process that writes or advances due fires.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -13,7 +13,7 @@ import {
   type ScheduledTask,
   type WorkspacePrivacyContext,
 } from '@maka/core';
-import type { ScheduledTaskStore } from '@maka/storage';
+import type { ScheduledTaskFireClaim, ScheduledTaskStore } from '@maka/storage';
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
@@ -30,6 +30,8 @@ export interface ScheduledTaskMainService {
   update(id: string, patch: unknown): Promise<ScheduledTask>;
   pause(id: string): Promise<ScheduledTask>;
   resume(id: string): Promise<ScheduledTask>;
+  snooze(id: string, delayMs?: number): Promise<ScheduledTask>;
+  clearRunHistory(id: string): Promise<ScheduledTask>;
   remove(id: string): Promise<void>;
   triggerNow(id: string): Promise<ScheduledTask>;
   refreshTimers(): Promise<void>;
@@ -71,6 +73,8 @@ export function createScheduledTaskMainService(
 ): ScheduledTaskMainService {
   const timers = new Map<string, NodeJS.Timeout>();
   const now = () => deps.now?.() ?? Date.now();
+  let refreshTask: Promise<void> | undefined;
+  let recovered = false;
 
   function clearTimer(id: string): void {
     const timer = timers.get(id);
@@ -89,10 +93,23 @@ export function createScheduledTaskMainService(
     timers.set(task.id, timer);
   }
 
-  async function refreshTimers(): Promise<void> {
-    stopTimers();
-    await triggerDue();
-    for (const task of await deps.store.list()) schedule(task);
+  function refreshTimers(): Promise<void> {
+    if (refreshTask) return refreshTask;
+    const task = (async () => {
+      stopTimers();
+      if (!recovered) {
+        const interrupted = await deps.store.recoverPendingFires(now());
+        recovered = true;
+        for (const entry of interrupted) deps.emitChanged('fired', entry);
+      }
+      await triggerDue();
+      for (const entry of await deps.store.list()) schedule(entry);
+    })();
+    const wrapped = task.finally(() => {
+      if (refreshTask === wrapped) refreshTask = undefined;
+    });
+    refreshTask = wrapped;
+    return wrapped;
   }
 
   function stopTimers(): void {
@@ -100,16 +117,26 @@ export function createScheduledTaskMainService(
   }
 
   async function triggerDue(): Promise<void> {
-    const due = await deps.store.listDue(now());
-    for (const task of due) {
-      await fulfill(task, now());
+    while (true) {
+      const claim = await deps.store.claimNextDue(now());
+      if (!claim) return;
+      await fulfill(claim, now());
     }
   }
 
-  async function fulfill(task: ScheduledTask, at: number): Promise<void> {
-    const privacy = await deps.getPrivacyContext();
+  async function fulfill(claim: ScheduledTaskFireClaim, at: number): Promise<void> {
+    const task = claim.task;
+    let privacy: WorkspacePrivacyContext;
+    try {
+      privacy = await deps.getPrivacyContext();
+    } catch (error) {
+      const failed = await settleFailure(claim, at, error);
+      schedule(failed);
+      deps.emitChanged('fired', failed);
+      return;
+    }
     if (privacy.incognitoActive) {
-      const blocked = await deps.store.recordFire(task.id, {
+      const blocked = await deps.store.settleFire(claim.id, {
         at,
         outcome: 'blocked',
         message: '隐私模式已开启，定时任务没有触发。',
@@ -121,7 +148,7 @@ export function createScheduledTaskMainService(
 
     if (task.effect.kind === 'notify' && task.effect.channel === 'bot') {
       if (!isBotDeliveryProvider(task.effect.platform)) {
-        const blocked = await deps.store.recordFire(task.id, {
+        const blocked = await deps.store.settleFire(claim.id, {
           at,
           outcome: 'blocked',
           message: `${botDisplayLabel(task.effect.platform)} 当前不是可投递目标。`,
@@ -138,7 +165,7 @@ export function createScheduledTaskMainService(
         )
         .catch(() => null);
       if (!sent) {
-        const blocked = await deps.store.recordFire(task.id, {
+        const blocked = await deps.store.settleFire(claim.id, {
           at,
           outcome: 'blocked',
           message: `${botDisplayLabel(task.effect.platform)} 通道不可用。`,
@@ -147,7 +174,7 @@ export function createScheduledTaskMainService(
         deps.emitChanged('blocked', blocked);
         return;
       }
-      const fired = await deps.store.recordFire(task.id, {
+      const fired = await deps.store.settleFire(claim.id, {
         at,
         outcome: 'ok',
         message: `已投递到 ${botDisplayLabel(task.effect.platform)}。`,
@@ -159,20 +186,22 @@ export function createScheduledTaskMainService(
     }
 
     if (task.effect.kind === 'notify') {
-      const fired = await deps.store.recordFire(task.id, {
+      // The renderer notification is the side effect. Admit it before marking
+      // the fire settled so a crash cannot record success for an unseen alert.
+      deps.emitFired(task);
+      const fired = await deps.store.settleFire(claim.id, {
         at,
         outcome: 'ok',
         message: '本地提醒已触发。',
       });
       schedule(fired);
       deps.emitChanged('fired', fired);
-      deps.emitFired(fired);
       return;
     }
 
     // agent_run
     if (!deps.startAgentRun) {
-      const failed = await deps.store.recordFire(task.id, {
+      const failed = await deps.store.settleFire(claim.id, {
         at,
         outcome: 'failed',
         message: 'Agent run fulfillment is not available.',
@@ -193,7 +222,7 @@ export function createScheduledTaskMainService(
         runId,
         userMessageId,
       });
-      const fired = await deps.store.recordFire(task.id, {
+      const fired = await deps.store.settleFire(claim.id, {
         at,
         outcome: 'ok',
         message: '已启动 Agent 会话执行。',
@@ -205,7 +234,7 @@ export function createScheduledTaskMainService(
       deps.emitFired(fired);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const failed = await deps.store.recordFire(task.id, {
+      const failed = await deps.store.settleFire(claim.id, {
         at,
         outcome: 'failed',
         message,
@@ -213,6 +242,18 @@ export function createScheduledTaskMainService(
       schedule(failed);
       deps.emitChanged('fired', failed);
     }
+  }
+
+  async function settleFailure(
+    claim: ScheduledTaskFireClaim,
+    at: number,
+    error: unknown,
+  ): Promise<ScheduledTask> {
+    return deps.store.settleFire(claim.id, {
+      at,
+      outcome: 'failed',
+      message: error instanceof Error ? error.message : String(error),
+    });
   }
 
   return {
@@ -263,16 +304,26 @@ export function createScheduledTaskMainService(
       deps.emitChanged('updated', task);
       return task;
     },
+    async snooze(id, delayMs = 10 * 60 * 1000) {
+      const task = await deps.store.snooze(id, delayMs);
+      schedule(task);
+      deps.emitChanged('updated', task);
+      return task;
+    },
+    async clearRunHistory(id) {
+      const task = await deps.store.clearRunHistory(id);
+      schedule(task);
+      deps.emitChanged('updated', task);
+      return task;
+    },
     async remove(id) {
       clearTimer(id);
       await deps.store.remove(id);
       deps.emitChanged('deleted', { id });
     },
     async triggerNow(id) {
-      const task = (await deps.store.list()).find((entry) => entry.id === id);
-      if (!task) throw new Error(`No such scheduled task: ${id}`);
-      if (task.status !== 'active') throw new Error('Only active tasks can be triggered now');
-      await fulfill(task, now());
+      const claim = await deps.store.claimNow(id, now());
+      await fulfill(claim, now());
       const updated = (await deps.store.list()).find((entry) => entry.id === id);
       if (!updated) throw new Error(`No such scheduled task: ${id}`);
       schedule(updated);

@@ -16,6 +16,8 @@ import {
 } from "@maka/core/llm-connections";
 import {
   BotRegistry,
+  SCHEDULED_TASK_AUTHORITY_SERVICE_ID,
+  SCHEDULED_TASK_AUTHORITY_SERVICE_VERSION,
   buildMcpTools,
   type BotIncomingMessage,
 } from "@maka/runtime";
@@ -71,10 +73,7 @@ import {
 import { registerNotificationsIpc } from "./notifications-ipc-main.js";
 import { registerScheduledTaskIpc } from "./scheduled-tasks-ipc-main.js";
 import { createScheduledTaskMainService } from "./scheduled-tasks-main.js";
-import {
-  planReminderFormToCreateInput,
-  scheduledTaskToPlanReminderView,
-} from "@maka/core";
+import { scheduledTaskToPlanReminderView } from "@maka/core";
 import { registerPetPackIpc } from "./pet-pack-import.js";
 import {
   createPermissionOverlayMain,
@@ -386,7 +385,7 @@ const scheduledTasks = createScheduledTaskMainService({
       ...(execution.thinkingLevel === undefined
         ? {}
         : { thinkingLevel: execution.thinkingLevel }),
-      permissionMode: "explore",
+      permissionMode: execution.permissionMode,
       collaborationMode: execution.collaborationMode,
       orchestrationMode: execution.orchestrationMode,
     } as never);
@@ -425,17 +424,12 @@ const scheduledTasks = createScheduledTaskMainService({
       ...(live.thinkingLevel === undefined
         ? {}
         : { thinkingLevel: live.thinkingLevel }),
+      permissionMode: live.permissionMode,
       collaborationMode: live.collaborationMode ?? "agent",
       orchestrationMode: live.orchestrationMode ?? "default",
     };
   },
   emitChanged: (reason, task) => {
-    mainWindowController.send("plans:changed", {
-      type: "plans_changed",
-      reason,
-      reminderId: task.id,
-      ts: Date.now(),
-    });
     mainWindowController.send("scheduled-tasks:changed", {
       type: "scheduled_tasks_changed",
       reason,
@@ -444,9 +438,10 @@ const scheduledTasks = createScheduledTaskMainService({
     });
   },
   emitFired: (task) => {
-    const view = scheduledTaskToPlanReminderView(task);
-    mainWindowController.send("plans:due", view);
-    mainWindowController.send("scheduled-tasks:fired", task);
+    mainWindowController.send(
+      "scheduled-tasks:fired",
+      scheduledTaskToPlanReminderView(task),
+    );
   },
 });
 mcpManager.onChange(() => {
@@ -517,6 +512,26 @@ owner = await startRuntimeHostDesktopOwner(
               ]),
         ];
       },
+      additionalServices: () => [
+        {
+          serviceId: SCHEDULED_TASK_AUTHORITY_SERVICE_ID,
+          version: SCHEDULED_TASK_AUTHORITY_SERVICE_VERSION,
+          async call(method, input) {
+            if (method === "list") return { tasks: await scheduledTasks.list() };
+            if (method === "create") {
+              return { task: await scheduledTasks.create(input.payload) };
+            }
+            if (method !== "pause" && method !== "resume" && method !== "delete") {
+              throw new Error(`Unknown ScheduledTask authority method: ${method}`);
+            }
+            const id = requireScheduledTaskServiceId(input.id);
+            if (method === "pause") return { task: await scheduledTasks.pause(id) };
+            if (method === "resume") return { task: await scheduledTasks.resume(id) };
+            await scheduledTasks.remove(id);
+            return { ok: true };
+          },
+        },
+      ],
       oauthPresentation,
       releaseComputerUseSession,
     },
@@ -763,94 +778,6 @@ function registerHostClientIpc(
         .incognitoActive,
     }),
   });
-  // Backward-compatible plans:* IPC surface → unified scheduled task catalog.
-  scopedIpc.handle("plans:list", async () =>
-    (await scheduledTasks.list()).map(scheduledTaskToPlanReminderView),
-  );
-  scopedIpc.handle("plans:create", async (_event, input: unknown) => {
-    const privacy = await client.queryRuntimePolicy();
-    if (privacy.policy.privacy.incognitoActive) {
-      throw new Error("PLAN_REMINDER_INCOGNITO_ACTIVE");
-    }
-    const created = await scheduledTasks.create(
-      planReminderFormToCreateInput(input as never),
-    );
-    return scheduledTaskToPlanReminderView(created);
-  });
-  scopedIpc.handle("plans:update", async (_event, id: string, patch: unknown) => {
-    const record = patch as Record<string, unknown>;
-    const updated = await scheduledTasks.update(id, {
-      ...(typeof record.title === "string" ? { title: record.title } : {}),
-      ...(typeof record.note === "string" ? { intentBody: record.note } : {}),
-      ...(record.runAt !== undefined ||
-      record.recurrence !== undefined ||
-      record.cronExpression !== undefined
-        ? {
-            schedule: planReminderFormToCreateInput({
-              title: "x",
-              runAt:
-                typeof record.runAt === "number"
-                  ? record.runAt
-                  : Date.now() + 60_000,
-              recurrence:
-                typeof record.recurrence === "string"
-                  ? record.recurrence
-                  : undefined,
-              cronExpression:
-                typeof record.cronExpression === "string"
-                  ? record.cronExpression
-                  : undefined,
-            }).schedule,
-          }
-        : {}),
-      ...(record.delivery !== undefined
-        ? {
-            effect: planReminderFormToCreateInput({
-              title: "x",
-              runAt: Date.now() + 60_000,
-              delivery: record.delivery as never,
-            }).effect,
-          }
-        : {}),
-    });
-    if (typeof record.enabled === "boolean") {
-      const toggled = record.enabled
-        ? await scheduledTasks.resume(id)
-        : await scheduledTasks.pause(id);
-      return scheduledTaskToPlanReminderView(toggled);
-    }
-    return scheduledTaskToPlanReminderView(updated);
-  });
-  scopedIpc.handle("plans:setEnabled", async (_event, id: string, enabled: boolean) =>
-    scheduledTaskToPlanReminderView(
-      enabled ? await scheduledTasks.resume(id) : await scheduledTasks.pause(id),
-    ),
-  );
-  scopedIpc.handle("plans:triggerNow", async (_event, id: string) =>
-    scheduledTaskToPlanReminderView(await scheduledTasks.triggerNow(id)),
-  );
-  scopedIpc.handle("plans:snooze", async (_event, id: string) => {
-    const task = (await scheduledTasks.list()).find((entry) => entry.id === id);
-    if (!task) throw new Error(`No such scheduled task: ${id}`);
-    if (typeof task.nextFireAt !== "number") {
-      throw new Error("Task has no next fire to snooze");
-    }
-    const snoozedAt = task.nextFireAt + 10 * 60 * 1000;
-    return scheduledTaskToPlanReminderView(
-      await scheduledTasks.update(id, {
-        schedule: { kind: "once", runAt: snoozedAt },
-      }),
-    );
-  });
-  scopedIpc.handle("plans:clearRunHistory", async (_event, id: string) => {
-    // Run history is append-only on ScheduledTask; treat clear as no-op refresh.
-    const task = (await scheduledTasks.list()).find((entry) => entry.id === id);
-    if (!task) throw new Error(`No such scheduled task: ${id}`);
-    return scheduledTaskToPlanReminderView(task);
-  });
-  scopedIpc.handle("plans:delete", async (_event, id: string) => {
-    await scheduledTasks.remove(id);
-  });
   const resolveProjectRootForContext = (sessionId: unknown): Promise<string> =>
     resolveProjectContextRoot(sessionId, {
       currentProjectRoot: () => projectRoot.current(),
@@ -958,6 +885,13 @@ function registerHostClientIpc(
     capabilityBinding.dispose();
     await capabilityBinding.aligned.catch(() => undefined);
   };
+}
+
+function requireScheduledTaskServiceId(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("ScheduledTask authority requires an id");
+  }
+  return value;
 }
 
 function registerPersistentClientIpc(): void {

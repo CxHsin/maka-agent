@@ -382,8 +382,8 @@ export function useAppShellBootstrapSubscriptions(options: {
       void options.refreshConnections();
     });
     const unsubscribeSessionChanges = window.maka.sessions.subscribeChanges(handleSessionChange);
-    const unsubscribePlanChanges = window.maka.plans.subscribeChanges(handlePlanChange);
-    const unsubscribePlanDue = window.maka.plans.subscribeDue(handlePlanDue);
+    const unsubscribePlanChanges = window.maka.scheduledTasks.subscribeChanges(handlePlanChange);
+    const unsubscribePlanDue = window.maka.scheduledTasks.subscribeDue(handlePlanDue);
     const unsubscribeWindowCommand = window.maka.appWindow.subscribeCommand(handleWindowCommand);
     markRendererMounted();
     return () => {

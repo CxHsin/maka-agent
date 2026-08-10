@@ -87,13 +87,8 @@ export type {
 } from './artifact-store.js';
 export * from './artifact-attachments.js';
 export * from './provider-request-capture-artifact.js';
-export { createSqlitePlanReminderStore } from './plan-reminder-store.js';
-export type {
-  PlanReminderStore,
-  SqlitePlanReminderStore,
-} from './plan-reminder-store.js';
 export { createSqliteScheduledTaskStore } from './scheduled-task-store.js';
-export type { ScheduledTaskStore } from './scheduled-task-store.js';
+export type { ScheduledTaskFireClaim, ScheduledTaskStore } from './scheduled-task-store.js';
 export { applyPlanEvent, createSqlitePlanStore } from './plan-store.js';
 export type {
   CreatePlanStoreOptions,

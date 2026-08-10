@@ -154,19 +154,30 @@ SPIs available, an ad-hoc non-hardened signature, and
 `metadataObservation / screenshotObservation / trustedWebContentClick = false`.
 
 Modal and secondary-window routing now have deterministic and live native
-evidence. Five consecutive CUA Lab runs completed:
+functional evidence. Five consecutive CUA Lab runs against the exact pinned
+binary completed:
 
 - modal open, app observation routed to the sheet, close, and return to main;
 - secondary open, app routing to the frontmost secondary window, exact-window
   button click, semantic scroll, close, and return to main;
-- every dispatch path was `ax_action`;
+- all 30 dispatch paths were `ax_action`;
 - button count was 1 and scroll offset reached 140;
-- the target application never became frontmost.
+- the five per-run records are retained in one aggregate fixture.
 
-The executor also handles the measured AppKit races: a newly listed CGWindow may
-publish its AXWindow later, and a press may return `cannotComplete` while
-creating or closing a window. Exact window identity, bounded AX readiness and
-same-app window-topology evidence keep those cases from becoming stale guesses.
+The high-frequency foreground sentinel does not pass: across ten modal/secondary
+sampling spans it recorded 1,738 target-frontmost samples, with at least 189
+samples per span and a maximum 96 ms sample gap. The stage-level before/after
+reads had hidden this transient focus theft. Modal/multi-window routing is
+therefore functionally qualified but does not yet satisfy the background-focus
+contract.
+
+The source includes bounded handling for two measured AppKit races: a newly
+listed CGWindow may publish its AXWindow later, and a press may return
+`cannotComplete` while creating or closing a window. This five-run fixture did
+not exercise the topology-recovery verification arm
+(`topologyRecoveryEvidenceCount: 0`), so that behavior remains implementation
+and unit-test evidence rather than a live claim.
+
 This is native executor qualification, not a provider-model matrix cell.
 
 The same pin now carries stable AX observation revisions:

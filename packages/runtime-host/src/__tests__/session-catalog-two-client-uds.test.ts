@@ -508,7 +508,6 @@ test('two Clients share stable Session creation, CAS configuration, and catalog 
       const heartbeat = await desktop.request('automation.mutate', {
         kind: 'create',
         sessionId: created.id,
-        automationKind: 'heartbeat',
         name: 'Retirement blocker',
         prompt: 'Remain attached to this Session.',
         schedule: { type: 'interval', seconds: 3_600 },

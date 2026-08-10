@@ -1,14 +1,14 @@
 /**
- * Plan-reminder create/edit form dialog (issue #1044).
+ * ScheduledTask create/edit form dialog (issue #1044).
  *
  * Owns ALL form state + the submit pipeline that used to live inline in
- * `plan-reminder-panel.tsx`: the nine field states, editingId, the
+ * `scheduled-task-panel.tsx`: the nine field states, editingId, the
  * submitPending single-flight owner, validation, and the close guard. The
  * panel keeps only list/runs/query state and opens this dialog with a
- * `PlanReminderFormSeed`. It remounts each form session so Astryx receives a
+ * `ScheduledTaskFormSeed`. It remounts each form session so Astryx receives a
  * fresh native dialog with the selected seed.
  *
- * Async-owner invariants (pinned by plan-reminder-panel-contract):
+ * Async-owner invariants (pinned by scheduled-task-panel-contract):
  *   - submit rejects re-entry synchronously via submitPendingRef before
  *     React commits the disabled state;
  *   - the dialog refuses to close while a submit is in flight;
@@ -20,19 +20,18 @@ import { useMountedRef } from './use-mounted-ref.js';
 import { BotBrandLogo } from './bot-brand-logo.js';
 import type {
   BotProvider,
-  PlanReminder,
-  PlanReminderDeliveryTarget,
-  PlanReminderRecurrence,
+  ScheduledTask,
+  ScheduledTaskSchedule,
 } from '@maka/core';
 import { BOT_DELIVERY_PROVIDERS, botDisplayLabel } from '@maka/core';
 import {
-  type PlanReminderFormSeed,
-  formatPlanDeliveryProviderList,
-  planReminderFormValidation,
-  planReminderPresetRunAt,
-  planReminderTemplateSeed,
-  toPlanReminderLocalDateTimeValue,
-} from './plan-reminder-helpers.js';
+  type ScheduledTaskFormSeed,
+  formatScheduledTaskDeliveryProviderList,
+  scheduledTaskFormValidation,
+  scheduledTaskPresetRunAt,
+  scheduledTaskTemplateSeed,
+  toScheduledTaskLocalDateTimeValue,
+} from './scheduled-task-helpers.js';
 import {
   Button as UiButton,
   DateTimeInput,
@@ -51,34 +50,37 @@ import {
   DropdownMenuItem,
 } from '@astryxdesign/core/DropdownMenu';
 import {
-  getPlanReminderCopy,
-  type PlanReminderExampleTemplate,
-} from './plan-reminder-copy.js';
+  getScheduledTaskCopy,
+  type ScheduledTaskExampleTemplate,
+} from './scheduled-task-copy.js';
 import { useUiLocale } from './locale-context.js';
 import type {
-  PlanReminderDraftInput,
-  PlanReminderUpdatePatch,
+  ScheduledTaskDelivery,
+  ScheduledTaskDeliveryMethod,
+  ScheduledTaskDraftInput,
+  ScheduledTaskRecurrence,
+  ScheduledTaskUpdatePatch,
 } from './module-panel-types.js';
 
-export function PlanReminderFormDialog(props: {
+export function ScheduledTaskFormDialog(props: {
   open: boolean;
-  seed: PlanReminderFormSeed;
-  /** Current reminders, so an open edit form resets if its reminder vanishes. */
-  reminders: PlanReminder[];
+  seed: ScheduledTaskFormSeed;
+  /** Current tasks, so an open edit form resets if its task vanishes. */
+  tasks: ScheduledTask[];
   onOpenChange(open: boolean): void;
-  onCreate?(input: PlanReminderDraftInput): boolean | Promise<boolean> | void | Promise<void>;
-  onUpdate?(id: string, patch: PlanReminderUpdatePatch): boolean | Promise<boolean> | void | Promise<void>;
+  onCreate?(input: ScheduledTaskDraftInput): boolean | Promise<boolean> | void | Promise<void>;
+  onUpdate?(id: string, patch: ScheduledTaskUpdatePatch): boolean | Promise<boolean> | void | Promise<void>;
 }) {
   const locale = useUiLocale();
-  const catalog = getPlanReminderCopy(locale);
+  const catalog = getScheduledTaskCopy(locale);
   const copy = catalog.form;
   const templates = catalog.templates;
   const [title, setTitle] = useState(props.seed.title);
   const [note, setNote] = useState(props.seed.note);
   const [runAtLocal, setRunAtLocal] = useState(props.seed.runAtLocal);
-  const [recurrence, setRecurrence] = useState<PlanReminderRecurrence>(props.seed.recurrence);
+  const [recurrence, setRecurrence] = useState<ScheduledTaskRecurrence>(props.seed.recurrence);
   const [cronExpression, setCronExpression] = useState(props.seed.cronExpression);
-  const [deliveryChannel, setDeliveryChannel] = useState<PlanReminderDeliveryTarget['channel']>(props.seed.deliveryChannel);
+  const [deliveryMethod, setDeliveryMethod] = useState<ScheduledTaskDeliveryMethod>(props.seed.deliveryMethod);
   const [deliveryPlatform, setDeliveryPlatform] = useState<BotProvider>(props.seed.deliveryPlatform);
   const [deliveryChatId, setDeliveryChatId] = useState(props.seed.deliveryChatId);
   const [editingId, setEditingId] = useState<string | null>(props.seed.editingId);
@@ -86,21 +88,26 @@ export function PlanReminderFormDialog(props: {
   // The empty form is invalid by definition; showing the title error before
   // the user has typed anything reads as a scolding. Gate it on first input.
   const [titleTouched, setTitleTouched] = useState(false);
-  const planReminderMountedRef = useMountedRef();
+  const scheduledTaskMountedRef = useMountedRef();
   const submitPendingRef = useRef(false);
   const parsedRunAt = Date.parse(runAtLocal);
-  const delivery: PlanReminderDeliveryTarget = deliveryChannel === 'bot'
-    ? { channel: 'bot', platform: deliveryPlatform, chatId: deliveryChatId.trim() }
-    : { channel: 'local' };
-  const validation = planReminderFormValidation({
+  const effect = deliveryMethod === 'agent_run'
+    ? props.seed.lockedEffect
+    : deliveryMethod === 'bot'
+      ? { kind: 'notify' as const, channel: 'bot' as const, platform: deliveryPlatform, chatId: deliveryChatId.trim() }
+      : { kind: 'notify' as const, channel: 'local' as const };
+  const validation = scheduledTaskFormValidation({
     title,
     parsedRunAt,
     recurrence,
     cronExpression,
-    delivery,
+    delivery: effect ?? { kind: 'notify', channel: 'local' },
     now: Date.now(),
   }, locale);
-  const canCreate = validation === null;
+  const canCreate =
+    validation === null &&
+    effect !== undefined &&
+    (recurrence !== 'interval' || props.seed.lockedSchedule !== undefined);
   const submitDisabled = !canCreate || submitPending;
   const formInteractionDisabled = submitPending;
   const isEditing = editingId !== null;
@@ -117,36 +124,36 @@ export function PlanReminderFormDialog(props: {
   // back to whatever opened it.
 
   useEffect(() => {
-    if (editingId && !props.reminders.some((reminder) => reminder.id === editingId)) resetForm();
-  }, [editingId, props.reminders]);
+    if (editingId && !props.tasks.some((task) => task.id === editingId)) resetForm();
+  }, [editingId, props.tasks]);
 
   function resetForm() {
     setTitle('');
     setNote('');
     setRecurrence('none');
     setCronExpression('0 9 * * 1-5');
-    setDeliveryChannel('local');
+    setDeliveryMethod('local');
     setDeliveryPlatform('telegram');
     setDeliveryChatId('');
-    setRunAtLocal(toPlanReminderLocalDateTimeValue(Date.now() + 60 * 60 * 1000));
+    setRunAtLocal(toScheduledTaskLocalDateTimeValue(Date.now() + 60 * 60 * 1000));
     setEditingId(null);
     setTitleTouched(false);
   }
 
-  function closeReminderDialog() {
+  function closeTaskDialog() {
     if (submitPendingRef.current) return;
     props.onOpenChange(false);
     resetForm();
   }
 
-  function applyTemplate(template: PlanReminderExampleTemplate) {
-    const seed = planReminderTemplateSeed(template);
+  function applyTemplate(template: ScheduledTaskExampleTemplate) {
+    const seed = scheduledTaskTemplateSeed(template);
     setTitle(seed.title);
     setNote(seed.note);
     setRunAtLocal(seed.runAtLocal);
     setRecurrence(seed.recurrence);
     setCronExpression(seed.cronExpression);
-    setDeliveryChannel(seed.deliveryChannel);
+    setDeliveryMethod(seed.deliveryMethod);
     setDeliveryPlatform(seed.deliveryPlatform);
     setDeliveryChatId(seed.deliveryChatId);
   }
@@ -154,30 +161,37 @@ export function PlanReminderFormDialog(props: {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (submitDisabled || submitPendingRef.current) return;
+    if (!effect) return;
+    let schedule: ScheduledTaskSchedule;
+    if (recurrence === 'interval') {
+      if (!props.seed.lockedSchedule) return;
+      schedule = props.seed.lockedSchedule;
+    } else if (recurrence === 'none') {
+      schedule = { kind: 'once', runAt: parsedRunAt };
+    } else if (recurrence === 'cron') {
+      schedule = { kind: 'cron', expression: cronExpression.trim(), startAt: parsedRunAt };
+    } else {
+      schedule = { kind: 'calendar', recurrence, anchorAt: parsedRunAt };
+    }
     submitPendingRef.current = true;
     const input = {
       title: title.trim(),
-      note: note.trim(),
-      runAt: parsedRunAt,
-      recurrence,
-      ...(recurrence === 'cron' ? { cronExpression: cronExpression.trim() } : {}),
-      delivery,
+      intentBody: note.trim(),
+      schedule,
+      effect,
     };
     setSubmitPending(true);
     try {
       const result = editingId
         ? await props.onUpdate?.(editingId, input)
-        : await props.onCreate?.({
-          ...input,
-          ...(input.note ? { note: input.note } : {}),
-        });
-      if (result !== false && planReminderMountedRef.current) {
+        : await props.onCreate?.(input);
+      if (result !== false && scheduledTaskMountedRef.current) {
         resetForm();
         props.onOpenChange(false);
       }
     } finally {
       submitPendingRef.current = false;
-      if (planReminderMountedRef.current) setSubmitPending(false);
+      if (scheduledTaskMountedRef.current) setSubmitPending(false);
     }
   }
 
@@ -197,7 +211,7 @@ export function PlanReminderFormDialog(props: {
     <Dialog
       isOpen={props.open}
       onOpenChange={(open) => {
-        if (!open) closeReminderDialog();
+        if (!open) closeTaskDialog();
       }}
       purpose="form"
       width={480}
@@ -208,7 +222,7 @@ export function PlanReminderFormDialog(props: {
           <DialogHeader
             title={isEditing ? copy.editTitle : copy.createTitle}
             onOpenChange={(open) => {
-              if (!open) closeReminderDialog();
+              if (!open) closeTaskDialog();
             }}
             endContent={!isEditing ? (
               <DropdownMenu
@@ -235,7 +249,7 @@ export function PlanReminderFormDialog(props: {
         content={(
           <LayoutContent>
             <form
-              id="maka-plan-reminder-form"
+              id="maka-scheduled-task-form"
               onSubmit={submit}
               aria-busy={submitPending ? 'true' : undefined}
             >
@@ -264,7 +278,7 @@ export function PlanReminderFormDialog(props: {
                 <UiTextarea
                   label={copy.field.note}
                   value={note}
-                  onChange={(value) => setNote(value.slice(0, 1000))}
+                  onChange={(value) => setNote(value.slice(0, 8000))}
                   rows={3}
                   placeholder={copy.notePlaceholder}
                   isDisabled={formInteractionDisabled}
@@ -289,7 +303,7 @@ export function PlanReminderFormDialog(props: {
                   isRequired
                   value={(runAtLocal || undefined) as ISODateTimeString | undefined}
                   onChange={(value) => setRunAtLocal(value ?? '')}
-                  isDisabled={formInteractionDisabled}
+                  isDisabled={formInteractionDisabled || recurrence === 'interval'}
                   hourFormat="24h"
                   timeIncrement={5}
                   width="100%"
@@ -306,7 +320,7 @@ export function PlanReminderFormDialog(props: {
                     shows the result and remains editable.
 
                     They set `runAtLocal` only — recurrence is a separate
-                    question, so choosing 明天 9 点 on a weekly reminder moves
+                    question, so choosing 明天 9 点 on a weekly task moves
                     the next occurrence without silently making it one-off. */}
                 <HStack gap={2} wrap="wrap" role="group" aria-label={copy.presetsAriaLabel}>
                   {copy.presets.map(([preset, label]) => (
@@ -315,9 +329,9 @@ export function PlanReminderFormDialog(props: {
                       variant="secondary"
                       size="sm"
                       label={label}
-                      isDisabled={formInteractionDisabled}
+                      isDisabled={formInteractionDisabled || recurrence === 'interval'}
                       onClick={() => setRunAtLocal(
-                        toPlanReminderLocalDateTimeValue(planReminderPresetRunAt(preset)),
+                        toScheduledTaskLocalDateTimeValue(scheduledTaskPresetRunAt(preset)),
                       )}
                     />
                   ))}
@@ -325,9 +339,12 @@ export function PlanReminderFormDialog(props: {
                 <Selector
                   label={copy.field.recurrence}
                   value={recurrence}
-                  onChange={(value) => setRecurrence(value as PlanReminderRecurrence)}
-                  options={copy.recurrenceOptions.map(([value, label]) => ({ value, label }))}
-                  isDisabled={formInteractionDisabled}
+                  onChange={(value) => setRecurrence(value as ScheduledTaskRecurrence)}
+                  options={(recurrence === 'interval'
+                    ? [['interval', copy.intervalOption] as const]
+                    : copy.recurrenceOptions
+                  ).map(([value, label]) => ({ value, label }))}
+                  isDisabled={formInteractionDisabled || recurrence === 'interval'}
                   width="100%"
                 />
                 {recurrence === 'cron' && (
@@ -347,20 +364,23 @@ export function PlanReminderFormDialog(props: {
                 <Text type="supporting" weight="medium">{copy.groupDelivery}</Text>
                 <Selector
                   label={copy.field.channel}
-                  value={deliveryChannel}
-                  onChange={(value) => setDeliveryChannel(value as PlanReminderDeliveryTarget['channel'])}
-                  options={copy.deliveryOptions.map(([value, label]) => ({ value, label }))}
-                  isDisabled={formInteractionDisabled}
+                  value={deliveryMethod}
+                  onChange={(value) => setDeliveryMethod(value as ScheduledTaskDelivery['channel'])}
+                  options={(deliveryMethod === 'agent_run'
+                    ? [['agent_run', copy.agentRunOption] as const]
+                    : copy.deliveryOptions
+                  ).map(([value, label]) => ({ value, label }))}
+                  isDisabled={formInteractionDisabled || deliveryMethod === 'agent_run'}
                   width="100%"
                 />
-                {deliveryChannel === 'bot' && (
+                {deliveryMethod === 'bot' && (
                   <>
                     <Selector
                       label={copy.field.platform}
                       /* The "why is my platform missing" answer rides the field
                          it answers for, as Selector's own description slot —
                          not a loose paragraph in a third type size. */
-                      description={copy.deliveryHelp(formatPlanDeliveryProviderList())}
+                      description={copy.deliveryHelp(formatScheduledTaskDeliveryProviderList())}
                       value={deliveryPlatform}
                       onChange={(value) => setDeliveryPlatform(value as BotProvider)}
                       options={BOT_DELIVERY_PROVIDERS.map((provider) => ({
@@ -398,7 +418,7 @@ export function PlanReminderFormDialog(props: {
               <UiButton
                 variant="primary"
                 type="submit"
-                form="maka-plan-reminder-form"
+                form="maka-scheduled-task-form"
                 isDisabled={submitDisabled}
                 label={submitPending ? (isEditing ? copy.saving : copy.creating) : (isEditing ? copy.save : copy.create)}
               />

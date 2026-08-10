@@ -9,10 +9,6 @@ import {
   resumeScheduledTask,
   type ScheduledTask,
 } from '../scheduled-task.js';
-import {
-  planReminderFormToCreateInput,
-  scheduledTaskToPlanReminderView,
-} from '../scheduled-task-plan-view.js';
 
 describe('scheduled-task catalog', () => {
   it('normalizes a cron agent_run create payload', () => {
@@ -107,35 +103,66 @@ describe('scheduled-task catalog', () => {
     assert.ok(typeof resumed.nextFireAt === 'number');
   });
 
-  it('projects agent-created tasks into the plan-reminder panel shape', () => {
+  it('does not resume a task whose fire budget is already spent', () => {
     const task: ScheduledTask = {
-      id: 't3',
-      title: 'Agent cron',
-      intent: { kind: 'text', body: 'do work' },
-      schedule: { kind: 'cron', expression: '0 9 * * *', startAt: 1 },
+      id: 'spent',
+      title: 'Spent',
+      intent: { kind: 'text', body: '' },
+      schedule: { kind: 'interval', everySeconds: 60, startAt: 0 },
       effect: { kind: 'notify', channel: 'local' },
-      status: 'active',
-      nextFireAt: 2,
-      lastFireAt: null,
-      fireCount: 0,
-      maxFires: null,
+      status: 'paused',
+      nextFireAt: null,
+      lastFireAt: 60_000,
+      fireCount: 1,
+      maxFires: 1,
       expiresAt: null,
-      createdBy: { kind: 'agent', sessionId: 's1' },
-      createdAt: 1,
-      updatedAt: 1,
+      createdBy: { kind: 'user' },
+      createdAt: 0,
+      updatedAt: 60_000,
       runs: [],
       lastError: null,
     };
-    const view = scheduledTaskToPlanReminderView(task);
-    assert.equal(view.title, 'Agent cron');
-    assert.equal(view.agentOrigin?.kind, 'cron');
-    assert.equal(view.status, 'scheduled');
+    assert.deepEqual(resumeScheduledTask(task, 120_000), {
+      error: 'Scheduled task fire budget is exhausted',
+    });
+  });
+
+  it('rejects numeric-string coercion and non-canonical cron spacing', () => {
+    const now = Date.UTC(2026, 0, 5, 8, 0, 0);
+    for (const schedule of [
+      { kind: 'once', runAt: String(now + 60_000) },
+      { kind: 'interval', everySeconds: '60', startAt: now },
+      { kind: 'interval', everySeconds: 60.5, startAt: now },
+      { kind: 'interval', everySeconds: 60, startAt: String(now) },
+      { kind: 'cron', expression: '0 9 * * *', startAt: String(now) },
+      { kind: 'cron', expression: ' 0 9 * * *', startAt: now },
+    ]) {
+      assert.equal(
+        normalizeCreateScheduledTaskInput(
+          {
+            title: 'Strict boundary',
+            intentBody: '',
+            schedule,
+            effect: { kind: 'notify', channel: 'local' },
+            createdBy: { kind: 'user' },
+          },
+          now,
+        ).ok,
+        false,
+      );
+    }
   });
 
   it('accepts an empty note for notification tasks', () => {
     const now = Date.UTC(2026, 0, 5, 8, 0, 0);
     const result = normalizeCreateScheduledTaskInput(
-      planReminderFormToCreateInput({ title: 'Stand up', runAt: now + 60_000 }),
+      {
+        title: 'Stand up',
+        intentBody: '',
+        schedule: { kind: 'once', runAt: now + 60_000 },
+        effect: { kind: 'notify', channel: 'local' },
+        createdBy: { kind: 'user' },
+      },
       now,
     );
     assert.equal(result.ok, true);
@@ -144,23 +171,15 @@ describe('scheduled-task catalog', () => {
 
   it('keeps weekly and monthly recurrences as calendar schedules', () => {
     const runAt = new Date(2026, 0, 31, 9, 30).getTime();
-    const weekly = planReminderFormToCreateInput({
-      title: 'Weekly',
-      runAt,
-      recurrence: 'weekly',
-    });
-    const monthly = planReminderFormToCreateInput({
-      title: 'Monthly',
-      runAt,
-      recurrence: 'monthly',
-    });
-    assert.deepEqual(weekly.schedule, { kind: 'calendar', recurrence: 'weekly', anchorAt: runAt });
-    assert.deepEqual(monthly.schedule, {
+    const weekly = { kind: 'calendar' as const, recurrence: 'weekly' as const, anchorAt: runAt };
+    const monthly = { kind: 'calendar' as const, recurrence: 'monthly' as const, anchorAt: runAt };
+    assert.deepEqual(weekly, { kind: 'calendar', recurrence: 'weekly', anchorAt: runAt });
+    assert.deepEqual(monthly, {
       kind: 'calendar',
       recurrence: 'monthly',
       anchorAt: runAt,
     });
-    const february = computeNextFireAt(monthly.schedule as never, runAt);
+    const february = computeNextFireAt(monthly, runAt);
     assert.equal(new Date(february!).getDate(), 28);
   });
 

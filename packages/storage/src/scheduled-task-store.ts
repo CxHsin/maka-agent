@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import type { DatabaseSync } from 'node:sqlite';
 import {
   compareScheduledTasksForList,
   computeNextFireAt,
@@ -63,7 +62,6 @@ class SqliteScheduledTaskStore implements ScheduledTaskStore {
 
   constructor(workspaceRoot: string) {
     this.#lease = acquireOperationalStateDatabase(resolve(workspaceRoot));
-    ensureScheduledTaskSchema(this.#lease.database);
   }
 
   ready(): Promise<void> {
@@ -127,8 +125,14 @@ class SqliteScheduledTaskStore implements ScheduledTaskStore {
         const expiresAt = Object.prototype.hasOwnProperty.call(normalized.value, 'expiresAt')
           ? (normalized.value.expiresAt ?? null)
           : task.expiresAt;
+        const maxFires = Object.prototype.hasOwnProperty.call(normalized.value, 'maxFires')
+          ? (normalized.value.maxFires ?? null)
+          : task.maxFires;
         if (effect.kind === 'agent_run' && !intentBody.trim()) {
           throw new Error('Agent run intent body is required');
+        }
+        if (maxFires !== null && maxFires <= task.fireCount) {
+          throw new Error('maxFires must be greater than the current fireCount');
         }
         if (nextFireAt !== null && expiresAt !== null && nextFireAt >= expiresAt) {
           throw new Error('Schedule must fire before expiresAt');
@@ -142,7 +146,7 @@ class SqliteScheduledTaskStore implements ScheduledTaskStore {
           schedule,
           effect,
           ...(Object.prototype.hasOwnProperty.call(normalized.value, 'maxFires')
-            ? { maxFires: normalized.value.maxFires ?? null }
+            ? { maxFires }
             : {}),
           expiresAt,
           nextFireAt,
@@ -408,25 +412,6 @@ function computeRequiredNext(schedule: ScheduledTaskSchedule, now: number): numb
   const next = computeNextFireAt(schedule, now);
   if (next === null) throw new Error('Schedule has no fire within one year');
   return next;
-}
-
-function ensureScheduledTaskSchema(database: DatabaseSync): void {
-  database.exec(`
-    CREATE TABLE IF NOT EXISTS workflow_scheduled_tasks (
-      task_id TEXT PRIMARY KEY,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      record_json TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS workflow_scheduled_tasks_order
-      ON workflow_scheduled_tasks(created_at, task_id);
-    CREATE TABLE IF NOT EXISTS workflow_scheduled_task_fires (
-      claim_id TEXT PRIMARY KEY,
-      task_id TEXT NOT NULL UNIQUE,
-      claimed_at INTEGER NOT NULL,
-      record_json TEXT NOT NULL
-    );
-  `);
 }
 
 function createClaim(

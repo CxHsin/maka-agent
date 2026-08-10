@@ -90,7 +90,7 @@ function automationScheduleIcon(text: string): ComponentType<LucideProps> {
 }
 
 /**
- * Compact preview card for the unified Automation tool's text results
+ * Compact preview card for the session heartbeat Automation tool's text results
  * (created / deleted / listed). The tool returns human-readable text, so this
  * parses its stable first-line shapes; anything unrecognized (pause/resume,
  * errors) falls back to the generic text preview.
@@ -99,7 +99,7 @@ function AutomationResultPreview(props: { text: string }) {
   const copy = getToolActivityCopy(useUiLocale()).automation;
   const text = props.text;
 
-  // mode:create success — "Automation created: "NAME" (kind[, durable])\nID: …\nSchedule: …\nNext fire: …"
+  // mode:create success — "Automation created: "NAME" (heartbeat)\nID: …\nSchedule: …\nNext fire: …"
   const created = text.match(/^Automation created: "(.+?)" \((.+?)\)\n/);
   if (created) {
     const schedule = text.match(/^Schedule: (.+)$/m)?.[1];

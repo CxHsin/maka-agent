@@ -353,8 +353,8 @@
   Astryx Link for the last bare anchors (#2138), a localized required/optional
   field marker (#2184), global shortcuts through Astryx `useHotkeys` (#2091),
   and Astryx `clickAction` owning the in-flight button state (#2089).
-- Fixed the 计划提醒 inspector to sit two tab stops from any row (#2185) and
-  seeded plan reminders with distinct `createdAt` (#2186).
+- Fixed the 定时任务 inspector to sit two tab stops from any row (#2185) and
+  seeded scheduled tasks with distinct `createdAt` (#2186).
 - Added an a11y audit that flags `aria-label` on elements whose role cannot hold
   a name (#2108), and established the Windows support baseline (#2156).
 - Replaced fixed waits with explicit barriers in runtime tests (#2162), owned
@@ -420,7 +420,7 @@
 - Derived thinking-strength controls from models.dev reasoning options, and
   unified cron expression authority.
 - Continued the Astryx redesign across Settings, the subagent page, the
-  extensions page, plan reminders, skill chips and empty states, and the
+  extensions page, scheduled tasks, skill chips and empty states, and the
   composer model and voice controls.
 - Put every headless benchmark arm under the same tool surface and model
   budget, registered `ArchiveRead` for Harbor-archived tool results, and

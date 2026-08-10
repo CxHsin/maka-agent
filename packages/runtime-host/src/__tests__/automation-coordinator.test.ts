@@ -70,7 +70,6 @@ describe('Host Automation coordinator', () => {
       harness.coordinator.start();
 
       const created = await harness.coordinator.create({
-        kind: 'heartbeat',
         name: 'check build',
         prompt: 'Check the build.',
         sessionId: 'creator-session',
@@ -358,41 +357,6 @@ describe('Host Automation coordinator', () => {
     );
   });
 
-  test('creates one stable cron Session from the frozen execution template', async () => {
-    await withHarness(async (harness) => {
-      await harness.coordinator.prepareRecovery();
-      await harness.coordinator.recover();
-      harness.coordinator.start();
-      const created = await harness.coordinator.create({
-        kind: 'cron',
-        name: 'daily summary',
-        prompt: 'Summarize the workspace.',
-        sessionId: 'creator-session',
-        schedule: { type: 'once', delaySeconds: 5 },
-      });
-      assert.ok(!('error' in created));
-      if ('error' in created) return;
-      harness.now = created.nextFireAt ?? assert.fail('Expected a scheduled fire');
-
-      harness.fireTimer();
-      await waitFor('cron Session creation', () => harness.stableCreates.length === 1);
-      const request = harness.stableCreates[0];
-      assert.ok(request);
-      assert.match(request.sessionId, /^automation_session_[0-9a-f]{48}$/);
-      assert.match(request.requestFingerprint, /^sha256:[0-9a-f]{64}$/);
-      assert.equal(request.input.cwd, '/workspace');
-      assert.equal(request.input.llmConnectionSlug, 'openrouter');
-      assert.equal(request.input.model, 'openrouter/free');
-      assert.equal(request.input.permissionMode, 'explore');
-
-      harness.finishRun();
-      await waitFor(
-        'cron fire to settle',
-        async () => (await harness.store.read()).pendingFires.length === 0,
-      );
-    });
-  });
-
   test('rejects new Automations whose creator Session cannot execute hosted roots', async () => {
     for (const scenario of [
       {
@@ -411,7 +375,6 @@ describe('Host Automation coordinator', () => {
             {
               kind: 'create',
               sessionId: 'creator-session',
-              automationKind: 'heartbeat',
               name: 'unsupported heartbeat',
               prompt: 'This cannot execute here.',
               schedule: { type: 'interval', seconds: 60 },
@@ -440,7 +403,6 @@ describe('Host Automation coordinator', () => {
         await harness.coordinator.recover();
         harness.coordinator.start();
         const created = await harness.coordinator.create({
-          kind: 'cron',
           name: 'daily summary',
           prompt: 'Summarize the workspace.',
           sessionId: 'creator-session',
@@ -476,7 +438,6 @@ describe('Host Automation coordinator', () => {
         await harness.coordinator.recover();
         harness.coordinator.start();
         const created = await harness.coordinator.create({
-          kind: 'heartbeat',
           name: 'provider task',
           prompt: 'Use the provider.',
           sessionId: 'creator-session',
@@ -550,7 +511,6 @@ describe('Host Automation coordinator', () => {
         await harness.coordinator.recover();
         harness.coordinator.start();
         const created = await harness.coordinator.create({
-          kind: 'heartbeat',
           name: 'provider task',
           prompt: 'Use the provider.',
           sessionId: 'creator-session',
@@ -615,7 +575,6 @@ describe('Host Automation coordinator', () => {
       await harness.coordinator.recover();
       harness.coordinator.start();
       const created = await harness.coordinator.create({
-        kind: 'heartbeat',
         name: 'check build',
         prompt: 'Check the build.',
         sessionId: 'creator-session',
@@ -630,7 +589,6 @@ describe('Host Automation coordinator', () => {
       assert.equal(harness.residencyCount, 0);
       assert.deepEqual(
         await harness.coordinator.create({
-          kind: 'heartbeat',
           name: 'second check',
           prompt: 'Check again.',
           sessionId: 'creator-session',
@@ -641,111 +599,24 @@ describe('Host Automation coordinator', () => {
     });
   });
 
-  test('allows durable definitions but fences pending fires during Session retirement', async () => {
+  test('session retirement requires its heartbeat automations to be removed', async () => {
     await withHarness(async (harness) => {
       await harness.coordinator.prepareRecovery();
-      await harness.coordinator.recover();
-      harness.coordinator.start();
-      const durable = await harness.coordinator.create({
-        kind: 'cron',
-        name: 'durable summary',
-        prompt: 'Summarize the workspace.',
+      const created = await harness.coordinator.create({
+        name: 'session check',
+        prompt: 'Check the workspace.',
         sessionId: 'creator-session',
-        schedule: { type: 'once', delaySeconds: 5 },
-        durable: true,
+        schedule: { type: 'interval', seconds: 60 },
       });
-      assert.ok(!('error' in durable));
-      if ('error' in durable) return;
-
-      const idleRetirement = await harness.coordinator.beginSessionRetirement(['creator-session']);
-      idleRetirement.rollback();
-
-      harness.now = durable.nextFireAt ?? assert.fail('Expected a scheduled fire');
-      harness.fireTimer();
-      await waitFor(
-        'durable fire to enter running state',
-        async () => (await harness.store.read()).pendingFires[0]?.status === 'running',
-      );
-      const pending = (await harness.store.read()).pendingFires[0];
-      assert.ok(pending);
+      assert.ok(!('error' in created));
+      if ('error' in created) return;
       await assert.rejects(
-        harness.coordinator.beginSessionRetirement([pending.targetSessionId]),
+        harness.coordinator.beginSessionRetirement(['creator-session']),
         HostAutomationSessionBusyError,
       );
-      harness.finishRun();
-      await waitFor(
-        'durable fire to settle',
-        async () => (await harness.store.read()).pendingFires.length === 0,
-      );
-    });
-  });
-
-  test('a Session that can no longer mutate is not reported to the model as a wrong status', async () => {
-    await withHarness(async (harness) => {
-      await harness.coordinator.prepareRecovery();
-      await harness.coordinator.recover();
-      harness.coordinator.start();
-      const durables: AutomationDefinition[] = [];
-      for (const name of ['nightly digest', 'weekly digest']) {
-        const created = await harness.coordinator.create({
-          kind: 'cron',
-          name,
-          prompt: 'Summarize the workspace.',
-          sessionId: 'creator-session',
-          schedule: { type: 'interval', seconds: 60 },
-          durable: true,
-        });
-        assert.ok(!('error' in created));
-        if ('error' in created) return;
-        durables.push(created);
-      }
-      const [toPause, toResume] = durables;
-      assert.ok(toPause && toResume);
-      // Its fire budget is untouched, so nothing about it is spent.
-      assert.ok(await harness.coordinator.pause(toResume.id, 'creator-session'));
-
-      // Retirement fences mutations only. Both automations keep the status the
-      // verb they are about to be asked for requires, and both stay visible.
+      assert.equal(await harness.coordinator.delete(created.id, 'creator-session'), true);
       const retirement = await harness.coordinator.beginSessionRetirement(['creator-session']);
-      try {
-        assert.equal(
-          (await harness.coordinator.get(toPause.id, 'creator-session'))?.status,
-          'active',
-        );
-        assert.equal(
-          (await harness.coordinator.get(toResume.id, 'creator-session'))?.status,
-          'paused',
-        );
-
-        const refusedPause = (await harness.coordinator.modelTool.impl(
-          { mode: 'pause', id: toPause.id },
-          modelToolContext(),
-        )) as string;
-        assert.match(refusedPause, /it is active/);
-        // The status admits pause, so the status is not what refused.
-        assert.doesNotMatch(refusedPause, /only an active automation can be paused/);
-        assert.match(refusedPause, /mode "list"/);
-
-        const refusedResume = (await harness.coordinator.modelTool.impl(
-          { mode: 'resume', id: toResume.id },
-          modelToolContext(),
-        )) as string;
-        assert.match(refusedResume, /it is paused/);
-        // The old wording called an automation with an intact budget spent, and
-        // sent the model to create — which passes through this same gate.
-        assert.doesNotMatch(refusedResume, /can no longer fire/);
-        assert.doesNotMatch(refusedResume, /Create a new automation instead/);
-        assert.match(refusedResume, /mode "list"/);
-
-        // mode "list" reads state, so it is a next step this gate still allows.
-        const listed = (await harness.coordinator.modelTool.impl(
-          { mode: 'list' },
-          modelToolContext(),
-        )) as string;
-        assert.match(listed, /nightly digest/);
-      } finally {
-        retirement.rollback();
-      }
+      retirement.rollback();
     });
   });
 
@@ -763,7 +634,6 @@ describe('Host Automation coordinator', () => {
       const output = await harness.coordinator.modelTool.impl(
         {
           mode: 'create',
-          kind: 'heartbeat',
           name: 'check build',
           prompt: 'Check the build.',
           schedule: { type: 'interval', seconds: 60 },
@@ -785,7 +655,7 @@ describe('Host Automation coordinator', () => {
         automations: [],
         pendingFires: [],
       });
-      assert.deepEqual(await harness.coordinator.listVisibleForSession('creator-session'), []);
+      assert.deepEqual(await harness.coordinator.listForSession('creator-session'), []);
     });
   });
 
@@ -824,7 +694,6 @@ describe('Host Automation coordinator', () => {
       },
       sessions: {
         readHeaderSnapshot: async () => sessionHeader('creator-session'),
-        createStableSession: async () => assert.fail('Heartbeat must not create a Session'),
       },
       runs: {
         readRun: async () => {
@@ -879,7 +748,6 @@ describe('Host Automation coordinator', () => {
       await harness.coordinator.recover();
       harness.coordinator.start();
       const created = await harness.coordinator.create({
-        kind: 'heartbeat',
         name: 'check build',
         prompt: 'Check the build.',
         sessionId: 'creator-session',
@@ -914,7 +782,6 @@ describe('Host Automation coordinator', () => {
       await harness.coordinator.recover();
       harness.coordinator.start();
       const created = await harness.coordinator.create({
-        kind: 'heartbeat',
         name: 'check build',
         prompt: 'Check the build.',
         sessionId: 'creator-session',
@@ -952,7 +819,6 @@ describe('Host Automation coordinator', () => {
       await harness.coordinator.recover();
       harness.coordinator.start();
       const created = await harness.coordinator.create({
-        kind: 'heartbeat',
         name: 'check build',
         prompt: 'Check the build.',
         sessionId: 'creator-session',
@@ -999,7 +865,6 @@ describe('Host Automation coordinator', () => {
         await harness.coordinator.recover();
         harness.coordinator.start();
         const created = await harness.coordinator.create({
-          kind: 'cron',
           name: 'daily summary',
           prompt: 'Summarize the workspace.',
           sessionId: 'creator-session',
@@ -1043,7 +908,6 @@ interface Harness {
   readonly store: InteractiveAutomationAuthorityWriter;
   readonly runs: Map<string, AgentRunHeader>;
   readonly rootInputs: HostedExecutionAdmission[];
-  readonly stableCreates: Parameters<ExecutionSessionWriter['createStableSession']>[0][];
   now: number;
   rootMode: 'run' | 'busy' | 'unavailable';
   residencyCount: number;
@@ -1073,7 +937,6 @@ async function withHarness(
   const store = await openInteractiveAutomationAuthorityForWrite(owner.lease);
   const runs = new Map<string, AgentRunHeader>();
   const rootInputs: HostedExecutionAdmission[] = [];
-  const stableCreates: Parameters<ExecutionSessionWriter['createStableSession']>[0][] = [];
   const sessionHeaders = new Map<string, SessionHeader>([
     ['creator-session', sessionHeader('creator-session', options.creatorHeader)],
   ]);
@@ -1085,7 +948,6 @@ async function withHarness(
     store,
     runs,
     rootInputs,
-    stableCreates,
     now: 1_000,
     rootMode: options.rootMode ?? 'run',
     residencyCount: 0,
@@ -1121,33 +983,7 @@ async function withHarness(
       if (!header) throw missingRecord(`Session not found: ${sessionId}`);
       return structuredClone(header);
     },
-    createStableSession: async (
-      request: Parameters<ExecutionSessionWriter['createStableSession']>[0],
-    ) => {
-      stableCreates.push(structuredClone(request));
-      const existing = sessionHeaders.get(request.sessionId);
-      if (existing) {
-        return {
-          kind: 'existing' as const,
-          record: {
-            header: structuredClone(existing),
-            revision: 1,
-            committedAt: harness.now,
-          },
-        };
-      }
-      const header = sessionHeader(request.sessionId, request.input);
-      sessionHeaders.set(request.sessionId, header);
-      return {
-        kind: 'created' as const,
-        record: {
-          header: structuredClone(header),
-          revision: 1,
-          committedAt: harness.now,
-        },
-      };
-    },
-  } as Pick<ExecutionSessionWriter, 'createStableSession' | 'readHeaderSnapshot'>;
+  } as Pick<ExecutionSessionWriter, 'readHeaderSnapshot'>;
   const runtime = {
     sendMessage: async function* (
       sessionId: string,
@@ -1309,7 +1145,6 @@ function sessionHeader(id: string, input: Partial<SessionHeader> = {}): SessionH
 function startedDefinition(): AutomationDefinition {
   return {
     id: 'automation-1',
-    kind: 'heartbeat',
     name: 'check build',
     status: 'active',
     prompt: 'Check the build.',
@@ -1332,7 +1167,6 @@ function pendingFire(): AutomationPendingFire {
   return {
     id: 'fire-1',
     automationId: 'automation-1',
-    automationKind: 'heartbeat',
     automationName: 'check build',
     prompt: 'Check the build.',
     scheduledFor: 6_000,

@@ -73,7 +73,6 @@ import {
 import { registerNotificationsIpc } from "./notifications-ipc-main.js";
 import { registerScheduledTaskIpc } from "./scheduled-tasks-ipc-main.js";
 import { createScheduledTaskMainService } from "./scheduled-tasks-main.js";
-import { scheduledTaskToPlanReminderView } from "@maka/core";
 import { registerPetPackIpc } from "./pet-pack-import.js";
 import {
   createPermissionOverlayMain,
@@ -376,7 +375,7 @@ const scheduledTasks = createScheduledTaskMainService({
       sessionId,
       workspace,
       name: task.title,
-      labels: ["scheduled-task", "automation"],
+      labels: ["scheduled-task"],
       modelTarget: {
         kind: "explicit",
         connectionSlug: execution.llmConnectionSlug,
@@ -437,12 +436,7 @@ const scheduledTasks = createScheduledTaskMainService({
       ts: Date.now(),
     });
   },
-  emitFired: (task) => {
-    mainWindowController.send(
-      "scheduled-tasks:fired",
-      scheduledTaskToPlanReminderView(task),
-    );
-  },
+  emitFired: (task) => mainWindowController.send("scheduled-tasks:fired", task),
 });
 mcpManager.onChange(() => {
   mainWindowController.send("mcp:changed", mcpManager.statuses());

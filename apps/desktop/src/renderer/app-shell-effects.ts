@@ -2,7 +2,7 @@ import { useEffect, useEffectEvent, useLayoutEffect } from 'react';
 import { useHotkeys } from '@astryxdesign/core/hooks';
 import type {
   ConnectionEvent,
-  PlanReminder,
+  ScheduledTask,
   SessionChangedEvent,
   SessionEvent,
   SessionEventStreamSnapshot,
@@ -227,7 +227,7 @@ export function useAppShellBootstrapSubscriptions(options: {
   refreshConnections: () => Promise<void>;
   refreshMemoryActive: (failureContext?: 'load') => Promise<void>;
   refreshMessages: (sessionId: string) => Promise<boolean>;
-  refreshPlanReminders: (options?: { shouldShowError?: () => boolean }) => Promise<void>;
+  refreshScheduledTasks: (options?: { shouldShowError?: () => boolean }) => Promise<void>;
   refreshProjects: () => Promise<unknown>;
   refreshShellSettings: () => Promise<void>;
   refreshSkills: (options?: { shouldShowError?: () => boolean }) => Promise<void>;
@@ -247,7 +247,7 @@ export function useAppShellBootstrapSubscriptions(options: {
     void options.refreshSkills();
     void options.refreshManagedSkillSources();
     void options.refreshBundledSkillCatalog();
-    void options.refreshPlanReminders();
+    void options.refreshScheduledTasks();
     void options.applyE2eFixture();
   });
   const handleConnectionSubscriptionEvent = useEffectEvent((event: ConnectionEvent) => {
@@ -309,20 +309,20 @@ export function useAppShellBootstrapSubscriptions(options: {
     }
     },
   );
-  const handlePlanChange = useEffectEvent(() => {
-    void options.refreshPlanReminders();
+  const handleScheduledTaskChange = useEffectEvent(() => {
+    void options.refreshScheduledTasks();
   });
-  const handlePlanDue = useEffectEvent((reminder: PlanReminder) => {
+  const handleScheduledTaskDue = useEffectEvent((task: ScheduledTask) => {
     const copy = getShellRemainingCopy(options.uiLocale).notifications;
-    void options.refreshPlanReminders();
+    void options.refreshScheduledTasks();
     options.toastApi.toast({
-      title: copy.planReminder,
-      description: reminder.title,
+      title: copy.scheduledTask,
+      description: task.title,
       variant: 'info',
       duration: 8000,
       action: {
         label: copy.viewScheduledTasks,
-        onClick: () => options.setNavSelection({ section: 'automations', module: 'plan-reminders' }),
+        onClick: () => options.setNavSelection({ section: 'automations', module: 'scheduled-tasks' }),
       },
     });
   });
@@ -382,8 +382,8 @@ export function useAppShellBootstrapSubscriptions(options: {
       void options.refreshConnections();
     });
     const unsubscribeSessionChanges = window.maka.sessions.subscribeChanges(handleSessionChange);
-    const unsubscribePlanChanges = window.maka.scheduledTasks.subscribeChanges(handlePlanChange);
-    const unsubscribePlanDue = window.maka.scheduledTasks.subscribeDue(handlePlanDue);
+    const unsubscribeScheduledTaskChanges = window.maka.scheduledTasks.subscribeChanges(handleScheduledTaskChange);
+    const unsubscribeScheduledTaskDue = window.maka.scheduledTasks.subscribeDue(handleScheduledTaskDue);
     const unsubscribeWindowCommand = window.maka.appWindow.subscribeCommand(handleWindowCommand);
     markRendererMounted();
     return () => {
@@ -391,8 +391,8 @@ export function useAppShellBootstrapSubscriptions(options: {
       unsubscribeConnections();
       unsubscribeSettingsExternal();
       unsubscribeSessionChanges();
-      unsubscribePlanChanges();
-      unsubscribePlanDue();
+      unsubscribeScheduledTaskChanges();
+      unsubscribeScheduledTaskDue();
       unsubscribeWindowCommand();
     };
   }, []);

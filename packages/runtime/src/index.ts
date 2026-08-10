@@ -1535,20 +1535,17 @@ export {
 } from './system-prompt/main-session-prompt.js';
 
 // ───────────────────────────────────────────────────────────────────────────
-// Unified Automation (Codex-style: heartbeat + cron, single tool).
+// Session-scoped heartbeat Automation.
 // ───────────────────────────────────────────────────────────────────────────
 export {
   AutomationManager,
   computeNextCronFire,
   computeJitter,
-  matchesCronField,
   settleAutomationAttempt,
 } from './automation-state.js';
 export type {
   AutomationAttemptOutcome,
   AutomationDefinition,
-  AutomationExecutionTemplate,
-  AutomationKind,
   AutomationSchedule,
   AutomationStatus,
   AutomationManagerDeps,

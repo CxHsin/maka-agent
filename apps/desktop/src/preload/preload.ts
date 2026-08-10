@@ -78,10 +78,10 @@ import type {
   AuthorizationUrlPayload,
   SubscriptionAccountState,
   SubscriptionActionResult,
-  PlanReminder,
+  CreateScheduledTaskInput,
+  ScheduledTask,
+  UpdateScheduledTaskInput,
   ProjectRecord,
-  PlanReminderDeliveryTarget,
-  PlanReminderRecurrence,
   DailyReviewArchive,
   DailyReviewArchiveSummary,
   QueueEnqueueOutcome,
@@ -941,25 +941,25 @@ const makaBridge = {
     },
   },
   scheduledTasks: {
-    list(): Promise<PlanReminder[]> {
+    list(): Promise<ScheduledTask[]> {
       return ipcRenderer.invoke('scheduled-tasks:list');
     },
-    create(input: { title: string; note?: string; runAt: number; recurrence?: PlanReminderRecurrence; cronExpression?: string; delivery?: PlanReminderDeliveryTarget }): Promise<PlanReminder> {
+    create(input: Omit<CreateScheduledTaskInput, 'createdBy'>): Promise<ScheduledTask> {
       return ipcRenderer.invoke('scheduled-tasks:create', input);
     },
-    update(id: string, patch: { title?: string; note?: string; runAt?: number; recurrence?: PlanReminderRecurrence; cronExpression?: string; delivery?: PlanReminderDeliveryTarget }): Promise<PlanReminder> {
+    update(id: string, patch: UpdateScheduledTaskInput): Promise<ScheduledTask> {
       return ipcRenderer.invoke('scheduled-tasks:update', id, patch);
     },
-    setEnabled(id: string, enabled: boolean): Promise<PlanReminder> {
+    setEnabled(id: string, enabled: boolean): Promise<ScheduledTask> {
       return ipcRenderer.invoke('scheduled-tasks:setEnabled', id, enabled);
     },
-    triggerNow(id: string): Promise<PlanReminder> {
+    triggerNow(id: string): Promise<ScheduledTask> {
       return ipcRenderer.invoke('scheduled-tasks:triggerNow', id);
     },
-    snooze(id: string): Promise<PlanReminder> {
+    snooze(id: string): Promise<ScheduledTask> {
       return ipcRenderer.invoke('scheduled-tasks:snooze', id);
     },
-    clearRunHistory(id: string): Promise<PlanReminder> {
+    clearRunHistory(id: string): Promise<ScheduledTask> {
       return ipcRenderer.invoke('scheduled-tasks:clearRunHistory', id);
     },
     delete(id: string): Promise<void> {
@@ -970,8 +970,8 @@ const makaBridge = {
       ipcRenderer.on('scheduled-tasks:changed', listener);
       return () => ipcRenderer.off('scheduled-tasks:changed', listener);
     },
-    subscribeDue(handler: (reminder: PlanReminder) => void): () => void {
-      const listener = (_event: Electron.IpcRendererEvent, payload: PlanReminder) => handler(payload);
+    subscribeDue(handler: (task: ScheduledTask) => void): () => void {
+      const listener = (_event: Electron.IpcRendererEvent, payload: ScheduledTask) => handler(payload);
       ipcRenderer.on('scheduled-tasks:fired', listener);
       return () => ipcRenderer.off('scheduled-tasks:fired', listener);
     },

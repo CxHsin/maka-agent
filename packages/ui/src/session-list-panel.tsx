@@ -1,4 +1,4 @@
-import type { PlanReminder, SessionSummary } from '@maka/core';
+import type { ScheduledTask, SessionSummary } from '@maka/core';
 import {
   SegmentedControl,
   SegmentedControlItem,
@@ -36,7 +36,7 @@ export function SessionListPanel(props: {
   selection: NavSelection;
   sessions: SessionSummary[];
   activeId?: string;
-  planReminders?: PlanReminder[];
+  scheduledTasks?: ScheduledTask[];
   streamingSessionIds?: Set<string>;
   staleSessionIds?: Set<string>;
   groups?: ReadonlyArray<SessionHistoryGroup>;
@@ -135,7 +135,7 @@ export function SessionListPanel(props: {
         topContent={
           <SessionSidebarNav
             selection={props.selection}
-            planReminders={props.planReminders}
+            scheduledTasks={props.scheduledTasks}
             moduleMemory={props.moduleMemory}
             onSelect={props.onSelect}
             onNew={props.onNew}

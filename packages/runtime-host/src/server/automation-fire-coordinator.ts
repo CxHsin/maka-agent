@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { agentRunMatchesHostedRootExecution, type AgentRunHeader } from '@maka/core/agent-run';
 import type {
   AutomationDefinition,
@@ -29,10 +28,7 @@ import { runtimeHostAutomationSessionUnavailableReason } from './host-session-av
 import type { HostedExecutionAuthority, HostedExecutionRef } from './hosted-execution-authority.js';
 import { waitForHostedExecutionTerminal } from './hosted-execution-wait.js';
 
-type AutomationSessions = Pick<
-  ExecutionSessionWriter,
-  'createStableSession' | 'readHeaderSnapshot'
->;
+type AutomationSessions = Pick<ExecutionSessionWriter, 'readHeaderSnapshot'>;
 type AutomationRuns = Pick<ExecutionAgentRunWriter, 'readRun'>;
 type AutomationRuntime = Pick<SessionManager, 'sendMessage'>;
 type AutomationRoot = Pick<HostedExecutionAuthority, 'admit' | 'reconcile' | 'subscribe'>;
@@ -275,10 +271,10 @@ export class HostAutomationFireCoordinator {
   }
 
   async #canFire(
-    automation: Pick<AutomationDefinition, 'kind' | 'sessionId' | 'capabilityRequirements'>,
+    automation: Pick<AutomationDefinition, 'sessionId' | 'capabilityRequirements'>,
   ): Promise<AutomationFireReadiness> {
     if (this.isDraining) return { ready: false, reason: 'transient_gate' };
-    if (automation.kind === 'heartbeat' && this.#isSessionActive(automation.sessionId))
+    if (this.#isSessionActive(automation.sessionId))
       return { ready: false, reason: 'transient_gate' };
     const allowed = await evaluateAutomationCanFire(automation, {
       isIncognitoActive: async () =>
@@ -355,7 +351,6 @@ export class HostAutomationFireCoordinator {
 
   async #runFire(fire: AutomationPendingFire, established: Deferred): Promise<void> {
     try {
-      await this.#ensureFireTarget(fire);
       const existingRun = await this.#readRun(fire);
       const execution = fireExecutionRef(fire);
       if (existingRun) {
@@ -485,37 +480,6 @@ export class HostAutomationFireCoordinator {
     }
   }
 
-  async #ensureFireTarget(fire: AutomationPendingFire): Promise<void> {
-    if (fire.automationKind === 'heartbeat') return;
-    if (!fire.execution) {
-      throw new AutomationAuthorityInvariantError('Pending cron fire has no execution template');
-    }
-    const result = await this.#sessions.createStableSession({
-      sessionId: fire.targetSessionId,
-      requestFingerprint: automationSessionFingerprint(fire),
-      input: {
-        cwd: fire.execution.cwd,
-        ...(fire.execution.projectId === undefined ? {} : { projectId: fire.execution.projectId }),
-        name: fire.automationName,
-        labels: ['automation', 'cron'],
-        backend: fire.execution.backend,
-        llmConnectionSlug: fire.execution.llmConnectionSlug,
-        model: fire.execution.model,
-        ...(fire.execution.thinkingLevel === undefined
-          ? {}
-          : { thinkingLevel: fire.execution.thinkingLevel }),
-        permissionMode: 'explore',
-        collaborationMode: fire.execution.collaborationMode,
-        orchestrationMode: fire.execution.orchestrationMode,
-      },
-    });
-    if (result.kind === 'conflict') {
-      throw new AutomationAuthorityInvariantError(
-        `Cron Session identity conflicts for fire ${fire.id}`,
-      );
-    }
-  }
-
   async #assertFireCanEnterRuntime(fire: AutomationPendingFire): Promise<void> {
     if (this.isDraining) {
       throw new AutomationFireDeferredError('Automation authority is draining');
@@ -539,7 +503,7 @@ export class HostAutomationFireCoordinator {
     if (runtimeHostAutomationSessionUnavailableReason(header)) {
       throw new AutomationFireDeferredError('Automation target Session is unavailable');
     }
-    if (fire.automationKind === 'heartbeat' && !HEARTBEAT_IDLE_STATUSES.has(header.status)) {
+    if (!HEARTBEAT_IDLE_STATUSES.has(header.status)) {
       throw new AutomationFireDeferredError('Automation target Session is not idle');
     }
     await this.#assertFireCapabilityRequirements(fire);
@@ -590,30 +554,8 @@ function automationAdmissionFailure(error: Error): string {
 
 export function fireContent(fire: AutomationPendingFire): MessageContent {
   return {
-    text:
-      fire.automationKind === 'heartbeat'
-        ? `[Automation: ${fire.automationName}]\n\n${fire.prompt}`
-        : fire.prompt,
+    text: `[Automation: ${fire.automationName}]\n\n${fire.prompt}`,
   };
-}
-
-export function automationSessionId(fireId: string): string {
-  const digest = createHash('sha256').update(`automation-session-v0\0${fireId}`).digest('hex');
-  return `automation_session_${digest.slice(0, 48)}`;
-}
-
-function automationSessionFingerprint(fire: AutomationPendingFire): string {
-  return `sha256:${createHash('sha256')
-    .update(
-      JSON.stringify({
-        protocol: 'automation-session-v0',
-        fireId: fire.id,
-        automationId: fire.automationId,
-        targetSessionId: fire.targetSessionId,
-        execution: fire.execution,
-      }),
-    )
-    .digest('hex')}`;
 }
 
 export function assertFireRunIdentity(fire: AutomationPendingFire, run: AgentRunHeader): void {

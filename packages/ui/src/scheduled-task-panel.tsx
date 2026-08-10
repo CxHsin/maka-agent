@@ -2,30 +2,29 @@ import { useEffect, useRef, useState } from 'react';
 import { useMountedRef } from './use-mounted-ref.js';
 import { useToast } from './toast.js';
 import { ICON_SIZE, Clock, MoreHorizontal, Plus, RefreshCcw } from './icons.js';
-import type { PlanReminder, PlanReminderStatus } from '@maka/core';
+import type { ScheduledTask, ScheduledTaskStatus } from '@maka/core';
 import {
   generalizedErrorMessage,
   generalizedErrorMessageChinese,
-  isAgentScheduledTaskPlanReminder,
 } from '@maka/core';
 import {
-  type PlanReminderFormSeed,
-  comparePlanReminderBySort,
-  createPlanReminderFormSeed,
-  formatPlanRecurrence,
-  formatReminderCountdown,
-  formatReminderTime,
-  normalizePlanReminderSearchQuery,
-  planReminderDuplicateSeed,
-  planReminderEditSeed,
-  planReminderMatchesSearch,
-  planReminderRunRangeStart,
-  planReminderStatusLabel,
+  type ScheduledTaskFormSeed,
+  compareScheduledTaskBySort,
+  createScheduledTaskFormSeed,
+  formatScheduledTaskRecurrence,
+  formatTaskCountdown,
+  formatTaskTime,
+  normalizeScheduledTaskSearchQuery,
+  scheduledTaskDuplicateSeed,
+  scheduledTaskEditSeed,
+  scheduledTaskMatchesSearch,
+  scheduledTaskRunRangeStart,
+  scheduledTaskStatusLabel,
   runStatusLabel,
-} from './plan-reminder-helpers.js';
-import { planReminderStatusDotVariant, planRunStatusDotVariant } from './plan-reminder-status.js';
-import { PlanReminderFormDialog } from './plan-reminder-form-dialog.js';
-import { PlanReminderInspector } from './plan-reminder-inspector.js';
+} from './scheduled-task-helpers.js';
+import { scheduledTaskStatusDotVariant, scheduledTaskRunStatusDotVariant } from './scheduled-task-status.js';
+import { ScheduledTaskFormDialog } from './scheduled-task-form-dialog.js';
+import { ScheduledTaskInspector } from './scheduled-task-inspector.js';
 import { useRovingRowFocus } from './use-roving-row-focus.js';
 import {
   Button as UiButton,
@@ -49,14 +48,14 @@ import { Divider } from '@astryxdesign/core/Divider';
 import { ModulePage } from './primitives/module-page.js';
 import type { ModuleHubHeader } from './module-hub-selector.js';
 import type {
-  PlanReminderDraftInput,
-  PlanReminderUpdatePatch,
+  ScheduledTaskDraftInput,
+  ScheduledTaskUpdatePatch,
 } from './module-panel-types.js';
-import { getPlanReminderCopy } from './plan-reminder-copy.js';
+import { getScheduledTaskCopy } from './scheduled-task-copy.js';
 import { useUiLocale } from './locale-context.js';
 
-export function PlanReminderPanel(props: {
-  reminders: PlanReminder[];
+export function ScheduledTaskPanel(props: {
+  tasks: ScheduledTask[];
   createRequestNonce?: number;
   onCreateRequestHandled?: () => void;
   hubHeader?: ModuleHubHeader;
@@ -68,8 +67,8 @@ export function PlanReminderPanel(props: {
   /** Persist a new keep-awake value; rejects on failure so the row reverts. */
   onKeepSystemAwakeChange?: (next: boolean) => Promise<void>;
   onRefresh?(): void | Promise<void>;
-  onCreate?(input: PlanReminderDraftInput): boolean | Promise<boolean> | void | Promise<void>;
-  onUpdate?(id: string, patch: PlanReminderUpdatePatch): boolean | Promise<boolean> | void | Promise<void>;
+  onCreate?(input: ScheduledTaskDraftInput): boolean | Promise<boolean> | void | Promise<void>;
+  onUpdate?(id: string, patch: ScheduledTaskUpdatePatch): boolean | Promise<boolean> | void | Promise<void>;
   onToggle?(id: string, enabled: boolean): void | Promise<void>;
   onTriggerNow?(id: string): void | Promise<void>;
   onSnooze?(id: string): void | Promise<void>;
@@ -77,22 +76,22 @@ export function PlanReminderPanel(props: {
   onDelete?(id: string): void | Promise<void>;
 }) {
   const locale = useUiLocale();
-  const copy = getPlanReminderCopy(locale);
+  const copy = getScheduledTaskCopy(locale);
   // 'active' = scheduled + paused. The low-volume default is 'all' so
-  // completed reminders remain manageable even before filters are justified.
-  type PlanReminderListFilter = 'active' | 'all' | PlanReminderStatus;
-  type PlanReminderView = 'tasks' | 'runs';
-  type PlanReminderRunRange = 'day' | 'week' | 'month' | 'all';
-  type PlanReminderSort = 'created-desc' | 'next-run-asc' | 'updated-desc';
+  // completed tasks remain manageable even before filters are justified.
+  type ScheduledTaskListFilter = 'current' | 'all' | ScheduledTaskStatus;
+  type ScheduledTaskView = 'tasks' | 'runs';
+  type ScheduledTaskRunRange = 'day' | 'week' | 'month' | 'all';
+  type ScheduledTaskSort = 'created-desc' | 'next-run-asc' | 'updated-desc';
   const [pendingActionKeys, setPendingActionKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const planReminderMountedRef = useMountedRef();
+  const scheduledTaskMountedRef = useMountedRef();
   const refreshPendingRef = useRef(false);
   const pendingActionKeysRef = useRef<Set<string>>(new Set());
   // Issue #1044: all create/edit form fields + submit live in
-  // PlanReminderFormDialog. The panel owns its open state and seed;
+  // ScheduledTaskFormDialog. The panel owns its open state and seed;
   // `formNonce` gives Astryx a fresh native dialog for each form session.
   const [formDialogOpen, setFormDialogOpen] = useState(false);
-  const [formSeed, setFormSeed] = useState<PlanReminderFormSeed>(() => createPlanReminderFormSeed());
+  const [formSeed, setFormSeed] = useState<ScheduledTaskFormSeed>(() => createScheduledTaskFormSeed());
   const [formNonce, setFormNonce] = useState(0);
   // Astryx's Dialog does not return focus to whatever opened it, and `key`ing
   // the dialog per session means there is nothing left to restore from. Capture
@@ -106,12 +105,12 @@ export function PlanReminderPanel(props: {
   // from row k of N costs N−k presses, because the inspector renders after the
   // list and every row is its own stop.
   const rovingRows = useRovingRowFocus(rowsContainerRef);
-  const [planView, setPlanView] = useState<PlanReminderView>('tasks');
-  const [runRange, setRunRange] = useState<PlanReminderRunRange>('week');
-  const [listFilter, setListFilter] = useState<PlanReminderListFilter>('all');
-  const [listSort, setListSort] = useState<PlanReminderSort>('created-desc');
+  const [taskView, setTaskView] = useState<ScheduledTaskView>('tasks');
+  const [runRange, setRunRange] = useState<ScheduledTaskRunRange>('week');
+  const [listFilter, setListFilter] = useState<ScheduledTaskListFilter>('all');
+  const [listSort, setListSort] = useState<ScheduledTaskSort>('created-desc');
   const [listQuery, setListQuery] = useState('');
-  const [selectedReminderId, setSelectedReminderId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [refreshPending, setRefreshPending] = useState(false);
   const toast = useToast();
   // 保持系统唤醒 capability control. Available only when the host wires both
@@ -124,41 +123,42 @@ export function PlanReminderPanel(props: {
   const [keepSystemAwakeChecked, setKeepSystemAwakeChecked] = useState(props.keepSystemAwake ?? false);
   const [keepSystemAwakePending, setKeepSystemAwakePending] = useState(false);
   const keepSystemAwakePendingRef = useRef(false);
-  const normalizedListQuery = normalizePlanReminderSearchQuery(listQuery);
+  const normalizedListQuery = normalizeScheduledTaskSearchQuery(listQuery);
   const showListControls =
-    props.reminders.length >= 8 ||
+    props.tasks.length >= 8 ||
     normalizedListQuery.length > 0 ||
     listFilter !== 'all' ||
     listSort !== 'created-desc';
-  const searchMatchedReminders = normalizedListQuery
-    ? props.reminders.filter((reminder) => planReminderMatchesSearch(reminder, normalizedListQuery, locale))
-    : props.reminders;
-  const visibleReminders = listFilter === 'all'
-    ? searchMatchedReminders
-    : listFilter === 'active'
-      ? searchMatchedReminders.filter((reminder) => reminder.status !== 'completed')
-      : searchMatchedReminders.filter((reminder) => reminder.status === listFilter);
-  const sortedReminders = [...visibleReminders].sort((a, b) => comparePlanReminderBySort(a, b, listSort, locale));
-  const runRangeStart = planReminderRunRangeStart(runRange, Date.now());
-  const visibleRunEntries = props.reminders
-    .flatMap((reminder) => reminder.runs.map((run) => ({ reminder, run })))
+  const searchMatchedTasks = normalizedListQuery
+    ? props.tasks.filter((task) => scheduledTaskMatchesSearch(task, normalizedListQuery, locale))
+    : props.tasks;
+  const visibleTasks = listFilter === 'all'
+    ? searchMatchedTasks
+    : listFilter === 'current'
+      ? searchMatchedTasks.filter((task) => task.status === 'active' || task.status === 'paused')
+      : searchMatchedTasks.filter((task) => task.status === listFilter);
+  const sortedTasks = [...visibleTasks].sort((a, b) => compareScheduledTaskBySort(a, b, listSort, locale));
+  const runRangeStart = scheduledTaskRunRangeStart(runRange, Date.now());
+  const visibleRunEntries = props.tasks
+    .flatMap((task) => task.runs.map((run) => ({ task, run })))
     .filter((entry) => runRangeStart === null || entry.run.at >= runRangeStart)
     .sort((a, b) => b.run.at - a.run.at);
-  const activeCount = props.reminders.filter((reminder) => reminder.status !== 'completed').length;
+  const activeCount = props.tasks.filter((task) => task.status === 'active').length;
   // Derived, not stored: whatever hides the row — deletion, a filter, the
   // 执行记录 view — closes the inspector without a reconciliation step, and the
-  // panel always reads the freshest copy of the reminder. Note the id itself
+  // panel always reads the freshest copy of the task. Note the id itself
   // survives, so clearing a filter re-opens the same selection; a deleted id
   // can never re-match, so only the reversible cases come back.
-  const selectedReminder = planView === 'tasks'
-    ? sortedReminders.find((reminder) => reminder.id === selectedReminderId) ?? null
+  const selectedTask = taskView === 'tasks'
+    ? sortedTasks.find((task) => task.id === selectedTaskId) ?? null
     : null;
-  const filterCounts: Record<PlanReminderListFilter, number> = {
-    active: searchMatchedReminders.filter((reminder) => reminder.status !== 'completed').length,
-    all: searchMatchedReminders.length,
-    scheduled: searchMatchedReminders.filter((reminder) => reminder.status === 'scheduled').length,
-    paused: searchMatchedReminders.filter((reminder) => reminder.status === 'paused').length,
-    completed: searchMatchedReminders.filter((reminder) => reminder.status === 'completed').length,
+  const filterCounts: Record<ScheduledTaskListFilter, number> = {
+    current: searchMatchedTasks.filter((task) => task.status === 'active' || task.status === 'paused').length,
+    all: searchMatchedTasks.length,
+    active: searchMatchedTasks.filter((task) => task.status === 'active').length,
+    paused: searchMatchedTasks.filter((task) => task.status === 'paused').length,
+    completed: searchMatchedTasks.filter((task) => task.status === 'completed').length,
+    expired: searchMatchedTasks.filter((task) => task.status === 'expired').length,
   };
 
   useEffect(() => {
@@ -179,7 +179,7 @@ export function PlanReminderPanel(props: {
 
   useEffect(() => {
     if (!props.createRequestNonce) return;
-    openReminderDialog(createPlanReminderFormSeed());
+    openTaskDialog(createScheduledTaskFormSeed());
     props.onCreateRequestHandled?.();
   }, [props.createRequestNonce]);
 
@@ -211,7 +211,7 @@ export function PlanReminderPanel(props: {
       rows[Math.min(index, rows.length - 1)]?.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [props.reminders]);
+  }, [props.tasks]);
 
   async function toggleKeepSystemAwake(next: boolean) {
     if (!props.onKeepSystemAwakeChange || keepSystemAwakePendingRef.current) return;
@@ -222,17 +222,17 @@ export function PlanReminderPanel(props: {
       await props.onKeepSystemAwakeChange(next);
     } catch (error) {
       // Revert to reflect REALITY, and surface the failure in Chinese.
-      if (planReminderMountedRef.current) setKeepSystemAwakeChecked(!next);
+      if (scheduledTaskMountedRef.current) setKeepSystemAwakeChecked(!next);
       toast.error(copy.page.keepAwakeErrorTitle, locale === 'zh'
         ? generalizedErrorMessageChinese(error, copy.page.keepAwakeErrorFallback)
         : generalizedErrorMessage(error, copy.page.keepAwakeErrorFallback));
     } finally {
       keepSystemAwakePendingRef.current = false;
-      if (planReminderMountedRef.current) setKeepSystemAwakePending(false);
+      if (scheduledTaskMountedRef.current) setKeepSystemAwakePending(false);
     }
   }
 
-  function openReminderDialog(seed: PlanReminderFormSeed) {
+  function openTaskDialog(seed: ScheduledTaskFormSeed) {
     formDialogOpenerRef.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
@@ -241,7 +241,7 @@ export function PlanReminderPanel(props: {
     setFormDialogOpen(true);
   }
 
-  async function runPlanReminderAction(
+  async function runScheduledTaskAction(
     actionKey: string,
     action: (() => void | Promise<void>) | undefined,
   ) {
@@ -256,7 +256,7 @@ export function PlanReminderPanel(props: {
       const pendingWithoutAction = new Set(pendingActionKeysRef.current);
       pendingWithoutAction.delete(actionKey);
       pendingActionKeysRef.current = pendingWithoutAction;
-      if (planReminderMountedRef.current) setPendingActionKeys(pendingWithoutAction);
+      if (scheduledTaskMountedRef.current) setPendingActionKeys(pendingWithoutAction);
     }
   }
 
@@ -268,7 +268,7 @@ export function PlanReminderPanel(props: {
       await props.onRefresh();
     } finally {
       refreshPendingRef.current = false;
-      if (planReminderMountedRef.current) setRefreshPending(false);
+      if (scheduledTaskMountedRef.current) setRefreshPending(false);
     }
   }
 
@@ -292,16 +292,17 @@ export function PlanReminderPanel(props: {
       />
       <Selector
         value={listFilter}
-        onChange={(value) => setListFilter(value as PlanReminderListFilter)}
+        onChange={(value) => setListFilter(value as ScheduledTaskListFilter)}
         label={copy.page.state}
         isLabelHidden
         width={148}
         options={[
-          { value: 'active', label: copy.page.filterOption(copy.page.active, filterCounts.active) },
+          { value: 'current', label: copy.page.filterOption(copy.page.active, filterCounts.current) },
           { value: 'all', label: copy.page.filterOption(copy.page.all, filterCounts.all) },
-          { value: 'scheduled', label: copy.page.filterOption(copy.status.scheduled, filterCounts.scheduled) },
+          { value: 'active', label: copy.page.filterOption(copy.status.active, filterCounts.active) },
           { value: 'paused', label: copy.page.filterOption(copy.status.paused, filterCounts.paused) },
           { value: 'completed', label: copy.page.filterOption(copy.status.completed, filterCounts.completed) },
+          { value: 'expired', label: copy.page.filterOption(copy.status.expired, filterCounts.expired) },
         ]}
       />
     </>
@@ -313,41 +314,41 @@ export function PlanReminderPanel(props: {
         title={props.hubHeader?.title ?? copy.page.title}
         meta={copy.page.activeCount(activeCount)}
         inspectorLabel={copy.detail.label}
-        inspectorAutoSaveId="maka-plan-inspector"
-        onInspectorDismiss={() => setSelectedReminderId(null)}
-        inspector={selectedReminder ? (
-          <PlanReminderInspector
-            reminder={selectedReminder}
+        inspectorAutoSaveId="maka-scheduled-task-inspector"
+        onInspectorDismiss={() => setSelectedTaskId(null)}
+        inspector={selectedTask ? (
+          <ScheduledTaskInspector
+            task={selectedTask}
             pendingActionKeys={pendingActionKeys}
-            onToggle={(enabled) => void runPlanReminderAction(
-              `${selectedReminder.id}:toggle`,
-              () => props.onToggle?.(selectedReminder.id, enabled),
+            onToggle={(enabled) => void runScheduledTaskAction(
+              `${selectedTask.id}:toggle`,
+              () => props.onToggle?.(selectedTask.id, enabled),
             )}
-            onEdit={() => openReminderDialog(planReminderEditSeed(selectedReminder))}
-            onDuplicate={() => openReminderDialog(planReminderDuplicateSeed(selectedReminder, locale))}
-            onTriggerNow={() => void runPlanReminderAction(
-              `${selectedReminder.id}:trigger`,
-              () => props.onTriggerNow?.(selectedReminder.id),
+            onEdit={() => openTaskDialog(scheduledTaskEditSeed(selectedTask))}
+            onDuplicate={() => openTaskDialog(scheduledTaskDuplicateSeed(selectedTask, locale))}
+            onTriggerNow={() => void runScheduledTaskAction(
+              `${selectedTask.id}:trigger`,
+              () => props.onTriggerNow?.(selectedTask.id),
             )}
-            onSnooze={() => void runPlanReminderAction(
-              `${selectedReminder.id}:snooze`,
-              () => props.onSnooze?.(selectedReminder.id),
+            onSnooze={() => void runScheduledTaskAction(
+              `${selectedTask.id}:snooze`,
+              () => props.onSnooze?.(selectedTask.id),
             )}
-            onClearRunHistory={() => void runPlanReminderAction(
-              `${selectedReminder.id}:clear-runs`,
-              () => props.onClearRunHistory?.(selectedReminder.id),
+            onClearRunHistory={() => void runScheduledTaskAction(
+              `${selectedTask.id}:clear-runs`,
+              () => props.onClearRunHistory?.(selectedTask.id),
             )}
             onDelete={() => {
               // The 删除 button is about to unmount with the whole inspector,
               // and nothing else would claim focus — it would fall to `body`,
               // dropping a keyboard user at the top of the document. Hand it
               // to the row that takes the deleted one's place.
-              focusRowAfterRemovalRef.current = sortedReminders.findIndex(
-                (reminder) => reminder.id === selectedReminder.id,
+              focusRowAfterRemovalRef.current = sortedTasks.findIndex(
+                (task) => task.id === selectedTask.id,
               );
-              void runPlanReminderAction(
-                `${selectedReminder.id}:delete`,
-                () => props.onDelete?.(selectedReminder.id),
+              void runScheduledTaskAction(
+                `${selectedTask.id}:delete`,
+                () => props.onDelete?.(selectedTask.id),
               );
             }}
           />
@@ -356,7 +357,7 @@ export function PlanReminderPanel(props: {
           <>
             <UiButton
               variant="primary"
-              onClick={() => openReminderDialog(createPlanReminderFormSeed())}
+              onClick={() => openTaskDialog(createScheduledTaskFormSeed())}
               icon={<Plus size={ICON_SIZE.control} aria-hidden="true" />}
               label={copy.page.create}
             />
@@ -367,7 +368,7 @@ export function PlanReminderPanel(props: {
                 isIconOnly: true,
                 variant: 'ghost',
               }}
-              className="maka-plan-page-menu"
+              className="maka-scheduled-task-page-menu"
             >
               <DropdownMenuItem
                 onClick={() => void refreshFromPanel()}
@@ -397,10 +398,10 @@ export function PlanReminderPanel(props: {
               label={copy.page.filtersAriaLabel}
               startContent={
                 <SegmentedControl
-                  value={planView}
+                  value={taskView}
                   onChange={(value) => {
                     if (value !== 'tasks' && value !== 'runs') return;
-                    setPlanView(value);
+                    setTaskView(value);
                   }}
                   label={copy.page.viewsAriaLabel}
                   size="sm"
@@ -409,7 +410,7 @@ export function PlanReminderPanel(props: {
                   <SegmentedControlItem value="runs" label={copy.page.runs} />
                 </SegmentedControl>
               }
-              endContent={planView === 'tasks' ? listControls : (
+              endContent={taskView === 'tasks' ? listControls : (
                 <Selector
                   value={runRange}
                   onChange={(value) => setRunRange(value as typeof runRange)}
@@ -423,7 +424,7 @@ export function PlanReminderPanel(props: {
           </div>
         )}
       >
-        {planView === 'tasks' ? (
+        {taskView === 'tasks' ? (
           <div className="maka-module-page-panel" ref={rowsContainerRef} {...rovingRows}>
             {/* Selecting a row moves no focus — a mouse user did not ask to
                 leave the list — so nothing else would tell a screen reader
@@ -432,15 +433,15 @@ export function PlanReminderPanel(props: {
                 unnamed: below the breakpoint the same content is a sheet
                 that announces itself, and this must not contradict it. */}
             <p className="maka-visually-hidden" role="status" aria-live="polite">
-              {selectedReminder ? copy.page.inspectorOpened(selectedReminder.title) : ''}
+              {selectedTask ? copy.page.inspectorOpened(selectedTask.title) : ''}
             </p>
             {normalizedListQuery && (
-              <div className="maka-plan-search-summary" role="status" aria-live="polite">
-                <span>{copy.page.searchMatches(searchMatchedReminders.length)}</span>
+              <div className="maka-scheduled-task-search-summary" role="status" aria-live="polite">
+                <span>{copy.page.searchMatches(searchMatchedTasks.length)}</span>
                 <UiButton variant="ghost" size="sm" onClick={() => setListQuery('')} label={copy.page.clearSearch} />
               </div>
             )}
-            {props.reminders.length === 0 ? (
+            {props.tasks.length === 0 ? (
               <EmptyState
                 icon={<Clock size={ICON_SIZE.empty} />}
                 title={copy.page.emptyTitle}
@@ -448,12 +449,12 @@ export function PlanReminderPanel(props: {
                 actions={(
                   <UiButton
                     variant="primary"
-                    onClick={() => openReminderDialog(createPlanReminderFormSeed())}
+                    onClick={() => openTaskDialog(createScheduledTaskFormSeed())}
                     label={copy.page.create}
                   />
                 )}
               />
-            ) : sortedReminders.length === 0 ? (
+            ) : sortedTasks.length === 0 ? (
               /* Filter empty (DESIGN.md §10): the clear action resets both
                  dimensions the reader may have narrowed — query and state. */
               <EmptyState
@@ -469,16 +470,17 @@ export function PlanReminderPanel(props: {
                  list item. The leading StatusDot also fixes the alignment the
                  old hand-held 40px switch placeholder kept getting wrong. */
               <List density="balanced" hasDividers className="maka-module-page-rows" aria-label={copy.page.listAriaLabel}>
-                {sortedReminders.map((reminder) => {
+                {sortedTasks.map((task) => {
                   // `triggered` is a plain "it ran" record, not a health
                   // signal — only blocked and failed earn the row's attention.
-                  const runException = reminder.lastRun && reminder.lastRun.status !== 'triggered'
-                    ? reminder.lastRun
+                  const lastRun = task.runs[0];
+                  const runException = lastRun && lastRun.outcome !== 'ok'
+                    ? lastRun
                     : null;
                   return (
                   <ListItem
-                    key={reminder.id}
-                    label={reminder.title}
+                    key={task.id}
+                    label={task.title}
                     /* An exceptional state leads the line as TEXT, not only as
                        the dot's colour: the dot sits outside the row's button,
                        so tabbing a row would otherwise announce no state at
@@ -488,45 +490,45 @@ export function PlanReminderPanel(props: {
                        avoid.
 
                        A failed or blocked LAST RUN counts as exceptional here
-                       even while the reminder's own lifecycle reads
+                       even while the task's own lifecycle reads
                        `scheduled`: those are two different questions ("is it
                        still on?" vs "did it work?"), and a delivery that
                        failed is exactly what someone scanning this page came
                        to find. Reporting only the lifecycle made a broken
-                       reminder and a healthy one identical on the row, so the
+                       task and a healthy one identical on the row, so the
                        page could only be read by opening every entry. */
                     description={[
-                      isAgentScheduledTaskPlanReminder(reminder) ? copy.detail.agentSource : null,
+                      task.effect.kind === 'agent_run' ? copy.detail.agentSource : null,
                       runException
-                        ? runStatusLabel(runException.status, locale)
-                        : reminder.status === 'scheduled'
+                        ? runStatusLabel(runException.outcome, locale)
+                        : task.status === 'active'
                           ? null
-                          : planReminderStatusLabel(reminder.status, locale),
-                      formatPlanRecurrence(reminder, locale),
-                      reminder.nextRunAt
-                        ? copy.page.nextRun(formatReminderTime(reminder.nextRunAt, locale))
-                        : reminder.lastRun
-                          ? copy.page.recentRun(formatReminderTime(reminder.lastRun.at, locale))
+                          : scheduledTaskStatusLabel(task.status, locale),
+                      formatScheduledTaskRecurrence(task, locale),
+                      task.nextFireAt
+                        ? copy.page.nextRun(formatTaskTime(task.nextFireAt, locale))
+                        : lastRun
+                          ? copy.page.recentRun(formatTaskTime(lastRun.at, locale))
                           : copy.page.unscheduled,
                     ].filter(Boolean).join(' · ')}
                     startContent={(
                       <StatusDot
                         variant={runException
-                          ? planRunStatusDotVariant(runException.status)
-                          : planReminderStatusDotVariant(reminder.status)}
+                          ? scheduledTaskRunStatusDotVariant(runException.outcome)
+                          : scheduledTaskStatusDotVariant(task.status)}
                         label={runException
-                          ? runStatusLabel(runException.status, locale)
-                          : planReminderStatusLabel(reminder.status, locale)}
+                          ? runStatusLabel(runException.outcome, locale)
+                          : scheduledTaskStatusLabel(task.status, locale)}
                       />
                     )}
-                    endContent={typeof reminder.nextRunAt === 'number' ? (
-                      <Text type="supporting" color="secondary" className="maka-plan-countdown">
-                        {formatReminderCountdown(reminder.nextRunAt, locale)}
+                    endContent={task.nextFireAt !== null ? (
+                      <Text type="supporting" color="secondary" className="maka-scheduled-task-countdown">
+                        {formatTaskCountdown(task.nextFireAt, locale)}
                       </Text>
                     ) : undefined}
-                    isSelected={selectedReminderId === reminder.id}
-                    onClick={() => setSelectedReminderId(
-                      selectedReminderId === reminder.id ? null : reminder.id,
+                    isSelected={selectedTaskId === task.id}
+                    onClick={() => setSelectedTaskId(
+                      selectedTaskId === task.id ? null : task.id,
                     )}
                   />
                   );
@@ -549,20 +551,20 @@ export function PlanReminderPanel(props: {
               />
             ) : (
               <List density="balanced" hasDividers className="maka-module-page-rows" aria-label={copy.page.runsAriaLabel}>
-                {visibleRunEntries.map(({ reminder, run }) => (
+                {visibleRunEntries.map(({ task, run }) => (
                   <ListItem
-                    key={`${reminder.id}:${run.id}`}
-                    label={reminder.title}
+                    key={`${task.id}:${run.id}`}
+                    label={task.title}
                     description={run.message}
                     startContent={(
                       <StatusDot
-                        variant={planRunStatusDotVariant(run.status)}
-                        label={runStatusLabel(run.status, locale)}
+                        variant={scheduledTaskRunStatusDotVariant(run.outcome)}
+                        label={runStatusLabel(run.outcome, locale)}
                       />
                     )}
                     endContent={(
-                      <Text type="supporting" color="secondary" className="maka-plan-countdown">
-                        {formatReminderTime(run.at, locale)}
+                      <Text type="supporting" color="secondary" className="maka-scheduled-task-countdown">
+                        {formatTaskTime(run.at, locale)}
                       </Text>
                     )}
                   />
@@ -573,11 +575,11 @@ export function PlanReminderPanel(props: {
         )}
       </ModulePage>
 
-      <PlanReminderFormDialog
+      <ScheduledTaskFormDialog
         key={formNonce}
         open={formDialogOpen}
         seed={formSeed}
-        reminders={props.reminders}
+        tasks={props.tasks}
         onOpenChange={setFormDialogOpen}
         onCreate={props.onCreate}
         onUpdate={props.onUpdate}

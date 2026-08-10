@@ -1,6 +1,6 @@
-// packages/ui/src/plan-reminder-inspector.tsx
+// packages/ui/src/scheduled-task-inspector.tsx
 //
-// The end-panel inspector for one selected reminder, modelled on the vendor's
+// The end-panel inspector for one selected task, modelled on the vendor's
 // `incident-console` template: identity + status at the top, the actions that
 // change it, then its facts as a MetadataList, then its own run history.
 //
@@ -11,7 +11,7 @@
 // delete controls all live here, where they are plain buttons with room for
 // real labels instead of six entries behind a per-row overflow menu.
 
-import { isAgentScheduledTaskPlanReminder, type PlanReminder } from '@maka/core';
+import type { ScheduledTask } from '@maka/core';
 import {
   Button,
   Divider,
@@ -27,18 +27,18 @@ import {
 } from '@astryxdesign/core';
 import { MetadataList, MetadataListItem } from '@astryxdesign/core/MetadataList';
 import {
-  formatPlanRecurrence,
-  formatReminderTime,
-  formatPlanReminderDeliveryTargetLabel,
-  planReminderStatusLabel,
+  formatScheduledTaskRecurrence,
+  formatTaskTime,
+  formatScheduledTaskDeliveryTargetLabel,
+  scheduledTaskStatusLabel,
   runStatusLabel,
-} from './plan-reminder-helpers.js';
-import { planReminderStatusDotVariant, planRunStatusDotVariant } from './plan-reminder-status.js';
-import { getPlanReminderCopy } from './plan-reminder-copy.js';
+} from './scheduled-task-helpers.js';
+import { scheduledTaskStatusDotVariant, scheduledTaskRunStatusDotVariant } from './scheduled-task-status.js';
+import { getScheduledTaskCopy } from './scheduled-task-copy.js';
 import { useUiLocale } from './locale-context.js';
 
-export function PlanReminderInspector(props: {
-  reminder: PlanReminder;
+export function ScheduledTaskInspector(props: {
+  task: ScheduledTask;
   pendingActionKeys: ReadonlySet<string>;
   onToggle(enabled: boolean): void;
   onEdit(): void;
@@ -49,42 +49,43 @@ export function PlanReminderInspector(props: {
   onDelete(): void;
 }) {
   const locale = useUiLocale();
-  const copy = getPlanReminderCopy(locale);
-  const { reminder } = props;
-  const isAgentAutomation = isAgentScheduledTaskPlanReminder(reminder);
-  const isCompleted = reminder.status === 'completed';
-  const pending = Array.from(props.pendingActionKeys).some((key) => key.startsWith(`${reminder.id}:`));
-  const key = (action: string) => props.pendingActionKeys.has(`${reminder.id}:${action}`);
+  const copy = getScheduledTaskCopy(locale);
+  const { task } = props;
+  const isAgentTask = task.effect.kind === 'agent_run';
+  const isTerminal = task.status === 'completed' || task.status === 'expired';
+  const lastRun = task.runs[0];
+  const pending = Array.from(props.pendingActionKeys).some((key) => key.startsWith(`${task.id}:`));
+  const key = (action: string) => props.pendingActionKeys.has(`${task.id}:${action}`);
 
   return (
-    <VStack className="maka-plan-inspector" gap={4}>
+    <VStack className="maka-scheduled-task-inspector" gap={4}>
       <VStack gap={2}>
         <HStack gap={2} vAlign="center" wrap="wrap">
           <StatusDot
-            variant={planReminderStatusDotVariant(reminder.status)}
-            label={planReminderStatusLabel(reminder.status, locale)}
+            variant={scheduledTaskStatusDotVariant(task.status)}
+            label={scheduledTaskStatusLabel(task.status, locale)}
           />
           <Text type="supporting" color="secondary">
-            {planReminderStatusLabel(reminder.status, locale)}
+            {scheduledTaskStatusLabel(task.status, locale)}
           </Text>
-          {isAgentAutomation ? (
+          {isAgentTask ? (
             <Text type="supporting" color="secondary">
               · {copy.detail.agentSource}
             </Text>
           ) : null}
         </HStack>
-        <Heading level={2}>{reminder.title}</Heading>
-        {reminder.note ? <Text type="body" color="secondary">{reminder.note}</Text> : null}
-        {isAgentAutomation ? (
+        <Heading level={2}>{task.title}</Heading>
+        {task.intent.body ? <Text type="body" color="secondary">{task.intent.body}</Text> : null}
+        {isAgentTask ? (
           <Text type="supporting" color="secondary">{copy.detail.agentSourceHint}</Text>
         ) : null}
       </VStack>
 
-      {!isCompleted && (
+      {!isTerminal && (
         <HStack gap={3} vAlign="center">
           <StackItem size="fill">
             <Switch
-              value={reminder.enabled}
+              value={task.status === 'active'}
               isDisabled={pending}
               label={copy.detail.enabled}
               onChange={(next) => props.onToggle(next)}
@@ -93,12 +94,11 @@ export function PlanReminderInspector(props: {
         </HStack>
       )}
 
-      {!isAgentAutomation ? (
-        <HStack gap={2} wrap="wrap">
+      <HStack gap={2} wrap="wrap">
           <Button
             size="sm"
             label={key('trigger') ? copy.page.triggering : copy.page.triggerNow}
-            isDisabled={pending || !reminder.enabled}
+            isDisabled={pending || task.status !== 'active'}
             onClick={props.onTriggerNow}
           />
           <Button
@@ -107,40 +107,36 @@ export function PlanReminderInspector(props: {
             label={key('snooze') ? copy.page.snoozing : copy.page.snooze}
             isDisabled={
               pending
-              || !reminder.enabled
-              || reminder.status !== 'scheduled'
-              || typeof reminder.nextRunAt !== 'number'
+              || task.status !== 'active'
+              || task.nextFireAt === null
             }
             onClick={props.onSnooze}
           />
-        </HStack>
-      ) : null}
+      </HStack>
 
       <Divider />
 
       <MetadataList columns="single" label={{ position: 'start', width: 88 }}>
         <MetadataListItem label={copy.detail.recurrence}>
-          <Text type="body">{formatPlanRecurrence(reminder, locale)}</Text>
+          <Text type="body">{formatScheduledTaskRecurrence(task, locale)}</Text>
         </MetadataListItem>
         <MetadataListItem label={copy.detail.nextRun}>
           <Text type="body">
-            {reminder.nextRunAt ? formatReminderTime(reminder.nextRunAt, locale) : copy.page.unscheduled}
+            {task.nextFireAt ? formatTaskTime(task.nextFireAt, locale) : copy.page.unscheduled}
           </Text>
         </MetadataListItem>
-        {reminder.lastRun ? (
+        {lastRun ? (
           <MetadataListItem label={copy.detail.lastRun}>
-            <Text type="body">{formatReminderTime(reminder.lastRun.at, locale)}</Text>
+            <Text type="body">{formatTaskTime(lastRun.at, locale)}</Text>
           </MetadataListItem>
         ) : null}
         <MetadataListItem label={copy.detail.delivery}>
           <Text type="body">
-            {isAgentAutomation
-              ? copy.detail.agentDelivery
-              : formatPlanReminderDeliveryTargetLabel(reminder.delivery, locale)}
+            {formatScheduledTaskDeliveryTargetLabel(task.effect, locale)}
           </Text>
         </MetadataListItem>
         <MetadataListItem label={copy.detail.created}>
-          <Text type="body">{formatReminderTime(reminder.createdAt, locale)}</Text>
+          <Text type="body">{formatTaskTime(task.createdAt, locale)}</Text>
         </MetadataListItem>
       </MetadataList>
 
@@ -151,7 +147,7 @@ export function PlanReminderInspector(props: {
           <StackItem size="fill">
             <Text type="label" color="secondary">{copy.detail.runs}</Text>
           </StackItem>
-          {reminder.runs.length > 0 && !isCompleted && !isAgentAutomation ? (
+          {task.runs.length > 0 && !isTerminal ? (
             <Button
               size="sm"
               variant="ghost"
@@ -161,17 +157,17 @@ export function PlanReminderInspector(props: {
             />
           ) : null}
         </HStack>
-        {reminder.runs.length > 0 ? (
+        {task.runs.length > 0 ? (
           <List density="compact" hasDividers>
-            {[...reminder.runs].sort((a, b) => b.at - a.at).map((run) => (
+            {[...task.runs].sort((a, b) => b.at - a.at).map((run) => (
               <ListItem
                 key={run.id}
-                label={formatReminderTime(run.at, locale)}
+                label={formatTaskTime(run.at, locale)}
                 description={run.message}
                 startContent={
                   <StatusDot
-                    variant={planRunStatusDotVariant(run.status)}
-                    label={runStatusLabel(run.status, locale)}
+                    variant={scheduledTaskRunStatusDotVariant(run.outcome)}
+                    label={runStatusLabel(run.outcome, locale)}
                   />
                 }
               />
@@ -187,13 +183,13 @@ export function PlanReminderInspector(props: {
       <Divider />
 
       <HStack gap={2} wrap="wrap">
-        {!isAgentAutomation ? (
+        {!isAgentTask ? (
           <>
             <Button
               size="sm"
               variant="secondary"
               label={copy.page.edit}
-              isDisabled={pending || isCompleted}
+              isDisabled={pending || isTerminal}
               onClick={props.onEdit}
             />
             <Button

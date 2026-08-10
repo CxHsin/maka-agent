@@ -57,12 +57,10 @@ describe('Automation protocol', () => {
     const create = {
       kind: 'create' as const,
       sessionId: 'session-1',
-      automationKind: 'cron' as const,
       name: 'daily summary',
       prompt: 'Summarize the workspace.',
       schedule: { type: 'once' as const, delaySeconds: 30 },
       maxFires: 1,
-      durable: true,
       requiredCapabilityGroups: ['client_contract'],
     };
     assert.deepEqual(decodeAutomationMutateInput(create), create);
@@ -167,7 +165,6 @@ function createInput(overrides: Record<string, unknown> = {}): Record<string, un
   return {
     kind: 'create',
     sessionId: 'session-1',
-    automationKind: 'heartbeat',
     name: 'check build',
     prompt: 'Check the build.',
     schedule: { type: 'interval', seconds: 60 },
@@ -178,7 +175,6 @@ function createInput(overrides: Record<string, unknown> = {}): Record<string, un
 function projection(): AutomationProjection {
   return {
     id: 'automation-1',
-    kind: 'cron',
     name: 'daily summary',
     status: 'active',
     prompt: 'Summarize the workspace.',
@@ -194,7 +190,6 @@ function projection(): AutomationProjection {
     expiresAt: 4,
     lastError: null,
     consecutiveFailures: 0,
-    durable: true,
     deferredFireCount: 0,
     firePending: false,
     waiting: {

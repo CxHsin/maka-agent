@@ -1,8 +1,3 @@
-import type { BackendKind } from './session.js';
-import type { CollaborationMode } from './collaboration.js';
-import type { OrchestrationMode } from './orchestration.js';
-import type { ThinkingLevel } from './model-thinking.js';
-
 const UTF8 = new TextEncoder();
 
 // Preserve the embedded model schema's code-unit limits while giving every
@@ -74,25 +69,12 @@ export function truncateAutomationText(value: string, limit: AutomationTextLimit
   return result;
 }
 
-export type AutomationKind = 'heartbeat' | 'cron';
 export type AutomationStatus = 'active' | 'paused' | 'completed' | 'expired';
 
 export type AutomationSchedule =
   | { type: 'cron'; expression: string }
   | { type: 'interval'; seconds: number }
   | { type: 'once'; delaySeconds: number };
-
-/** Frozen execution settings used by durable cron fires after their creator changes. */
-export interface AutomationExecutionTemplate {
-  readonly cwd: string;
-  readonly projectId?: string | null;
-  readonly backend: BackendKind;
-  readonly llmConnectionSlug: string;
-  readonly model: string;
-  readonly thinkingLevel?: ThinkingLevel;
-  readonly collaborationMode: CollaborationMode;
-  readonly orchestrationMode: OrchestrationMode;
-}
 
 export interface AutomationClientCapabilityRequirement {
   readonly principalId: string;
@@ -108,7 +90,6 @@ export interface AutomationWaitingState {
 
 export interface AutomationDefinition {
   id: string;
-  kind: AutomationKind;
   name: string;
   status: AutomationStatus;
   prompt: string;
@@ -124,22 +105,17 @@ export interface AutomationDefinition {
   expiresAt: number | null;
   lastError: string | null;
   consecutiveFailures: number;
-  /** Cron definitions are globally visible and survive the creating Client. */
-  durable?: boolean;
   deferredFireCount?: number;
   /** Session-affine Client Capability contracts frozen when the Automation is created. */
   capabilityRequirements?: readonly AutomationClientCapabilityRequirement[];
   /** A transient prerequisite that must recover before the next fire can enter Runtime. */
   waiting?: AutomationWaitingState;
-  /** Present for Host-created cron definitions; legacy definitions acquire it before firing. */
-  execution?: AutomationExecutionTemplate;
 }
 
 /** Durable execution intent removed atomically when its canonical Run settles. */
 export interface AutomationPendingFire {
   readonly id: string;
   readonly automationId: string;
-  readonly automationKind: AutomationKind;
   readonly automationName: string;
   readonly prompt: string;
   readonly scheduledFor: number;
@@ -153,7 +129,6 @@ export interface AutomationPendingFire {
   readonly transientDeferredSince?: number;
   readonly startedAt?: number;
   readonly capabilityRequirements?: readonly AutomationClientCapabilityRequirement[];
-  readonly execution?: AutomationExecutionTemplate;
 }
 
 export interface AutomationAuthoritySnapshot {

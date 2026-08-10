@@ -78,7 +78,7 @@ import {
 import {
   writeConnections,
   writeDailyReviewArchives,
-  writePlanReminders,
+  writeScheduledTasks,
   writeSettings,
 } from './e2e-fixture/scenarios-settings.js';
 import { usageStatsSessions } from './e2e-fixture/scenarios-usage.js';
@@ -153,11 +153,11 @@ const E2E_FIXTURE_SCENARIOS = new Set<E2eFixtureScenario>([
   // / done / archived) so the sidebar grouping covers every
   // status badge + group header in one fixture.
   'workstation-statuses',
-  // PR-PLAN-REMINDER-MVP-0: exercise the first real Automations
-  // surface. Seeds scheduled / paused / completed local reminders and
+  // PR-PLAN-TASK-MVP-0: exercise the first real Automations
+  // surface. Seeds scheduled / paused / completed local tasks and
   // opens the 计划 module so reviewers can verify this is real product
   // UI rather than a passive placeholder.
-  'plan-reminders',
+  'scheduled-tasks',
   // PR109f (g): turn-control-history — seeds a primary session whose
   // turn list covers the four TurnStatus values plus retry + regenerate
   // lineage, alongside two branch sessions (visible-parent vs missing-
@@ -597,10 +597,10 @@ function buildE2eFixtureState(fixture: E2eFixture | null): E2eFixtureState | nul
       // SessionStatus enum value (running / waiting_for_user / blocked
       // × 4 reasons / review / done / archived / aborted (filtered)).
       return { ...state, activeSessionId: WORKSTATION_RUNNING_SESSION_ID };
-    case 'plan-reminders':
+    case 'scheduled-tasks':
       // Open the 计划 module directly so the alignment audit reaches
-      // the real local reminder MVP: create form + persisted
-      // scheduled / paused / completed reminders.
+      // the real local task MVP: create form + persisted
+      // scheduled / paused / completed tasks.
       return { ...state, activeSessionId: TURN_SESSION_ID, sidebarSection: 'automations', sidebarCollapsed: false };
     case 'turn-control-history':
       // Active = primary so the chat surface shows every turn control
@@ -851,8 +851,8 @@ export async function seedE2eFixture(input: {
       ],
     });
   }
-  if (input.fixture.scenario === 'plan-reminders') {
-    await writePlanReminders(input.workspaceRoot, now);
+  if (input.fixture.scenario === 'scheduled-tasks') {
+    await writeScheduledTasks(input.workspaceRoot, now);
   }
   if (input.fixture.scenario === 'module-daily-review' || input.fixture.scenario === 'settings-daily-review') {
     await writeDailyReviewArchives(input.workspaceRoot, now);

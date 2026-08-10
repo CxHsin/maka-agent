@@ -3,7 +3,7 @@
  *
  * One catalog, one scheduler authority (the initiating Desktop), multiple effects
  * (local/bot notify vs agent session run). Heartbeats are intentionally
- * out of scope: they remain session-scoped Automation kind.
+ * out of scope: they remain session-scoped Automation.
  */
 
 import { compileCronExpression } from './cron-expression.js';
@@ -225,7 +225,7 @@ export function computeNextFireAt(schedule: ScheduledTaskSchedule, after: number
     const next = nextCalendarFireAt(schedule, after);
     return next - after <= SCHEDULED_TASK_MAX_DELAY_MS ? next : null;
   }
-  const compiled = compileCronExpression(schedule.expression, { profile: 'automation-v1' });
+  const compiled = compileCronExpression(schedule.expression);
   if (!compiled.ok) return null;
   return (
     compiled.value.nextAfter(after, {
@@ -305,6 +305,12 @@ export function resumeScheduledTask(
   now: number,
 ): ScheduledTask | { error: string } {
   if (task.status !== 'paused') return { error: 'Only paused tasks can be resumed' };
+  if (task.maxFires !== null && task.fireCount >= task.maxFires) {
+    return { error: 'Scheduled task fire budget is exhausted' };
+  }
+  if (task.schedule.kind === 'once' && task.fireCount > 0) {
+    return { error: 'One-shot scheduled task has already fired' };
+  }
   if (task.expiresAt !== null && now >= task.expiresAt) {
     return {
       ...task,
@@ -386,8 +392,11 @@ function normalizeSchedule(
   }
   if (value.kind === 'interval') {
     const everySeconds = asFiniteNumber(value.everySeconds);
-    const startAt = asFiniteNumber(value.startAt) ?? now;
-    if (everySeconds === null) return fail('interval schedule requires everySeconds');
+    const startAt = value.startAt === undefined ? now : asFiniteNumber(value.startAt);
+    if (everySeconds === null || !Number.isInteger(everySeconds)) {
+      return fail('interval schedule requires integer everySeconds');
+    }
+    if (startAt === null) return fail('interval schedule startAt must be a number');
     if (
       everySeconds < SCHEDULED_TASK_MIN_INTERVAL_SECONDS ||
       everySeconds > SCHEDULED_TASK_MAX_INTERVAL_SECONDS
@@ -398,7 +407,7 @@ function normalizeSchedule(
     }
     return {
       ok: true,
-      value: { kind: 'interval', everySeconds: Math.floor(everySeconds), startAt },
+      value: { kind: 'interval', everySeconds, startAt },
     };
   }
   if (value.kind === 'calendar') {
@@ -418,14 +427,15 @@ function normalizeSchedule(
   }
   if (value.kind === 'cron') {
     if (typeof value.expression !== 'string') return fail('cron schedule requires expression');
-    const expression = value.expression.trim();
+    const expression = value.expression;
     if (!expression) return fail('cron expression is empty');
     if ([...expression].length > SCHEDULED_TASK_CRON_MAX_CHARS) {
       return fail(`cron expression must be ${SCHEDULED_TASK_CRON_MAX_CHARS} characters or fewer`);
     }
-    const compiled = compileCronExpression(expression, { profile: 'automation-v1' });
+    const compiled = compileCronExpression(expression);
     if (!compiled.ok) return fail(`Invalid cron expression: ${compiled.error.code}`);
-    const startAt = asFiniteNumber(value.startAt) ?? now;
+    const startAt = value.startAt === undefined ? now : asFiniteNumber(value.startAt);
+    if (startAt === null) return fail('cron schedule startAt must be a number');
     return { ok: true, value: { kind: 'cron', expression, startAt } };
   }
   return fail('Unknown schedule kind');
@@ -491,18 +501,19 @@ function normalizeExecution(
   if (
     value.projectId !== undefined &&
     value.projectId !== null &&
-    typeof value.projectId !== 'string'
+    (typeof value.projectId !== 'string' || !value.projectId.trim())
   ) {
     return fail('execution.projectId is invalid');
   }
+  const projectId = typeof value.projectId === 'string' ? value.projectId.trim() : value.projectId;
   return {
     ok: true,
     value: {
-      cwd: value.cwd,
-      ...(value.projectId === undefined ? {} : { projectId: value.projectId }),
+      cwd: value.cwd.trim(),
+      ...(projectId === undefined ? {} : { projectId }),
       backend: value.backend,
-      llmConnectionSlug: value.llmConnectionSlug,
-      model: value.model,
+      llmConnectionSlug: value.llmConnectionSlug.trim(),
+      model: value.model.trim(),
       ...(value.thinkingLevel === undefined ? {} : { thinkingLevel: value.thinkingLevel }),
       permissionMode: value.permissionMode,
       collaborationMode: value.collaborationMode,
@@ -522,7 +533,7 @@ function normalizeCreatedBy(value: unknown): ScheduledTaskNormalizeResult<Schedu
     if (typeof value.sessionId !== 'string' || !value.sessionId.trim()) {
       return fail('agent createdBy requires sessionId');
     }
-    return { ok: true, value: { kind: 'agent', sessionId: value.sessionId } };
+    return { ok: true, value: { kind: 'agent', sessionId: value.sessionId.trim() } };
   }
   return {
     ok: true,
@@ -558,9 +569,6 @@ function isObject(value: unknown): value is Record<string, any> {
 
 function asFiniteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) {
-    return Number(value);
-  }
   return null;
 }
 

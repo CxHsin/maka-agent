@@ -224,5 +224,5 @@ This interactive task ledger remains separate from:
 
 - Headless `TaskRun`, the durable execution envelope across Attempts;
 - Goal state, which owns bounded autonomous continuation;
-- Automation and plan reminders, which own scheduled execution;
+- ScheduledTask and session-scoped Automation, which own scheduled execution;
 - `AgentRun` / `RuntimeEvent`, which own actual runtime and evidence history.

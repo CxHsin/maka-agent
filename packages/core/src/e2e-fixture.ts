@@ -62,7 +62,7 @@ export type E2eFixtureScenario =
   | 'module-mcp'
   | 'module-daily-review'
   | 'workstation-statuses'
-  | 'plan-reminders'
+  | 'scheduled-tasks'
   // PR109f (g): turn-control-history — seeds a primary session whose
   // turn list covers retried / regenerated / aborted / failed and two
   // branch sessions (one with visible parent showing the banner, one

@@ -183,14 +183,14 @@ function model(
   return { id, capabilities, contextWindow };
 }
 
-export async function writePlanReminders(workspaceRoot: string, now: number): Promise<void> {
+export async function writeScheduledTasks(workspaceRoot: string, now: number): Promise<void> {
   const scheduledRunAt = Date.UTC(2026, 11, 18, 3, 0, 0);
   const pausedRunAt = Date.UTC(2026, 11, 20, 3, 0, 0);
   // The panel's default 创建时间倒序 sort keys on `createdAt` and only falls
   // back to a status/next-run comparator on ties. Four back-to-back
-  // `create()` calls land in the same millisecond, so every reminder tied
+  // `create()` calls land in the same millisecond, so every task tied
   // and the fallback decided the order — which made any position-based
-  // assertion in `plan-reminders.spec.ts` vary between runs. Seed one
+  // assertion in `scheduled-tasks.spec.ts` vary between runs. Seed one
   // explicit minute apart, oldest first, so 创建时间倒序 has a single answer.
   const createdAt = (index: number): number => now - (4 - index) * 60_000;
   const store = createSqliteScheduledTaskStore(workspaceRoot);
@@ -246,10 +246,10 @@ export async function writePlanReminders(workspaceRoot: string, now: number): Pr
     await store.settleFire(completedClaim.id, {
       at: scheduledRunAt,
       outcome: 'ok',
-      message: '计划提醒已触发',
+      message: '定时任务已触发',
     });
     // The list's search / sort / filter controls only appear at eight
-    // reminders, and they are the widest thing the page header carries — the
+    // tasks, and they are the widest thing the page header carries — the
     // narrow-window geometry test has nothing to measure below that count.
     // These four carry no state any other test reads. They are seeded OLDER
     // than the four above so 创建时间倒序 keeps those four in the first four

@@ -188,7 +188,6 @@ describe('interactive Automation authority', () => {
 function definition(): AutomationDefinition {
   return {
     id: 'automation-1',
-    kind: 'cron',
     name: 'daily summary',
     status: 'active',
     prompt: 'Summarize the workspace.',
@@ -204,15 +203,6 @@ function definition(): AutomationDefinition {
     expiresAt: 604_800_001,
     lastError: null,
     consecutiveFailures: 0,
-    durable: true,
-    execution: {
-      cwd: '/workspace',
-      backend: 'ai-sdk',
-      llmConnectionSlug: 'openrouter',
-      model: 'openrouter/free',
-      collaborationMode: 'agent',
-      orchestrationMode: 'default',
-    },
   };
 }
 
@@ -236,11 +226,10 @@ function pendingFire(): AutomationPendingFire {
   return {
     id: 'fire-1',
     automationId: 'automation-1',
-    automationKind: 'cron',
     automationName: 'daily summary',
     prompt: 'Summarize the workspace.',
     scheduledFor: 60_001,
-    targetSessionId: 'automation-session-1',
+    targetSessionId: 'creator-session',
     turnId: 'turn-1',
     runId: 'run-1',
     userMessageId: 'message-1',
@@ -248,14 +237,6 @@ function pendingFire(): AutomationPendingFire {
     admittedAt: 60_002,
     updatedAt: 60_002,
     capabilityRequirements: [capabilityRequirement()],
-    execution: {
-      cwd: '/workspace',
-      backend: 'ai-sdk',
-      llmConnectionSlug: 'openrouter',
-      model: 'openrouter/free',
-      collaborationMode: 'agent',
-      orchestrationMode: 'default',
-    },
   };
 }
 

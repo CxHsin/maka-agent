@@ -1,10 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
-import type {
-  PlanReminder,
-  PlanReminderDeliveryTarget,
-  PlanReminderRecurrence,
-  UiLocale,
-} from "@maka/core";
+import type { CreateScheduledTaskInput, ScheduledTask, UiLocale, UpdateScheduledTaskInput } from "@maka/core";
 import { getShellRemainingCopy } from "./locales/shell-remaining-copy.js";
 import { localizedShellErrorMessage } from "./locales/shell-copy.js";
 
@@ -20,59 +15,43 @@ type ToastApi = {
   }): Promise<boolean>;
 };
 
-type PlanReminderCreateInput = {
-  title: string;
-  note?: string;
-  runAt: number;
-  recurrence?: PlanReminderRecurrence;
-  cronExpression?: string;
-  delivery?: PlanReminderDeliveryTarget;
-};
+type ScheduledTaskCreateInput = Omit<CreateScheduledTaskInput, "createdBy">;
 
-type PlanReminderPatch = {
-  title?: string;
-  note?: string;
-  runAt?: number;
-  recurrence?: PlanReminderRecurrence;
-  cronExpression?: string;
-  delivery?: PlanReminderDeliveryTarget;
-};
-
-export interface AppShellPlanActions {
-  refreshPlanReminders(options?: {
+export interface AppShellScheduledTaskActions {
+  refreshScheduledTasks(options?: {
     shouldShowError?: () => boolean;
   }): Promise<void>;
-  createPlanReminder(input: PlanReminderCreateInput): Promise<boolean>;
-  updatePlanReminder(id: string, patch: PlanReminderPatch): Promise<boolean>;
-  togglePlanReminder(id: string, enabled: boolean): Promise<void>;
-  triggerPlanReminderNow(id: string): Promise<void>;
-  snoozePlanReminder(id: string): Promise<void>;
-  clearPlanReminderRunHistory(id: string): Promise<void>;
-  deletePlanReminder(id: string): Promise<void>;
+  createScheduledTask(input: ScheduledTaskCreateInput): Promise<boolean>;
+  updateScheduledTask(id: string, patch: UpdateScheduledTaskInput): Promise<boolean>;
+  toggleScheduledTask(id: string, enabled: boolean): Promise<void>;
+  triggerScheduledTaskNow(id: string): Promise<void>;
+  snoozeScheduledTask(id: string): Promise<void>;
+  clearScheduledTaskRunHistory(id: string): Promise<void>;
+  deleteScheduledTask(id: string): Promise<void>;
 }
 
-export function createAppShellPlanActions(deps: {
+export function createAppShellScheduledTaskActions(deps: {
   uiLocale: UiLocale;
-  getPlanReminders: () => readonly PlanReminder[];
-  isAutomationsSurfaceActive: () => boolean;
-  setPlanReminders: Dispatch<SetStateAction<PlanReminder[]>>;
+  getScheduledTasks: () => readonly ScheduledTask[];
+  isScheduledTasksSurfaceActive: () => boolean;
+  setScheduledTasks: Dispatch<SetStateAction<ScheduledTask[]>>;
   toastApi: ToastApi;
-}): AppShellPlanActions {
+}): AppShellScheduledTaskActions {
   const {
     uiLocale,
-    getPlanReminders,
-    isAutomationsSurfaceActive,
-    setPlanReminders,
+    getScheduledTasks,
+    isScheduledTasksSurfaceActive,
+    setScheduledTasks,
     toastApi,
   } = deps;
-  const copy = getShellRemainingCopy(uiLocale).planActions;
+  const copy = getShellRemainingCopy(uiLocale).scheduledTaskActions;
 
-  async function refreshPlanReminders(
+  async function refreshScheduledTasks(
     options: { shouldShowError?: () => boolean } = {},
   ) {
     try {
       const next = await window.maka.scheduledTasks.list();
-      setPlanReminders(next);
+      setScheduledTasks(next);
     } catch (error) {
       if (options.shouldShowError?.() ?? true) {
         toastApi.error(
@@ -83,7 +62,7 @@ export function createAppShellPlanActions(deps: {
     }
   }
 
-  async function runPlanReminderMutation(mutation: {
+  async function runScheduledTaskMutation(mutation: {
     run: () => Promise<unknown>;
     successTitle?: string;
     successDetail?: string;
@@ -93,15 +72,15 @@ export function createAppShellPlanActions(deps: {
   }): Promise<boolean> {
     try {
       await mutation.run();
-      await refreshPlanReminders({
-        shouldShowError: isAutomationsSurfaceActive,
+      await refreshScheduledTasks({
+        shouldShowError: isScheduledTasksSurfaceActive,
       });
-      if (mutation.successTitle && isAutomationsSurfaceActive()) {
+      if (mutation.successTitle && isScheduledTasksSurfaceActive()) {
         toastApi.success(mutation.successTitle, mutation.successDetail);
       }
       return true;
     } catch (error) {
-      if (isAutomationsSurfaceActive()) {
+      if (isScheduledTasksSurfaceActive()) {
         toastApi.error(
           mutation.errorTitle,
           mutation.errorMessage?.(error) ??
@@ -113,9 +92,9 @@ export function createAppShellPlanActions(deps: {
   }
 
   return {
-    refreshPlanReminders,
-    createPlanReminder(input) {
-      return runPlanReminderMutation({
+    refreshScheduledTasks,
+    createScheduledTask(input) {
+      return runScheduledTaskMutation({
         run: () => window.maka.scheduledTasks.create(input),
         successTitle: copy.created,
         successDetail: input.title,
@@ -127,8 +106,8 @@ export function createAppShellPlanActions(deps: {
             : undefined,
       });
     },
-    updatePlanReminder(id, patch) {
-      return runPlanReminderMutation({
+    updateScheduledTask(id, patch) {
+      return runScheduledTaskMutation({
         run: () => window.maka.scheduledTasks.update(id, patch),
         successTitle: copy.saved,
         successDetail: patch.title,
@@ -136,63 +115,63 @@ export function createAppShellPlanActions(deps: {
         errorFallback: copy.saveFallback,
       });
     },
-    async togglePlanReminder(id, enabled) {
-      await runPlanReminderMutation({
+    async toggleScheduledTask(id, enabled) {
+      await runScheduledTaskMutation({
         run: () => window.maka.scheduledTasks.setEnabled(id, enabled),
         successTitle: enabled ? copy.enabled : copy.paused,
         errorTitle: copy.updateFailed,
         errorFallback: copy.updateFallback,
       });
     },
-    async triggerPlanReminderNow(id) {
-      const reminder = getPlanReminders().find((entry) => entry.id === id);
-      await runPlanReminderMutation({
+    async triggerScheduledTaskNow(id) {
+      const task = getScheduledTasks().find((entry) => entry.id === id);
+      await runScheduledTaskMutation({
         run: () => window.maka.scheduledTasks.triggerNow(id),
         successTitle: copy.triggered,
-        successDetail: reminder?.title,
+        successDetail: task?.title,
         errorTitle: copy.triggerFailed,
         errorFallback: copy.triggerFallback,
       });
     },
-    async snoozePlanReminder(id) {
-      const reminder = getPlanReminders().find((entry) => entry.id === id);
-      await runPlanReminderMutation({
+    async snoozeScheduledTask(id) {
+      const task = getScheduledTasks().find((entry) => entry.id === id);
+      await runScheduledTaskMutation({
         run: () => window.maka.scheduledTasks.snooze(id),
         successTitle: copy.snoozed,
-        successDetail: reminder?.title,
+        successDetail: task?.title,
         errorTitle: copy.snoozeFailed,
         errorFallback: copy.snoozeFallback,
       });
     },
-    async clearPlanReminderRunHistory(id) {
-      const reminder = getPlanReminders().find((entry) => entry.id === id);
+    async clearScheduledTaskRunHistory(id) {
+      const task = getScheduledTasks().find((entry) => entry.id === id);
       const ok = await toastApi.confirm({
-        title: copy.clearTitle(reminder?.title ?? copy.reminder),
+        title: copy.clearTitle(task?.title ?? copy.task),
         description: copy.clearDescription,
         confirmLabel: copy.clear,
         cancelLabel: copy.cancel,
         destructive: true,
       });
       if (!ok) return;
-      await runPlanReminderMutation({
+      await runScheduledTaskMutation({
         run: () => window.maka.scheduledTasks.clearRunHistory(id),
         successTitle: copy.cleared,
-        successDetail: reminder?.title,
+        successDetail: task?.title,
         errorTitle: copy.clearFailed,
         errorFallback: copy.clearFallback,
       });
     },
-    async deletePlanReminder(id) {
-      const reminder = getPlanReminders().find((entry) => entry.id === id);
+    async deleteScheduledTask(id) {
+      const task = getScheduledTasks().find((entry) => entry.id === id);
       const ok = await toastApi.confirm({
-        title: copy.deleteTitle(reminder?.title ?? copy.reminder),
+        title: copy.deleteTitle(task?.title ?? copy.task),
         description: copy.deleteDescription,
         confirmLabel: copy.delete,
         cancelLabel: copy.cancel,
         destructive: true,
       });
       if (!ok) return;
-      await runPlanReminderMutation({
+      await runScheduledTaskMutation({
         run: () => window.maka.scheduledTasks.delete(id),
         successTitle: copy.deleted,
         errorTitle: copy.deleteFailed,

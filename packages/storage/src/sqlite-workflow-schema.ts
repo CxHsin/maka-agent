@@ -1,9 +1,12 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const SQLITE_WORKFLOW_SCHEMA_VERSION = 7;
+export const SQLITE_WORKFLOW_SCHEMA_VERSION = 8;
 
 export function migrateSqliteWorkflowDatabase(db: DatabaseSync): void {
   db.exec(`
+    DROP INDEX IF EXISTS workflow_plan_reminders_order;
+    DROP TABLE IF EXISTS workflow_plan_reminders;
+
     CREATE TABLE IF NOT EXISTS workflow_task_ledger_events (
       session_id TEXT NOT NULL,
       sequence INTEGER NOT NULL CHECK (sequence >= 0),

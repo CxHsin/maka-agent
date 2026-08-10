@@ -1,8 +1,7 @@
 /**
  * Agent tool for the unified ScheduledTask catalog.
  *
- * Replaces Automation cron for standalone scheduled work. Heartbeats stay on
- * the Automation tool (session-scoped).
+ * Agent-facing access to the Desktop-owned ScheduledTask catalog.
  */
 
 import { z } from 'zod';
@@ -72,7 +71,7 @@ const schema = z.object({
     .enum(['agent_run', 'notify_local'])
     .optional()
     .describe(
-      '[create] agent_run (default) starts a fresh agent session; notify_local only shows a local reminder',
+      '[create] agent_run (default) starts a fresh agent session; notify_local only shows a local notification',
     ),
   id: z.string().min(1).optional().describe('[pause|resume|delete] task id'),
   maxFires: z.number().int().min(1).max(10_000).optional(),
@@ -86,7 +85,7 @@ export function buildScheduledTaskTool(deps: { authority: ScheduledTaskToolAutho
       'Create and manage workspace scheduled tasks (定时任务). ' +
       'Use for standalone recurring/one-shot work that must appear in the desktop Scheduled tasks page. ' +
       'Default effect agent_run starts a fresh session with intentBody when due. ' +
-      'For session-internal polling use Automation with kind heartbeat instead.',
+      'For session-internal polling use Automation instead.',
     parameters: schema,
     impl: async (raw, ctx) => {
       const input = schema.parse(raw);

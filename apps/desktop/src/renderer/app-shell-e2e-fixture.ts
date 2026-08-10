@@ -164,7 +164,7 @@ export function createAppShellE2eFixtureActions(options: {
       openPalette();
     }
     if (state.sidebarSection === 'automations') {
-      setNavSelection({ section: 'automations', module: 'plan-reminders' });
+      setNavSelection({ section: 'automations', module: 'scheduled-tasks' });
     } else if (state.sidebarSection === 'skills') {
       setNavSelection({ section: 'extensions', module: 'skills' });
     } else if (state.sidebarSection === 'mcp') {

@@ -49,8 +49,7 @@ test('two Clients share one revision-pinned Automation authority', async () => {
             if (!header) throw missingRecord();
             return structuredClone(header);
           },
-          createStableSession: async () => assert.fail('No cron fire is expected in this test'),
-        } as Pick<ExecutionSessionWriter, 'createStableSession' | 'readHeaderSnapshot'>,
+        } as Pick<ExecutionSessionWriter, 'readHeaderSnapshot'>,
         runs: {
           readRun: async () => {
             throw missingRecord();
@@ -105,7 +104,6 @@ test('two Clients share one revision-pinned Automation authority', async () => {
     const created = await desktop.request('automation.mutate', {
       kind: 'create',
       sessionId: 'desktop-session',
-      automationKind: 'heartbeat',
       name: 'check build',
       prompt: 'Check the build.',
       schedule: { type: 'interval', seconds: 60 },
@@ -145,27 +143,25 @@ test('two Clients share one revision-pinned Automation authority', async () => {
       actual: paused.revision,
     });
 
-    const cron = await desktop.request('automation.mutate', {
+    const second = await desktop.request('automation.mutate', {
       kind: 'create',
       sessionId: 'desktop-session',
-      automationKind: 'cron',
       name: 'daily summary',
       prompt: 'Summarize the workspace.',
       schedule: { type: 'once', delaySeconds: 30 },
     });
-    assert.equal(cron.kind, 'committed');
-    if (cron.kind !== 'committed' || !cron.automation) return;
-    const globallyVisible = await tui.request('automation.query', {
+    assert.equal(second.kind, 'committed');
+    if (second.kind !== 'committed' || !second.automation) return;
+    const isolated = await tui.request('automation.query', {
       kind: 'get',
       sessionId: 'tui-session',
-      automationId: cron.automation.id,
+      automationId: second.automation.id,
     });
-    assert.equal(globallyVisible.kind, 'automation');
-    if (globallyVisible.kind === 'automation') {
-      assert.equal(globallyVisible.automation?.id, cron.automation.id);
-      assert.equal(globallyVisible.automation?.durable, true);
+    assert.equal(isolated.kind, 'automation');
+    if (isolated.kind === 'automation') {
+      assert.equal(isolated.automation, null);
     }
-    assert.equal(JSON.stringify(globallyVisible).includes('execution'), false);
+    assert.equal(JSON.stringify(isolated).includes('execution'), false);
   } finally {
     await Promise.allSettled([desktop?.close(), tui?.close()]);
     await host.close().catch(() => undefined);

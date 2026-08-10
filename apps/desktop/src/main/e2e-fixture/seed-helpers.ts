@@ -75,7 +75,7 @@ export const LONG_SIDEBAR_PROJECT_SESSION_COUNT = 3;
 export const LONG_SIDEBAR_SCENARIOS = new Set<E2eFixtureScenario>([
   'module-skills',
   'module-daily-review',
-  'plan-reminders',
+  'scheduled-tasks',
   'sidebar-long-sessions',
   'sidebar-search-modal-open',
   'command-palette-open',

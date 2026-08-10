@@ -5,7 +5,6 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
 import { tmpdir } from 'node:os';
 import {
-  scheduledTaskToPlanReminderView,
   type ScheduledTask,
   type SessionHeader,
   type StoredMessage,
@@ -621,13 +620,13 @@ describe('e2e-fixture mode', () => {
     }
   });
 
-  it('plan-reminders opens the Automations module and seeds scheduled / paused / completed reminders', async () => {
-    const workspaceRoot = await mkdtemp(join(tmpdir(), 'maka-e2e-fixture-plan-reminders-'));
+  it('scheduled-tasks opens the Automations module and seeds scheduled / paused / completed tasks', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'maka-e2e-fixture-scheduled-tasks-'));
     try {
-      const fixture = resolveE2eFixture('plan-reminders', false);
+      const fixture = resolveE2eFixture('scheduled-tasks', false);
       assert.ok(fixture);
       // Seeds on the fixture's own clock (E2E_FIXTURE_NOW, the app default)
-      // rather than this file's arbitrary 2023 stamp: the reminders carry
+      // rather than this file's arbitrary 2023 stamp: the tasks carry
       // fixed 2026 run times, and the store rejects a runAt more than a year
       // past its creation clock.
       await seedE2eFixture({
@@ -641,41 +640,37 @@ describe('e2e-fixture mode', () => {
       assert.equal(state?.sidebarCollapsed, false);
       assert.equal(state?.activeSessionId, 'e2e-fixture-turn');
 
-      const reminders = withRuntimeDatabase(workspaceRoot, (database) =>
+      const tasks = withRuntimeDatabase(workspaceRoot, (database) =>
         (
           database
             .prepare('SELECT record_json AS recordJson FROM workflow_scheduled_tasks')
             .all() as Array<{ recordJson: string }>
-        ).map((row) =>
-          scheduledTaskToPlanReminderView(JSON.parse(row.recordJson) as ScheduledTask),
-        ),
+        ).map((row) => JSON.parse(row.recordJson) as ScheduledTask),
       );
       // Eight, not four: the list's search / sort / filter controls only
-      // appear at eight reminders, and the narrow-window geometry tests in
-      // plan-reminders.spec.ts have nothing to measure below that count.
-      assert.equal(reminders.length, 8);
+      // appear at eight tasks, and the narrow-window geometry tests in
+      // scheduled-tasks.spec.ts have nothing to measure below that count.
+      assert.equal(tasks.length, 8);
       // The panel's default 创建时间倒序 sort only falls back to the status /
       // next-run comparator on `createdAt` ties, so the seed must hand every
-      // reminder a distinct value or row positions drift between runs.
+      // task a distinct value or row positions drift between runs.
       assert.equal(
-        new Set(reminders.map((reminder) => reminder.createdAt)).size,
+        new Set(tasks.map((task) => task.createdAt)).size,
         8,
-        'seeded plan reminders need distinct createdAt values',
+        'seeded plan tasks need distinct createdAt values',
       );
-      const scheduled = reminders.find((reminder) => reminder.title === '同步项目风险');
-      const paused = reminders.find((reminder) => reminder.title === '暂停的发布检查');
-      const weekly = reminders.find((reminder) => reminder.title === '每周竞品动态追踪');
-      const completed = reminders.find((reminder) => reminder.title === '已触发的本地提醒');
-      assert.equal(scheduled?.status, 'scheduled');
-      assert.equal(scheduled?.enabled, true);
-      assert.equal(typeof scheduled?.nextRunAt, 'number');
+      const scheduled = tasks.find((task) => task.title === '同步项目风险');
+      const paused = tasks.find((task) => task.title === '暂停的发布检查');
+      const weekly = tasks.find((task) => task.title === '每周竞品动态追踪');
+      const completed = tasks.find((task) => task.title === '已触发的本地提醒');
+      assert.equal(scheduled?.status, 'active');
+      assert.equal(typeof scheduled?.nextFireAt, 'number');
       assert.equal(paused?.status, 'paused');
-      assert.equal(paused?.enabled, false);
-      assert.equal(weekly?.status, 'scheduled');
-      assert.equal(weekly?.enabled, true);
+      assert.equal(paused?.nextFireAt, null);
+      assert.equal(weekly?.status, 'active');
       assert.equal(completed?.status, 'completed');
-      assert.equal(completed?.lastRun?.status, 'triggered');
-      assert.match(completed?.lastRun?.message ?? '', /计划提醒/);
+      assert.equal(completed?.runs[0]?.outcome, 'ok');
+      assert.match(completed?.runs[0]?.message ?? '', /定时任务/);
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true });
     }

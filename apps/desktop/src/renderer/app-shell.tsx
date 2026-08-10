@@ -10,7 +10,7 @@ import {
   type SetStateAction,
 } from 'react';
 import type {
-  PlanReminder,
+  ScheduledTask,
   QuoteRef,
   SessionSummary,
   SlashCommandIdForSurface,
@@ -25,7 +25,7 @@ import {
 } from '@maka/core';
 import { hasSettledInitialOnboarding } from '@maka/core/onboarding-milestone';
 import {
-  AutomationsPage,
+  ScheduledTasksPage,
   DailyReviewPage,
   ChatSurfaceLayout,
   type ComposerHandle,
@@ -376,7 +376,7 @@ function AppShellContent({
     draftKey: attachmentDraftKey,
   });
   const [newChatPlanModeActive, setNewChatPlanModeActive] = useState(false);
-  const [planReminderCreateRequestNonce, setPlanReminderCreateRequestNonce] = useState(0);
+  const [scheduledTaskCreateRequestNonce, setScheduledTaskCreateRequestNonce] = useState(0);
   const [pendingCollaborationModeBySession, setPendingCollaborationModeBySession] = useState<Record<string, boolean>>({});
   const [newChatSwarmModeActive, setNewChatSwarmModeActive] = useState(false);
   const [newChatGraphModeActive, setNewChatGraphModeActive] = useState(false);
@@ -494,7 +494,7 @@ function AppShellContent({
   }, []);
 
   const updateReminder = updateReminderFromStatus(appUpdateStatus);
-  // Dispatches on the reminder, not on the raw status: the footer is this
+  // Dispatches on the task, not on the raw status: the footer is this
   // callback's only caller and it only renders for the two states above, so
   // reading the status again here would be the same "who needs the user" list
   // maintained twice.
@@ -1638,8 +1638,8 @@ function AppShellContent({
     sideConversations.removePanels(staleIds);
   }, [quotePanels, activeId, closeWorkbarTab, sideConversations, workbarPanelsState]);
 
-  function isAutomationsSurfaceActive(): boolean {
-    return navSelectionRef.current.section === 'automations' && navSelectionRef.current.module === 'plan-reminders';
+  function isScheduledTasksSurfaceActive(): boolean {
+    return navSelectionRef.current.section === 'automations' && navSelectionRef.current.module === 'scheduled-tasks';
   }
 
   function isSkillsSurfaceActive(): boolean {
@@ -1654,15 +1654,15 @@ function AppShellContent({
     skills,
     managedSkillSources,
     bundledSkillCatalog,
-    planReminders,
-    refreshPlanReminders,
-    createPlanReminder,
-    updatePlanReminder,
-    togglePlanReminder,
-    triggerPlanReminderNow,
-    snoozePlanReminder,
-    clearPlanReminderRunHistory,
-    deletePlanReminder,
+    scheduledTasks,
+    refreshScheduledTasks,
+    createScheduledTask,
+    updateScheduledTask,
+    toggleScheduledTask,
+    triggerScheduledTaskNow,
+    snoozeScheduledTask,
+    clearScheduledTaskRunHistory,
+    deleteScheduledTask,
     refreshSkills,
     refreshManagedSkillSources,
     refreshBundledSkillCatalog,
@@ -1678,30 +1678,9 @@ function AppShellContent({
   } = useAppShellModuleData({
     uiLocale,
     isSkillsSurfaceActive,
-    isAutomationsSurfaceActive,
+    isScheduledTasksSurfaceActive,
     toastApi,
   });
-
-  // Agent Automations (Automation tool) live in Runtime Host, not the plan
-  // store. Re-merge them whenever the scheduled-tasks page is open so a cron
-  // created in chat appears without a manual refresh. Poll while the page is
-  // foregrounded because the host does not yet push automation-catalog events.
-  //
-  // `refreshPlanReminders` is recreated every render (module-data helpers are
-  // not memoized). Hold it in a ref so this effect only re-runs when the
-  // surface becomes active — otherwise list → setState → re-render loops.
-  const refreshPlanRemindersRef = useRef(refreshPlanReminders);
-  refreshPlanRemindersRef.current = refreshPlanReminders;
-  const planRemindersSurfaceActive =
-    navSelection.section === 'automations' && navSelection.module === 'plan-reminders';
-  useEffect(() => {
-    if (!planRemindersSurfaceActive) return;
-    void refreshPlanRemindersRef.current({ shouldShowError: isAutomationsSurfaceActive });
-    const timer = window.setInterval(() => {
-      void refreshPlanRemindersRef.current({ shouldShowError: () => false });
-    }, 12_000);
-    return () => window.clearInterval(timer);
-  }, [planRemindersSurfaceActive]);
 
   // 保持系统唤醒 capability for the 定时任务 page: reads/writes
   // settings.system.keepSystemAwake over the existing settings bridge. When
@@ -2267,7 +2246,7 @@ function AppShellContent({
     refreshConnections,
     refreshMemoryActive,
     refreshMessages,
-    refreshPlanReminders,
+    refreshScheduledTasks,
     refreshProjects,
     refreshShellSettings,
     refreshSkills,
@@ -2382,10 +2361,10 @@ function AppShellContent({
     if (await prepareProject(projectId)) openNewTaskSurface();
   }
 
-  function openPlanReminderForm() {
-    setNavSelection({ section: 'automations', module: 'plan-reminders' });
+  function openScheduledTaskForm() {
+    setNavSelection({ section: 'automations', module: 'scheduled-tasks' });
     closePalette();
-    setPlanReminderCreateRequestNonce((nonce) => nonce + 1);
+    setScheduledTaskCreateRequestNonce((nonce) => nonce + 1);
   }
 
   /**
@@ -2481,7 +2460,7 @@ function AppShellContent({
     startModeSession,
     isComposerImportOwnerActive,
     openHelp,
-    openPlanReminderForm,
+    openScheduledTaskForm,
     openProjectFolder,
     openSessionInChat,
     openSideConversation,
@@ -2625,7 +2604,7 @@ function AppShellContent({
             selection={navSelection}
             sessions={visibleSessions}
             activeId={sidebarActiveId}
-            planReminders={planReminders}
+            scheduledTasks={scheduledTasks}
             streamingSessionIds={streamingSessionIds}
             staleSessionIds={staleSessionIds}
             viewMode={viewMode}
@@ -2661,7 +2640,7 @@ function AppShellContent({
                 <SkillsPage
                   hubHeader={extensionsHubHeader}
                   skills={skills}
-                  planReminders={planReminders}
+                  scheduledTasks={scheduledTasks}
                   onRefreshSkills={() => refreshSkills()}
                   onRefreshManagedSkillSources={() => refreshManagedSkillSources()}
                   onOpenSkill={(skillId) => openSkill(skillId)}
@@ -2681,12 +2660,12 @@ function AppShellContent({
                 />
               ) : navSelection.section === 'extensions' && navSelection.module === 'mcp' ? (
                 <McpPage hubHeader={extensionsHubHeader} />
-              ) : navSelection.section === 'automations' && navSelection.module === 'plan-reminders' ? (
-                <AutomationsPage
+              ) : navSelection.section === 'automations' && navSelection.module === 'scheduled-tasks' ? (
+                <ScheduledTasksPage
                   hubHeader={automationsHubHeader}
-                  reminders={planReminders}
-                  createRequestNonce={planReminderCreateRequestNonce}
-                  onCreateRequestHandled={() => setPlanReminderCreateRequestNonce(0)}
+                  tasks={scheduledTasks}
+                  createRequestNonce={scheduledTaskCreateRequestNonce}
+                  onCreateRequestHandled={() => setScheduledTaskCreateRequestNonce(0)}
                   keepSystemAwake={
                     keepSystemAwakeController.supported
                       ? keepSystemAwakeController.keepSystemAwake
@@ -2698,17 +2677,17 @@ function AppShellContent({
                       : undefined
                   }
                     onRefresh={() =>
-                      refreshPlanReminders({
-                        shouldShowError: isAutomationsSurfaceActive,
+                      refreshScheduledTasks({
+                        shouldShowError: isScheduledTasksSurfaceActive,
                       })
                     }
-                  onCreate={(input) => createPlanReminder(input)}
-                  onUpdate={(id, patch) => updatePlanReminder(id, patch)}
-                  onToggle={(id, enabled) => togglePlanReminder(id, enabled)}
-                  onTriggerNow={(id) => triggerPlanReminderNow(id)}
-                  onSnooze={(id) => snoozePlanReminder(id)}
-                  onClearRunHistory={(id) => clearPlanReminderRunHistory(id)}
-                  onDelete={(id) => deletePlanReminder(id)}
+                  onCreate={(input) => createScheduledTask(input)}
+                  onUpdate={(id, patch) => updateScheduledTask(id, patch)}
+                  onToggle={(id, enabled) => toggleScheduledTask(id, enabled)}
+                  onTriggerNow={(id) => triggerScheduledTaskNow(id)}
+                  onSnooze={(id) => snoozeScheduledTask(id)}
+                  onClearRunHistory={(id) => clearScheduledTaskRunHistory(id)}
+                  onDelete={(id) => deleteScheduledTask(id)}
                 />
               ) : navSelection.section === 'automations' && navSelection.module === 'daily-review' ? (
                 <DailyReviewPage

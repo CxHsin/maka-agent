@@ -56,7 +56,7 @@ export interface SharedUiCopy {
       title: string;
       description: string;
       selectorLabel: (module: string) => string;
-      planReminders: string;
+      scheduledTasks: string;
       dailyReview: string;
     };
   };
@@ -160,9 +160,9 @@ const SHARED_UI_COPY = {
       },
       automations: {
         title: '定时任务',
-        description: '安排计划提醒，并回顾本机对话中的工作进展。',
+        description: '安排定时任务，并回顾本机对话中的工作进展。',
         selectorLabel: (module) => `定时任务内容：${module}`,
-        planReminders: '计划提醒',
+        scheduledTasks: '定时任务',
         dailyReview: '每日回顾',
       },
     },
@@ -249,9 +249,9 @@ const SHARED_UI_COPY = {
       },
       automations: {
         title: 'Scheduled tasks',
-        description: 'Schedule reminders and review progress from local conversations.',
+        description: 'Schedule tasks and review progress from local conversations.',
         selectorLabel: (module) => `Scheduled task content: ${module}`,
-        planReminders: 'Plan reminders',
+        scheduledTasks: 'Scheduled tasks',
         dailyReview: 'Daily review',
       },
     },

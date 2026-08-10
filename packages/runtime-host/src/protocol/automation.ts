@@ -8,7 +8,6 @@ import {
   AUTOMATION_PROMPT_LIMIT,
   AUTOMATION_PROMPT_MAX_BYTES as CORE_AUTOMATION_PROMPT_MAX_BYTES,
   isAutomationTextWithinLimit,
-  type AutomationKind,
   type AutomationSchedule,
   type AutomationStatus,
   type AutomationWaitingState,
@@ -51,7 +50,6 @@ const MUTATION_ERRORS = [
 
 export interface AutomationProjection {
   readonly id: string;
-  readonly kind: AutomationKind;
   readonly name: string;
   readonly status: AutomationStatus;
   readonly prompt: string;
@@ -67,7 +65,6 @@ export interface AutomationProjection {
   readonly expiresAt: number | null;
   readonly lastError: string | null;
   readonly consecutiveFailures: number;
-  readonly durable: boolean;
   readonly deferredFireCount: number;
   readonly firePending: boolean;
   readonly waiting: AutomationWaitingState | null;
@@ -107,12 +104,10 @@ export type AutomationMutateInput =
   | {
       readonly kind: 'create';
       readonly sessionId: string;
-      readonly automationKind: AutomationKind;
       readonly name: string;
       readonly prompt: string;
       readonly schedule: AutomationSchedule;
       readonly maxFires?: number;
-      readonly durable?: boolean;
       readonly requiredCapabilityGroups?: readonly string[];
     }
   | {
@@ -259,25 +254,18 @@ export function decodeAutomationMutateInput(value: unknown): AutomationMutateInp
     const input = requireShapedRecord(
       record,
       'Automation create input',
-      ['kind', 'sessionId', 'automationKind', 'name', 'prompt', 'schedule'],
-      ['maxFires', 'durable', 'requiredCapabilityGroups'],
+      ['kind', 'sessionId', 'name', 'prompt', 'schedule'],
+      ['maxFires', 'requiredCapabilityGroups'],
     );
-    if (input.automationKind !== 'heartbeat' && input.automationKind !== 'cron') {
-      throw invalidProtocolFrame('Invalid Automation kind');
-    }
     const maxFires =
       input.maxFires === undefined ? undefined : positiveCount(input.maxFires, 'maxFires');
     if (maxFires !== undefined && maxFires > AUTOMATION_MAX_FIRES) {
       throw invalidProtocolFrame('Automation maxFires is out of range');
     }
-    if (!(input.durable === undefined || typeof input.durable === 'boolean')) {
-      throw invalidProtocolFrame('Invalid durable flag');
-    }
     const requiredCapabilityGroups = decodeRequiredCapabilityGroups(input.requiredCapabilityGroups);
     return {
       kind: 'create',
       sessionId: requireEntityId(input.sessionId, 'sessionId'),
-      automationKind: input.automationKind,
       name: requireAutomationText(input.name, 'Automation name', AUTOMATION_NAME_LIMIT, true),
       prompt: requireAutomationText(
         input.prompt,
@@ -287,7 +275,6 @@ export function decodeAutomationMutateInput(value: unknown): AutomationMutateInp
       ),
       schedule: decodeAutomationSchedule(input.schedule),
       ...(maxFires === undefined ? {} : { maxFires }),
-      ...(input.durable === undefined ? {} : { durable: input.durable }),
       ...(requiredCapabilityGroups === undefined ? {} : { requiredCapabilityGroups }),
     };
   }
@@ -347,7 +334,6 @@ export function decodeAutomationMutateResult(value: unknown): AutomationMutateRe
 export function decodeAutomationProjection(value: unknown): AutomationProjection {
   const record = requireExactRecord(value, 'Automation projection', [
     'id',
-    'kind',
     'name',
     'status',
     'prompt',
@@ -363,14 +349,10 @@ export function decodeAutomationProjection(value: unknown): AutomationProjection
     'expiresAt',
     'lastError',
     'consecutiveFailures',
-    'durable',
     'deferredFireCount',
     'firePending',
     'waiting',
   ]);
-  if (record.kind !== 'heartbeat' && record.kind !== 'cron') {
-    throw invalidProtocolFrame('Invalid Automation projection kind');
-  }
   if (
     record.status !== 'active' &&
     record.status !== 'paused' &&
@@ -379,12 +361,11 @@ export function decodeAutomationProjection(value: unknown): AutomationProjection
   ) {
     throw invalidProtocolFrame('Invalid Automation projection status');
   }
-  if (typeof record.durable !== 'boolean' || typeof record.firePending !== 'boolean') {
-    throw invalidProtocolFrame('Invalid Automation projection flags');
+  if (typeof record.firePending !== 'boolean') {
+    throw invalidProtocolFrame('Invalid Automation projection flag');
   }
   return {
     id: requireEntityId(record.id, 'Automation id'),
-    kind: record.kind,
     name: requireAutomationText(record.name, 'Automation name', AUTOMATION_NAME_LIMIT),
     status: record.status,
     prompt: requireAutomationText(record.prompt, 'Automation prompt', AUTOMATION_PROMPT_LIMIT),
@@ -403,7 +384,6 @@ export function decodeAutomationProjection(value: unknown): AutomationProjection
         ? null
         : requireAutomationText(record.lastError, 'lastError', AUTOMATION_LAST_ERROR_LIMIT),
     consecutiveFailures: requireCount(record.consecutiveFailures, 'consecutiveFailures'),
-    durable: record.durable,
     deferredFireCount: requireCount(record.deferredFireCount, 'deferredFireCount'),
     firePending: record.firePending,
     waiting: record.waiting === null ? null : decodeAutomationWaitingState(record.waiting),

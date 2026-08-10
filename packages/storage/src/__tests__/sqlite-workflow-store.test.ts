@@ -437,6 +437,33 @@ describe('SQLite workflow stores', () => {
     });
   });
 
+  test('does not lower maxFires below the task fire count', async () => {
+    await withRoot(async (root) => {
+      const now = Date.now();
+      const store = createSqliteScheduledTaskStore(root);
+      try {
+        const task = await store.create(
+          {
+            title: 'Bounded recurrence',
+            intentBody: '',
+            schedule: { kind: 'interval', everySeconds: 60, startAt: now + 1_000 },
+            effect: { kind: 'notify', channel: 'local' },
+            createdBy: { kind: 'user' },
+          },
+          now,
+        );
+        const claim = await store.claimNow(task.id, now);
+        await store.settleFire(claim.id, { at: now, outcome: 'ok', message: 'done' });
+        await assert.rejects(
+          () => store.update(task.id, { maxFires: 1 }, now + 1),
+          /maxFires must be greater than the current fireCount/,
+        );
+      } finally {
+        store.close();
+      }
+    });
+  });
+
   test('does not admit later due Scheduled Tasks before their side effects can start', async () => {
     await withRoot(async (root) => {
       const now = Date.now();

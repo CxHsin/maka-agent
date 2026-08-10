@@ -36,7 +36,7 @@ A story that mounts the right component inside the wrong wrapper is still unreac
 
 Import the wrapper rather than retyping its classes. A hand-copied chain drifts the same way a hand-copied convention block does, and it drifts invisibly: `onboarding.stories.tsx` was rewritten once to "the app's chain, class for class", and the rewrite inverted two levels of nesting and dropped a 32px header. Write out only what genuinely cannot be imported, and say in the comment which part that is.
 
-When a component has two hosts, one frame is not both. `capability-audit-strip.stories.tsx` named 技能 and 计划提醒 as paths to a single story built in the skills frame; the plan-reminder page mounts the same strip inside a 1024px clamp with no `.maka-module-main` ancestor, so a `:has(> …)` grid rule that page never gets was part of every measurement taken there. Either build the second frame or say in the annotation which host the story is and what the other one changes. Naming the divergence is cheap; a story that silently averages two frames is worse than no story.
+When a component has two hosts, one frame is not both. `capability-audit-strip.stories.tsx` named 技能 and 定时任务 as paths to a single story built in the skills frame; the scheduled-task page mounts the same strip inside a 1024px clamp with no `.maka-module-main` ancestor, so a `:has(> …)` grid rule that page never gets was part of every measurement taken there. Either build the second frame or say in the annotation which host the story is and what the other one changes. Naming the divergence is cheap; a story that silently averages two frames is worse than no story.
 
 ## Derive the fixture, do not assert it
 

@@ -2,11 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AgentRunHeader } from '@maka/core/agent-run';
 import { messageContentsEqual } from '@maka/core/events';
 import type { SessionHeader } from '@maka/core/session';
-import type {
-  AutomationDefinition,
-  AutomationExecutionTemplate,
-  AutomationPendingFire,
-} from '@maka/core/automation';
+import type { AutomationDefinition, AutomationPendingFire } from '@maka/core/automation';
 import {
   AutomationManager,
   buildAutomationAuthorityTool,
@@ -42,7 +38,6 @@ import type { AutomationClientCapabilityAuthority } from './client-capability-se
 import { AutomationAuthorityInvariantError } from './automation-errors.js';
 import {
   assertFireRunIdentity,
-  automationSessionId,
   fireContent,
   HostAutomationFireCoordinator,
 } from './automation-fire-coordinator.js';
@@ -50,10 +45,7 @@ import { runtimeHostAutomationSessionUnavailableReason } from './host-session-av
 import type { HostedExecutionAuthority } from './hosted-execution-authority.js';
 import { SessionAdmissionGate } from './session-admission-gate.js';
 
-type AutomationSessions = Pick<
-  ExecutionSessionWriter,
-  'createStableSession' | 'readHeaderSnapshot'
->;
+type AutomationSessions = Pick<ExecutionSessionWriter, 'readHeaderSnapshot'>;
 type AutomationRuns = Pick<ExecutionAgentRunWriter, 'readRun'>;
 type AutomationRuntime = Pick<SessionManager, 'sendMessage'>;
 type AutomationRoot = Pick<HostedExecutionAuthority, 'admit' | 'reconcile' | 'subscribe'>;
@@ -203,8 +195,7 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
       setTimeout: input.setTimeout ?? ((callback, delayMs) => setTimeout(callback, delayMs)),
       clearTimeout: input.clearTimeout ?? ((timer) => clearTimeout(timer as NodeJS.Timeout)),
     });
-    // Cron/standalone schedules live on ScheduledTask. Automation keeps heartbeats.
-    this.modelTool = buildAutomationAuthorityTool({ authority: this, cronEnabled: false });
+    this.modelTool = buildAutomationAuthorityTool({ authority: this });
   }
 
   async prepareRecovery(): Promise<void> {
@@ -258,9 +249,7 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
     return this.#exclusive(() => {
       const blocked = unique.some(
         (sessionId) =>
-          this.#manager
-            .listForSession(sessionId)
-            .some((automation) => automation.durable !== true) ||
+          this.#manager.listForSession(sessionId).length > 0 ||
           [...this.#pendingFires.values()].some((fire) => fire.targetSessionId === sessionId),
       );
       if (blocked) {
@@ -288,13 +277,11 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
   }
 
   async create(input: {
-    kind: AutomationDefinition['kind'];
     name: string;
     prompt: string;
     sessionId: string;
     schedule: AutomationDefinition['schedule'];
     maxFires?: number;
-    durable?: boolean;
     requiredCapabilityGroups?: readonly string[];
   }): Promise<AutomationDefinition | { error: string }> {
     try {
@@ -338,15 +325,15 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
   get(id: string, sessionId: string): Promise<AutomationDefinition | undefined> {
     return this.#exclusive(() => {
       const automation = this.#manager.get(id);
-      return automation && visibleTo(automation, sessionId)
+      return automation && automation.sessionId === sessionId
         ? cloneDefinition(automation)
         : undefined;
     });
   }
 
-  listVisibleForSession(sessionId: string): Promise<readonly AutomationDefinition[]> {
+  listForSession(sessionId: string): Promise<readonly AutomationDefinition[]> {
     return this.#exclusive(() =>
-      this.#manager.listVisibleForSession(sessionId).sort(compareAutomations).map(cloneDefinition),
+      this.#manager.listForSession(sessionId).sort(compareAutomations).map(cloneDefinition),
     );
   }
 
@@ -364,7 +351,7 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
       if (!this.#prepared)
         return queryFailure('host_not_ready', 'Automation authority is not ready');
       const visible = this.#manager
-        .listVisibleForSession(input.sessionId)
+        .listForSession(input.sessionId)
         .sort(compareAutomations)
         .map((automation) => projectAutomation(automation, this.#pendingFires.has(automation.id)));
       if (input.kind === 'get') {
@@ -407,13 +394,11 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
       switch (input.kind) {
         case 'create': {
           const committed = await this.#create({
-            kind: input.automationKind,
             name: input.name,
             prompt: input.prompt,
             sessionId: input.sessionId,
             schedule: input.schedule,
             ...(input.maxFires === undefined ? {} : { maxFires: input.maxFires }),
-            ...(input.durable === undefined ? {} : { durable: input.durable }),
             ...(input.requiredCapabilityGroups === undefined
               ? {}
               : { requiredCapabilityGroups: input.requiredCapabilityGroups }),
@@ -471,13 +456,11 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
   }
 
   async #create(input: {
-    kind: AutomationDefinition['kind'];
     name: string;
     prompt: string;
     sessionId: string;
     schedule: AutomationDefinition['schedule'];
     maxFires?: number;
-    durable?: boolean;
     requiredCapabilityGroups?: readonly string[];
   }): Promise<CommittedAutomation> {
     return this.#exclusive(async () => {
@@ -495,17 +478,13 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
         throw new AutomationMutationFailure('capability_unavailable', resolvedRequirements.message);
       }
       const capabilityRequirements = resolvedRequirements.requirements;
-      const execution = input.kind === 'cron' ? executionTemplateFromHeader(header) : undefined;
       const before = this.#snapshot();
       const result = this.#manager.create({
-        kind: input.kind,
         name: input.name,
         prompt: input.prompt,
         sessionId: input.sessionId,
         schedule: input.schedule,
         ...(input.maxFires === undefined ? {} : { maxFires: input.maxFires }),
-        ...(input.durable === undefined ? {} : { durable: input.durable }),
-        ...(execution ? { execution } : {}),
         ...(capabilityRequirements.length > 0 ? { capabilityRequirements } : {}),
       });
       if ('error' in result) {
@@ -593,7 +572,7 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
   #requireManagedAutomation(id: string, sessionId: string): AutomationDefinition {
     const automation = this.#manager.get(id);
     if (!automation) throw new AutomationMutationFailure('not_found', 'Automation was not found');
-    if (!visibleTo(automation, sessionId)) {
+    if (automation.sessionId !== sessionId) {
       throw new AutomationMutationFailure('not_owned', 'Automation is not owned by this Session');
     }
     return automation;
@@ -738,29 +717,6 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
         return undefined;
       }
       const before = this.#snapshot();
-      if (automation.kind === 'cron' && !automation.execution) {
-        try {
-          const creator = await this.#sessions.readHeaderSnapshot(automation.sessionId);
-          const unavailableReason = runtimeHostAutomationSessionUnavailableReason(creator);
-          if (unavailableReason) {
-            automation.status = 'paused';
-            automation.nextFireAt = null;
-            automation.updatedAt = this.#now();
-            automation.lastError = unavailableReason;
-            await this.#commitOrRestore(before);
-            return undefined;
-          }
-          automation.execution = executionTemplateFromHeader(creator);
-        } catch (error) {
-          if (!isSessionNotFoundError(error) && !isMissingRecord(error)) throw error;
-          automation.status = 'paused';
-          automation.nextFireAt = null;
-          automation.updatedAt = this.#now();
-          automation.lastError = 'Creator Session is unavailable; execution settings are unknown.';
-          await this.#commitOrRestore(before);
-          return undefined;
-        }
-      }
       const started = this.#manager.attemptStarted(automationId);
       if (!started) {
         await this.#commitOrRestore(before);
@@ -771,12 +727,10 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
       const fire: AutomationPendingFire = {
         id: fireId,
         automationId,
-        automationKind: started.kind,
         automationName: started.name,
         prompt: started.prompt,
         scheduledFor: expectedSchedule,
-        targetSessionId:
-          started.kind === 'heartbeat' ? started.sessionId : automationSessionId(fireId),
+        targetSessionId: started.sessionId,
         turnId: this.#newId(),
         runId: this.#newId(),
         userMessageId: this.#newId(),
@@ -786,7 +740,6 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
         ...(started.capabilityRequirements && started.capabilityRequirements.length > 0
           ? { capabilityRequirements: structuredClone(started.capabilityRequirements) }
           : {}),
-        ...(started.execution ? { execution: structuredClone(started.execution) } : {}),
       };
       this.#pendingFires.set(automationId, fire);
       await this.#commitOrRestore(before);
@@ -959,19 +912,6 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
   }
 }
 
-function executionTemplateFromHeader(header: SessionHeader): AutomationExecutionTemplate {
-  return {
-    cwd: header.cwd,
-    ...(header.projectId === undefined ? {} : { projectId: header.projectId }),
-    backend: header.backend,
-    llmConnectionSlug: header.llmConnectionSlug,
-    model: header.model,
-    ...(header.thinkingLevel === undefined ? {} : { thinkingLevel: header.thinkingLevel }),
-    collaborationMode: header.collaborationMode ?? 'agent',
-    orchestrationMode: header.orchestrationMode ?? 'default',
-  };
-}
-
 function runFailureMessage(run: AgentRunHeader): string {
   if (run.status === 'cancelled') {
     return run.abortSource
@@ -979,10 +919,6 @@ function runFailureMessage(run: AgentRunHeader): string {
       : 'Automation run cancelled';
   }
   return run.failureMessage ?? run.failureClass ?? 'Automation run failed';
-}
-
-function visibleTo(automation: AutomationDefinition, sessionId: string): boolean {
-  return automation.sessionId === sessionId || automation.durable === true;
 }
 
 function compareAutomations(left: AutomationDefinition, right: AutomationDefinition): number {
@@ -995,7 +931,6 @@ function projectAutomation(
 ): AutomationProjection {
   return {
     id: automation.id,
-    kind: automation.kind,
     name: automation.name,
     status: automation.status,
     prompt: automation.prompt,
@@ -1011,7 +946,6 @@ function projectAutomation(
     expiresAt: automation.expiresAt,
     lastError: automation.lastError,
     consecutiveFailures: automation.consecutiveFailures,
-    durable: automation.durable === true,
     deferredFireCount: automation.deferredFireCount ?? 0,
     firePending,
     waiting: automation.waiting ? structuredClone(automation.waiting) : null,

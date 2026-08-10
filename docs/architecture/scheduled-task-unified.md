@@ -4,8 +4,8 @@
 
 Maka previously had two clocks:
 
-1. **Plan reminders** (desktop SQLite + Electron timer) — UI-created notify jobs  
-2. **Automation cron** (Runtime Host) — agent-created session runners  
+1. Desktop-owned notification schedules
+2. Runtime Host standalone session schedules
 
 The product word was one (“定时任务”), the data paths were two. Agent-created work never appeared in the desktop catalog.
 
@@ -23,14 +23,14 @@ One noun: **`ScheduledTask`**.
 
 ### Effects
 
-- `notify.local` / `notify.bot` — delivery only  
+- `notify.local` / `notify.bot` — delivery only
 - `agent_run` — freeze execution template at create; on fire, create session + `turn.start`
 
 ### UI
 
-The existing plan-reminder panel remains the view layer and is fed through
-`scheduledTaskToPlanReminderView`. Renderer operations use the single
-`scheduled-tasks:*` IPC surface; there is no second Plan Reminder API or store.
+The scheduled-task panel consumes `ScheduledTask` directly. Renderer operations
+use the single `scheduled-tasks:*` IPC surface; there is no projection adapter,
+alias API, or second store.
 
 ### Authority invariant
 
@@ -52,9 +52,9 @@ manage this workspace catalog; heartbeat remains available for session-scoped Ho
 
 ## Key files
 
-- `packages/core/src/scheduled-task.ts`  
-- `packages/storage/src/scheduled-task-store.ts`  
-- `packages/runtime/src/scheduled-task-tools.ts`  
-- `packages/runtime-host/src/server/scheduled-task-authority.ts`  
-- `apps/desktop/src/main/scheduled-tasks-main.ts`  
+- `packages/core/src/scheduled-task.ts`
+- `packages/storage/src/scheduled-task-store.ts`
+- `packages/runtime/src/scheduled-task-tools.ts`
+- `packages/runtime-host/src/server/scheduled-task-authority.ts`
+- `apps/desktop/src/main/scheduled-tasks-main.ts`
 - `apps/desktop/src/main/runtime-host-boot.ts` (Desktop authority wiring)

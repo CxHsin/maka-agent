@@ -78,6 +78,7 @@ descriptions of what a build did on a given date, and are dated for that reason.
 | Overlay level policy — an occluded target raises the cursor rather than hiding it | same file, and `apps/desktop/src/main/computer-use/cursor-overlay-window.ts` |
 | The observation text shape | `packages/runtime/src/computer-use-tools.ts`, corroborated by the archived capture in §2 |
 | OOP WebContent targeting, retained-element unique refetch, and renderer-generation fencing | Reimplemented in the pinned `maka-cu` source; this repository records the exact source commit and binary digest in `apps/desktop/bundled-tools.json` |
+| Stable AX ids across revisions, ordered no-change/remove/insert/update presentation, and full-tree fallback | Reimplemented in the pinned `maka-cu` source and `packages/runtime/src/computer-use-observation-text.ts`; the complete current tree remains authoritative and dispatch still uses fresh snapshot tokens |
 
 Where Maka deliberately diverges, the divergence is stated at the point of
 divergence rather than here, so it is read by whoever is changing that code.

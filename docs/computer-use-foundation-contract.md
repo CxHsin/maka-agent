@@ -10,6 +10,7 @@
 - `codex-computer-use-lab/docs/13-policy-error-state-machine.md`：policy → approval → fresh observation → action，以及 intervention/lock/blocked URL 状态；
 - `codex-computer-use-lab/docs/16-service-process-lifecycle-and-retention.md`：exact executable ownership、client/idle lifecycle、connection-loss cleanup；
 - `codex-computer-use-lab/docs/19-electron-presentation-and-mcp-event-contract.md`：presentation 与 native action transport 分离。
+- `codex-computer-use-lab/docs/22-native-ax-diff-refetch-and-instance-isolation.md`：stable AX revision ids、ordered difference、no-change 与 full fallback。
 
 上述文件位于独立逆向实验仓库。本文只记录由 Maka 测试锁定的合同，
 不把外部路径声明为本仓库内链接。
@@ -18,6 +19,7 @@
 
 1. Observation authority
    - 每个可执行 observation 具有唯一 `frameId + epoch`、截图尺寸、`pid + windowId`、capture-local 坐标信息，以及适用时的 Electron page identity。
+   - 同一窗口跨 revision 的模型 element id 可以稳定，但它只是 presentation identity；每次 dispatch 仍必须解析到 fresh snapshot 的 opaque token。
    - WebContent/renderer 元素同时绑定 host process generation 与 actual input-owner generation；唯一真实 WebContent 元素会遮蔽同框叶子 mirror，歧义 mirror 不删除。
    - 坐标只能在产生它的截图/窗口 frame 内解释。dispatch 禁止重新选择当前全局坐标下的最高 z-order 窗口。
    - 新 observation、turn/session 结束、abort、user stop、service loss 和明确 intervention 使旧 action claim 与 keyboard ownership 失效。
@@ -41,7 +43,8 @@
    - child process 在未知 action outcome 下退出时必须 re-observe，禁止自动重放。
 
 5. Postcondition
-   - mutation 成功后旧 observation 被消费并返回 fresh full observation；可获得视觉状态时向模型返回新截图。
+   - mutation 成功后旧 observation 被消费并返回 fresh authoritative observation；完整当前元素树保留在 observation 内，可获得视觉状态时向模型返回新截图。
+   - immediate post-action model text 可以使用 executor 声明的 no-change/difference/full presentation；显式 observe 仍显示完整树，差分不得成为重建当前状态的唯一来源。
    - transport success 不等于 business success。`verified:true` 必须由 action-specific effect/readback 支撑。
    - `supported:true, ok:false` 为本次 terminal failure；仅 side-effect-free 的 `supported:false` 可进行一次显式允许的 fallback。
    - retry 基于 fresh observation 和新 claim，禁止重试旧 coordinate/fingerprint。
@@ -77,6 +80,7 @@
 | Capture-local coordinate authority | PASS | window-local transform、scale/geometry、Retina/negative-origin tests | decoy window 下的 cumulative Desktop E2E |
 | WebContent / renderer target | PASS | actual PID + start time、coalition readiness、mirror 去重、10 轮 OOP `isTrusted=true` / 单 down-up | 扩到真实 Electron/Chromium app matrix |
 | Semantic identity refetch | PASS | unique replacement 成功；missing=`element_released`；ambiguous=`element_changed`；全部零误点 | 保留跨 toolkit 录制回归 |
+| Stable AX revision / post-action diff | PASS | DFS stable ID、跨 fresh token 继承、ordered changes、removed ranges、no-change/full fallback；host 显式 observe 保持 full | 增加真实长树 token-saving trajectory 样本 |
 | Modal / multi-window routing | PARTIAL | app→frontmost sheet、exact secondary window、direct AXWindow→AXSheet/AXDrawer frame matching | 解锁后完成 open/close/button/scroll oracle 矩阵 |
 | Occlusion、no foreground/pixel fallback | PASS | coordinate/semantic occlusion 与 fail-closed tests | real-window safety sentinel |
 | Fresh postcondition、effect verification | PARTIAL | mutation 后 fresh observation；slider 业务值/readback=42；scroll tree delta + oracle=76 | 继续补 secondary action 与跨窗口业务 oracle |

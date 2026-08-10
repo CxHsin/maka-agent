@@ -125,7 +125,7 @@ without focusing it or using an always-on-top overlay layer.
 ## Native WebContent Qualification
 
 The executor pinned by `apps/desktop/bundled-tools.json` now carries source
-commit `955686c18a864f7b108324f687a35679430fc217`.
+commit `40ba6764565f3fdb13e61b51bb5e2abd11ea15c3`.
 
 The shared synthetic CUA Lab was run ten consecutive times before integration:
 
@@ -158,3 +158,17 @@ secondary window ID, and AX frame matching prefers a direct `AXWindow` before
 looking through `AXSheet` / `AXDrawer` children. The screen remained locked, so
 open/close/button/scroll oracle qualification is still pending and is not
 classified as a real-runtime pass.
+
+The same pin now carries stable AX observation revisions:
+
+- the first tree receives depth-first stable ids;
+- matched siblings preserve ids across fresh snapshot tokens;
+- new ids begin above the previous maximum;
+- post-action observations can render no-change, ordered insert/update changes,
+  compressed removed-id ranges, or a full-tree fallback;
+- explicit observe continues to render the complete tree.
+
+This is hermetic protocol/static contract evidence, not a provider-model
+qualification cell. The native source suite passed 320 tests with 26 explicit
+live-test skips, and the host Computer Use suite passed 124 tests. The
+screen was locked, so no modal or long-trajectory live claim was added.

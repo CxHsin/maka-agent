@@ -125,7 +125,7 @@ without focusing it or using an always-on-top overlay layer.
 ## Native WebContent Qualification
 
 The executor pinned by `apps/desktop/bundled-tools.json` now carries source
-commit `82988a48242f07602285c4401ec121fb64b3b54f`.
+commit `955686c18a864f7b108324f687a35679430fc217`.
 
 The shared synthetic CUA Lab was run ten consecutive times before integration:
 
@@ -151,3 +151,10 @@ The same source commit adds `doctor --json`. A release-binary smoke on the
 locked-screen state correctly reported permissions granted, all required native
 SPIs available, an ad-hoc non-hardened signature, and
 `metadataObservation / screenshotObservation / trustedWebContentClick = false`.
+
+Modal routing now has deterministic contract evidence: app targets select the
+frontmost sheet inventory entry, exact window targets retain the requested
+secondary window ID, and AX frame matching prefers a direct `AXWindow` before
+looking through `AXSheet` / `AXDrawer` children. The screen remained locked, so
+open/close/button/scroll oracle qualification is still pending and is not
+classified as a real-runtime pass.

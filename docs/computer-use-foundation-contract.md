@@ -77,6 +77,7 @@
 | Capture-local coordinate authority | PASS | window-local transform、scale/geometry、Retina/negative-origin tests | decoy window 下的 cumulative Desktop E2E |
 | WebContent / renderer target | PASS | actual PID + start time、coalition readiness、mirror 去重、10 轮 OOP `isTrusted=true` / 单 down-up | 扩到真实 Electron/Chromium app matrix |
 | Semantic identity refetch | PASS | unique replacement 成功；missing=`element_released`；ambiguous=`element_changed`；全部零误点 | 保留跨 toolkit 录制回归 |
+| Modal / multi-window routing | PARTIAL | app→frontmost sheet、exact secondary window、direct AXWindow→AXSheet/AXDrawer frame matching | 解锁后完成 open/close/button/scroll oracle 矩阵 |
 | Occlusion、no foreground/pixel fallback | PASS | coordinate/semantic occlusion 与 fail-closed tests | real-window safety sentinel |
 | Fresh postcondition、effect verification | PARTIAL | mutation 后 fresh observation；slider 业务值/readback=42；scroll tree delta + oracle=76 | 继续补 secondary action 与跨窗口业务 oracle |
 | Per-session queue、generation lease | PARTIAL | session queue/frame claim；lease 修复尚在本地 | concurrent-session 与 intervention-before-dispatch tests |

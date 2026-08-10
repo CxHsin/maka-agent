@@ -125,7 +125,8 @@ without focusing it or using an always-on-top overlay layer.
 ## Native WebContent Qualification
 
 The executor pinned by `apps/desktop/bundled-tools.json` now carries source
-commit `40ba6764565f3fdb13e61b51bb5e2abd11ea15c3`.
+commit `058ee57604cf40b021bfb8642ac9bd884e71cd3f`, the merge commit of
+`maka-agent/maka-cu#2` on `maka/base`.
 
 The shared synthetic CUA Lab was run ten consecutive times before integration:
 

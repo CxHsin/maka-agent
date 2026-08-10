@@ -47,7 +47,7 @@ describe('Runtime Host bootstrap protocol', () => {
 
   test('declares the current protocol and closed authority operation set', () => {
     assert.equal(RUNTIME_HOST_PROTOCOL_VERSION, 0);
-    assert.equal(RUNTIME_HOST_COMPATIBILITY_EPOCH, 15);
+    assert.equal(RUNTIME_HOST_COMPATIBILITY_EPOCH, 16);
     assert.deepEqual(Object.keys(HOST_OPERATION_SPECS).sort(), [
       'access.credential.issue',
       'access.credential.revoke',
@@ -118,6 +118,8 @@ describe('Runtime Host bootstrap protocol', () => {
       'runtime.resource.query',
       'runtime.resource.start',
       'runtime.resource.stop',
+      'scheduled-task.mutate',
+      'scheduled-task.query',
       'session.branch.create',
       'session.catalog.query',
       'session.configuration.update',

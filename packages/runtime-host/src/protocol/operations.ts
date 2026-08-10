@@ -30,6 +30,7 @@ import {
 } from './operation-spec.js';
 import { RUNTIME_POLICY_OPERATION_SPECS } from './runtime-policy.js';
 import { RUNTIME_RESOURCE_OPERATION_SPECS } from './runtime-resource.js';
+import { SCHEDULED_TASK_OPERATION_SPECS } from './scheduled-task.js';
 import { SESSION_CATALOG_OPERATION_SPECS } from './session-catalog.js';
 import { SESSION_CONTINUITY_OPERATION_SPECS } from './session-continuity.js';
 import { SESSION_TRANSCRIPT_OPERATION_SPECS } from './session-transcript.js';
@@ -139,6 +140,7 @@ export * from './plan.js';
 export * from './project-catalog.js';
 export * from './runtime-policy.js';
 export * from './runtime-resource.js';
+export * from './scheduled-task.js';
 export * from './session-catalog.js';
 export * from './session-revision.js';
 export * from './session-retirement.js';
@@ -164,6 +166,7 @@ export const HOST_OPERATION_SPECS = composeOperationSpecMaps(
   EXTERNAL_SESSION_OPERATION_SPECS,
   RUNTIME_POLICY_OPERATION_SPECS,
   RUNTIME_RESOURCE_OPERATION_SPECS,
+  SCHEDULED_TASK_OPERATION_SPECS,
   AUTOMATION_OPERATION_SPECS,
   PLAN_OPERATION_SPECS,
   PROJECT_CATALOG_OPERATION_SPECS,

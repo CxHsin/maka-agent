@@ -25,6 +25,7 @@ test('CLI Runtime Host bootstrap launches the execution composition', async () =
     subscribeConfigurationChanges: () => () => {},
     subscribeProjectCatalogChanges: () => () => {},
     subscribeSessionCatalogChanges: () => () => {},
+    subscribeScheduledTaskChanges: () => () => {},
     close: async () => {
       closes += 1;
     },

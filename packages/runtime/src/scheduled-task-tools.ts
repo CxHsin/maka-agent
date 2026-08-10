@@ -17,7 +17,7 @@ import {
 import type { MakaTool } from './tool-runtime.js';
 
 export const SCHEDULED_TASK_TOOL_NAME = 'ScheduledTask';
-export const SCHEDULED_TASK_AUTHORITY_SERVICE_ID = 'maka.scheduled-task-authority';
+export const SCHEDULED_TASK_AUTHORITY_SERVICE_ID = 'maka_scheduled_task_authority';
 export const SCHEDULED_TASK_AUTHORITY_SERVICE_VERSION = '1';
 
 export interface ScheduledTaskToolAuthority {

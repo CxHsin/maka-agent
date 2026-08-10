@@ -134,7 +134,7 @@ test('publishes and admits additional Desktop authority services', async () => {
     releaseComputerUseSession() {},
     additionalServices: () => [
       {
-        serviceId: 'maka.scheduled-task-authority',
+        serviceId: 'maka_scheduled_task_authority',
         version: '1',
         async call(method, input) {
           return { method, id: input.id };
@@ -143,7 +143,7 @@ test('publishes and admits additional Desktop authority services', async () => {
     ],
   });
   assert.deepEqual(provider.services?.(), [
-    { serviceId: 'maka.scheduled-task-authority', version: '1' },
+    { serviceId: 'maka_scheduled_task_authority', version: '1' },
   ]);
   assert.ok(provider.callService);
   const result = await provider.callService(serviceFrame(), {
@@ -498,7 +498,7 @@ function serviceFrame(): ClientCapabilityServiceCallFrame {
     kind: 'client.capability.service_call',
     invocationId: 'invocation-service-1',
     registrationId: 'registration-1',
-    serviceId: 'maka.scheduled-task-authority',
+    serviceId: 'maka_scheduled_task_authority',
     version: '1',
     method: 'pause',
     input: { id: 'task-1' },

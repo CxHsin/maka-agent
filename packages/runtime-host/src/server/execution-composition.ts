@@ -80,6 +80,8 @@ import { HostArtifactCoordinator } from './artifact-coordinator.js';
 import { HostAgentGraphCoordinator } from './agent-graph-coordinator.js';
 import { HostAgentGraphExecutionCoordinator } from './agent-graph-execution-coordinator.js';
 import { HostAutomationCoordinator } from './automation-coordinator.js';
+import { HostScheduledTaskAuthority } from './scheduled-task-authority.js';
+import { buildScheduledTaskTool } from '@maka/runtime';
 import { recoverClientCapabilityOutcomes } from './client-capability-recovery.js';
 import { HostConnectionEffectCoordinator } from './connection-effect-coordinator.js';
 import { HostConfigurationChangeService } from './configuration-change-service.js';
@@ -463,6 +465,8 @@ export async function createExecutionRuntimeHostComposition(
     let clientCapabilities: HostClientCapabilityCoordinator | undefined;
     let oauth: HostOAuthCoordinator | undefined;
     let automations: HostAutomationCoordinator | undefined;
+    let scheduledTaskAuthority: HostScheduledTaskAuthority | undefined;
+    let scheduledTaskTool: MakaTool | undefined;
     let goal: HostGoalCoordinator | undefined;
     let deepResearch: HostDeepResearchCoordinator | undefined;
     let dailyReview: HostDailyReviewCoordinator | undefined;
@@ -626,6 +630,7 @@ export async function createExecutionRuntimeHostComposition(
               taskLedger,
               clientCapabilities: requireClientCapabilities(clientCapabilities),
               automationTool: requireAutomationCoordinator(automations).modelTool,
+              ...(scheduledTaskTool ? { scheduledTaskTool } : {}),
               planStore: openedPlanStore,
               deepResearchTools: requireDeepResearch(deepResearch).toolsForSession(
                 backendContext.sessionId,
@@ -696,6 +701,7 @@ export async function createExecutionRuntimeHostComposition(
           builtinTools,
           hostTools: [...hostTools, ...graphTools],
           automationTool: requireAutomationCoordinator(automations).modelTool,
+          ...(scheduledTaskTool ? { scheduledTaskTool } : {}),
           goalTools: requireGoal(goal).tools,
           parentAgentTools: childAgentTools.parentTools,
           plan: {
@@ -738,6 +744,7 @@ export async function createExecutionRuntimeHostComposition(
             builtinTools,
             hostTools,
             automationTool: requireAutomationCoordinator(automations).modelTool,
+            ...(scheduledTaskTool ? { scheduledTaskTool } : {}),
             goalTools: requireGoal(goal).tools,
             parentAgentTools: childAgentTools.parentTools,
             plan: {
@@ -1069,6 +1076,13 @@ export async function createExecutionRuntimeHostComposition(
       acquireResidency: () => context.acquireResidency('automation'),
       requestDrain: context.requestDrain,
     });
+    // Unified 定时任务 catalog (agent + desktop). Heartbeat stays on Automation.
+    scheduledTaskAuthority = new HostScheduledTaskAuthority({
+      workspaceRoot: context.owner.capability.canonicalPath,
+      sessions: stores.sessionStore,
+    });
+    await scheduledTaskAuthority.ready();
+    scheduledTaskTool = buildScheduledTaskTool({ authority: scheduledTaskAuthority });
     const goalExecutionCoordinator = new HostGoalExecutionCoordinator({
       executions: coordinator,
       runtime: manager,
@@ -1332,7 +1346,11 @@ export async function createExecutionRuntimeHostComposition(
           schedulers: () => requireAutomationCoordinator(automations).start(),
         },
         drain: [() => automations?.beginDrain()],
-        close: [() => automations?.close(), () => openedAutomationStore.close()],
+        close: [
+          () => automations?.close(),
+          () => openedAutomationStore.close(),
+          () => scheduledTaskAuthority?.close(),
+        ],
       }),
       createRuntimeHostDomainModule({
         id: 'execution',

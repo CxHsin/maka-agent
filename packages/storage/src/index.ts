@@ -92,6 +92,8 @@ export type {
   PlanReminderStore,
   SqlitePlanReminderStore,
 } from './plan-reminder-store.js';
+export { createSqliteScheduledTaskStore } from './scheduled-task-store.js';
+export type { ScheduledTaskStore } from './scheduled-task-store.js';
 export { applyPlanEvent, createSqlitePlanStore } from './plan-store.js';
 export type {
   CreatePlanStoreOptions,

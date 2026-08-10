@@ -90,6 +90,7 @@ export interface InteractiveRunComposerInput {
   readonly builtinTools?: BuildBuiltinToolsOptions;
   readonly hostTools?: readonly MakaTool[];
   readonly automationTool?: MakaTool;
+  readonly scheduledTaskTool?: MakaTool;
   readonly goalTools?: readonly MakaTool[];
   readonly parentAgentTools?: readonly MakaTool[];
   readonly plan?: {
@@ -116,6 +117,7 @@ export function createInteractiveRunComposer(input: InteractiveRunComposerInput)
         input.builtinTools,
         input.hostTools,
         input.automationTool,
+        input.scheduledTaskTool,
         input.goalTools,
         input.parentAgentTools,
         input.plan,
@@ -341,6 +343,7 @@ export function createInteractiveRunComposerFactory(
         ...(input.builtinTools ? { builtinTools: input.builtinTools } : {}),
         ...(hostTools.length > 0 ? { hostTools } : {}),
         ...(input.automationTool ? { automationTool: input.automationTool } : {}),
+        ...(input.scheduledTaskTool ? { scheduledTaskTool: input.scheduledTaskTool } : {}),
         ...(input.goalTools ? { goalTools: input.goalTools } : {}),
         ...(parentAgentTools ? { parentAgentTools } : {}),
         ...(planState && input.planStore
@@ -411,6 +414,7 @@ function buildDefaultHostTools(
   builtinOptions?: BuildBuiltinToolsOptions,
   hostTools: readonly MakaTool[] = [],
   automationTool?: MakaTool,
+  scheduledTaskTool?: MakaTool,
   goalTools: readonly MakaTool[] = [],
   parentAgentTools: readonly MakaTool[] = [],
   plan?: InteractiveRunComposerInput['plan'],
@@ -445,6 +449,7 @@ function buildDefaultHostTools(
     'SkillSearch',
     ...taskTools.map((tool) => tool.name),
     ...(automationTool ? [automationTool.name] : []),
+    ...(scheduledTaskTool ? [scheduledTaskTool.name] : []),
     ...goalTools.map((tool) => tool.name),
     ...parentAgentTools.map((tool) => tool.name),
     ...planTools.map((tool) => tool.name),
@@ -462,6 +467,7 @@ function buildDefaultHostTools(
     buildSkillSearchAgentToolFromInventory(inventoryFor, skillHost, { shadowTracker }),
     ...taskTools,
     ...(automationTool ? [automationTool] : []),
+    ...(scheduledTaskTool ? [scheduledTaskTool] : []),
     ...goalTools,
     ...parentAgentTools,
     ...planTools,

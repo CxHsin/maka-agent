@@ -1563,6 +1563,12 @@ export type {
   AutomationAuthorityToolDeps,
   AutomationToolAuthority,
 } from './automation-tools.js';
+export {
+  buildScheduledTaskTool,
+  buildAgentScheduledTaskCreatePayload,
+  SCHEDULED_TASK_TOOL_NAME,
+} from './scheduled-task-tools.js';
+export type { ScheduledTaskToolAuthority } from './scheduled-task-tools.js';
 export { evaluateAutomationCanFire, HEARTBEAT_IDLE_STATUSES } from './automation-can-fire.js';
 export type { CanFireSessionHeader, EvaluateAutomationCanFireDeps } from './automation-can-fire.js';
 

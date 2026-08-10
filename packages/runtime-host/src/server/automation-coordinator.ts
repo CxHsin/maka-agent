@@ -203,7 +203,8 @@ export class HostAutomationCoordinator implements AutomationToolAuthority {
       setTimeout: input.setTimeout ?? ((callback, delayMs) => setTimeout(callback, delayMs)),
       clearTimeout: input.clearTimeout ?? ((timer) => clearTimeout(timer as NodeJS.Timeout)),
     });
-    this.modelTool = buildAutomationAuthorityTool({ authority: this, cronEnabled: true });
+    // Cron/standalone schedules live on ScheduledTask. Automation keeps heartbeats.
+    this.modelTool = buildAutomationAuthorityTool({ authority: this, cronEnabled: false });
   }
 
   async prepareRecovery(): Promise<void> {

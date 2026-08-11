@@ -245,7 +245,30 @@ async function prepareProfile(
               apiKey: '{env:DEEPSEEK_API_KEY}',
               baseURL: '{env:DEEPSEEK_BASE_URL}',
             },
+            models: {
+              'deepseek-v4-flash': {
+                name: 'DeepSeek V4 Flash',
+                limit: {
+                  context: 1_048_576,
+                  output: 131_072,
+                },
+                options: {
+                  thinking: { type: 'enabled' },
+                  effort: 'max',
+                },
+                variants: {
+                  max: {
+                    thinking: { type: 'enabled' },
+                    effort: 'max',
+                  },
+                },
+              },
+            },
           },
+        },
+        permission: {
+          webfetch: 'deny',
+          websearch: 'deny',
         },
       })}\n`,
       { mode: 0o600 },
@@ -261,6 +284,24 @@ async function prepareProfile(
     env.KIMI_MODEL_MAX_COMPLETION_TOKENS = '131072';
     env.KIMI_MODEL_ADAPTIVE_THINKING = 'true';
     env.KIMI_MODEL_THINKING_EFFORT = 'max';
+    await writeFile(
+      join(home, 'config.toml'),
+      [
+        'telemetry = false',
+        'default_permission_mode = "auto"',
+        '',
+        '[background]',
+        'keep_alive_on_exit = true',
+        '',
+        '[permission]',
+        'rules = [',
+        '  { decision = "deny", scope = "user", pattern = "WebSearch", reason = "Disabled for eval parity" },',
+        '  { decision = "deny", scope = "user", pattern = "FetchURL", reason = "Disabled for eval parity" },',
+        ']',
+        '',
+      ].join('\n'),
+      { mode: 0o600 },
+    );
   } else {
     const zcodeHome = join(home, '.zcode');
     const configRoot = join(zcodeHome, 'cli');

@@ -69,6 +69,7 @@ test('owned hosted execution closes its fresh Host after configuration fails', a
   });
 
   assert.equal(result.kind, 'indeterminate');
+  assert.equal(result.failureReason, 'Runtime Host connection failed before execution settlement');
 });
 
 test('pre-cancelled hosted execution does not start a Runtime Host', async () => {

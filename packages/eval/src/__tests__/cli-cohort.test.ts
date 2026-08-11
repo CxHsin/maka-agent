@@ -84,6 +84,16 @@ test('competitor wrapper installs declared containment and provider policy', asy
   );
   await execFileAsync(
     process.execPath,
+    [wrapper.pathname, 'opencode', 'https://provider.test', root, '/usr/bin/true'],
+    { env },
+  );
+  await execFileAsync(
+    process.execPath,
+    [wrapper.pathname, 'kimi-code', 'https://provider.test', root, '/usr/bin/true'],
+    { env },
+  );
+  await execFileAsync(
+    process.execPath,
     [wrapper.pathname, 'claude-code', 'https://provider.test', root, '/usr/bin/true'],
     { env },
   );
@@ -118,6 +128,20 @@ test('competitor wrapper installs declared containment and provider policy', asy
   );
   assert.equal(zcode.model, 'deepseek/deepseek-v4-flash');
   assert.equal(zcode.provider.deepseek.models['deepseek-v4-flash'].reasoning.defaultLevel, 'max');
+  const opencode = JSON.parse(
+    await readFile(join(root, 'tmp/maka-eval-opencode/opencode.json'), 'utf8'),
+  );
+  assert.deepEqual(opencode.provider.deepseek.models['deepseek-v4-flash'].limit, {
+    context: 1_048_576,
+    output: 131_072,
+  });
+  assert.equal(opencode.provider.deepseek.models['deepseek-v4-flash'].variants.max.effort, 'max');
+  assert.equal(opencode.permission.webfetch, 'deny');
+  assert.equal(opencode.permission.websearch, 'deny');
+  const kimi = await readFile(join(root, 'tmp/maka-eval-kimi-code/config.toml'), 'utf8');
+  assert.match(kimi, /default_permission_mode = "auto"/u);
+  assert.match(kimi, /decision = "deny".*pattern = "WebSearch"/u);
+  assert.match(kimi, /decision = "deny".*pattern = "FetchURL"/u);
 });
 
 test('competitor wrapper publishes one newline-terminated result envelope', async () => {
@@ -173,26 +197,7 @@ test('Reasonix wrapper removes its credential before cancellation settles', asyn
   await assert.rejects(stat(credential), { code: 'ENOENT' });
 });
 
-test('checked-in cohort is one fully expanded six-arm experiment', async () => {
-  const path = new URL(
-    '../../experiments/terminal-bench-2.1-deepseek-v4-flash-six-arm.json',
-    import.meta.url,
-  );
-  const parsed = parseExperimentSpec(JSON.parse(await readFile(path, 'utf8')) as unknown);
-  assert.equal(parsed.tasks.length, 89);
-  assert.deepEqual(
-    parsed.subjects.map(({ id }) => id),
-    ['maka', 'codex', 'claude-code', 'reasonix', 'opencode', 'kimi-code'],
-  );
-  assert.equal(parsed.execution.maxConcurrentTaskGroups, 12);
-  assert.equal(expandExperiment(parsed).length, 534);
-  const adapters = [createMakaSubjectAdapter(), createExternalSubjectAdapter()];
-  for (const cell of expandExperiment(parsed).slice(0, 6)) {
-    adapters.find(({ kind }) => kind === cell.subject.kind)?.validate?.(cell);
-  }
-});
-
-test('checked-in ZCode cohort adds one pinned seventh arm', async () => {
+test('checked-in primary cohort is one fully expanded seven-arm experiment', async () => {
   const path = new URL(
     '../../experiments/terminal-bench-2.1-deepseek-v4-flash-seven-arm.json',
     import.meta.url,
@@ -205,6 +210,25 @@ test('checked-in ZCode cohort adds one pinned seventh arm', async () => {
   );
   assert.equal(parsed.execution.maxConcurrentTaskGroups, 10);
   assert.equal(expandExperiment(parsed).length, 623);
+  const adapters = [createMakaSubjectAdapter(), createExternalSubjectAdapter()];
+  for (const cell of expandExperiment(parsed).slice(0, 7)) {
+    adapters.find(({ kind }) => kind === cell.subject.kind)?.validate?.(cell);
+  }
+});
+
+test('checked-in six-arm cohort remains the compatibility subset', async () => {
+  const path = new URL(
+    '../../experiments/terminal-bench-2.1-deepseek-v4-flash-six-arm.json',
+    import.meta.url,
+  );
+  const parsed = parseExperimentSpec(JSON.parse(await readFile(path, 'utf8')) as unknown);
+  assert.equal(parsed.tasks.length, 89);
+  assert.deepEqual(
+    parsed.subjects.map(({ id }) => id),
+    ['maka', 'codex', 'claude-code', 'reasonix', 'opencode', 'kimi-code'],
+  );
+  assert.equal(parsed.execution.maxConcurrentTaskGroups, 12);
+  assert.equal(expandExperiment(parsed).length, 534);
 });
 
 function spec() {

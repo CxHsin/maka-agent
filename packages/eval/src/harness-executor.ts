@@ -220,7 +220,10 @@ async function startTrial(
   const timeoutMultiplier = positive(cell.budget.timeoutMultiplier, 'budget.timeoutMultiplier');
   const environmentConfig = { ...options.environment, mounts: resolveMounts(options.mounts) };
   const relayPath = resolve(dirname(fileURLToPath(import.meta.url)), '../harbor');
-  const environment = preparationEnvironment(framework, relayPath, subjectCredentialNames);
+  const environment = preparationEnvironment(framework, relayPath, [
+    ...subjectCredentialNames,
+    ...cell.subject.credentials,
+  ]);
   const server = createServer();
   let child: ChildProcess | undefined;
   let connectedSocket: Socket | undefined;

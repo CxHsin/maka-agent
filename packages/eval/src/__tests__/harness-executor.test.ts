@@ -113,6 +113,7 @@ import { connect } from 'node:net';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 const config = JSON.parse(await readFile(process.argv.at(-1), 'utf8'));
+if (process.env.SSL_CERT_FILE) process.exit(3);
 const socket = connect(config.agent.kwargs.relay_port, config.agent.kwargs.relay_host);
 socket.setEncoding('utf8');
 await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
@@ -131,14 +132,16 @@ await writeFile(trial + '/result.json', JSON.stringify({ exception_info: { excep
   await chmod(executable, 0o755);
   const previousPython = process.env.MAKA_TEST_PYTHON;
   const previousTrials = process.env.MAKA_TEST_TRIALS;
+  const previousCertificate = process.env.SSL_CERT_FILE;
   process.env.MAKA_TEST_PYTHON = executable;
   process.env.MAKA_TEST_TRIALS = root;
+  process.env.SSL_CERT_FILE = 'test-only-sensitive-value';
   try {
     const executor = testExecutor(root);
     await assert.rejects(
       executor.runAttempt(
         {
-          cell: harnessCell(),
+          cell: harnessCell(['SSL_CERT_FILE']),
           subjectCredentialNames: [],
         },
         async ({ context, verify }) => {
@@ -174,6 +177,8 @@ await writeFile(trial + '/result.json', JSON.stringify({ exception_info: { excep
     else process.env.MAKA_TEST_PYTHON = previousPython;
     if (previousTrials === undefined) delete process.env.MAKA_TEST_TRIALS;
     else process.env.MAKA_TEST_TRIALS = previousTrials;
+    if (previousCertificate === undefined) delete process.env.SSL_CERT_FILE;
+    else process.env.SSL_CERT_FILE = previousCertificate;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -242,13 +247,18 @@ socket.end();
   }
 });
 
-function harnessCell() {
+function harnessCell(credentials: readonly string[] = []) {
   return {
     id: 'task::1::subject',
     experimentId: 'experiment',
     benchmark: { id: 'benchmark', version: 'version', config: { repository: 'repo' } },
     executor: { kind: 'harbor', config: {} },
-    subject: { id: 'subject', kind: 'external' as const, credentials: [], config: {} },
+    subject: {
+      id: 'subject',
+      kind: 'external' as const,
+      credentials,
+      config: {},
+    },
     task: { id: 'task', input: 'solve', config: { harbor: { path: 'task' } } },
     repetition: 1,
     budget: { timeoutMultiplier: 1 },

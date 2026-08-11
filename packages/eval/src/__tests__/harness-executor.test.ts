@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -125,6 +125,10 @@ process.exitCode = 9;
     assert.doesNotMatch(diagnostic.stderr, /test-bearer-secret|test-env-secret/u);
     assert.doesNotMatch(diagnostic.stderr, /s{32}/u);
     assert.doesNotMatch(diagnostic.stderr, /q{32}|credential-leak|unrelated-env-leak/u);
+    assert.deepEqual(
+      (await readdir(root)).filter((name) => name.endsWith('.json')),
+      [],
+    );
   } finally {
     if (previousPython === undefined) delete process.env.MAKA_TEST_PYTHON;
     else process.env.MAKA_TEST_PYTHON = previousPython;

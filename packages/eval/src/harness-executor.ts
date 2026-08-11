@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -309,6 +309,7 @@ async function startTrial(
     stderr.finish();
     connectedSocket?.destroy();
     await closeServer(server);
+    await unlink(configPath).catch(() => undefined);
     await mkdir(trialPath, { recursive: true, mode: 0o700 });
     const diagnosticPath = 'preparation-error.json';
     await writeFile(

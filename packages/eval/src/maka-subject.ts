@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { redactSecrets } from '@maka/core/redaction';
 import type { HostedExecutionStartInput } from '@maka/runtime-host/protocol';
 import { decodeHostedExecutionProjection } from '@maka/runtime-host/protocol';
 import type { JsonObject } from './experiment.js';
@@ -70,7 +71,7 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
           costUsd: null,
           durationMs: Date.now() - startedAt,
           status: 'indeterminate' as const,
-          failureReason: projection.failureReason,
+          failureReason: safeFailureReason(projection.failureReason),
           artifacts: [],
         };
       }
@@ -109,11 +110,16 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
         costUsd: projection.costUsd,
         durationMs: Date.now() - startedAt,
         status: projection.status === 'completed' ? ('completed' as const) : ('failed' as const),
-        failureReason: projection.failureReason ?? null,
+        failureReason:
+          projection.failureReason == null ? null : safeFailureReason(projection.failureReason),
         artifacts: [],
       };
     },
   };
+}
+
+function safeFailureReason(value: string): string {
+  return [...redactSecrets(value)].slice(0, 512).join('');
 }
 
 type SubjectFailureStage =

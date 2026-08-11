@@ -216,6 +216,34 @@ test('Maka subject records the precise safe failure stage', async (t) => {
   }
 });
 
+test('Maka subject redacts an untrusted Runtime Host failure reason', async () => {
+  const result = await createMakaSubjectAdapter().execute({
+    cell: subjectCell('maka', makaConfig()),
+    context: {
+      cwd: '/app',
+      taskInput: 'official instruction',
+      metadata: {},
+      execute: async (input) => {
+        const payload = JSON.parse(Buffer.from(input.args[1] ?? '', 'base64url').toString()) as {
+          execution: { executionId: string };
+        };
+        return {
+          termination: 'exited',
+          exitCode: 0,
+          stdout: JSON.stringify({
+            executionId: payload.execution.executionId,
+            kind: 'indeterminate',
+            failureReason: 'OPENAI_API_KEY=test-only-sensitive-value',
+          }),
+        };
+      },
+    },
+  });
+
+  assert.equal(result.status, 'indeterminate');
+  assert.doesNotMatch(result.failureReason ?? '', /test-only-sensitive-value/u);
+});
+
 function subjectCell(
   kind: 'maka' | 'external',
   config: ExperimentCell['subject']['config'],

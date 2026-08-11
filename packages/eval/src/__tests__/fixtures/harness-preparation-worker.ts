@@ -24,7 +24,11 @@ await executor
       cell: {
         id: 'task::1::subject',
         experimentId: 'experiment',
-        benchmark: { id: 'benchmark', version: 'version', config: { repository: 'repo' } },
+        benchmark: {
+          id: 'benchmark',
+          version: 'd49e28f1e4ddd13d289e85a5f312a66750951932',
+          config: { repository: 'repo' },
+        },
         executor: { kind: 'harbor', config: {} },
         subject: { id: 'subject', kind: 'external', credentials: [], config: {} },
         task: { id: 'task', input: 'solve', config: { harbor: { path: 'task' } } },

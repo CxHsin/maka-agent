@@ -7,7 +7,9 @@ import { test } from 'node:test';
 import { FileAttemptStore } from '../attempt-store.js';
 import { createHarborExecutor } from '../harness-executor.js';
 import type { ExperimentSpec } from '../experiment.js';
-import { runExperiment, type SubjectAdapter } from '../runner.js';
+import { runExperiment, type ExperimentExecutor, type SubjectAdapter } from '../runner.js';
+
+const TEST_REVISION = 'd49e28f1e4ddd13d289e85a5f312a66750951932';
 
 test('harness spawn failure releases its relay listener and process', async () => {
   const child = spawn(
@@ -37,6 +39,26 @@ test('harness spawn failure releases its relay listener and process', async () =
   assert.equal(output, 'SETTLED\n');
 });
 
+test('Harbor rejects unresolved Git revisions before attempt admission', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-harbor-revision-'));
+  const previousPython = process.env.MAKA_TEST_PYTHON;
+  const previousTrials = process.env.MAKA_TEST_TRIALS;
+  process.env.MAKA_TEST_PYTHON = process.execPath;
+  process.env.MAKA_TEST_TRIALS = root;
+  try {
+    const executor = testExecutor(root) as ExperimentExecutor & {
+      validate(cell: ReturnType<typeof harnessCell>): void;
+    };
+    assert.throws(() => executor.validate(harnessCell([], 'main')), /complete Git commit/u);
+  } finally {
+    if (previousPython === undefined) delete process.env.MAKA_TEST_PYTHON;
+    else process.env.MAKA_TEST_PYTHON = previousPython;
+    if (previousTrials === undefined) delete process.env.MAKA_TEST_TRIALS;
+    else process.env.MAKA_TEST_TRIALS = previousTrials;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('preparation failure persists only safe structured facts on the attempt', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-preparation-diagnostic-'));
   const executable = join(root, 'fake-python.mjs');
@@ -62,7 +84,7 @@ process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET
     const spec: ExperimentSpec = {
       schemaVersion: 'maka.eval.v1',
       id: 'experiment',
-      benchmark: { id: 'benchmark', version: 'version', config: { repository: 'repo' } },
+      benchmark: { id: 'benchmark', version: TEST_REVISION, config: { repository: 'repo' } },
       executor: { kind: 'harbor', config: {} },
       execution: { maxConcurrentTaskGroups: 1 },
       subjects: [
@@ -276,11 +298,11 @@ socket.end();
   }
 });
 
-function harnessCell(credentials: readonly string[] = []) {
+function harnessCell(credentials: readonly string[] = [], revision = TEST_REVISION) {
   return {
     id: 'task::1::subject',
     experimentId: 'experiment',
-    benchmark: { id: 'benchmark', version: 'version', config: { repository: 'repo' } },
+    benchmark: { id: 'benchmark', version: revision, config: { repository: 'repo' } },
     executor: { kind: 'harbor', config: {} },
     subject: {
       id: 'subject',

@@ -57,6 +57,7 @@ export interface ExecutorVerification {
 
 export interface ExperimentExecutor {
   readonly kind: string;
+  validate?(cell: ExperimentCell): void;
   runAttempt(
     input: {
       readonly cell: ExperimentCell;
@@ -108,6 +109,7 @@ export async function runExperiment(input: {
     if (input.executor.kind !== input.spec.executor.kind) throw new Error('executor kind mismatch');
 
     for (const cell of selected) {
+      input.executor.validate?.(cell);
       const subject = subjects.get(cell.subject.kind);
       if (!subject) throw new Error(`missing subject adapter: ${cell.subject.kind}`);
       subject.validate?.(cell);

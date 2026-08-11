@@ -47,6 +47,9 @@ function createHarnessExecutor(
   const options = decodeOptions(config, framework);
   const executor: ExperimentExecutor = {
     kind: framework,
+    validate: (cell) => {
+      decodeTask(framework, options, cell);
+    },
     runAttempt: (input, operation) =>
       runHarnessAttempt(framework, options, specPath, input, operation),
   };
@@ -455,10 +458,14 @@ function decodeTask(framework: Framework, options: HarnessOptions, cell: Experim
     const benchmark = exact(cell.benchmark.config, ['repository'], 'benchmark.config');
     const task = exact(cell.task.config, ['harbor'], 'task.config');
     const harbor = exact(task.harbor, ['path'], 'task.config.harbor');
+    const revision = text(cell.benchmark.version, 'benchmark.version');
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(revision)) {
+      throw new Error('Harbor benchmark.version must be a complete Git commit');
+    }
     return {
       path: text(harbor.path, 'task.config.harbor.path'),
       git_url: text(benchmark.repository, 'benchmark.config.repository'),
-      git_commit_id: cell.benchmark.version,
+      git_commit_id: revision,
     };
   }
   const task = exact(cell.task.config, ['pier'], 'task.config');

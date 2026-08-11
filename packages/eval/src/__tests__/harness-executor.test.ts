@@ -11,6 +11,24 @@ import { runExperiment, type ExperimentExecutor, type SubjectAdapter } from '../
 
 const TEST_REVISION = 'd49e28f1e4ddd13d289e85a5f312a66750951932';
 
+test('preparation host inputs must be declared explicitly', () => {
+  assert.throws(
+    () =>
+      createHarborExecutor(
+        {
+          frameworkVersion: '0.20.0',
+          pythonPathEnv: 'PATH',
+          trialsRootEnv: 'HOME',
+          containerCwd: '/app',
+          environment: {},
+          mounts: [],
+        },
+        import.meta.url,
+      ),
+    /preparationEnvironment.*required/u,
+  );
+});
+
 test('harness spawn failure releases its relay listener and process', async () => {
   const child = spawn(
     process.execPath,
@@ -65,8 +83,9 @@ test('preparation failure persists only safe structured facts on the attempt', a
   await writeFile(
     executable,
     `#!/usr/bin/env node
+import { delimiter } from 'node:path';
 process.stderr.write('argv: /private/subject --token=test-only-sensitive-value\\nError: raw diagnostic\\n');
-process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET || process.env.MAKA_UNRELATED_SECRET ? 8 : process.env.MAKA_TEST_CONTROL === 'declared-control-plane' ? 78 : 7;
+process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET || process.env.MAKA_UNRELATED_SECRET ? 8 : process.env.MAKA_TEST_CONTROL === 'declared-control-plane' && process.env.PYTHONPATH?.split(delimiter).at(-1) === 'declared-import-root' ? 78 : 7;
 `,
   );
   await chmod(executable, 0o755);
@@ -76,12 +95,14 @@ process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET
   const previousOtherSecret = process.env.MAKA_OTHER_SECRET;
   const previousUnrelatedSecret = process.env.MAKA_UNRELATED_SECRET;
   const previousControl = process.env.MAKA_TEST_CONTROL;
+  const previousPythonPath = process.env.PYTHONPATH;
   process.env.MAKA_TEST_PYTHON = executable;
   process.env.MAKA_TEST_TRIALS = root;
   process.env.MAKA_TEST_SECRET = 'test-only-sensitive-value';
   process.env.MAKA_OTHER_SECRET = 'other-test-only-secret';
   process.env.MAKA_UNRELATED_SECRET = 'unrelated-test-only-secret';
   process.env.MAKA_TEST_CONTROL = 'declared-control-plane';
+  process.env.PYTHONPATH = 'declared-import-root';
   try {
     const spec: ExperimentSpec = {
       schemaVersion: 'maka.eval.v1',
@@ -98,7 +119,7 @@ process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET
       budget: { timeoutMultiplier: 1 },
       verifier: { reward: 'reward' },
     };
-    const executor = testExecutor(root, ['MAKA_TEST_CONTROL', 'MAKA_TEST_SECRET']);
+    const executor = testExecutor(root, ['MAKA_TEST_CONTROL', 'MAKA_TEST_SECRET', 'PYTHONPATH']);
     const subject: SubjectAdapter = {
       kind: 'external',
       execute: async () => assert.fail('subject must not run'),
@@ -157,6 +178,8 @@ process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET
     else process.env.MAKA_UNRELATED_SECRET = previousUnrelatedSecret;
     if (previousControl === undefined) delete process.env.MAKA_TEST_CONTROL;
     else process.env.MAKA_TEST_CONTROL = previousControl;
+    if (previousPythonPath === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = previousPythonPath;
     await rm(root, { recursive: true, force: true });
   }
 });

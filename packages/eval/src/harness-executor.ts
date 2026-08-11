@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { delimiter, dirname, join, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { decodeJsonObject, type ExperimentCell, type JsonObject } from './experiment.js';
@@ -371,15 +371,16 @@ function preparationEnvironment(
     ...declared,
   ]);
   const credentials = new Set(subjectCredentialNames);
+  const inherited = Object.fromEntries(
+    [...allowed].flatMap((name) => {
+      const value = process.env[name];
+      return value === undefined || credentials.has(name) ? [] : [[name, value]];
+    }),
+  );
   return {
-    ...Object.fromEntries(
-      [...allowed].flatMap((name) => {
-        const value = process.env[name];
-        return value === undefined || credentials.has(name) ? [] : [[name, value]];
-      }),
-    ),
+    ...inherited,
     MAKA_EVAL_FRAMEWORK: framework,
-    PYTHONPATH: relayPath,
+    PYTHONPATH: [relayPath, inherited.PYTHONPATH].filter(Boolean).join(delimiter),
   };
 }
 
@@ -434,26 +435,28 @@ interface HarnessOptions {
 }
 
 function decodeOptions(value: JsonObject, framework: Framework): HarnessOptions {
+  if (!Object.hasOwn(value, 'preparationEnvironment')) {
+    throw new Error('executor.config.preparationEnvironment is required');
+  }
   const fields = [
     'frameworkVersion',
     'pythonPathEnv',
     'trialsRootEnv',
     'containerCwd',
     'environment',
+    'preparationEnvironment',
     'mounts',
   ];
   if (framework === 'pier') fields.push('tasksRootEnv');
-  const options = exact(value, fields, 'executor.config', ['preparationEnvironment']);
-  const preparationEnvironment =
-    options.preparationEnvironment === undefined
-      ? []
-      : array(options.preparationEnvironment, 'preparationEnvironment').map((name, index) =>
-          machinePathEnv(name, `preparationEnvironment[${index}]`),
-        );
+  const options = exact(value, fields, 'executor.config');
+  const preparationEnvironment = array(
+    options.preparationEnvironment,
+    'preparationEnvironment',
+  ).map((name, index) => machinePathEnv(name, `preparationEnvironment[${index}]`));
   if (new Set(preparationEnvironment).size !== preparationEnvironment.length) {
     throw new Error('preparationEnvironment must contain unique names');
   }
-  if (preparationEnvironment.some((name) => ['MAKA_EVAL_FRAMEWORK', 'PYTHONPATH'].includes(name))) {
+  if (preparationEnvironment.includes('MAKA_EVAL_FRAMEWORK')) {
     throw new Error('preparationEnvironment contains a reserved name');
   }
   const decoded: HarnessOptions = {

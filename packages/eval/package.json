@@ -23,7 +23,6 @@
     "test:dist": "node --test \"dist/**/*.test.js\" && python3 harbor/test_relay_agent.py && python3 harbor/test_run_trial.py"
   },
   "dependencies": {
-    "@maka/core": "0.1.0",
     "@maka/runtime-host": "0.1.0"
   }
 }

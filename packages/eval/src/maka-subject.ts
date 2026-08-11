@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { redactSecrets } from '@maka/core/redaction';
 import type { HostedExecutionStartInput } from '@maka/runtime-host/protocol';
 import { decodeHostedExecutionProjection } from '@maka/runtime-host/protocol';
 import type { JsonObject } from './experiment.js';
@@ -71,7 +70,10 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
           costUsd: null,
           durationMs: Date.now() - startedAt,
           status: 'indeterminate' as const,
-          failureReason: safeFailureReason(projection.failureReason),
+          failureReason: safeFailureReason(
+            projection.failureReason,
+            'Maka execution did not settle',
+          ),
           artifacts: [],
         };
       }
@@ -111,16 +113,39 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
         durationMs: Date.now() - startedAt,
         status: projection.status === 'completed' ? ('completed' as const) : ('failed' as const),
         failureReason:
-          projection.failureReason == null ? null : safeFailureReason(projection.failureReason),
+          projection.failureReason == null
+            ? null
+            : safeFailureReason(projection.failureReason, 'Maka execution failed'),
         artifacts: [],
       };
     },
   };
 }
 
-function safeFailureReason(value: string): string {
-  return [...redactSecrets(value)].slice(0, 512).join('');
+function safeFailureReason(value: string, fallback: string): string {
+  if (SAFE_RUNTIME_FAILURE_REASONS.has(value)) return value;
+  if (
+    /^Runtime Host did not start: (?:composition_mismatch|existing_host|host_unresponsive|incompatible|startup_timeout|upgrade_required)$/u.test(
+      value,
+    ) ||
+    /^Runtime Host usage did not settle: (?:missing_attempt_usage|partial_attempt_usage|pending_usage_repair|unreadable_usage_record)$/u.test(
+      value,
+    )
+  )
+    return value;
+  return fallback;
 }
+
+const SAFE_RUNTIME_FAILURE_REASONS = new Set([
+  'Hosted execution is not active',
+  'Hosted execution was cancelled',
+  'Hosted execution was cancelled before admission',
+  'Runtime Host connection failed before execution settlement',
+  'Runtime Host could not settle execution',
+  'Runtime Host did not exit cleanly',
+  'Runtime Host did not start',
+  'Runtime Host usage did not settle completely',
+]);
 
 type SubjectFailureStage =
   | 'relay-execute'

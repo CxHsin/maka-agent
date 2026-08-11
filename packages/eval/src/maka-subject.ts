@@ -77,57 +77,35 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
           artifacts: [],
         };
       }
-      if (process.termination === 'cancelled') {
-        return {
-          usage: projection.usage,
-          costUsd: projection.costUsd,
-          durationMs: Date.now() - startedAt,
-          status: 'indeterminate' as const,
-          failureReason: 'Maka subject cancelled',
-          artifacts: [],
-        };
-      }
-      if (process.termination === 'framework_timeout') {
-        return {
-          usage: projection.usage,
-          costUsd: projection.costUsd,
-          durationMs: Date.now() - startedAt,
-          status: 'failed' as const,
-          failureReason: 'Maka subject exceeded the framework timeout',
-          artifacts: [],
-        };
-      }
-      if (process.exitCode !== 0) {
-        return {
-          usage: projection.usage,
-          costUsd: projection.costUsd,
-          durationMs: Date.now() - startedAt,
-          status: 'indeterminate' as const,
-          failureReason: 'Maka execution shim did not settle cleanly',
-          artifacts: [],
-        };
-      }
-      if (projection.status === 'cancelled') {
-        return {
-          usage: projection.usage,
-          costUsd: projection.costUsd,
-          durationMs: Date.now() - startedAt,
-          status: 'indeterminate' as const,
-          failureReason: 'Maka subject cancelled',
-          artifacts: [],
-        };
-      }
-      return {
+      const result = (
+        status: 'completed' | 'failed' | 'indeterminate',
+        failureReason: string | null,
+      ) => ({
         usage: projection.usage,
         costUsd: projection.costUsd,
         durationMs: Date.now() - startedAt,
-        status: projection.status === 'completed' ? ('completed' as const) : ('failed' as const),
-        failureReason:
-          projection.status === 'completed' || projection.failureReason == null
-            ? null
-            : safeFailureReason(projection.failureReason, 'Maka execution failed'),
+        status,
+        failureReason,
         artifacts: [],
-      };
+      });
+      if (process.termination === 'cancelled') {
+        return result('indeterminate', 'Maka subject cancelled');
+      }
+      if (process.termination === 'framework_timeout') {
+        return result('failed', 'Maka subject exceeded the framework timeout');
+      }
+      if (process.exitCode !== 0) {
+        return result('indeterminate', 'Maka execution shim did not settle cleanly');
+      }
+      if (projection.status === 'cancelled') {
+        return result('indeterminate', 'Maka subject cancelled');
+      }
+      return result(
+        projection.status,
+        projection.status === 'completed' || projection.failureReason == null
+          ? null
+          : safeFailureReason(projection.failureReason, 'Maka execution failed'),
+      );
     },
   };
 }

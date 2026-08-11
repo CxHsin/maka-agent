@@ -43,16 +43,10 @@ test('hosted execution reads usage only after execution residencies settle', asy
 });
 
 test('incomplete usage preserves its fixed safe cause', async () => {
+  const usage = usageSummary();
+  usage.provenance.coverage.usageMissingAttempts = 1;
   const runner = new HostHostedExecutionRunner({
-    handlers: handlers({
-      usage: () => ({
-        ...usageSummary(),
-        provenance: {
-          ...usageSummary().provenance,
-          coverage: { ...usageSummary().provenance.coverage, usageMissingAttempts: 1 },
-        },
-      }),
-    }),
+    handlers: handlers({ usage: () => usage }),
     context: context(),
     requestDrain: () => {},
     waitForExecutionResidencies: async () => {},

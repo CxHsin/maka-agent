@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import importlib
 import importlib.metadata
+import json
 import os
 import signal
 import sys
@@ -17,6 +18,9 @@ FRAMEWORK_VERSION_MISMATCH_EXIT_CODE = 78
 
 class FrameworkVersionMismatch(Exception):
     pass
+
+
+TASK_CACHE_PROTOCOL_VERSION = 1
 
 
 @contextlib.asynccontextmanager
@@ -42,6 +46,59 @@ async def task_cache_lock(cache_dir: Path, identity: str) -> AsyncIterator[None]
         os.close(descriptor)
 
 
+def ready_task(cache_dir: Path, identity: str) -> tuple[Path, Path | None]:
+    namespace = cache_dir / ".maka-tasks" / hashlib.sha256(identity.encode()).hexdigest()
+    marker = namespace / "ready.json"
+    try:
+        value = json.loads(marker.read_text())
+        if set(value) != {"version", "target"}:
+            return namespace, None
+        if value["version"] != TASK_CACHE_PROTOCOL_VERSION or not isinstance(
+            value["target"], str
+        ):
+            return namespace, None
+        target = (namespace / value["target"]).resolve()
+        if (
+            not target.is_relative_to(namespace.resolve())
+            or not target.is_dir()
+            or not any(target.iterdir())
+        ):
+            return namespace, None
+        return namespace, target
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return namespace, None
+
+
+def publish_ready_task(namespace: Path, target: Path) -> None:
+    resolved_namespace = namespace.resolve()
+    resolved_target = target.resolve()
+    if not resolved_target.is_relative_to(resolved_namespace):
+        raise RuntimeError("Harbor task cache target escaped its Maka namespace")
+    relative_target = resolved_target.relative_to(resolved_namespace).as_posix()
+    marker = namespace / "ready.json"
+    temporary = namespace / ".ready.tmp"
+    descriptor = os.open(
+        temporary,
+        os.O_CREAT | os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            descriptor = -1
+            json.dump(
+                {"version": TASK_CACHE_PROTOCOL_VERSION, "target": relative_target},
+                stream,
+            )
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, marker)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
 async def run_trial(framework: str, expected_version: str, config_file: Path) -> None:
     distribution = {"harbor": "harbor", "pier": "datacurve-pier"}.get(framework)
     if distribution is None:
@@ -58,7 +115,16 @@ async def run_trial(framework: str, expected_version: str, config_file: Path) ->
 
             task_identity = config.task.get_task_id().model_dump_json()
             async with task_cache_lock(TASK_CACHE_DIR, task_identity):
+                namespace, ready = ready_task(TASK_CACHE_DIR, task_identity)
+                namespace.mkdir(parents=True, exist_ok=True, mode=0o700)
+                config.task.download_dir = namespace
+                config.task.overwrite = ready is None
                 trial = await trial_type.create(config)
+                target = Path(trial.task.task_dir)
+                if ready is not None and target.resolve() != ready:
+                    raise RuntimeError("Harbor task cache target changed for one identity")
+                if ready is None:
+                    publish_ready_task(namespace, target)
         else:
             trial = await trial_type.create(config)
         await trial.run()

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import multiprocessing
 import queue
 import sys
@@ -78,7 +79,7 @@ class TrialCreateLockTest(unittest.IsolatedAsyncioTestCase):
             await main()
         self.assertEqual(exited.exception.code, 78)
 
-    async def test_trial_create_is_serialized_but_trial_run_is_not(self) -> None:
+    async def test_task_publication_is_serialized_but_trial_run_is_not(self) -> None:
         first_create_entered = asyncio.Event()
         release_first_create = asyncio.Event()
         second_identity_read = asyncio.Event()
@@ -91,6 +92,8 @@ class TrialCreateLockTest(unittest.IsolatedAsyncioTestCase):
             def __init__(self, name: str) -> None:
                 self.name = name
                 self.task = SimpleNamespace(
+                    download_dir=None,
+                    overwrite=False,
                     model_dump_json=lambda: f"same-task-config-{name}",
                     get_task_id=self.get_task_id,
                 )
@@ -106,17 +109,26 @@ class TrialCreateLockTest(unittest.IsolatedAsyncioTestCase):
                 return FakeConfig(value)
 
         class FakeTrial:
-            def __init__(self, name: str) -> None:
+            def __init__(self, name: str, task_dir: Path) -> None:
                 self.name = name
+                self.task = SimpleNamespace(task_dir=task_dir)
 
             @classmethod
             async def create(cls, config: FakeConfig) -> "FakeTrial":
+                self.assertIsNotNone(config.task.download_dir)
+                task_dir = config.task.download_dir / "task"
                 if config.name == "first":
+                    self.assertTrue(config.task.overwrite)
+                    self.assertTrue((task_dir / "partial").exists())
                     first_create_entered.set()
                     await release_first_create.wait()
+                    (task_dir / "partial").unlink()
+                    (task_dir / "complete").write_text("complete")
                 else:
+                    self.assertFalse(config.task.overwrite)
+                    self.assertTrue((task_dir / "complete").exists())
                     second_create_entered.set()
-                return cls(config.name)
+                return cls(config.name, task_dir)
 
             async def run(self) -> None:
                 (first_run_entered if self.name == "first" else second_run_entered).set()
@@ -129,7 +141,14 @@ class TrialCreateLockTest(unittest.IsolatedAsyncioTestCase):
         constants_module = ModuleType("harbor.constants")
 
         with tempfile.TemporaryDirectory() as root:
-            constants_module.TASK_CACHE_DIR = Path(root) / "cache"
+            cache_dir = Path(root) / "cache"
+            constants_module.TASK_CACHE_DIR = cache_dir
+            namespace = cache_dir / ".maka-tasks" / hashlib.sha256(
+                b"same-task"
+            ).hexdigest()
+            task_dir = namespace / "task"
+            task_dir.mkdir(parents=True)
+            (task_dir / "partial").write_text("partial")
             first_path = Path(root) / "first.json"
             second_path = Path(root) / "second.json"
             first_path.write_text("first")

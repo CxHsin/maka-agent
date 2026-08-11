@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,34 @@ import { FileAttemptStore } from '../attempt-store.js';
 import { createHarborExecutor } from '../harness-executor.js';
 import type { ExperimentSpec } from '../experiment.js';
 import { runExperiment, type SubjectAdapter } from '../runner.js';
+
+test('harness spawn failure releases its relay listener and process', async () => {
+  const child = spawn(
+    process.execPath,
+    [new URL('./fixtures/harness-preparation-worker.js', import.meta.url).pathname],
+    { stdio: ['ignore', 'pipe', 'inherit'] },
+  );
+  let output = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    output += chunk;
+  });
+  const exited = await new Promise<boolean>((resolve, reject) => {
+    const timeout = setTimeout(() => resolve(false), 1_000);
+    child.once('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once('exit', () => {
+      clearTimeout(timeout);
+      resolve(true);
+    });
+  });
+  if (!exited) child.kill('SIGKILL');
+
+  assert.equal(exited, true);
+  assert.equal(output, 'SETTLED\n');
+});
 
 test('preparation failure persists only safe structured facts on the attempt', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-preparation-diagnostic-'));
@@ -113,7 +142,6 @@ import { connect } from 'node:net';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 const config = JSON.parse(await readFile(process.argv.at(-1), 'utf8'));
-if (process.env.SSL_CERT_FILE) process.exit(3);
 const socket = connect(config.agent.kwargs.relay_port, config.agent.kwargs.relay_host);
 socket.setEncoding('utf8');
 await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
@@ -132,16 +160,14 @@ await writeFile(trial + '/result.json', JSON.stringify({ exception_info: { excep
   await chmod(executable, 0o755);
   const previousPython = process.env.MAKA_TEST_PYTHON;
   const previousTrials = process.env.MAKA_TEST_TRIALS;
-  const previousCertificate = process.env.SSL_CERT_FILE;
   process.env.MAKA_TEST_PYTHON = executable;
   process.env.MAKA_TEST_TRIALS = root;
-  process.env.SSL_CERT_FILE = 'test-only-sensitive-value';
   try {
     const executor = testExecutor(root);
     await assert.rejects(
       executor.runAttempt(
         {
-          cell: harnessCell(['SSL_CERT_FILE']),
+          cell: harnessCell(),
           subjectCredentialNames: [],
         },
         async ({ context, verify }) => {
@@ -177,8 +203,6 @@ await writeFile(trial + '/result.json', JSON.stringify({ exception_info: { excep
     else process.env.MAKA_TEST_PYTHON = previousPython;
     if (previousTrials === undefined) delete process.env.MAKA_TEST_TRIALS;
     else process.env.MAKA_TEST_TRIALS = previousTrials;
-    if (previousCertificate === undefined) delete process.env.SSL_CERT_FILE;
-    else process.env.SSL_CERT_FILE = previousCertificate;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -193,6 +217,7 @@ import { connect } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 const config = JSON.parse(await readFile(process.argv.at(-1), 'utf8'));
+if (process.env.SSL_CERT_FILE) process.exit(3);
 const socket = connect(config.agent.kwargs.relay_port, config.agent.kwargs.relay_host);
 socket.setEncoding('utf8');
 await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
@@ -209,13 +234,15 @@ socket.end();
   await chmod(executable, 0o755);
   const previousPython = process.env.MAKA_TEST_PYTHON;
   const previousTrials = process.env.MAKA_TEST_TRIALS;
+  const previousCertificate = process.env.SSL_CERT_FILE;
   process.env.MAKA_TEST_PYTHON = executable;
   process.env.MAKA_TEST_TRIALS = root;
+  process.env.SSL_CERT_FILE = 'test-only-sensitive-value';
   try {
     const executor = testExecutor(root);
     const result = await executor.runAttempt(
       {
-        cell: harnessCell(),
+        cell: harnessCell(['SSL_CERT_FILE']),
         subjectCredentialNames: [],
       },
       async ({ context }) => {
@@ -243,6 +270,8 @@ socket.end();
     else process.env.MAKA_TEST_PYTHON = previousPython;
     if (previousTrials === undefined) delete process.env.MAKA_TEST_TRIALS;
     else process.env.MAKA_TEST_TRIALS = previousTrials;
+    if (previousCertificate === undefined) delete process.env.SSL_CERT_FILE;
+    else process.env.SSL_CERT_FILE = previousCertificate;
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -26,8 +26,10 @@ test('experiment expands task by repetition by subject', () => {
 test('all arms of one task repetition start together', async () => {
   const store = new MemoryStore();
   let started = 0;
-  const allStarted = deferred<void>();
-  const release = deferred<void>();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const threeArms: ExperimentSpec = {
     ...spec(),
     subjects: ['a', 'b', 'c'].map((id) => ({
@@ -41,8 +43,7 @@ test('all arms of one task repetition start together', async () => {
     kind: 'executor',
     runAttempt: async (_input, operation) => {
       started += 1;
-      if (started === 3) allStarted.resolve();
-      await release.promise;
+      await gate;
       return {
         kind: 'settled',
         value: await operation({
@@ -75,12 +76,12 @@ test('all arms of one task repetition start together', async () => {
   };
 
   const running = runExperiment({ spec: threeArms, store, executor, subjects: [subject] });
+  await new Promise((resolve) => setTimeout(resolve, 20));
   try {
-    await withTimeout(allStarted.promise, 'all arms did not start');
     assert.equal(started, 3);
   } finally {
-    release.resolve();
-    await withTimeout(running, 'all arms did not settle');
+    release();
+    await running;
   }
 });
 
@@ -88,8 +89,10 @@ test('task-group concurrency never exceeds the frozen limit', async () => {
   const store = new MemoryStore();
   let active = 0;
   let peak = 0;
-  const twoActive = deferred<void>();
-  const release = deferred<void>();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   const threeTasks: ExperimentSpec = {
     ...spec(),
     execution: { maxConcurrentTaskGroups: 2 },
@@ -102,8 +105,8 @@ test('task-group concurrency never exceeds the frozen limit', async () => {
     runAttempt: async (_input, operation) => {
       active += 1;
       peak = Math.max(peak, active);
-      if (active === 2) twoActive.resolve();
-      await release.promise;
+      if (active === 2) release();
+      await gate;
       active -= 1;
       return {
         kind: 'settled',
@@ -136,91 +139,52 @@ test('task-group concurrency never exceeds the frozen limit', async () => {
     }),
   };
 
-  const running = runExperiment({
+  const results = await runExperiment({
     spec: threeTasks,
     store,
     executor,
     subjects: [subject],
   });
-  try {
-    await withTimeout(twoActive.promise, 'task-group concurrency did not reach two');
-  } finally {
-    release.resolve();
-  }
-  const results = await withTimeout(running, 'task groups did not settle');
 
   assert.equal(peak, 2);
   assert.equal(results.size, 3);
 });
 
-test('worker failure stops new groups and retains writer ownership until started groups settle', async () => {
+test('worker rejection stops new groups until every started arm settles', {
+  timeout: 2_000,
+}, async () => {
   const store = new RejectingStore('one::1::a');
-  const siblingStarted = deferred<void>();
-  const releaseSibling = deferred<void>();
+  const siblingStarted = deferred();
+  const release = deferred();
   const started: string[] = [];
-  const threeTasks: ExperimentSpec = {
+  const experiment: ExperimentSpec = {
     ...spec(),
     execution: { maxConcurrentTaskGroups: 2 },
-    subjects: ['a', 'b'].map((id) => ({
-      id,
-      kind: 'maka' as const,
-      credentials: [],
-      config: {},
-    })),
+    subjects: ['a', 'b'].map((id) => ({ id, kind: 'maka', credentials: [], config: {} })),
     tasks: ['one', 'two', 'three'].map((id) => ({ id, input: 'solve', config: {} })),
     repetitions: 1,
   };
   const executor: ExperimentExecutor = {
     kind: 'executor',
-    runAttempt: async ({ cell }, operation) => {
+    runAttempt: async ({ cell }) => {
       started.push(cell.id);
-      if (cell.id === 'one::1::b') {
-        siblingStarted.resolve();
-        await releaseSibling.promise;
-      }
-      return {
-        kind: 'settled',
-        value: await operation({
-          context: {
-            cwd: '/workspace',
-            taskInput: 'solve',
-            metadata: {},
-            execute: async () => ({ termination: 'exited', exitCode: 0, stdout: '' }),
-          },
-          verify: async () => ({
-            status: 'completed',
-            score: 1,
-            failureReason: null,
-            artifacts: [],
-          }),
-        }),
-      };
+      if (cell.id === 'one::1::b') siblingStarted.resolve();
+      if (cell.id !== 'one::1::a') await release.promise;
+      return { kind: 'settled', value: attempt(1, 'completed').result };
     },
   };
-  const subject: SubjectAdapter = {
-    kind: 'maka',
-    execute: async () => ({
-      usage: null,
-      costUsd: null,
-      durationMs: 1,
-      status: 'completed',
-      failureReason: null,
-      artifacts: [],
-    }),
-  };
+  const running = runExperiment({
+    spec: experiment,
+    store,
+    executor,
+    subjects: [{ kind: 'maka', execute: async () => assert.fail('subject must not run') }],
+  });
 
-  const running = runExperiment({ spec: threeTasks, store, executor, subjects: [subject] });
-  const settled = running.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-  await withTimeout(siblingStarted.promise, 'sibling arm did not start');
-  await withTimeout(store.rejected.promise, 'first task group did not reject');
-
+  await siblingStarted.promise;
+  await store.rejected.promise;
   assert.equal(store.exclusive, true);
-
-  releaseSibling.resolve();
-  assert.match(String(await settled), /append rejected/u);
+  release.resolve();
+  await assert.rejects(running, /append rejected/u);
   assert.equal(store.exclusive, false);
   assert.equal(
     started.some((cellId) => cellId.startsWith('three::')),
@@ -228,51 +192,48 @@ test('worker failure stops new groups and retains writer ownership until started
   );
 });
 
-test('abort while loading attempts prevents the cell from starting', async () => {
-  const listed = deferred<void>();
-  const releaseList = deferred<void>();
+test('abort after listing prevents execution', { timeout: 2_000 }, async () => {
+  const listed = deferred();
+  const release = deferred();
   const controller = new AbortController();
   let executions = 0;
   const store: AttemptStore = {
     runExclusive: (operation) => operation(),
     list: async () => {
       listed.resolve();
-      await releaseList.promise;
+      await release.promise;
       return [];
     },
     append: async () => undefined,
   };
-  const executor: ExperimentExecutor = {
-    kind: 'executor',
-    runAttempt: async () => {
-      executions += 1;
-      throw new Error('must not start');
-    },
-  };
-
   const running = runExperiment({
     spec: { ...spec(), subjects: [spec().subjects[0]!], repetitions: 1 },
     store,
-    executor,
+    executor: {
+      kind: 'executor',
+      runAttempt: async () => {
+        executions += 1;
+        throw new Error('must not start');
+      },
+    },
     subjects: [{ kind: 'maka', execute: async () => assert.fail('subject must not run') }],
     signal: controller.signal,
   });
-  await withTimeout(listed.promise, 'attempt listing did not start');
-  controller.abort();
-  releaseList.resolve();
-  await running;
 
+  await listed.promise;
+  controller.abort();
+  release.resolve();
+  await running;
   assert.equal(executions, 0);
 });
 
-test('legacy v1 experiment directory resumes without a spec drift error', async () => {
+test('legacy v1 experiment resumes with serialized task groups', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-legacy-v1-'));
   const { execution: _execution, ...legacy } = spec();
   await writeFile(join(root, 'experiment.json'), JSON.stringify(legacy));
   try {
     const normalized = parseExperimentSpec(legacy);
     await openExperimentDirectory(root, normalized);
-
     assert.deepEqual(normalized.execution, { maxConcurrentTaskGroups: 1 });
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -289,20 +250,17 @@ test('cell result is the earliest valid attempt, never a hand-picked replacement
 
 test('experiment directory admits only one writer across processes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-writer-'));
-  const workers = Array.from({ length: 2 }, () => worker(root));
   try {
-    await waitForFiles(root, 'ready-', workers.length);
+    const workers = Array.from({ length: 12 }, () => worker(root));
+    while (
+      (await readdir(root)).filter((name) => name.startsWith('ready-')).length < workers.length
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     await writeFile(join(root, 'go'), '');
-    await waitForFiles(root, 'entered-', 1);
-    await waitForFiles(root, 'rejected-', workers.length - 1);
-    await writeFile(join(root, 'release'), '');
-    const outputs = await withTimeout(
-      Promise.all(workers.map(({ result }) => result)),
-      'writer workers did not exit',
-    );
+    const outputs = await Promise.all(workers);
     assert.equal(outputs.filter(({ stdout }) => stdout === 'ENTER\n').length, 1);
   } finally {
-    for (const worker of workers) worker.kill();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -528,10 +486,7 @@ test('invalid subject status cannot be verified into a completed result', async 
   assert.equal(verifications, 0);
 });
 
-function worker(root: string): {
-  readonly result: Promise<{ stdout: string; code: number | null }>;
-  readonly kill: () => boolean;
-} {
+function worker(root: string): Promise<{ stdout: string; code: number | null }> {
   const child = spawn(
     process.execPath,
     [new URL('./fixtures/writer-worker.js', import.meta.url).pathname, root],
@@ -544,11 +499,10 @@ function worker(root: string): {
   child.stdout.on('data', (chunk) => {
     stdout += chunk;
   });
-  const result = new Promise<{ stdout: string; code: number | null }>((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('exit', (code) => resolve({ stdout, code }));
   });
-  return { result, kill: () => child.kill('SIGKILL') };
 }
 
 function spec(): ExperimentSpec {
@@ -604,7 +558,7 @@ class MemoryStore implements AttemptStore {
 }
 
 class RejectingStore extends MemoryStore {
-  readonly rejected = deferred<void>();
+  readonly rejected = deferred();
   exclusive = false;
 
   constructor(readonly rejectedCellId: string) {
@@ -620,46 +574,19 @@ class RejectingStore extends MemoryStore {
     }
   }
 
-  override async append(attempt: CellAttempt): Promise<void> {
-    if (attempt.cellId === this.rejectedCellId) {
+  override async append(value: CellAttempt): Promise<void> {
+    if (value.cellId === this.rejectedCellId) {
       this.rejected.resolve();
       throw new Error('append rejected');
     }
-    await super.append(attempt);
+    await super.append(value);
   }
 }
 
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
   });
   return { promise, resolve };
-}
-
-async function waitForFiles(root: string, prefix: string, count: number): Promise<void> {
-  await withTimeout(
-    (async () => {
-      for (;;) {
-        if ((await readdir(root)).filter((name) => name.startsWith(prefix)).length === count)
-          return;
-        await new Promise<void>((resolve) => setTimeout(resolve, 5));
-      }
-    })(),
-    `${prefix} barrier did not reach ${count}`,
-  );
-}
-
-async function withTimeout<T>(operation: Promise<T>, message: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), 2_000);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }

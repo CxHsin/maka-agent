@@ -147,62 +147,37 @@ test('framework timeout remains a verifiable failure for every subject kind', as
 });
 
 test('Maka subject records the precise safe failure stage', async (t) => {
-  const cases: readonly {
-    readonly name: string;
-    readonly stage: string;
-    readonly execute: (input: Parameters<SubjectExecutionContext['execute']>[0]) => Promise<{
-      termination: 'exited';
-      exitCode: number;
-      stdout: string;
-    }>;
-  }[] = [
-    {
-      name: 'relay execute rejection',
-      stage: 'relay-execute',
-      execute: async () => {
-        throw new Error('test-only sensitive relay detail');
-      },
-    },
-    {
-      name: 'empty output',
-      stage: 'empty-output',
-      execute: async () => ({ termination: 'exited', exitCode: 1, stdout: '' }),
-    },
-    {
-      name: 'JSON parse',
-      stage: 'json-parse',
-      execute: async () => ({ termination: 'exited', exitCode: 1, stdout: '{' }),
-    },
-    {
-      name: 'result decode',
-      stage: 'result-decode',
-      execute: async () => ({ termination: 'exited', exitCode: 1, stdout: '{}' }),
-    },
-    {
-      name: 'identity check',
-      stage: 'identity-check',
-      execute: async () => ({
-        termination: 'exited',
-        exitCode: 0,
-        stdout: JSON.stringify({
+  const rejected: SubjectExecutionContext['execute'] = async () => {
+    throw new Error('test-only sensitive relay detail');
+  };
+  const cases = [
+    ['relay-execute', rejected],
+    ['empty-output', executed('')],
+    ['json-parse', executed('{')],
+    ['result-decode', executed('{}')],
+    [
+      'identity-check',
+      executed(
+        JSON.stringify({
           executionId: 'different-execution',
           kind: 'settled',
           status: 'completed',
           usage: zeroUsage(),
           costUsd: null,
         }),
-      }),
-    },
-  ];
+        0,
+      ),
+    ],
+  ] as const;
 
-  for (const failure of cases) {
-    await t.test(failure.name, async () => {
-      const result = await executeMaka(failure.execute);
+  for (const [stage, execute] of cases) {
+    await t.test(stage, async () => {
+      const result = await executeMaka(execute);
 
       assert.equal(result.status, 'infra_failed');
-      assert.equal(result.failureReason, `Maka subject failed during ${failure.stage}`);
+      assert.equal(result.failureReason, `Maka subject failed during ${stage}`);
       assert.equal(result.artifacts[0]?.kind, 'subject-failure');
-      assert.equal(result.artifacts[0]?.stage, failure.stage);
+      assert.equal(result.artifacts[0]?.stage, stage);
       assert.doesNotMatch(JSON.stringify(result), /sensitive relay detail|different-execution/u);
     });
   }
@@ -265,6 +240,10 @@ function executeMaka(execute: SubjectExecutionContext['execute']) {
     cell: subjectCell('maka', makaConfig()),
     context: { cwd: '/app', taskInput: 'official instruction', metadata: {}, execute },
   });
+}
+
+function executed(stdout: string, exitCode = 1): SubjectExecutionContext['execute'] {
+  return async () => ({ termination: 'exited', exitCode, stdout });
 }
 
 function subjectCell(

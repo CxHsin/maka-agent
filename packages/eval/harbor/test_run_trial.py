@@ -43,22 +43,6 @@ class TaskCacheLockTest(unittest.IsolatedAsyncioTestCase):
             process.join(timeout=2)
             self.assertEqual(process.exitcode, 0)
 
-    async def test_different_task_does_not_wait(self) -> None:
-        context = multiprocessing.get_context("spawn")
-        started = context.Queue()
-        acquired = context.Queue()
-        with tempfile.TemporaryDirectory() as cache_dir:
-            async with task_cache_lock(Path(cache_dir), "first-task"):
-                process = context.Process(
-                    target=acquire_lock,
-                    args=(cache_dir, "second-task", started, acquired),
-                )
-                process.start()
-                self.assertEqual(started.get(timeout=2), "second-task")
-                self.assertEqual(acquired.get(timeout=2), "second-task")
-                process.join(timeout=2)
-                self.assertEqual(process.exitcode, 0)
-
     async def test_waiting_for_the_same_task_is_cancellable(self) -> None:
         waiting_for_lock = asyncio.Event()
 

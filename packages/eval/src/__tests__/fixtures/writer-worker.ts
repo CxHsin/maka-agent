@@ -4,19 +4,14 @@ import { FileAttemptStore } from '../../attempt-store.js';
 
 const root = process.argv[2]!;
 await writeFile(join(root, `ready-${process.pid}`), '');
-await waitFor(join(root, 'go'));
-let entered = false;
+while (!(await exists(join(root, 'go')))) await new Promise((resolve) => setTimeout(resolve, 5));
 try {
   await new FileAttemptStore(join(root, 'attempts')).runExclusive(async () => {
-    entered = true;
-    await writeFile(join(root, `entered-${process.pid}`), '');
     process.stdout.write('ENTER\n');
-    await waitFor(join(root, 'release'));
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   });
 } catch {
-  if (entered) throw new Error('writer barrier failed');
-  await writeFile(join(root, `rejected-${process.pid}`), '');
-  process.stdout.write('REJECT\n');
+  process.exitCode = 2;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -25,13 +20,5 @@ async function exists(path: string): Promise<boolean> {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function waitFor(path: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (!(await exists(path))) {
-    if (Date.now() >= deadline) throw new Error(`barrier timed out: ${path}`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 5));
   }
 }

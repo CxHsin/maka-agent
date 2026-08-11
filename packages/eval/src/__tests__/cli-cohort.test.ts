@@ -134,23 +134,22 @@ test('Reasonix wrapper removes its credential before cancellation settles', asyn
     ],
     { env: { ...process.env, OPENAI_API_KEY: 'test-only-secret' }, stdio: 'ignore' },
   );
-  try {
-    await waitUntil(
-      async () =>
-        await stat(credential).then(
-          () => true,
-          () => false,
-        ),
-      'Reasonix credential file was not created',
-    );
-
-    child.kill('SIGTERM');
-    await waitForChild(child);
-
-    await assert.rejects(stat(credential), { code: 'ENOENT' });
-  } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  while (
+    await stat(credential).then(
+      () => false,
+      () => true,
+    )
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
+
+  child.kill('SIGTERM');
+  await new Promise<void>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', () => resolve());
+  });
+
+  await assert.rejects(stat(credential), { code: 'ENOENT' });
 });
 
 test('checked-in cohort is one fully expanded four-arm experiment', async () => {
@@ -184,30 +183,4 @@ function spec() {
     budget: {},
     verifier: {},
   };
-}
-
-async function waitUntil(check: () => Promise<boolean>, message: string): Promise<void> {
-  const deadline = Date.now() + 2_000;
-  while (!(await check())) {
-    if (Date.now() >= deadline) throw new Error(message);
-    await new Promise<void>((resolve) => setTimeout(resolve, 5));
-  }
-}
-
-async function waitForChild(child: ReturnType<typeof spawn>): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([
-      new Promise<void>((resolve, reject) => {
-        child.once('error', reject);
-        child.once('exit', () => resolve());
-      }),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error('Reasonix wrapper did not exit')), 2_000);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }

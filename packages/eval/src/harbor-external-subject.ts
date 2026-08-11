@@ -2,11 +2,11 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { readFileSync, rmSync, statSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { basename, dirname, join, resolve } from 'node:path';
 
-type Profile = 'codex' | 'claude-code' | 'reasonix' | 'opencode' | 'kimi-code';
+type Profile = 'codex' | 'claude-code' | 'reasonix' | 'opencode' | 'kimi-code' | 'zcode';
 type SubjectStatus = 'completed' | 'failed' | 'infra_failed' | 'indeterminate';
 
 interface Usage {
@@ -49,6 +49,11 @@ const PROFILE_IDENTITIES: Readonly<Record<Profile, ProfileIdentity>> = {
     root: '/opt/maka-kimi-code-toolchain',
     version: '0.26.0',
     fingerprint: 'sha256:6fba6386f65df4247d116491d9ba464b2aaf040f4c1184db1aa33edd87a216d7',
+  },
+  zcode: {
+    root: '/opt/maka-zcode-toolchain',
+    version: '3.7.5/cli-0.16.1',
+    fingerprint: 'sha256:e344ee527a482a1984efbed1081365a135a9b66279a5bffdbec632ea00016a8c',
   },
 };
 
@@ -112,6 +117,8 @@ try {
     const classified = classifyExecution(profile, result.exitCode, output, proxy.requestCount());
     status = stopped ? 'indeterminate' : classified.status;
     failureReason = stopped ? 'external subject cancelled' : classified.failureReason;
+    const profileArtifacts =
+      profile === 'zcode' ? await collectZCodeArtifacts(prepared.home, logsRoot) : [];
     await writeState('result_ready', { status, requests: proxy.requestCount() });
     artifacts.push(
       fileArtifact('trajectory', trajectoryPath, profile),
@@ -123,6 +130,7 @@ try {
         usageComplete: usage !== null,
       },
       fileArtifact('wrapper-state', statePath, profile),
+      ...profileArtifacts,
     );
   } finally {
     await proxy.close();
@@ -242,7 +250,7 @@ async function prepareProfile(
       })}\n`,
       { mode: 0o600 },
     );
-  } else {
+  } else if (selected === 'kimi-code') {
     env.KIMI_CODE_HOME = home;
     env.KIMI_MODEL_NAME = 'deepseek-v4-flash';
     env.KIMI_MODEL_API_KEY = 'maka-eval-local';
@@ -253,6 +261,57 @@ async function prepareProfile(
     env.KIMI_MODEL_MAX_COMPLETION_TOKENS = '131072';
     env.KIMI_MODEL_ADAPTIVE_THINKING = 'true';
     env.KIMI_MODEL_THINKING_EFFORT = 'max';
+  } else {
+    const zcodeHome = join(home, '.zcode');
+    const configRoot = join(zcodeHome, 'cli');
+    await mkdir(configRoot, { recursive: true, mode: 0o700 });
+    env.ZCODE_HOME = zcodeHome;
+    env.ZCODE_DATA_BASE_DIR = zcodeHome;
+    env.DEEPSEEK_API_KEY = 'maka-eval-local';
+    await writeFile(
+      join(configRoot, 'config.json'),
+      `${JSON.stringify({
+        provider: {
+          deepseek: {
+            kind: 'openai-compatible',
+            name: 'DeepSeek',
+            options: {
+              baseURL: proxyBaseUrl,
+              includeUsage: true,
+            },
+            models: {
+              'deepseek-v4-flash': {
+                name: 'DeepSeek V4 Flash',
+                supportsReasoning: true,
+                supportsToolCall: true,
+                contextWindow: 1_048_576,
+                maxOutputTokens: 131_072,
+                reasoning: {
+                  enabled: true,
+                  levels: ['high', 'max'],
+                  defaultLevel: 'max',
+                  providerOptionsByLevel: {
+                    max: {
+                      reasoningEffort: 'max',
+                      thinking: { type: 'enabled' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: 'deepseek/deepseek-v4-flash',
+        permission: {
+          mode: 'yolo',
+          disallowedTools: ['WebSearch', 'WebFetch'],
+        },
+        features: { memory: false, mcp: false },
+        plugins: { enabled: false },
+        skills: { enabled: false },
+      })}\n`,
+      { mode: 0o600 },
+    );
   }
   return {
     command: executable,
@@ -353,7 +412,7 @@ function classifyExecution(
   output: string,
   requests: number,
 ): { status: SubjectStatus; failureReason: string | null } {
-  let completed = false;
+  let completed = selected === 'zcode' && exitCode === 0 && output.trim().length > 0;
   let reportedError = false;
   for (const line of output.split('\n')) {
     if (!line.trim()) continue;
@@ -373,7 +432,7 @@ function classifyExecution(
       } else if (selected === 'opencode') {
         completed ||= event.type === 'step_finish';
         reportedError ||= event.type === 'error';
-      } else {
+      } else if (selected === 'kimi-code') {
         completed ||= event.role === 'assistant';
         reportedError ||= event.role === 'error' || event.type === 'error';
       }
@@ -653,7 +712,8 @@ function isProfile(value: string | undefined): value is Profile {
     value === 'claude-code' ||
     value === 'reasonix' ||
     value === 'opencode' ||
-    value === 'kimi-code'
+    value === 'kimi-code' ||
+    value === 'zcode'
   );
 }
 
@@ -671,4 +731,28 @@ async function writeState(phase: string, detail: Record<string, unknown> = {}): 
     `${JSON.stringify({ schemaVersion: 1, profile, phase, ...detail })}\n`,
     { mode: 0o600 },
   );
+}
+
+async function collectZCodeArtifacts(
+  home: string,
+  logsRoot: string,
+): Promise<Record<string, unknown>[]> {
+  const artifacts: Record<string, unknown>[] = [];
+  for (const [sourceDirectory, targetName, kind] of [
+    [join(home, '.zcode/cli/rollout'), 'zcode-model-io.jsonl', 'model-io'],
+    [join(home, '.zcode/cli/log'), 'zcode-runtime.jsonl', 'runtime-events'],
+  ] as const) {
+    const names = await readdir(sourceDirectory).catch(() => []);
+    const contents = await Promise.all(
+      names
+        .filter((name) => name.endsWith('.jsonl'))
+        .sort()
+        .map((name) => readFile(join(sourceDirectory, name), 'utf8')),
+    );
+    if (contents.length === 0) continue;
+    const target = join(logsRoot, targetName);
+    await writeFile(target, contents.join(''), { mode: 0o600 });
+    artifacts.push(fileArtifact(kind, target, 'zcode'));
+  }
+  return artifacts;
 }

@@ -79,6 +79,11 @@ test('competitor wrapper installs declared containment and provider policy', asy
   );
   await execFileAsync(
     process.execPath,
+    [wrapper.pathname, 'zcode', 'https://provider.test/v1', root, '/usr/bin/true'],
+    { env },
+  );
+  await execFileAsync(
+    process.execPath,
     [wrapper.pathname, 'claude-code', 'https://provider.test', root, '/usr/bin/true'],
     { env },
   );
@@ -108,6 +113,11 @@ test('competitor wrapper installs declared containment and provider policy', asy
     /bash = "off"/u,
   );
   await assert.rejects(stat(join(root, 'tmp/maka-eval-reasonix/.env')), { code: 'ENOENT' });
+  const zcode = JSON.parse(
+    await readFile(join(root, 'tmp/maka-eval-zcode/.zcode/cli/config.json'), 'utf8'),
+  );
+  assert.equal(zcode.model, 'deepseek/deepseek-v4-flash');
+  assert.equal(zcode.provider.deepseek.models['deepseek-v4-flash'].reasoning.defaultLevel, 'max');
 });
 
 test('competitor wrapper publishes one newline-terminated result envelope', async () => {
@@ -180,6 +190,21 @@ test('checked-in cohort is one fully expanded six-arm experiment', async () => {
   for (const cell of expandExperiment(parsed).slice(0, 6)) {
     adapters.find(({ kind }) => kind === cell.subject.kind)?.validate?.(cell);
   }
+});
+
+test('checked-in ZCode cohort adds one pinned seventh arm', async () => {
+  const path = new URL(
+    '../../experiments/terminal-bench-2.1-deepseek-v4-flash-seven-arm.json',
+    import.meta.url,
+  );
+  const parsed = parseExperimentSpec(JSON.parse(await readFile(path, 'utf8')) as unknown);
+  assert.equal(parsed.tasks.length, 89);
+  assert.deepEqual(
+    parsed.subjects.map(({ id }) => id),
+    ['maka', 'codex', 'claude-code', 'reasonix', 'opencode', 'kimi-code', 'zcode'],
+  );
+  assert.equal(parsed.execution.maxConcurrentTaskGroups, 10);
+  assert.equal(expandExperiment(parsed).length, 623);
 });
 
 function spec() {

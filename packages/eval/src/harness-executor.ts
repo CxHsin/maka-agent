@@ -5,7 +5,6 @@ import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { createServer, type Server, type Socket } from 'node:net';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
-import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { decodeJsonObject, type ExperimentCell, type JsonObject } from './experiment.js';
 import {
@@ -17,9 +16,6 @@ import {
 import type { EvalResult } from './result.js';
 
 type Framework = 'harbor' | 'pier';
-
-const PREPARATION_STDERR_LIMIT = 64 * 1024;
-const PREPARATION_LINE_LIMIT = 64 * 1024;
 
 interface RelayState {
   readonly child: ChildProcess;
@@ -229,13 +225,6 @@ async function startTrial(
   let child: ChildProcess | undefined;
   let connectedSocket: Socket | undefined;
   let abort: (() => void) | undefined;
-  const exactSecrets = [token, ...Object.values(credentials)];
-  const stderr = new RedactedDiagnosticCapture(
-    PREPARATION_STDERR_LIMIT,
-    PREPARATION_LINE_LIMIT,
-    exactSecrets,
-  );
-  let stderrClosed: Promise<unknown> | undefined;
   let stage: 'spawn' | 'exit-before-ready' | 'ready-decode' = 'spawn';
   try {
     server.listen(0, '127.0.0.1');
@@ -260,10 +249,8 @@ async function startTrial(
     child = spawn(
       process.env[options.pythonPathEnv]!,
       [join(relayPath, 'run_trial.py'), framework, options.frameworkVersion, configPath],
-      { cwd: dirname(specPath), env: environment, stdio: ['ignore', 'ignore', 'pipe'] },
+      { cwd: dirname(specPath), env: environment, stdio: 'ignore' },
     );
-    child.stderr!.on('data', (chunk: Buffer) => stderr.append(chunk));
-    stderrClosed = once(child.stderr!, 'close');
     await Promise.race([
       once(child, 'spawn'),
       once(child, 'error').then(([error]) => Promise.reject(error)),
@@ -305,8 +292,6 @@ async function startTrial(
       child.kill('SIGTERM');
       await waitForTrial(child);
     }
-    await stderrClosed?.catch(() => undefined);
-    stderr.finish();
     connectedSocket?.destroy();
     await closeServer(server);
     await unlink(configPath).catch(() => undefined);
@@ -320,8 +305,6 @@ async function startTrial(
         errorCode: safeErrorCode(error),
         exitCode: child?.exitCode ?? null,
         signal: child?.signalCode ?? null,
-        stderr: stderr.text(),
-        truncated: stderr.truncated,
       })}\n`,
       { flag: 'wx', mode: 0o600 },
     );
@@ -332,96 +315,6 @@ async function startTrial(
   } finally {
     if (abort) signal?.removeEventListener('abort', abort);
   }
-}
-
-class RedactedDiagnosticCapture {
-  #value = Buffer.alloc(0);
-  #pending = '';
-  #discardingLine = false;
-  #truncated = false;
-  readonly #decoder = new StringDecoder('utf8');
-
-  constructor(
-    readonly limit: number,
-    readonly lineLimit: number,
-    readonly exactSecrets: readonly string[],
-  ) {}
-
-  append(chunk: Buffer): void {
-    this.#consume(this.#decoder.write(chunk));
-  }
-
-  finish(): void {
-    this.#consume(this.#decoder.end());
-    if (!this.#discardingLine && this.#pending)
-      this.#appendSafe(sanitizeDiagnosticLine(this.#pending, this.exactSecrets));
-    this.#pending = '';
-  }
-
-  get truncated(): boolean {
-    return this.#truncated;
-  }
-
-  text(): string {
-    let value = this.#value.toString('utf8');
-    while (Buffer.byteLength(value) > this.limit) value = value.slice(1);
-    return value;
-  }
-
-  #consume(value: string): void {
-    let remaining = value;
-    if (this.#discardingLine) {
-      const newline = remaining.indexOf('\n');
-      if (newline === -1) return;
-      this.#discardingLine = false;
-      remaining = remaining.slice(newline + 1);
-    }
-    this.#pending += remaining;
-    for (;;) {
-      const newline = this.#pending.indexOf('\n');
-      if (newline === -1) break;
-      const line = this.#pending.slice(0, newline + 1);
-      this.#pending = this.#pending.slice(newline + 1);
-      if (Buffer.byteLength(line) > this.lineLimit) {
-        this.#truncated = true;
-        this.#appendSafe('[REDACTED OVERSIZE LINE]\n');
-      } else {
-        this.#appendSafe(sanitizeDiagnosticLine(line, this.exactSecrets));
-      }
-    }
-    if (Buffer.byteLength(this.#pending) > this.lineLimit) {
-      this.#pending = '';
-      this.#discardingLine = true;
-      this.#truncated = true;
-      this.#appendSafe('[REDACTED OVERSIZE LINE]\n');
-    }
-  }
-
-  #appendSafe(value: string): void {
-    const combined = Buffer.concat([this.#value, Buffer.from(value)]);
-    if (combined.length > this.limit) this.#truncated = true;
-    this.#value = combined.subarray(-this.limit);
-  }
-}
-
-function sanitizeDiagnosticLine(value: string, exactSecrets: readonly string[]): string {
-  let redacted = value;
-  for (const secret of exactSecrets) {
-    if (secret) redacted = redacted.replaceAll(secret, '[REDACTED]');
-  }
-  redacted = redacted
-    .replace(/(authorization\s*:\s*(?:bearer|basic)\s+)[^\s]+/giu, '$1[REDACTED]')
-    .replace(
-      /((?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password)\s*[:=]\s*)[^\s]+/giu,
-      '$1[REDACTED]',
-    )
-    .replace(
-      /(--(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password)\s+)[^\s]+/giu,
-      '$1[REDACTED]',
-    )
-    .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu, '$1[REDACTED]@')
-    .replace(/\bcommand\b[^\r\n]*/giu, 'command [REDACTED]');
-  return redacted;
 }
 
 function preparationEnvironment(

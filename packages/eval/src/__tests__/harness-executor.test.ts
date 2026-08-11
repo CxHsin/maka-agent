@@ -37,19 +37,14 @@ test('harness spawn failure releases its relay listener and process', async () =
   assert.equal(output, 'SETTLED\n');
 });
 
-test('preparation failure persists bounded redacted diagnostics on the attempt', async () => {
+test('preparation failure persists only safe structured facts on the attempt', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-preparation-diagnostic-'));
   const executable = join(root, 'fake-python.mjs');
-  const boundarySecret = 's'.repeat(256);
   await writeFile(
     executable,
     `#!/usr/bin/env node
-if (process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET) process.stderr.write('credential-leak\\n');
-if (process.env.MAKA_UNRELATED_SECRET) process.stderr.write('unrelated-env-leak\\n');
-await new Promise((resolve) => process.stderr.write('x'.repeat(4_450) + '${boundarySecret}' + 'x'.repeat(65_294), resolve));
-await new Promise((resolve) => process.stderr.write('\\nOPENAI_API_KEY=' + 'q'.repeat(20_000) + '\\n', resolve));
-await new Promise((resolve) => process.stderr.write('\\nAuthorization: Bearer test-bearer-secret\\nOPENAI_API_KEY=test-env-secret\\n', resolve));
-process.exitCode = 9;
+process.stderr.write('argv: /private/subject --token=test-only-sensitive-value\\nError: raw diagnostic\\n');
+process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET || process.env.MAKA_UNRELATED_SECRET ? 8 : 9;
 `,
   );
   await chmod(executable, 0o755);
@@ -60,7 +55,7 @@ process.exitCode = 9;
   const previousUnrelatedSecret = process.env.MAKA_UNRELATED_SECRET;
   process.env.MAKA_TEST_PYTHON = executable;
   process.env.MAKA_TEST_TRIALS = root;
-  process.env.MAKA_TEST_SECRET = boundarySecret;
+  process.env.MAKA_TEST_SECRET = 'test-only-sensitive-value';
   process.env.MAKA_OTHER_SECRET = 'other-test-only-secret';
   process.env.MAKA_UNRELATED_SECRET = 'unrelated-test-only-secret';
   try {
@@ -98,23 +93,26 @@ process.exitCode = 9;
     assert.equal(attempt.result.failureReason, 'executor preparation failed');
     const artifact = attempt.result.artifacts[0]!;
     assert.equal(artifact.kind, 'executor-preparation');
-    const diagnostic = JSON.parse(
-      await readFile(join(root, String(artifact.trialName), String(artifact.path)), 'utf8'),
-    ) as {
+    const diagnosticText = await readFile(
+      join(root, String(artifact.trialName), String(artifact.path)),
+      'utf8',
+    );
+    const diagnostic = JSON.parse(diagnosticText) as {
       stage: string;
       errorCode: string | null;
-      stderr: string;
-      truncated: boolean;
       exitCode: number | null;
     };
     assert.equal(diagnostic.stage, 'exit-before-ready');
     assert.equal(diagnostic.errorCode, null);
     assert.equal(diagnostic.exitCode, 9);
-    assert.equal(diagnostic.truncated, true);
-    assert.ok(Buffer.byteLength(diagnostic.stderr) <= 65_536);
-    assert.doesNotMatch(diagnostic.stderr, /test-bearer-secret|test-env-secret/u);
-    assert.doesNotMatch(diagnostic.stderr, /s{32}/u);
-    assert.doesNotMatch(diagnostic.stderr, /q{32}|credential-leak|unrelated-env-leak/u);
+    assert.deepEqual(Object.keys(diagnostic).sort(), [
+      'errorCode',
+      'exitCode',
+      'framework',
+      'signal',
+      'stage',
+    ]);
+    assert.doesNotMatch(diagnosticText, /subject|token|sensitive|diagnostic/u);
     assert.deepEqual(
       (await readdir(root)).filter((name) => name.endsWith('.json')),
       [],

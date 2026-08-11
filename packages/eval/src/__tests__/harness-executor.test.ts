@@ -66,7 +66,7 @@ test('preparation failure persists only safe structured facts on the attempt', a
     executable,
     `#!/usr/bin/env node
 process.stderr.write('argv: /private/subject --token=test-only-sensitive-value\\nError: raw diagnostic\\n');
-process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET || process.env.MAKA_UNRELATED_SECRET ? 8 : process.env.MAKA_TEST_CONTROL === 'declared-control-plane' ? 9 : 7;
+process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET || process.env.MAKA_UNRELATED_SECRET ? 8 : process.env.MAKA_TEST_CONTROL === 'declared-control-plane' ? 78 : 7;
 `,
   );
   await chmod(executable, 0o755);
@@ -128,9 +128,9 @@ process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET
       exitCode: number | null;
     };
     assert.equal(diagnostic.stage, 'exit-before-ready');
-    assert.equal(diagnostic.code, 'exit-before-ready');
+    assert.equal(diagnostic.code, 'framework-version-mismatch');
     assert.equal(diagnostic.errorCode, null);
-    assert.equal(diagnostic.exitCode, 9);
+    assert.equal(diagnostic.exitCode, 78);
     assert.deepEqual(Object.keys(diagnostic).sort(), [
       'code',
       'errorCode',

@@ -1,13 +1,14 @@
 import asyncio
 import multiprocessing
 import queue
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
-from run_trial import run_trial, task_cache_lock
+from run_trial import main, run_trial, task_cache_lock
 
 
 def acquire_lock(
@@ -68,6 +69,15 @@ class TaskCacheLockTest(unittest.IsolatedAsyncioTestCase):
 
 
 class TrialCreateLockTest(unittest.IsolatedAsyncioTestCase):
+    async def test_framework_version_mismatch_uses_a_fixed_exit_code(self) -> None:
+        with (
+            patch.object(sys, "argv", ["run_trial.py", "harbor", "0.20.0", "unused"]),
+            patch("run_trial.importlib.metadata.version", return_value="0.19.0"),
+            self.assertRaises(SystemExit) as exited,
+        ):
+            await main()
+        self.assertEqual(exited.exception.code, 78)
+
     async def test_trial_create_is_serialized_but_trial_run_is_not(self) -> None:
         first_create_entered = asyncio.Event()
         release_first_create = asyncio.Event()

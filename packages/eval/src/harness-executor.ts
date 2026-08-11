@@ -309,7 +309,7 @@ async function startTrial(
     await unlink(configPath).catch(() => undefined);
     await mkdir(trialPath, { recursive: true, mode: 0o700 });
     const diagnosticPath = 'preparation-error.json';
-    const code = preparationCode(stage, signal);
+    const code = preparationCode(stage, child?.exitCode ?? null, signal);
     await writeFile(
       join(trialPath, diagnosticPath),
       `${JSON.stringify({
@@ -340,9 +340,11 @@ function notStarted(
 
 function preparationCode(
   stage: 'spawn' | 'exit-before-ready' | 'ready-decode',
+  exitCode: number | null,
   signal?: AbortSignal,
 ): ExecutorPreparationCode {
   if (signal?.aborted) return 'cancelled';
+  if (stage === 'exit-before-ready' && exitCode === 78) return 'framework-version-mismatch';
   if (stage === 'spawn') return 'spawn-failed';
   if (stage === 'ready-decode') return 'invalid-ready';
   return 'exit-before-ready';

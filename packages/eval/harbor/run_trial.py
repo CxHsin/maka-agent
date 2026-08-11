@@ -12,6 +12,12 @@ import sys
 from pathlib import Path
 from typing import AsyncIterator
 
+FRAMEWORK_VERSION_MISMATCH_EXIT_CODE = 78
+
+
+class FrameworkVersionMismatch(Exception):
+    pass
+
 
 @contextlib.asynccontextmanager
 async def task_cache_lock(cache_dir: Path, identity: str) -> AsyncIterator[None]:
@@ -41,7 +47,7 @@ async def run_trial(framework: str, expected_version: str, config_file: Path) ->
     if distribution is None:
         raise RuntimeError("framework must be harbor or pier")
     if importlib.metadata.version(distribution) != expected_version:
-        raise RuntimeError(f"{framework} version does not match the experiment spec")
+        raise FrameworkVersionMismatch
     try:
         config_type = importlib.import_module(f"{framework}.models.trial.config").TrialConfig
         trial_type = importlib.import_module(f"{framework}.trial.trial").Trial
@@ -68,7 +74,10 @@ async def main() -> None:
     for host_signal in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(host_signal, task.cancel)
     try:
-        await run_trial(framework, expected_version, Path(config_path))
+        try:
+            await run_trial(framework, expected_version, Path(config_path))
+        except FrameworkVersionMismatch:
+            raise SystemExit(FRAMEWORK_VERSION_MISMATCH_EXIT_CODE) from None
     finally:
         for host_signal in (signal.SIGINT, signal.SIGTERM):
             loop.remove_signal_handler(host_signal)

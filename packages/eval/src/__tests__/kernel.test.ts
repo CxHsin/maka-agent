@@ -192,22 +192,32 @@ test('worker rejection stops new groups until every started arm settles', {
   );
 });
 
-test('abort after listing prevents execution', { timeout: 2_000 }, async () => {
+test('abort closes admission before the next task group', { timeout: 2_000 }, async () => {
   const listed = deferred();
   const release = deferred();
   const controller = new AbortController();
+  const listCounts = new Map<string, number>();
   let executions = 0;
   const store: AttemptStore = {
     runExclusive: (operation) => operation(),
-    list: async () => {
-      listed.resolve();
-      await release.promise;
+    list: async (cellId) => {
+      const count = (listCounts.get(cellId) ?? 0) + 1;
+      listCounts.set(cellId, count);
+      if (cellId === 'one::1::a' && count === 1) {
+        listed.resolve();
+        await release.promise;
+      }
       return [];
     },
     append: async () => undefined,
   };
   const running = runExperiment({
-    spec: { ...spec(), subjects: [spec().subjects[0]!], repetitions: 1 },
+    spec: {
+      ...spec(),
+      subjects: [spec().subjects[0]!],
+      tasks: ['one', 'two'].map((id) => ({ id, input: 'solve', config: {} })),
+      repetitions: 1,
+    },
     store,
     executor: {
       kind: 'executor',
@@ -225,6 +235,9 @@ test('abort after listing prevents execution', { timeout: 2_000 }, async () => {
   release.resolve();
   await running;
   assert.equal(executions, 0);
+  // The final result snapshot lists every cell once; only an admitted group is listed twice.
+  assert.equal(listCounts.get('one::1::a'), 2);
+  assert.equal(listCounts.get('two::1::a'), 1);
 });
 
 test('legacy v1 experiment resumes with serialized task groups', async () => {

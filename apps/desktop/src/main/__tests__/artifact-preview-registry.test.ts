@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
-import type { ArtifactBinaryReadResult } from '@maka/core';
+import type { ArtifactBinaryReadResult } from '@maka/core/artifacts';
 import {
   ALLOWED_IMAGE_MIMES,
   IMAGE_PAYLOAD_MAX_BASE64_LENGTH,

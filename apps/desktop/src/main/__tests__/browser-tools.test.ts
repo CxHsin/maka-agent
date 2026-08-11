@@ -7,7 +7,7 @@
 import { strict as assert } from 'node:assert';
 import { afterEach, describe, it } from 'node:test';
 import type { IPage } from '@jackwener/opencli/types';
-import type { MakaTool, MakaToolContext } from '@maka/runtime';
+import type { MakaTool, MakaToolContext } from '@maka/runtime/tool-runtime';
 import {
   buildBrowserClickTool,
   buildBrowserExtractTool,

@@ -71,20 +71,17 @@ test('maka eval publishes only immutable attempts from one spec', async () => {
 test('competitor wrapper installs declared containment and provider policy', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-profiles-'));
   const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
-  await execFileAsync(process.execPath, [
-    wrapper.pathname,
-    'codex',
-    'https://provider.test',
-    root,
-    '/usr/bin/true',
-  ]);
-  await execFileAsync(process.execPath, [
-    wrapper.pathname,
-    'claude-code',
-    'https://provider.test',
-    root,
-    '/usr/bin/true',
-  ]);
+  const env = { ...process.env, OPENAI_API_KEY: 'test-only-secret' };
+  await execFileAsync(
+    process.execPath,
+    [wrapper.pathname, 'codex', 'https://provider.test', root, '/usr/bin/true'],
+    { env },
+  );
+  await execFileAsync(
+    process.execPath,
+    [wrapper.pathname, 'claude-code', 'https://provider.test', root, '/usr/bin/true'],
+    { env },
+  );
   await execFileAsync(
     process.execPath,
     [
@@ -98,7 +95,7 @@ test('competitor wrapper installs declared containment and provider policy', asy
       '--effort',
       'max',
     ],
-    { env: { ...process.env, OPENAI_API_KEY: 'test-only-secret' } },
+    { env },
   );
 
   assert.match(await readFile(join(root, 'etc/codex/requirements.toml'), 'utf8'), /disabled/u);
@@ -107,15 +104,29 @@ test('competitor wrapper installs declared containment and provider policy', asy
     /WebSearch/u,
   );
   assert.match(
-    await readFile(join(root, 'tmp/maka-reasonix/config.toml'), 'utf8'),
+    await readFile(join(root, 'tmp/maka-eval-reasonix/config.toml'), 'utf8'),
     /bash = "off"/u,
   );
-  await assert.rejects(stat(join(root, 'tmp/maka-reasonix/.env')), { code: 'ENOENT' });
+  await assert.rejects(stat(join(root, 'tmp/maka-eval-reasonix/.env')), { code: 'ENOENT' });
+});
+
+test('competitor wrapper publishes one newline-terminated result envelope', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-result-envelope-'));
+  const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [wrapper.pathname, 'codex', 'https://provider.test', root, '/usr/bin/true'],
+    { env: { ...process.env, OPENAI_API_KEY: 'test-only-secret' } },
+  );
+
+  assert.equal(stdout.endsWith('\n'), true);
+  assert.equal(stdout.trim().split('\n').length, 1);
+  assert.equal(JSON.parse(stdout).schemaVersion, 'maka.external_subject_result.v2');
 });
 
 test('Reasonix wrapper removes its credential before cancellation settles', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-reasonix-cancel-'));
-  const credential = join(root, 'tmp/maka-reasonix/.env');
+  const credential = join(root, 'tmp/maka-eval-reasonix/.env');
   const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
   const child = spawn(
     process.execPath,
@@ -152,20 +163,21 @@ test('Reasonix wrapper removes its credential before cancellation settles', asyn
   await assert.rejects(stat(credential), { code: 'ENOENT' });
 });
 
-test('checked-in cohort is one fully expanded four-arm experiment', async () => {
+test('checked-in cohort is one fully expanded six-arm experiment', async () => {
   const path = new URL(
-    '../../experiments/terminal-bench-2.1-deepseek-v4-flash-four-arm.json',
+    '../../experiments/terminal-bench-2.1-deepseek-v4-flash-six-arm.json',
     import.meta.url,
   );
   const parsed = parseExperimentSpec(JSON.parse(await readFile(path, 'utf8')) as unknown);
   assert.equal(parsed.tasks.length, 89);
   assert.deepEqual(
     parsed.subjects.map(({ id }) => id),
-    ['maka', 'codex', 'claude-code', 'reasonix'],
+    ['maka', 'codex', 'claude-code', 'reasonix', 'opencode', 'kimi-code'],
   );
-  assert.equal(expandExperiment(parsed).length, 356);
+  assert.equal(parsed.execution.maxConcurrentTaskGroups, 12);
+  assert.equal(expandExperiment(parsed).length, 534);
   const adapters = [createMakaSubjectAdapter(), createExternalSubjectAdapter()];
-  for (const cell of expandExperiment(parsed).slice(0, 4)) {
+  for (const cell of expandExperiment(parsed).slice(0, 6)) {
     adapters.find(({ kind }) => kind === cell.subject.kind)?.validate?.(cell);
   }
 });

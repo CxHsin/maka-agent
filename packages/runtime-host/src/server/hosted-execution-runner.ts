@@ -29,6 +29,12 @@ export class HostHostedExecutionRunner {
     signal: AbortSignal,
   ): Promise<HostedExecutionProjection> {
     const startedAt = (this.input.now ?? Date.now)();
+    let stage:
+      | 'session_create'
+      | 'turn_start'
+      | 'turn_settlement'
+      | 'residency_settlement'
+      | 'usage_settlement' = 'session_create';
     let drainRequested = false;
     const requestDrain = () => {
       if (drainRequested) return;
@@ -47,6 +53,7 @@ export class HostHostedExecutionRunner {
         ),
       );
       signal.throwIfAborted();
+      stage = 'turn_start';
       const started = await requireSuccess(
         this.input.handlers['turn.start'](
           {
@@ -59,10 +66,13 @@ export class HostHostedExecutionRunner {
         ),
       );
       if (started.kind !== 'started') throw new Error('Hosted root Turn was not started');
+      stage = 'turn_settlement';
       const terminal = await this.#waitForTerminal(started.turn, signal);
+      stage = 'residency_settlement';
       await (signal.aborted
         ? this.input.waitForAllResidencies()
         : this.input.waitForExecutionResidencies());
+      stage = 'usage_settlement';
       const usage = await this.#readUsage(startedAt, (this.input.now ?? Date.now)());
       const incompleteUsage = incompleteUsageReason(usage);
       if (incompleteUsage) {
@@ -89,10 +99,26 @@ export class HostHostedExecutionRunner {
             ? usage.summary.totalCostUsd
             : null,
       };
-    } catch {
+    } catch (error) {
+      process.stderr.write(
+        `[hosted-execution:${stage}] ${
+          error instanceof HostedExecutionOperationError
+            ? error.detail
+            : error instanceof Error
+              ? error.message
+              : 'unknown operation failure'
+        }\n`,
+      );
       requestDrain();
       await this.input.waitForAllResidencies().catch(() => undefined);
-      return indeterminate(input.executionId, 'Runtime Host could not settle execution');
+      const code =
+        error instanceof HostedExecutionOperationError
+          ? safeOperationCode(error.code)
+          : 'operation_failed';
+      return indeterminate(
+        input.executionId,
+        `Runtime Host could not settle execution: ${stage}:${code}`,
+      );
     } finally {
       signal.removeEventListener('abort', requestCancellation);
     }
@@ -169,8 +195,23 @@ async function requireSuccess<K extends OperationKey>(
   outcome: Promise<OperationOutcome<K>>,
 ): Promise<OperationOutput<K>> {
   const result = await outcome;
-  if (!result.ok) throw new Error(result.error.message);
+  if (!result.ok) {
+    throw new HostedExecutionOperationError(result.error.code, result.error.message);
+  }
   return result.result;
+}
+
+class HostedExecutionOperationError extends Error {
+  constructor(
+    readonly code: string,
+    readonly detail: string,
+  ) {
+    super('Hosted execution operation failed');
+  }
+}
+
+function safeOperationCode(value: string): string {
+  return /^[a-z][a-z0-9_]{0,63}$/u.test(value) ? value : 'operation_failed';
 }
 
 function delay(): Promise<void> {

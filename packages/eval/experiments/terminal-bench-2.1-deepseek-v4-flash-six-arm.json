@@ -1,6 +1,6 @@
 {
   "schemaVersion": "maka.eval.v1",
-  "id": "deepseek-v4-flash-4arm-tbench-2.1",
+  "id": "deepseek-v4-flash-6arm-tbench-2.1",
   "benchmark": {
     "id": "terminal-bench-2.1",
     "version": "d49e28f1e4ddd13d289e85a5f312a66750951932",
@@ -55,11 +55,21 @@
           "sourceEnv": "MAKA_EVAL_REASONIX_TOOLCHAIN_PATH",
           "target": "/opt/maka-reasonix-toolchain",
           "readOnly": true
+        },
+        {
+          "sourceEnv": "MAKA_EVAL_OPENCODE_TOOLCHAIN_PATH",
+          "target": "/opt/maka-opencode-toolchain",
+          "readOnly": true
+        },
+        {
+          "sourceEnv": "MAKA_EVAL_KIMI_CODE_TOOLCHAIN_PATH",
+          "target": "/opt/maka-kimi-code-toolchain",
+          "readOnly": true
         }
       ]
     }
   },
-  "execution": { "maxConcurrentTaskGroups": 1 },
+  "execution": { "maxConcurrentTaskGroups": 12 },
   "subjects": [
     {
       "id": "maka",
@@ -150,6 +160,53 @@
           "max",
           "--output-format",
           "stream-json",
+          "{{task.input}}"
+        ]
+      }
+    },
+    {
+      "id": "opencode",
+      "kind": "external",
+      "credentials": ["OPENAI_API_KEY"],
+      "config": {
+        "command": "/opt/maka-node-toolchain/bin/node",
+        "args": [
+          "/opt/maka-agent/packages/eval/dist/harbor-external-subject.js",
+          "opencode",
+          "https://api.deepseek.com",
+          "/",
+          "/opt/maka-opencode-toolchain/bin/opencode",
+          "run",
+          "--model",
+          "deepseek/deepseek-v4-flash",
+          "--format",
+          "json",
+          "--pure",
+          "--variant",
+          "max",
+          "--thinking",
+          "--auto",
+          "--",
+          "{{task.input}}"
+        ]
+      }
+    },
+    {
+      "id": "kimi-code",
+      "kind": "external",
+      "credentials": ["OPENAI_API_KEY"],
+      "config": {
+        "command": "/opt/maka-node-toolchain/bin/node",
+        "args": [
+          "/opt/maka-agent/packages/eval/dist/harbor-external-subject.js",
+          "kimi-code",
+          "https://api.deepseek.com",
+          "/",
+          "/opt/maka-kimi-code-toolchain/bin/node",
+          "/opt/maka-kimi-code-toolchain/lib/kimi-code/main.mjs",
+          "--output-format",
+          "stream-json",
+          "--prompt",
           "{{task.input}}"
         ]
       }

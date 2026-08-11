@@ -41,6 +41,41 @@ test('external subject delegates exactly one declared command to its executor', 
   assert.equal(result.status, 'completed');
 });
 
+test('external subject preserves metering and a verifiable CLI failure from v2', async () => {
+  const result = await createExternalSubjectAdapter().execute({
+    cell: subjectCell('external', { command: '/opt/competitor', args: [] }),
+    context: {
+      cwd: '/app',
+      taskInput: 'official instruction',
+      metadata: {},
+      execute: async () => ({
+        termination: 'exited',
+        exitCode: 0,
+        stdout: JSON.stringify({
+          schemaVersion: 'maka.external_subject_result.v2',
+          status: 'failed',
+          failureReason: 'competitor execution failed',
+          usage: {
+            inputTokens: 10,
+            outputTokens: 2,
+            cacheReadTokens: 4,
+            cacheWriteTokens: 0,
+            reasoningTokens: 1,
+            totalTokens: 12,
+          },
+          costUsd: 0.01,
+          artifacts: [{ kind: 'trajectory', path: '/logs/agent/competitor.jsonl' }],
+        }),
+      }),
+    },
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.failureReason, 'competitor execution failed');
+  assert.equal(result.usage?.totalTokens, 12);
+  assert.equal(result.artifacts[0]?.kind, 'trajectory');
+});
+
 test('Maka subject delegates one Hosted execution without owning Runtime lifecycle', async () => {
   const cell = subjectCell('maka', {
     nodePath: '/opt/node/bin/node',
@@ -48,7 +83,7 @@ test('Maka subject delegates one Hosted execution without owning Runtime lifecyc
     runtimeHostsPath: '/tmp/maka-runtime-hosts',
     baseUrl: 'https://provider.test/v1',
     connectionSlug: 'provider',
-    model: 'model',
+    model: 'deepseek-v4-flash',
     thinkingLevel: 'high',
     permissionMode: 'bypass',
     collaborationMode: 'agent',
@@ -91,6 +126,7 @@ test('Maka subject delegates one Hosted execution without owning Runtime lifecyc
 
   assert.equal(request?.args[0], '/opt/maka/harbor-maka-subject.js');
   assert.equal(result.status, 'completed');
+  assert.equal(result.costUsd, 0);
   assert.deepEqual(result.artifacts, []);
 });
 

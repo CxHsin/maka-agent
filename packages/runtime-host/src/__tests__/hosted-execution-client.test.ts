@@ -52,6 +52,19 @@ test('startup failure preserves its fixed safe cause', async () => {
   assert.equal(result.failureReason, 'Runtime Host did not start: existing_host');
 });
 
+test('startup cancellation closes admission with the cancelled result', async () => {
+  const abort = new AbortController();
+  const result = await runHostedExecutionWithDependencies(input(abort.signal), {
+    connectOwnedRuntimeHost: async (request) => {
+      assert.equal(request.signal, abort.signal);
+      abort.abort();
+      return { kind: 'failed', reason: 'host_unresponsive' };
+    },
+  });
+
+  assert.equal(result.failureReason, 'Hosted execution was cancelled');
+});
+
 const ID = '00000000-0000-4000-8000-000000000001';
 
 function input(signal?: AbortSignal) {

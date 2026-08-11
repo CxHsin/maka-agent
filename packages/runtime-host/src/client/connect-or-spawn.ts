@@ -24,7 +24,7 @@ import {
   type CandidateLauncher,
   type OwnedCandidateAttempt,
 } from './launcher.js';
-import { waitForRuntimeHostReady } from './wait-for-ready.js';
+import { abortable, waitForRuntimeHostReady } from './wait-for-ready.js';
 
 const DEFAULT_ELECTION_DEADLINE_MS = 45_000;
 const DEFAULT_BACKOFF_MIN_MS = 20;
@@ -108,16 +108,17 @@ export async function connectOwnedRuntimeHost(
       await host?.settle(1_000);
       return result.kind === 'connected' ? { kind: 'failed', reason: 'existing_host' } : result;
     }
-    connection = result.connection;
-    const diagnostics = await connection.queryHostDiagnostics();
+    const ownedConnection = result.connection;
+    connection = ownedConnection;
+    const diagnostics = await abortable(() => ownedConnection.queryHostDiagnostics(), input.signal);
     if (diagnostics.pid !== host.pid) {
       await connection.close();
       connection = undefined;
       await host.settle(1_000);
       return { kind: 'failed', reason: 'existing_host' };
     }
-    await waitForRuntimeHostReady(connection, input.electionDeadlineMs);
-    return { kind: 'connected', connection, host };
+    await waitForRuntimeHostReady(ownedConnection, input.electionDeadlineMs, input.signal);
+    return { kind: 'connected', connection: ownedConnection, host };
   } catch {
     await connection?.close().catch(() => undefined);
     const host = await launch?.spawned.catch(() => undefined);

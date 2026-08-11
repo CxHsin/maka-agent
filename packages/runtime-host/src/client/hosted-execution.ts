@@ -44,10 +44,19 @@ export async function runHostedExecutionWithDependencies(
       max: RUNTIME_HOST_PROTOCOL_VERSION,
     },
     compositionId: INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
+    ...(input.signal ? { signal: input.signal } : {}),
   });
   if (connected.kind !== 'connected') {
+    if (input.signal?.aborted) {
+      return indeterminate(input.execution.executionId, 'Hosted execution was cancelled');
+    }
     const cause = connected.kind === 'failed' ? connected.reason : connected.kind;
     return indeterminate(input.execution.executionId, `Runtime Host did not start: ${cause}`);
+  }
+  if (input.signal?.aborted) {
+    await connected.connection.close().catch(() => undefined);
+    await connected.host.settle(input.hostSettlementTimeoutMs ?? 15_000);
+    return indeterminate(input.execution.executionId, 'Hosted execution was cancelled');
   }
 
   let projection: HostedExecutionProjection;
@@ -55,18 +64,24 @@ export async function runHostedExecutionWithDependencies(
     const target = input.execution.session.modelTarget;
     if (target.kind === 'explicit') {
       if (!input.baseUrl) throw new Error('Explicit model target requires baseUrl');
-      await configureHostedExecutionTarget(connected.connection, {
-        connectionSlug: target.connectionSlug,
-        model: target.model,
-        baseUrl: input.baseUrl,
-      });
+      await configureHostedExecutionTarget(
+        connected.connection,
+        {
+          connectionSlug: target.connectionSlug,
+          model: target.model,
+          baseUrl: input.baseUrl,
+        },
+        input.signal,
+      );
     }
     projection = await executeHostedExecution(connected.connection, input.execution, input.signal);
   } catch {
-    projection = indeterminate(
-      input.execution.executionId,
-      'Runtime Host connection failed before execution settlement',
-    );
+    projection = input.signal?.aborted
+      ? indeterminate(input.execution.executionId, 'Hosted execution was cancelled')
+      : indeterminate(
+          input.execution.executionId,
+          'Runtime Host connection failed before execution settlement',
+        );
   } finally {
     await connected.connection.close().catch(() => undefined);
   }

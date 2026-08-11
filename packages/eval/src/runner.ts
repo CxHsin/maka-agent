@@ -55,6 +55,24 @@ export interface ExecutorVerification {
   readonly artifacts: readonly JsonObject[];
 }
 
+export type ExecutorPreparationCode =
+  | 'cancelled'
+  | 'preparation-failed'
+  | 'spawn-failed'
+  | 'exit-before-ready'
+  | 'invalid-ready'
+  | 'framework-version-mismatch';
+
+export type ExecutorAttemptOutcome =
+  | { readonly kind: 'settled'; readonly value: EvalResult }
+  | { readonly kind: 'indeterminate'; readonly value?: EvalResult }
+  | {
+      readonly kind: 'not_started';
+      readonly outcome: 'cancelled' | 'failed';
+      readonly code: ExecutorPreparationCode;
+      readonly artifacts: readonly JsonObject[];
+    };
+
 export interface ExperimentExecutor {
   readonly kind: string;
   validate?(cell: ExperimentCell): void;
@@ -68,26 +86,13 @@ export interface ExperimentExecutor {
       readonly context: SubjectExecutionContext;
       verify(): Promise<ExecutorVerification>;
     }) => Promise<EvalResult>,
-  ): Promise<
-    | { readonly kind: 'settled'; readonly value: EvalResult }
-    | { readonly kind: 'indeterminate'; readonly value?: EvalResult }
-  >;
+  ): Promise<ExecutorAttemptOutcome>;
 }
 
 export interface AttemptStore {
   list(cellId: string): Promise<readonly CellAttempt[]>;
   append(attempt: CellAttempt): Promise<void>;
   runExclusive<T>(operation: () => Promise<T>): Promise<T>;
-}
-
-export class ExecutorPreparationFailure extends Error {
-  constructor(
-    readonly artifacts: readonly JsonObject[],
-    options?: ErrorOptions,
-  ) {
-    super('executor preparation failed', options);
-    this.name = 'ExecutorPreparationFailure';
-  }
 }
 
 export async function runExperiment(input: {
@@ -256,6 +261,16 @@ async function executeCell(
         }
       },
     );
+    if (attempt.kind === 'not_started') {
+      return failure(
+        attempt.outcome === 'cancelled' ? 'indeterminate' : 'infra_failed',
+        attempt.outcome === 'cancelled'
+          ? 'executor preparation cancelled'
+          : 'executor preparation failed',
+        undefined,
+        attempt.artifacts,
+      );
+    }
     if (attempt.kind === 'settled') return decodeEvalResult(attempt.value);
     if (!attempt.value) return failure('indeterminate', 'executor cleanup did not settle');
     const partial = decodeEvalResult(attempt.value);
@@ -265,13 +280,8 @@ async function executeCell(
       status: 'indeterminate',
       failureReason: partial.failureReason ?? 'executor cleanup did not settle',
     };
-  } catch (error) {
-    return failure(
-      'infra_failed',
-      'executor preparation failed',
-      undefined,
-      error instanceof ExecutorPreparationFailure ? error.artifacts : [],
-    );
+  } catch {
+    return failure('infra_failed', 'executor preparation failed');
   }
 }
 

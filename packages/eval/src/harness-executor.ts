@@ -8,8 +8,9 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { decodeJsonObject, type ExperimentCell, type JsonObject } from './experiment.js';
 import {
-  ExecutorPreparationFailure,
+  type ExecutorAttemptOutcome,
   type ExperimentExecutor,
+  type ExecutorPreparationCode,
   type ExecutorVerification,
   type SubjectExecutionContext,
 } from './runner.js';
@@ -73,19 +74,16 @@ async function runHarnessAttempt(
     readonly context: SubjectExecutionContext;
     verify(): Promise<ExecutorVerification>;
   }) => Promise<EvalResult>,
-): Promise<
-  | { readonly kind: 'settled'; readonly value: EvalResult }
-  | { readonly kind: 'indeterminate'; readonly value?: EvalResult }
-> {
-  if (signal?.aborted) return { kind: 'indeterminate' };
-  const state = await startTrial(
-    framework,
-    options,
-    specPath,
-    cell,
-    subjectCredentialNames,
-    signal,
-  );
+): Promise<ExecutorAttemptOutcome> {
+  if (signal?.aborted) return notStarted('cancelled', 'cancelled');
+  let prepared: Awaited<ReturnType<typeof startTrial>>;
+  try {
+    prepared = await startTrial(framework, options, specPath, cell, subjectCredentialNames, signal);
+  } catch {
+    return notStarted('failed', 'preparation-failed');
+  }
+  if (prepared.kind === 'not_started') return prepared;
+  const state = prepared.state;
   let decision = false;
   let value: EvalResult | undefined;
   let hasValue = false;
@@ -210,7 +208,10 @@ async function startTrial(
   cell: ExperimentCell,
   subjectCredentialNames: readonly string[],
   signal?: AbortSignal,
-): Promise<RelayState> {
+): Promise<
+  | { readonly kind: 'ready'; readonly state: RelayState }
+  | Extract<ExecutorAttemptOutcome, { readonly kind: 'not_started' }>
+> {
   const credentials = requireCredentials(cell.subject.credentials);
   const token = randomBytes(24).toString('hex');
   const trialsRoot = resolve(process.env[options.trialsRootEnv]!);
@@ -283,17 +284,20 @@ async function startTrial(
       throw new Error('relay returned an invalid ready message');
     }
     return {
-      child,
-      server,
-      socket,
-      lines,
-      token,
-      trialName,
-      trialPath,
-      taskInput: ready.instruction,
-      credentials,
-      containerCwd: options.containerCwd,
-      used: false,
+      kind: 'ready',
+      state: {
+        child,
+        server,
+        socket,
+        lines,
+        token,
+        trialName,
+        trialPath,
+        taskInput: ready.instruction,
+        credentials,
+        containerCwd: options.containerCwd,
+        used: false,
+      },
     };
   } catch (error) {
     if (child?.pid !== undefined) {
@@ -305,24 +309,43 @@ async function startTrial(
     await unlink(configPath).catch(() => undefined);
     await mkdir(trialPath, { recursive: true, mode: 0o700 });
     const diagnosticPath = 'preparation-error.json';
+    const code = preparationCode(stage, signal);
     await writeFile(
       join(trialPath, diagnosticPath),
       `${JSON.stringify({
         stage,
         framework,
+        code,
         errorCode: safeErrorCode(error),
         exitCode: child?.exitCode ?? null,
         signal: child?.signalCode ?? null,
       })}\n`,
       { flag: 'wx', mode: 0o600 },
     );
-    throw new ExecutorPreparationFailure(
-      [{ kind: 'executor-preparation', framework, trialName, path: diagnosticPath }],
-      { cause: error },
-    );
+    return notStarted(code === 'cancelled' ? 'cancelled' : 'failed', code, [
+      { kind: 'executor-preparation', framework, trialName, path: diagnosticPath },
+    ]);
   } finally {
     if (abort) signal?.removeEventListener('abort', abort);
   }
+}
+
+function notStarted(
+  outcome: 'cancelled' | 'failed',
+  code: ExecutorPreparationCode,
+  artifacts: readonly JsonObject[] = [],
+): Extract<ExecutorAttemptOutcome, { readonly kind: 'not_started' }> {
+  return { kind: 'not_started', outcome, code, artifacts };
+}
+
+function preparationCode(
+  stage: 'spawn' | 'exit-before-ready' | 'ready-decode',
+  signal?: AbortSignal,
+): ExecutorPreparationCode {
+  if (signal?.aborted) return 'cancelled';
+  if (stage === 'spawn') return 'spawn-failed';
+  if (stage === 'ready-decode') return 'invalid-ready';
+  return 'exit-before-ready';
 }
 
 function preparationEnvironment(

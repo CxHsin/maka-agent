@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, watch, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -123,13 +123,16 @@ process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET
     );
     const diagnostic = JSON.parse(diagnosticText) as {
       stage: string;
+      code: string;
       errorCode: string | null;
       exitCode: number | null;
     };
     assert.equal(diagnostic.stage, 'exit-before-ready');
+    assert.equal(diagnostic.code, 'exit-before-ready');
     assert.equal(diagnostic.errorCode, null);
     assert.equal(diagnostic.exitCode, 9);
     assert.deepEqual(Object.keys(diagnostic).sort(), [
+      'code',
       'errorCode',
       'exitCode',
       'framework',
@@ -154,6 +157,80 @@ process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET
     else process.env.MAKA_UNRELATED_SECRET = previousUnrelatedSecret;
     if (previousControl === undefined) delete process.env.MAKA_TEST_CONTROL;
     else process.env.MAKA_TEST_CONTROL = previousControl;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('cancellation during preparation is persisted as indeterminate', {
+  timeout: 2_000,
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-preparation-cancel-'));
+  const executable = join(root, 'fake-python.mjs');
+  const preparingPath = join(root, 'preparing');
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+import { writeFile } from 'node:fs/promises';
+process.on('SIGTERM', () => process.exit(0));
+await writeFile(process.env.MAKA_TEST_PREPARING, '');
+setInterval(() => {}, 1_000);
+await new Promise(() => {});
+`,
+  );
+  await chmod(executable, 0o755);
+  const previousPython = process.env.MAKA_TEST_PYTHON;
+  const previousTrials = process.env.MAKA_TEST_TRIALS;
+  const previousPreparing = process.env.MAKA_TEST_PREPARING;
+  process.env.MAKA_TEST_PYTHON = executable;
+  process.env.MAKA_TEST_TRIALS = root;
+  process.env.MAKA_TEST_PREPARING = preparingPath;
+  const watching = new AbortController();
+  const events = watch(root, { signal: watching.signal })[Symbol.asyncIterator]();
+  try {
+    const controller = new AbortController();
+    const store = new FileAttemptStore(join(root, 'attempts'));
+    const experiment: ExperimentSpec = {
+      schemaVersion: 'maka.eval.v1',
+      id: 'experiment',
+      benchmark: { id: 'benchmark', version: TEST_REVISION, config: { repository: 'repo' } },
+      executor: { kind: 'harbor', config: {} },
+      execution: { maxConcurrentTaskGroups: 1 },
+      subjects: [{ id: 'subject', kind: 'external', credentials: [], config: {} }],
+      tasks: [{ id: 'task', input: 'solve', config: { harbor: { path: 'tasks/task' } } }],
+      repetitions: 1,
+      budget: { timeoutMultiplier: 1 },
+      verifier: { reward: 'reward' },
+    };
+    const running = runExperiment({
+      spec: experiment,
+      store,
+      executor: testExecutor(root, ['MAKA_TEST_PREPARING']),
+      subjects: [{ kind: 'external', execute: async () => assert.fail('subject must not run') }],
+      signal: controller.signal,
+    });
+    for (;;) {
+      const event = await events.next();
+      if (event.value?.filename === 'preparing') break;
+    }
+    controller.abort();
+    await running;
+
+    const attempt = (await store.list('task::1::subject'))[0]!;
+    const artifact = attempt.result.artifacts[0]!;
+    const diagnostic = JSON.parse(
+      await readFile(join(root, String(artifact.trialName), String(artifact.path)), 'utf8'),
+    ) as { code: string };
+    assert.equal(diagnostic.code, 'cancelled');
+    assert.equal(attempt.result.status, 'indeterminate');
+    assert.equal(attempt.result.failureReason, 'executor preparation cancelled');
+  } finally {
+    watching.abort();
+    if (previousPython === undefined) delete process.env.MAKA_TEST_PYTHON;
+    else process.env.MAKA_TEST_PYTHON = previousPython;
+    if (previousTrials === undefined) delete process.env.MAKA_TEST_TRIALS;
+    else process.env.MAKA_TEST_TRIALS = previousTrials;
+    if (previousPreparing === undefined) delete process.env.MAKA_TEST_PREPARING;
+    else process.env.MAKA_TEST_PREPARING = previousPreparing;
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -197,15 +197,7 @@ test('Maka subject records the precise safe failure stage', async (t) => {
 
   for (const failure of cases) {
     await t.test(failure.name, async () => {
-      const result = await createMakaSubjectAdapter().execute({
-        cell: subjectCell('maka', makaConfig()),
-        context: {
-          cwd: '/app',
-          taskInput: 'official instruction',
-          metadata: {},
-          execute: failure.execute,
-        },
-      });
+      const result = await executeMaka(failure.execute);
 
       assert.equal(result.status, 'infra_failed');
       assert.equal(result.failureReason, `Maka subject failed during ${failure.stage}`);
@@ -248,26 +240,18 @@ test('Maka subject keeps only fixed Runtime Host failure reasons', async () => {
       'Maka subject cancelled',
     ],
   ] as const) {
-    const result = await createMakaSubjectAdapter().execute({
-      cell: subjectCell('maka', makaConfig()),
-      context: {
-        cwd: '/app',
-        taskInput: 'official instruction',
-        metadata: {},
-        execute: async (input) => {
-          const payload = JSON.parse(Buffer.from(input.args[1] ?? '', 'base64url').toString()) as {
-            execution: { executionId: string };
-          };
-          return {
-            termination: 'exited',
-            exitCode: 0,
-            stdout: JSON.stringify({
-              executionId: payload.execution.executionId,
-              ...projection,
-            }),
-          };
-        },
-      },
+    const result = await executeMaka(async (input) => {
+      const payload = JSON.parse(Buffer.from(input.args[1] ?? '', 'base64url').toString()) as {
+        execution: { executionId: string };
+      };
+      return {
+        termination: 'exited',
+        exitCode: 0,
+        stdout: JSON.stringify({
+          executionId: payload.execution.executionId,
+          ...projection,
+        }),
+      };
     });
 
     assert.equal(result.status, expectedStatus);
@@ -275,6 +259,13 @@ test('Maka subject keeps only fixed Runtime Host failure reasons', async () => {
     assert.doesNotMatch(result.failureReason ?? '', /test-only-sensitive-value/u);
   }
 });
+
+function executeMaka(execute: SubjectExecutionContext['execute']) {
+  return createMakaSubjectAdapter().execute({
+    cell: subjectCell('maka', makaConfig()),
+    context: { cwd: '/app', taskInput: 'official instruction', metadata: {}, execute },
+  });
+}
 
 function subjectCell(
   kind: 'maka' | 'external',

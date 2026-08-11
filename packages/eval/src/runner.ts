@@ -115,6 +115,7 @@ export async function runExperiment(input: {
     await runTaskGroups(
       groupTaskCells(selected),
       input.spec.execution.maxConcurrentTaskGroups,
+      input.signal,
       async (group, fail) => {
         if (input.signal?.aborted) return;
         const operations = group.map(async (cell) => {
@@ -175,6 +176,7 @@ function groupTaskCells(cells: readonly ExperimentCell[]): ExperimentCell[][] {
 async function runTaskGroups<T>(
   groups: readonly T[],
   maximum: number,
+  signal: AbortSignal | undefined,
   run: (group: T, fail: (error: unknown) => void) => Promise<void>,
 ): Promise<void> {
   let next = 0;
@@ -187,7 +189,7 @@ async function runTaskGroups<T>(
   };
   const worker = async () => {
     for (;;) {
-      if (failed) return;
+      if (failed || signal?.aborted) return;
       const group = groups[next];
       next += 1;
       if (group === undefined) return;

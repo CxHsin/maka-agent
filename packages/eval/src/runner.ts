@@ -110,10 +110,11 @@ export async function runExperiment(input: {
       input.spec.execution.maxConcurrentTaskGroups,
       async (group) => {
         if (input.signal?.aborted) return;
-        await Promise.all(
+        const settled = await Promise.allSettled(
           group.map(async (cell) => {
             if (input.signal?.aborted) return;
             const attempts = await input.store.list(cell.id);
+            if (input.signal?.aborted) return;
             if (selectCellResult(attempts)) return;
             const startedAt = (input.now ?? Date.now)();
             const result = await executeCell(
@@ -131,6 +132,10 @@ export async function runExperiment(input: {
             });
           }),
         );
+        const rejected = settled.find(
+          (result): result is PromiseRejectedResult => result.status === 'rejected',
+        );
+        if (rejected) throw rejected.reason;
       },
     );
 
@@ -163,17 +168,25 @@ async function runTaskGroups<T>(
   run: (group: T) => Promise<void>,
 ): Promise<void> {
   let next = 0;
+  let failure: unknown;
   const worker = async () => {
     for (;;) {
+      if (failure !== undefined) return;
       const group = groups[next];
       next += 1;
       if (group === undefined) return;
-      await run(group);
+      try {
+        await run(group);
+      } catch (error) {
+        failure ??= error;
+        return;
+      }
     }
   };
   await Promise.all(
     Array.from({ length: Math.min(maximum, groups.length) }, async () => await worker()),
   );
+  if (failure !== undefined) throw failure;
 }
 
 async function executeCell(

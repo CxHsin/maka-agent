@@ -13,6 +13,7 @@ import {
   type ExperimentExecutor,
   type SubjectAdapter,
 } from '../runner.js';
+import { parseExperimentSpec } from '../spec.js';
 
 test('experiment expands task by repetition by subject', () => {
   assert.deepEqual(
@@ -146,6 +147,118 @@ test('task-group concurrency never exceeds the frozen limit', async () => {
 
   assert.equal(peak, 2);
   assert.equal(results.size, 3);
+});
+
+test('worker failure stops new groups and retains writer ownership until started groups settle', async () => {
+  const store = new RejectingStore('one::1::a');
+  const secondStarted = deferred<void>();
+  const releaseSecond = deferred<void>();
+  const started: string[] = [];
+  const threeTasks: ExperimentSpec = {
+    ...spec(),
+    execution: { maxConcurrentTaskGroups: 2 },
+    subjects: [spec().subjects[0]!],
+    tasks: ['one', 'two', 'three'].map((id) => ({ id, input: 'solve', config: {} })),
+    repetitions: 1,
+  };
+  const executor: ExperimentExecutor = {
+    kind: 'executor',
+    runAttempt: async ({ cell }, operation) => {
+      started.push(cell.task.id);
+      if (cell.task.id === 'two') {
+        secondStarted.resolve();
+        await releaseSecond.promise;
+      }
+      return {
+        kind: 'settled',
+        value: await operation({
+          context: {
+            cwd: '/workspace',
+            taskInput: 'solve',
+            metadata: {},
+            execute: async () => ({ termination: 'exited', exitCode: 0, stdout: '' }),
+          },
+          verify: async () => ({
+            status: 'completed',
+            score: 1,
+            failureReason: null,
+            artifacts: [],
+          }),
+        }),
+      };
+    },
+  };
+  const subject: SubjectAdapter = {
+    kind: 'maka',
+    execute: async () => ({
+      usage: null,
+      costUsd: null,
+      durationMs: 1,
+      status: 'completed',
+      failureReason: null,
+      artifacts: [],
+    }),
+  };
+
+  const running = runExperiment({ spec: threeTasks, store, executor, subjects: [subject] });
+  const settled = running.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await secondStarted.promise;
+  await store.rejected.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(store.exclusive, true);
+  assert.deepEqual(started, ['one', 'two']);
+
+  releaseSecond.resolve();
+  assert.match(String(await settled), /append rejected/u);
+  assert.equal(store.exclusive, false);
+  assert.deepEqual(started, ['one', 'two']);
+});
+
+test('abort while loading attempts prevents the cell from starting', async () => {
+  const listed = deferred<void>();
+  const releaseList = deferred<void>();
+  const controller = new AbortController();
+  let executions = 0;
+  const store: AttemptStore = {
+    runExclusive: (operation) => operation(),
+    list: async () => {
+      listed.resolve();
+      await releaseList.promise;
+      return [];
+    },
+    append: async () => undefined,
+  };
+  const executor: ExperimentExecutor = {
+    kind: 'executor',
+    runAttempt: async () => {
+      executions += 1;
+      throw new Error('must not start');
+    },
+  };
+
+  const running = runExperiment({
+    spec: { ...spec(), subjects: [spec().subjects[0]!], repetitions: 1 },
+    store,
+    executor,
+    subjects: [{ kind: 'maka', execute: async () => assert.fail('subject must not run') }],
+    signal: controller.signal,
+  });
+  await listed.promise;
+  controller.abort();
+  releaseList.resolve();
+  await running;
+
+  assert.equal(executions, 0);
+});
+
+test('legacy v1 spec without execution resumes with serialized task groups', () => {
+  const { execution: _execution, ...legacy } = spec();
+
+  assert.deepEqual(parseExperimentSpec(legacy).execution, { maxConcurrentTaskGroups: 1 });
 });
 
 test('cell result is the earliest valid attempt, never a hand-picked replacement', () => {
@@ -463,4 +576,40 @@ class MemoryStore implements AttemptStore {
   async append(attempt: CellAttempt): Promise<void> {
     this.attempts.push(attempt);
   }
+}
+
+class RejectingStore extends MemoryStore {
+  readonly rejected = deferred<void>();
+  exclusive = false;
+
+  constructor(readonly rejectedCellId: string) {
+    super();
+  }
+
+  override async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    this.exclusive = true;
+    try {
+      return await operation();
+    } finally {
+      this.exclusive = false;
+    }
+  }
+
+  override async append(attempt: CellAttempt): Promise<void> {
+    if (attempt.cellId === this.rejectedCellId) {
+      this.rejected.resolve();
+      throw new Error('append rejected');
+    }
+    await super.append(attempt);
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

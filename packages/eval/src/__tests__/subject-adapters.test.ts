@@ -217,13 +217,37 @@ test('Maka subject records the precise safe failure stage', async (t) => {
 });
 
 test('Maka subject keeps only fixed Runtime Host failure reasons', async () => {
-  for (const [failureReason, expected] of [
-    ['PROVIDER_KEY=test-only-sensitive-value', 'Maka execution did not settle'],
+  for (const [projection, expectedStatus, expectedReason] of [
     [
-      'Runtime Host usage did not settle: missing_attempt_usage',
+      { kind: 'indeterminate', failureReason: 'PROVIDER_KEY=test-only-sensitive-value' },
+      'indeterminate',
+      'Maka execution did not settle',
+    ],
+    [
+      {
+        kind: 'indeterminate',
+        failureReason: 'Runtime Host usage did not settle: missing_attempt_usage',
+      },
+      'indeterminate',
       'Runtime Host usage did not settle: missing_attempt_usage',
     ],
-  ]) {
+    [
+      {
+        kind: 'settled',
+        status: 'completed',
+        failureReason: 'PROVIDER_KEY=test-only-sensitive-value',
+        usage: zeroUsage(),
+        costUsd: null,
+      },
+      'completed',
+      null,
+    ],
+    [
+      { kind: 'settled', status: 'cancelled', usage: zeroUsage(), costUsd: null },
+      'indeterminate',
+      'Maka subject cancelled',
+    ],
+  ] as const) {
     const result = await createMakaSubjectAdapter().execute({
       cell: subjectCell('maka', makaConfig()),
       context: {
@@ -239,16 +263,15 @@ test('Maka subject keeps only fixed Runtime Host failure reasons', async () => {
             exitCode: 0,
             stdout: JSON.stringify({
               executionId: payload.execution.executionId,
-              kind: 'indeterminate',
-              failureReason,
+              ...projection,
             }),
           };
         },
       },
     });
 
-    assert.equal(result.status, 'indeterminate');
-    assert.equal(result.failureReason, expected);
+    assert.equal(result.status, expectedStatus);
+    assert.equal(result.failureReason, expectedReason);
     assert.doesNotMatch(result.failureReason ?? '', /test-only-sensitive-value/u);
   }
 });

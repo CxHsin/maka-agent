@@ -107,13 +107,23 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
           artifacts: [],
         };
       }
+      if (projection.status === 'cancelled') {
+        return {
+          usage: projection.usage,
+          costUsd: projection.costUsd,
+          durationMs: Date.now() - startedAt,
+          status: 'indeterminate' as const,
+          failureReason: 'Maka subject cancelled',
+          artifacts: [],
+        };
+      }
       return {
         usage: projection.usage,
         costUsd: projection.costUsd,
         durationMs: Date.now() - startedAt,
         status: projection.status === 'completed' ? ('completed' as const) : ('failed' as const),
         failureReason:
-          projection.failureReason == null
+          projection.status === 'completed' || projection.failureReason == null
             ? null
             : safeFailureReason(projection.failureReason, 'Maka execution failed'),
         artifacts: [],
@@ -143,8 +153,6 @@ const SAFE_RUNTIME_FAILURE_REASONS = new Set([
   'Runtime Host connection failed before execution settlement',
   'Runtime Host could not settle execution',
   'Runtime Host did not exit cleanly',
-  'Runtime Host did not start',
-  'Runtime Host usage did not settle completely',
 ]);
 
 type SubjectFailureStage =

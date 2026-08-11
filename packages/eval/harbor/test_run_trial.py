@@ -88,7 +88,12 @@ class TrialCreateLockTest(unittest.IsolatedAsyncioTestCase):
         class FakeConfig:
             def __init__(self, name: str) -> None:
                 self.name = name
-                self.task = SimpleNamespace(model_dump_json=lambda: "same-task")
+                self.task = SimpleNamespace(
+                    model_dump_json=lambda: f"same-task-config-{name}",
+                    get_task_id=lambda: SimpleNamespace(
+                        model_dump_json=lambda: "same-task"
+                    ),
+                )
 
         class FakeConfigType:
             @staticmethod

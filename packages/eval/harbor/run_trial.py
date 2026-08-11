@@ -50,7 +50,7 @@ async def run_trial(framework: str, expected_version: str, config_file: Path) ->
         if framework == "harbor":
             from harbor.constants import TASK_CACHE_DIR
 
-            task_identity = config.task.model_dump_json()
+            task_identity = config.task.get_task_id().model_dump_json()
             async with task_cache_lock(TASK_CACHE_DIR, task_identity):
                 trial = await trial_type.create(config)
         else:

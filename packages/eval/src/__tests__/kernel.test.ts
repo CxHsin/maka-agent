@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { FileAttemptStore } from '../attempt-store.js';
+import { openExperimentDirectory } from '../experiment-directory.js';
 import { expandExperiment, type ExperimentSpec } from '../experiment.js';
 import { selectCellResult, type CellAttempt } from '../result.js';
 import {
@@ -25,10 +26,8 @@ test('experiment expands task by repetition by subject', () => {
 test('all arms of one task repetition start together', async () => {
   const store = new MemoryStore();
   let started = 0;
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const allStarted = deferred<void>();
+  const release = deferred<void>();
   const threeArms: ExperimentSpec = {
     ...spec(),
     subjects: ['a', 'b', 'c'].map((id) => ({
@@ -42,7 +41,8 @@ test('all arms of one task repetition start together', async () => {
     kind: 'executor',
     runAttempt: async (_input, operation) => {
       started += 1;
-      await gate;
+      if (started === 3) allStarted.resolve();
+      await release.promise;
       return {
         kind: 'settled',
         value: await operation({
@@ -75,12 +75,12 @@ test('all arms of one task repetition start together', async () => {
   };
 
   const running = runExperiment({ spec: threeArms, store, executor, subjects: [subject] });
-  await new Promise((resolve) => setTimeout(resolve, 20));
   try {
+    await withTimeout(allStarted.promise, 'all arms did not start');
     assert.equal(started, 3);
   } finally {
-    release();
-    await running;
+    release.resolve();
+    await withTimeout(running, 'all arms did not settle');
   }
 });
 
@@ -88,10 +88,8 @@ test('task-group concurrency never exceeds the frozen limit', async () => {
   const store = new MemoryStore();
   let active = 0;
   let peak = 0;
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const twoActive = deferred<void>();
+  const release = deferred<void>();
   const threeTasks: ExperimentSpec = {
     ...spec(),
     execution: { maxConcurrentTaskGroups: 2 },
@@ -104,8 +102,8 @@ test('task-group concurrency never exceeds the frozen limit', async () => {
     runAttempt: async (_input, operation) => {
       active += 1;
       peak = Math.max(peak, active);
-      if (active === 2) release();
-      await gate;
+      if (active === 2) twoActive.resolve();
+      await release.promise;
       active -= 1;
       return {
         kind: 'settled',
@@ -138,12 +136,18 @@ test('task-group concurrency never exceeds the frozen limit', async () => {
     }),
   };
 
-  const results = await runExperiment({
+  const running = runExperiment({
     spec: threeTasks,
     store,
     executor,
     subjects: [subject],
   });
+  try {
+    await withTimeout(twoActive.promise, 'task-group concurrency did not reach two');
+  } finally {
+    release.resolve();
+  }
+  const results = await withTimeout(running, 'task groups did not settle');
 
   assert.equal(peak, 2);
   assert.equal(results.size, 3);
@@ -205,8 +209,8 @@ test('worker failure stops new groups and retains writer ownership until started
     () => undefined,
     (error: unknown) => error,
   );
-  await secondStarted.promise;
-  await store.rejected.promise;
+  await withTimeout(secondStarted.promise, 'second task group did not start');
+  await withTimeout(store.rejected.promise, 'first task group did not reject');
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(store.exclusive, true);
@@ -247,7 +251,7 @@ test('abort while loading attempts prevents the cell from starting', async () =>
     subjects: [{ kind: 'maka', execute: async () => assert.fail('subject must not run') }],
     signal: controller.signal,
   });
-  await listed.promise;
+  await withTimeout(listed.promise, 'attempt listing did not start');
   controller.abort();
   releaseList.resolve();
   await running;
@@ -261,6 +265,21 @@ test('legacy v1 spec without execution resumes with serialized task groups', () 
   assert.deepEqual(parseExperimentSpec(legacy).execution, { maxConcurrentTaskGroups: 1 });
 });
 
+test('legacy v1 experiment directory resumes without a spec drift error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-legacy-v1-'));
+  const { execution: _execution, ...legacy } = spec();
+  await writeFile(join(root, 'experiment.json'), JSON.stringify(legacy));
+  try {
+    const normalized = parseExperimentSpec(legacy);
+    const directory = await openExperimentDirectory(root, normalized);
+
+    assert.deepEqual(directory.attempts.path, join(root, 'attempts'));
+    assert.deepEqual(normalized.execution, { maxConcurrentTaskGroups: 1 });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('cell result is the earliest valid attempt, never a hand-picked replacement', () => {
   assert.equal(
     selectCellResult([attempt(1, 'infra_failed'), attempt(2, 'completed'), attempt(3, 'completed')])
@@ -271,17 +290,20 @@ test('cell result is the earliest valid attempt, never a hand-picked replacement
 
 test('experiment directory admits only one writer across processes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-writer-'));
+  const workers = Array.from({ length: 12 }, () => worker(root));
   try {
-    const workers = Array.from({ length: 12 }, () => worker(root));
-    while (
-      (await readdir(root)).filter((name) => name.startsWith('ready-')).length < workers.length
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitForFiles(root, 'ready-', workers.length);
     await writeFile(join(root, 'go'), '');
-    const outputs = await Promise.all(workers);
+    await waitForFiles(root, 'entered-', 1);
+    await waitForFiles(root, 'rejected-', workers.length - 1);
+    await writeFile(join(root, 'release'), '');
+    const outputs = await withTimeout(
+      Promise.all(workers.map(({ result }) => result)),
+      'writer workers did not exit',
+    );
     assert.equal(outputs.filter(({ stdout }) => stdout === 'ENTER\n').length, 1);
   } finally {
+    for (const worker of workers) worker.kill();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -539,7 +561,10 @@ test('invalid subject status cannot be verified into a completed result', async 
   assert.equal(verifications, 0);
 });
 
-function worker(root: string): Promise<{ stdout: string; code: number | null }> {
+function worker(root: string): {
+  readonly result: Promise<{ stdout: string; code: number | null }>;
+  readonly kill: () => boolean;
+} {
   const child = spawn(
     process.execPath,
     [new URL('./fixtures/writer-worker.js', import.meta.url).pathname, root],
@@ -552,10 +577,11 @@ function worker(root: string): Promise<{ stdout: string; code: number | null }> 
   child.stdout.on('data', (chunk) => {
     stdout += chunk;
   });
-  return new Promise((resolve, reject) => {
+  const result = new Promise<{ stdout: string; code: number | null }>((resolve, reject) => {
     child.once('error', reject);
     child.once('exit', (code) => resolve({ stdout, code }));
   });
+  return { result, kill: () => child.kill('SIGKILL') };
 }
 
 function spec(): ExperimentSpec {
@@ -644,4 +670,31 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+async function waitForFiles(root: string, prefix: string, count: number): Promise<void> {
+  await withTimeout(
+    (async () => {
+      for (;;) {
+        if ((await readdir(root)).filter((name) => name.startsWith(prefix)).length === count)
+          return;
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+      }
+    })(),
+    `${prefix} barrier did not reach ${count}`,
+  );
+}
+
+async function withTimeout<T>(operation: Promise<T>, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), 2_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

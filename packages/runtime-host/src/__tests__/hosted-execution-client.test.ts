@@ -44,6 +44,14 @@ test('abort observed with a completed response does not replace the result', asy
   assert.deepEqual(result, projection);
 });
 
+test('startup failure preserves its fixed safe cause', async () => {
+  const result = await runHostedExecutionWithDependencies(input(), {
+    connectOwnedRuntimeHost: async () => ({ kind: 'failed', reason: 'existing_host' }),
+  });
+
+  assert.equal(result.failureReason, 'Runtime Host did not start: existing_host');
+});
+
 const ID = '00000000-0000-4000-8000-000000000001';
 
 function input(signal?: AbortSignal) {

@@ -46,7 +46,8 @@ export async function runHostedExecutionWithDependencies(
     compositionId: INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
   });
   if (connected.kind !== 'connected') {
-    return indeterminate(input.execution.executionId, 'Runtime Host did not start');
+    const cause = connected.kind === 'failed' ? connected.reason : connected.kind;
+    return indeterminate(input.execution.executionId, `Runtime Host did not start: ${cause}`);
   }
 
   let projection: HostedExecutionProjection;

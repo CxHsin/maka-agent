@@ -60,12 +60,19 @@ class TaskCacheLockTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(process.exitcode, 0)
 
     async def test_waiting_for_the_same_task_is_cancellable(self) -> None:
+        waiting_for_lock = asyncio.Event()
+
+        async def wait_for_retry(_delay: float) -> None:
+            waiting_for_lock.set()
+            await asyncio.Future()
+
         with tempfile.TemporaryDirectory() as cache_dir:
             async with task_cache_lock(Path(cache_dir), "same-task"):
-                waiting = asyncio.create_task(
-                    self._acquire(Path(cache_dir), "same-task")
-                )
-                await asyncio.sleep(0)
+                with patch("run_trial.asyncio.sleep", new=wait_for_retry):
+                    waiting = asyncio.create_task(
+                        self._acquire(Path(cache_dir), "same-task")
+                    )
+                    await asyncio.wait_for(waiting_for_lock.wait(), timeout=1)
                 waiting.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await asyncio.wait_for(waiting, timeout=1)
@@ -80,6 +87,7 @@ class TrialCreateLockTest(unittest.IsolatedAsyncioTestCase):
     async def test_trial_create_is_serialized_but_trial_run_is_not(self) -> None:
         first_create_entered = asyncio.Event()
         release_first_create = asyncio.Event()
+        second_identity_read = asyncio.Event()
         second_create_entered = asyncio.Event()
         first_run_entered = asyncio.Event()
         second_run_entered = asyncio.Event()
@@ -90,10 +98,13 @@ class TrialCreateLockTest(unittest.IsolatedAsyncioTestCase):
                 self.name = name
                 self.task = SimpleNamespace(
                     model_dump_json=lambda: f"same-task-config-{name}",
-                    get_task_id=lambda: SimpleNamespace(
-                        model_dump_json=lambda: "same-task"
-                    ),
+                    get_task_id=self.get_task_id,
                 )
+
+            def get_task_id(self) -> SimpleNamespace:
+                if self.name == "second":
+                    second_identity_read.set()
+                return SimpleNamespace(model_dump_json=lambda: "same-task")
 
         class FakeConfigType:
             @staticmethod
@@ -141,8 +152,8 @@ class TrialCreateLockTest(unittest.IsolatedAsyncioTestCase):
                 first = asyncio.create_task(run_trial("harbor", "0.20.0", first_path))
                 await asyncio.wait_for(first_create_entered.wait(), timeout=1)
                 second = asyncio.create_task(run_trial("harbor", "0.20.0", second_path))
-                with self.assertRaises(asyncio.TimeoutError):
-                    await asyncio.wait_for(second_create_entered.wait(), timeout=0.1)
+                await asyncio.wait_for(second_identity_read.wait(), timeout=1)
+                self.assertFalse(second_create_entered.is_set())
 
                 release_first_create.set()
                 await asyncio.wait_for(first_run_entered.wait(), timeout=1)

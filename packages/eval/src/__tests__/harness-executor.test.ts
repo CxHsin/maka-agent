@@ -79,17 +79,7 @@ process.exitCode = 9;
       budget: { timeoutMultiplier: 1 },
       verifier: { reward: 'reward' },
     };
-    const executor = createHarborExecutor(
-      {
-        frameworkVersion: '0.20.0',
-        pythonPathEnv: 'MAKA_TEST_PYTHON',
-        trialsRootEnv: 'MAKA_TEST_TRIALS',
-        containerCwd: '/app',
-        environment: {},
-        mounts: [],
-      },
-      join(root, 'spec.json'),
-    );
+    const executor = testExecutor(root);
     const subject: SubjectAdapter = {
       kind: 'external',
       execute: async () => assert.fail('subject must not run'),
@@ -175,31 +165,11 @@ await writeFile(trial + '/result.json', JSON.stringify({ exception_info: { excep
   process.env.MAKA_TEST_PYTHON = executable;
   process.env.MAKA_TEST_TRIALS = root;
   try {
-    const executor = createHarborExecutor(
-      {
-        frameworkVersion: '0.20.0',
-        pythonPathEnv: 'MAKA_TEST_PYTHON',
-        trialsRootEnv: 'MAKA_TEST_TRIALS',
-        containerCwd: '/app',
-        environment: {},
-        mounts: [],
-      },
-      join(root, 'spec.json'),
-    );
+    const executor = testExecutor(root);
     await assert.rejects(
       executor.runAttempt(
         {
-          cell: {
-            id: 'task::1::subject',
-            experimentId: 'experiment',
-            benchmark: { id: 'benchmark', version: 'version', config: { repository: 'repo' } },
-            executor: { kind: 'harbor', config: {} },
-            subject: { id: 'subject', kind: 'external', credentials: [], config: {} },
-            task: { id: 'task', input: 'solve', config: { harbor: { path: 'task' } } },
-            repetition: 1,
-            budget: { timeoutMultiplier: 1 },
-            verifier: { reward: 'reward' },
-          },
+          cell: harnessCell(),
           subjectCredentialNames: [],
         },
         async ({ context, verify }) => {
@@ -268,17 +238,7 @@ socket.end();
   process.env.MAKA_TEST_PYTHON = executable;
   process.env.MAKA_TEST_TRIALS = root;
   try {
-    const executor = createHarborExecutor(
-      {
-        frameworkVersion: '0.20.0',
-        pythonPathEnv: 'MAKA_TEST_PYTHON',
-        trialsRootEnv: 'MAKA_TEST_TRIALS',
-        containerCwd: '/app',
-        environment: {},
-        mounts: [],
-      },
-      join(root, 'spec.json'),
-    );
+    const executor = testExecutor(root);
     const result = await executor.runAttempt(
       {
         cell: harnessCell(),
@@ -325,4 +285,18 @@ function harnessCell() {
     budget: { timeoutMultiplier: 1 },
     verifier: { reward: 'reward' },
   };
+}
+
+function testExecutor(root: string) {
+  return createHarborExecutor(
+    {
+      frameworkVersion: '0.20.0',
+      pythonPathEnv: 'MAKA_TEST_PYTHON',
+      trialsRootEnv: 'MAKA_TEST_TRIALS',
+      containerCwd: '/app',
+      environment: {},
+      mounts: [],
+    },
+    join(root, 'spec.json'),
+  );
 }

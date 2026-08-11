@@ -115,35 +115,37 @@ export async function runExperiment(input: {
     await runTaskGroups(
       groupTaskCells(selected),
       input.spec.execution.maxConcurrentTaskGroups,
-      async (group) => {
+      async (group, fail) => {
         if (input.signal?.aborted) return;
-        const settled = await Promise.allSettled(
-          group.map(async (cell) => {
-            if (input.signal?.aborted) return;
-            const attempts = await input.store.list(cell.id);
-            if (input.signal?.aborted) return;
-            if (selectCellResult(attempts)) return;
-            const startedAt = (input.now ?? Date.now)();
-            const result = await executeCell(
-              input.executor,
-              subjects.get(cell.subject.kind)!,
-              cell,
-              subjectCredentialNames,
-              input.signal,
-            );
-            await input.store.append({
-              cellId: cell.id,
-              sequence: (attempts.at(-1)?.sequence ?? 0) + 1,
-              startedAt,
-              completedAt: (input.now ?? Date.now)(),
-              result,
-            });
-          }),
+        const operations = group.map(async (cell) => {
+          if (input.signal?.aborted) return;
+          const attempts = await input.store.list(cell.id);
+          if (input.signal?.aborted) return;
+          if (selectCellResult(attempts)) return;
+          const startedAt = (input.now ?? Date.now)();
+          const result = await executeCell(
+            input.executor,
+            subjects.get(cell.subject.kind)!,
+            cell,
+            subjectCredentialNames,
+            input.signal,
+          );
+          await input.store.append({
+            cellId: cell.id,
+            sequence: (attempts.at(-1)?.sequence ?? 0) + 1,
+            startedAt,
+            completedAt: (input.now ?? Date.now)(),
+            result,
+          });
+        });
+        await Promise.allSettled(
+          operations.map((operation) =>
+            operation.catch((error: unknown) => {
+              fail(error);
+              throw error;
+            }),
+          ),
         );
-        const rejected = settled.find(
-          (result): result is PromiseRejectedResult => result.status === 'rejected',
-        );
-        if (rejected) throw rejected.reason;
       },
     );
 
@@ -173,28 +175,33 @@ function groupTaskCells(cells: readonly ExperimentCell[]): ExperimentCell[][] {
 async function runTaskGroups<T>(
   groups: readonly T[],
   maximum: number,
-  run: (group: T) => Promise<void>,
+  run: (group: T, fail: (error: unknown) => void) => Promise<void>,
 ): Promise<void> {
   let next = 0;
+  let failed = false;
   let failure: unknown;
+  const fail = (error: unknown) => {
+    if (failed) return;
+    failed = true;
+    failure = error;
+  };
   const worker = async () => {
     for (;;) {
-      if (failure !== undefined) return;
+      if (failed) return;
       const group = groups[next];
       next += 1;
       if (group === undefined) return;
       try {
-        await run(group);
+        await run(group, fail);
       } catch (error) {
-        failure ??= error;
-        return;
+        fail(error);
       }
     }
   };
   await Promise.all(
     Array.from({ length: Math.min(maximum, groups.length) }, async () => await worker()),
   );
-  if (failure !== undefined) throw failure;
+  if (failed) throw failure;
 }
 
 async function executeCell(

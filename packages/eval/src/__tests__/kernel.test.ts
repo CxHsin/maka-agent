@@ -155,23 +155,28 @@ test('task-group concurrency never exceeds the frozen limit', async () => {
 
 test('worker failure stops new groups and retains writer ownership until started groups settle', async () => {
   const store = new RejectingStore('one::1::a');
-  const secondStarted = deferred<void>();
-  const releaseSecond = deferred<void>();
+  const siblingStarted = deferred<void>();
+  const releaseSibling = deferred<void>();
   const started: string[] = [];
   const threeTasks: ExperimentSpec = {
     ...spec(),
     execution: { maxConcurrentTaskGroups: 2 },
-    subjects: [spec().subjects[0]!],
+    subjects: ['a', 'b'].map((id) => ({
+      id,
+      kind: 'maka' as const,
+      credentials: [],
+      config: {},
+    })),
     tasks: ['one', 'two', 'three'].map((id) => ({ id, input: 'solve', config: {} })),
     repetitions: 1,
   };
   const executor: ExperimentExecutor = {
     kind: 'executor',
     runAttempt: async ({ cell }, operation) => {
-      started.push(cell.task.id);
-      if (cell.task.id === 'two') {
-        secondStarted.resolve();
-        await releaseSecond.promise;
+      started.push(cell.id);
+      if (cell.id === 'one::1::b') {
+        siblingStarted.resolve();
+        await releaseSibling.promise;
       }
       return {
         kind: 'settled',
@@ -209,17 +214,23 @@ test('worker failure stops new groups and retains writer ownership until started
     () => undefined,
     (error: unknown) => error,
   );
-  await withTimeout(secondStarted.promise, 'second task group did not start');
+  await withTimeout(siblingStarted.promise, 'sibling arm did not start');
   await withTimeout(store.rejected.promise, 'first task group did not reject');
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   assert.equal(store.exclusive, true);
-  assert.deepEqual(started, ['one', 'two']);
+  assert.equal(
+    started.some((cellId) => cellId.startsWith('three::')),
+    false,
+  );
 
-  releaseSecond.resolve();
+  releaseSibling.resolve();
   assert.match(String(await settled), /append rejected/u);
   assert.equal(store.exclusive, false);
-  assert.deepEqual(started, ['one', 'two']);
+  assert.equal(
+    started.some((cellId) => cellId.startsWith('three::')),
+    false,
+  );
 });
 
 test('abort while loading attempts prevents the cell from starting', async () => {

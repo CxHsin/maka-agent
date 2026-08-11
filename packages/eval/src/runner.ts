@@ -68,7 +68,6 @@ export type ExecutorAttemptOutcome =
   | { readonly kind: 'indeterminate'; readonly value?: EvalResult }
   | {
       readonly kind: 'not_started';
-      readonly outcome: 'cancelled' | 'failed';
       readonly code: ExecutorPreparationCode;
       readonly artifacts: readonly JsonObject[];
     };
@@ -262,11 +261,10 @@ async function executeCell(
       },
     );
     if (attempt.kind === 'not_started') {
+      const cancelled = attempt.code === 'cancelled';
       return failure(
-        attempt.outcome === 'cancelled' ? 'indeterminate' : 'infra_failed',
-        attempt.outcome === 'cancelled'
-          ? 'executor preparation cancelled'
-          : 'executor preparation failed',
+        cancelled ? 'indeterminate' : 'infra_failed',
+        cancelled ? 'executor preparation cancelled' : 'executor preparation failed',
         undefined,
         attempt.artifacts,
       );

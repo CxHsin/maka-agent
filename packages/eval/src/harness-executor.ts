@@ -75,12 +75,12 @@ async function runHarnessAttempt(
     verify(): Promise<ExecutorVerification>;
   }) => Promise<EvalResult>,
 ): Promise<ExecutorAttemptOutcome> {
-  if (signal?.aborted) return notStarted('cancelled', 'cancelled');
+  if (signal?.aborted) return notStarted('cancelled');
   let prepared: Awaited<ReturnType<typeof startTrial>>;
   try {
     prepared = await startTrial(framework, options, specPath, cell, subjectCredentialNames, signal);
   } catch {
-    return notStarted('failed', 'preparation-failed');
+    return notStarted('preparation-failed');
   }
   if (prepared.kind === 'not_started') return prepared;
   const state = prepared.state;
@@ -322,7 +322,7 @@ async function startTrial(
       })}\n`,
       { flag: 'wx', mode: 0o600 },
     );
-    return notStarted(code === 'cancelled' ? 'cancelled' : 'failed', code, [
+    return notStarted(code, [
       { kind: 'executor-preparation', framework, trialName, path: diagnosticPath },
     ]);
   } finally {
@@ -331,11 +331,10 @@ async function startTrial(
 }
 
 function notStarted(
-  outcome: 'cancelled' | 'failed',
   code: ExecutorPreparationCode,
   artifacts: readonly JsonObject[] = [],
 ): Extract<ExecutorAttemptOutcome, { readonly kind: 'not_started' }> {
-  return { kind: 'not_started', outcome, code, artifacts };
+  return { kind: 'not_started', code, artifacts };
 }
 
 function preparationCode(

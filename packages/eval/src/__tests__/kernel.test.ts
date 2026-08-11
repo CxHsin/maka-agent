@@ -371,6 +371,38 @@ test('executor cleanup uncertainty cannot publish a completed result', async () 
   assert.equal(store.attempts[0]?.result.status, 'indeterminate');
 });
 
+test('executor cleanup uncertainty preserves the primary failure evidence', async () => {
+  const store = new MemoryStore();
+  const executor: ExperimentExecutor = {
+    kind: 'executor',
+    runAttempt: async () => ({
+      kind: 'indeterminate',
+      value: {
+        score: null,
+        usage: null,
+        costUsd: null,
+        durationMs: 1,
+        status: 'infra_failed',
+        failureReason: 'Maka subject failed during empty-output',
+        artifacts: [
+          { kind: 'subject-failure', stage: 'empty-output' },
+          { kind: 'executor-cleanup', action: 'abort', outcome: 'unsettled' },
+        ] as const,
+      },
+    }),
+  };
+
+  await runExperiment({
+    spec: { ...spec(), subjects: [spec().subjects[0]!], repetitions: 1 },
+    store,
+    executor,
+    subjects: [{ kind: 'maka', execute: async () => assert.fail('subject must not run') }],
+  });
+
+  assert.equal(store.attempts[0]?.result.failureReason, 'Maka subject failed during empty-output');
+  assert.equal(store.attempts[0]?.result.artifacts[1]?.outcome, 'unsettled');
+});
+
 test('malformed subject output is recorded as replaceable infrastructure failure', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-malformed-subject-'));
   try {

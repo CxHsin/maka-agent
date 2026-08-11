@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { createExternalSubjectAdapter } from '../external-subject.js';
 import type { ExperimentCell } from '../experiment.js';
 import { createMakaSubjectAdapter } from '../maka-subject.js';
+import type { SubjectExecutionContext } from '../runner.js';
 
 test('external subject delegates exactly one declared command to its executor', async () => {
   const cell = subjectCell('external', {
@@ -145,6 +146,76 @@ test('framework timeout remains a verifiable failure for every subject kind', as
   assert.equal(externalResult.status, 'failed');
 });
 
+test('Maka subject records the precise safe failure stage', async (t) => {
+  const cases: readonly {
+    readonly name: string;
+    readonly stage: string;
+    readonly execute: (input: Parameters<SubjectExecutionContext['execute']>[0]) => Promise<{
+      termination: 'exited';
+      exitCode: number;
+      stdout: string;
+    }>;
+  }[] = [
+    {
+      name: 'relay execute rejection',
+      stage: 'relay-execute',
+      execute: async () => {
+        throw new Error('test-only sensitive relay detail');
+      },
+    },
+    {
+      name: 'empty output',
+      stage: 'empty-output',
+      execute: async () => ({ termination: 'exited', exitCode: 1, stdout: '' }),
+    },
+    {
+      name: 'JSON parse',
+      stage: 'json-parse',
+      execute: async () => ({ termination: 'exited', exitCode: 1, stdout: '{' }),
+    },
+    {
+      name: 'result decode',
+      stage: 'result-decode',
+      execute: async () => ({ termination: 'exited', exitCode: 1, stdout: '{}' }),
+    },
+    {
+      name: 'identity check',
+      stage: 'identity-check',
+      execute: async () => ({
+        termination: 'exited',
+        exitCode: 0,
+        stdout: JSON.stringify({
+          executionId: 'different-execution',
+          kind: 'settled',
+          status: 'completed',
+          usage: zeroUsage(),
+          costUsd: null,
+        }),
+      }),
+    },
+  ];
+
+  for (const failure of cases) {
+    await t.test(failure.name, async () => {
+      const result = await createMakaSubjectAdapter().execute({
+        cell: subjectCell('maka', makaConfig()),
+        context: {
+          cwd: '/app',
+          taskInput: 'official instruction',
+          metadata: {},
+          execute: failure.execute,
+        },
+      });
+
+      assert.equal(result.status, 'infra_failed');
+      assert.equal(result.failureReason, `Maka subject failed during ${failure.stage}`);
+      assert.equal(result.artifacts[0]?.kind, 'subject-failure');
+      assert.equal(result.artifacts[0]?.stage, failure.stage);
+      assert.doesNotMatch(JSON.stringify(result), /sensitive relay detail|different-execution/u);
+    });
+  }
+});
+
 function subjectCell(
   kind: 'maka' | 'external',
   config: ExperimentCell['subject']['config'],
@@ -159,6 +230,21 @@ function subjectCell(
     repetition: 1,
     budget: { maxSteps: 100 },
     verifier: {},
+  };
+}
+
+function makaConfig(): ExperimentCell['subject']['config'] {
+  return {
+    nodePath: '/opt/node/bin/node',
+    shimPath: '/opt/maka/harbor-maka-subject.js',
+    runtimeHostsPath: '/tmp/maka-runtime-hosts',
+    baseUrl: 'https://provider.test/v1',
+    connectionSlug: 'provider',
+    model: 'model',
+    thinkingLevel: 'high',
+    permissionMode: 'bypass',
+    collaborationMode: 'agent',
+    orchestrationMode: 'default',
   };
 }
 

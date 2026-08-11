@@ -44,7 +44,10 @@ test('preparation failure persists bounded redacted diagnostics on the attempt',
   await writeFile(
     executable,
     `#!/usr/bin/env node
+if (process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET) process.stderr.write('credential-leak\\n');
+if (process.env.MAKA_UNRELATED_SECRET) process.stderr.write('unrelated-env-leak\\n');
 await new Promise((resolve) => process.stderr.write('x'.repeat(4_450) + '${boundarySecret}' + 'x'.repeat(65_294), resolve));
+await new Promise((resolve) => process.stderr.write('\\nOPENAI_API_KEY=' + 'q'.repeat(20_000) + '\\n', resolve));
 await new Promise((resolve) => process.stderr.write('\\nAuthorization: Bearer test-bearer-secret\\nOPENAI_API_KEY=test-env-secret\\n', resolve));
 process.exitCode = 9;
 `,
@@ -53,9 +56,13 @@ process.exitCode = 9;
   const previousPython = process.env.MAKA_TEST_PYTHON;
   const previousTrials = process.env.MAKA_TEST_TRIALS;
   const previousSecret = process.env.MAKA_TEST_SECRET;
+  const previousOtherSecret = process.env.MAKA_OTHER_SECRET;
+  const previousUnrelatedSecret = process.env.MAKA_UNRELATED_SECRET;
   process.env.MAKA_TEST_PYTHON = executable;
   process.env.MAKA_TEST_TRIALS = root;
   process.env.MAKA_TEST_SECRET = boundarySecret;
+  process.env.MAKA_OTHER_SECRET = 'other-test-only-secret';
+  process.env.MAKA_UNRELATED_SECRET = 'unrelated-test-only-secret';
   try {
     const spec: ExperimentSpec = {
       schemaVersion: 'maka.eval.v1',
@@ -65,6 +72,7 @@ process.exitCode = 9;
       execution: { maxConcurrentTaskGroups: 1 },
       subjects: [
         { id: 'subject', kind: 'external', credentials: ['MAKA_TEST_SECRET'], config: {} },
+        { id: 'other', kind: 'external', credentials: ['MAKA_OTHER_SECRET'], config: {} },
       ],
       tasks: [{ id: 'task', input: 'solve', config: { harbor: { path: 'tasks/task' } } }],
       repetitions: 1,
@@ -88,7 +96,13 @@ process.exitCode = 9;
     };
     const store = new FileAttemptStore(join(root, 'attempts'));
 
-    await runExperiment({ spec, store, executor, subjects: [subject] });
+    await runExperiment({
+      spec,
+      store,
+      executor,
+      subjects: [subject],
+      cellIds: ['task::1::subject'],
+    });
 
     const attempt = (await store.list('task::1::subject'))[0]!;
     assert.equal(attempt.result.failureReason, 'executor preparation failed');
@@ -96,12 +110,21 @@ process.exitCode = 9;
     assert.equal(artifact.kind, 'executor-preparation');
     const diagnostic = JSON.parse(
       await readFile(join(root, String(artifact.trialName), String(artifact.path)), 'utf8'),
-    ) as { stderr: string; truncated: boolean; exitCode: number | null };
+    ) as {
+      stage: string;
+      errorCode: string | null;
+      stderr: string;
+      truncated: boolean;
+      exitCode: number | null;
+    };
+    assert.equal(diagnostic.stage, 'exit-before-ready');
+    assert.equal(diagnostic.errorCode, null);
     assert.equal(diagnostic.exitCode, 9);
     assert.equal(diagnostic.truncated, true);
     assert.ok(Buffer.byteLength(diagnostic.stderr) <= 65_536);
     assert.doesNotMatch(diagnostic.stderr, /test-bearer-secret|test-env-secret/u);
     assert.doesNotMatch(diagnostic.stderr, /s{32}/u);
+    assert.doesNotMatch(diagnostic.stderr, /q{32}|credential-leak|unrelated-env-leak/u);
   } finally {
     if (previousPython === undefined) delete process.env.MAKA_TEST_PYTHON;
     else process.env.MAKA_TEST_PYTHON = previousPython;
@@ -109,6 +132,10 @@ process.exitCode = 9;
     else process.env.MAKA_TEST_TRIALS = previousTrials;
     if (previousSecret === undefined) delete process.env.MAKA_TEST_SECRET;
     else process.env.MAKA_TEST_SECRET = previousSecret;
+    if (previousOtherSecret === undefined) delete process.env.MAKA_OTHER_SECRET;
+    else process.env.MAKA_OTHER_SECRET = previousOtherSecret;
+    if (previousUnrelatedSecret === undefined) delete process.env.MAKA_UNRELATED_SECRET;
+    else process.env.MAKA_UNRELATED_SECRET = previousUnrelatedSecret;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -169,6 +196,7 @@ await writeFile(trial + '/result.json', JSON.stringify({ exception_info: { excep
             budget: { timeoutMultiplier: 1 },
             verifier: { reward: 'reward' },
           },
+          subjectCredentialNames: [],
         },
         async ({ context, verify }) => {
           const execution = await context.execute({
@@ -206,3 +234,91 @@ await writeFile(trial + '/result.json', JSON.stringify({ exception_info: { excep
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('Harbor abort outcome is recorded without replacing the primary subject failure', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-cleanup-evidence-'));
+  const executable = join(root, 'fake-python.mjs');
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+import { connect } from 'node:net';
+import { readFile } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
+const config = JSON.parse(await readFile(process.argv.at(-1), 'utf8'));
+const socket = connect(config.agent.kwargs.relay_port, config.agent.kwargs.relay_host);
+socket.setEncoding('utf8');
+await new Promise((resolve, reject) => { socket.once('connect', resolve); socket.once('error', reject); });
+const lines = createInterface({ input: socket, crlfDelay: Infinity })[Symbol.asyncIterator]();
+const next = async () => JSON.parse((await lines.next()).value);
+socket.write(JSON.stringify({ token: config.agent.kwargs.relay_token, kind: 'ready', instruction: 'solve' }) + '\\n');
+await next();
+socket.write(JSON.stringify({ token: config.agent.kwargs.relay_token, kind: 'executed', termination: 'exited', exitCode: 0, stdout: '' }) + '\\n');
+const cleanup = await next();
+if (cleanup.kind !== 'abort') process.exitCode = 2;
+socket.end();
+`,
+  );
+  await chmod(executable, 0o755);
+  const previousPython = process.env.MAKA_TEST_PYTHON;
+  const previousTrials = process.env.MAKA_TEST_TRIALS;
+  process.env.MAKA_TEST_PYTHON = executable;
+  process.env.MAKA_TEST_TRIALS = root;
+  try {
+    const executor = createHarborExecutor(
+      {
+        frameworkVersion: '0.20.0',
+        pythonPathEnv: 'MAKA_TEST_PYTHON',
+        trialsRootEnv: 'MAKA_TEST_TRIALS',
+        containerCwd: '/app',
+        environment: {},
+        mounts: [],
+      },
+      join(root, 'spec.json'),
+    );
+    const result = await executor.runAttempt(
+      {
+        cell: harnessCell(),
+        subjectCredentialNames: [],
+      },
+      async ({ context }) => {
+        await context.execute({ command: '/opt/subject', args: [], credentialNames: [] });
+        return {
+          score: null,
+          usage: null,
+          costUsd: null,
+          durationMs: 1,
+          status: 'infra_failed',
+          failureReason: 'Maka subject failed during empty-output',
+          artifacts: [{ kind: 'subject-failure', stage: 'empty-output' }],
+        };
+      },
+    );
+
+    assert.equal(result.kind, 'settled');
+    assert.equal(result.value.failureReason, 'Maka subject failed during empty-output');
+    assert.deepEqual(result.value.artifacts, [
+      { kind: 'subject-failure', stage: 'empty-output' },
+      { kind: 'executor-cleanup', action: 'abort', outcome: 'completed' },
+    ]);
+  } finally {
+    if (previousPython === undefined) delete process.env.MAKA_TEST_PYTHON;
+    else process.env.MAKA_TEST_PYTHON = previousPython;
+    if (previousTrials === undefined) delete process.env.MAKA_TEST_TRIALS;
+    else process.env.MAKA_TEST_TRIALS = previousTrials;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function harnessCell() {
+  return {
+    id: 'task::1::subject',
+    experimentId: 'experiment',
+    benchmark: { id: 'benchmark', version: 'version', config: { repository: 'repo' } },
+    executor: { kind: 'harbor', config: {} },
+    subject: { id: 'subject', kind: 'external' as const, credentials: [], config: {} },
+    task: { id: 'task', input: 'solve', config: { harbor: { path: 'task' } } },
+    repetition: 1,
+    budget: { timeoutMultiplier: 1 },
+    verifier: { reward: 'reward' },
+  };
+}

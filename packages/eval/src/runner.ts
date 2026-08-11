@@ -58,7 +58,11 @@ export interface ExecutorVerification {
 export interface ExperimentExecutor {
   readonly kind: string;
   runAttempt(
-    input: { readonly cell: ExperimentCell; readonly signal?: AbortSignal },
+    input: {
+      readonly cell: ExperimentCell;
+      readonly subjectCredentialNames: readonly string[];
+      readonly signal?: AbortSignal;
+    },
     operation: (attempt: {
       readonly context: SubjectExecutionContext;
       verify(): Promise<ExecutorVerification>;
@@ -98,6 +102,9 @@ export async function runExperiment(input: {
     const cells = expandExperiment(input.spec);
     const selected = selectCells(cells, input.cellIds);
     const subjects = new Map(input.subjects.map((subject) => [subject.kind, subject]));
+    const subjectCredentialNames = [
+      ...new Set(input.spec.subjects.flatMap((subject) => subject.credentials)),
+    ];
     if (input.executor.kind !== input.spec.executor.kind) throw new Error('executor kind mismatch');
 
     for (const cell of selected) {
@@ -121,6 +128,7 @@ export async function runExperiment(input: {
               input.executor,
               subjects.get(cell.subject.kind)!,
               cell,
+              subjectCredentialNames,
               input.signal,
             );
             await input.store.append({
@@ -193,11 +201,12 @@ async function executeCell(
   executor: ExperimentExecutor,
   subject: SubjectAdapter,
   cell: ExperimentCell,
+  subjectCredentialNames: readonly string[],
   signal?: AbortSignal,
 ): Promise<EvalResult> {
   try {
     const attempt = await executor.runAttempt(
-      { cell, ...(signal ? { signal } : {}) },
+      { cell, subjectCredentialNames, ...(signal ? { signal } : {}) },
       async ({ context, verify }) => {
         let execution: SubjectExecutionResult;
         try {
@@ -243,7 +252,7 @@ async function executeCell(
       ...partial,
       score: null,
       status: 'indeterminate',
-      failureReason: 'executor cleanup did not settle',
+      failureReason: partial.failureReason ?? 'executor cleanup did not settle',
     };
   } catch (error) {
     return failure(

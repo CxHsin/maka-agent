@@ -32,6 +32,7 @@ await executor
         budget: { timeoutMultiplier: 1 },
         verifier: {},
       },
+      subjectCredentialNames: [],
     },
     async () => {
       throw new Error('operation must not run');

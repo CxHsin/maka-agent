@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { HostedExecutionStartInput } from '@maka/runtime-host/protocol';
 import { decodeHostedExecutionProjection } from '@maka/runtime-host/protocol';
 import type { JsonObject } from './experiment.js';
-import type { SubjectAdapter } from './runner.js';
+import type { SubjectAdapter, SubjectExecutionContext } from './runner.js';
 
 export function createMakaSubjectAdapter(): SubjectAdapter {
   return {
@@ -36,75 +36,119 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
         }),
       ).toString('base64url');
       const startedAt = Date.now();
+      let process: Awaited<ReturnType<typeof context.execute>>;
       try {
-        const process = await context.execute({
+        process = await context.execute({
           command: config.nodePath,
           args: [config.shimPath, payload],
           credentialNames: cell.subject.credentials,
         });
-        const projection = decodeHostedExecutionProjection(JSON.parse(process.stdout));
-        if (projection.executionId !== executionId) {
-          throw new Error('Runtime Host returned a different execution identity');
-        }
-        if (projection.kind === 'indeterminate') {
-          return {
-            usage: null,
-            costUsd: null,
-            durationMs: Date.now() - startedAt,
-            status: 'indeterminate' as const,
-            failureReason: projection.failureReason,
-            artifacts: [],
-          };
-        }
-        if (process.termination === 'cancelled') {
-          return {
-            usage: projection.usage,
-            costUsd: projection.costUsd,
-            durationMs: Date.now() - startedAt,
-            status: 'indeterminate' as const,
-            failureReason: 'Maka subject cancelled',
-            artifacts: [],
-          };
-        }
-        if (process.termination === 'framework_timeout') {
-          return {
-            usage: projection.usage,
-            costUsd: projection.costUsd,
-            durationMs: Date.now() - startedAt,
-            status: 'failed' as const,
-            failureReason: 'Maka subject exceeded the framework timeout',
-            artifacts: [],
-          };
-        }
-        if (process.exitCode !== 0) {
-          return {
-            usage: projection.usage,
-            costUsd: projection.costUsd,
-            durationMs: Date.now() - startedAt,
-            status: 'indeterminate' as const,
-            failureReason: 'Maka execution shim did not settle cleanly',
-            artifacts: [],
-          };
-        }
-        return {
-          usage: projection.usage,
-          costUsd: projection.costUsd,
-          durationMs: Date.now() - startedAt,
-          status: projection.status === 'completed' ? ('completed' as const) : ('failed' as const),
-          failureReason: projection.failureReason ?? null,
-          artifacts: [],
-        };
       } catch {
+        return subjectFailure('relay-execute', startedAt, context.signal);
+      }
+      if (process.stdout.length === 0) {
+        return subjectFailure('empty-output', startedAt, context.signal, process);
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(process.stdout) as unknown;
+      } catch {
+        return subjectFailure('json-parse', startedAt, context.signal, process);
+      }
+      let projection: ReturnType<typeof decodeHostedExecutionProjection>;
+      try {
+        projection = decodeHostedExecutionProjection(parsed);
+      } catch {
+        return subjectFailure('result-decode', startedAt, context.signal, process);
+      }
+      if (projection.executionId !== executionId) {
+        return subjectFailure('identity-check', startedAt, context.signal, process);
+      }
+      if (projection.kind === 'indeterminate') {
         return {
           usage: null,
           costUsd: null,
           durationMs: Date.now() - startedAt,
-          status: context.signal?.aborted ? ('indeterminate' as const) : ('infra_failed' as const),
-          failureReason: context.signal?.aborted ? 'Maka subject cancelled' : 'Maka subject failed',
+          status: 'indeterminate' as const,
+          failureReason: projection.failureReason,
           artifacts: [],
         };
       }
+      if (process.termination === 'cancelled') {
+        return {
+          usage: projection.usage,
+          costUsd: projection.costUsd,
+          durationMs: Date.now() - startedAt,
+          status: 'indeterminate' as const,
+          failureReason: 'Maka subject cancelled',
+          artifacts: [],
+        };
+      }
+      if (process.termination === 'framework_timeout') {
+        return {
+          usage: projection.usage,
+          costUsd: projection.costUsd,
+          durationMs: Date.now() - startedAt,
+          status: 'failed' as const,
+          failureReason: 'Maka subject exceeded the framework timeout',
+          artifacts: [],
+        };
+      }
+      if (process.exitCode !== 0) {
+        return {
+          usage: projection.usage,
+          costUsd: projection.costUsd,
+          durationMs: Date.now() - startedAt,
+          status: 'indeterminate' as const,
+          failureReason: 'Maka execution shim did not settle cleanly',
+          artifacts: [],
+        };
+      }
+      return {
+        usage: projection.usage,
+        costUsd: projection.costUsd,
+        durationMs: Date.now() - startedAt,
+        status: projection.status === 'completed' ? ('completed' as const) : ('failed' as const),
+        failureReason: projection.failureReason ?? null,
+        artifacts: [],
+      };
     },
+  };
+}
+
+type SubjectFailureStage =
+  | 'relay-execute'
+  | 'empty-output'
+  | 'json-parse'
+  | 'result-decode'
+  | 'identity-check';
+
+function subjectFailure(
+  stage: SubjectFailureStage,
+  startedAt: number,
+  signal?: AbortSignal,
+  process?: Awaited<ReturnType<SubjectExecutionContext['execute']>>,
+) {
+  const cancelled = signal?.aborted === true;
+  return {
+    usage: null,
+    costUsd: null,
+    durationMs: Date.now() - startedAt,
+    status: cancelled ? ('indeterminate' as const) : ('infra_failed' as const),
+    failureReason: cancelled ? 'Maka subject cancelled' : `Maka subject failed during ${stage}`,
+    artifacts: [
+      {
+        kind: 'subject-failure',
+        stage,
+        ...(process
+          ? {
+              termination: process.termination,
+              exitCode: process.exitCode,
+              stdoutBytes: Buffer.byteLength(process.stdout),
+            }
+          : {}),
+      },
+    ],
   };
 }
 

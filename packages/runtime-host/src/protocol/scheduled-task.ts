@@ -35,7 +35,7 @@ import {
 import { invalidProtocolFrame } from './errors.js';
 import { defineOperation } from './operation-spec.js';
 
-export const SCHEDULED_TASK_PAGE_MAX_ITEMS = 2;
+export const SCHEDULED_TASK_PAGE_MAX_ITEMS = 64;
 export const SCHEDULED_TASK_CATALOG_MAX_ITEMS = 256;
 export const SCHEDULED_TASK_RESULT_MAX_BYTES = 88 * 1024;
 

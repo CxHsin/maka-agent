@@ -30,6 +30,7 @@ import type { RuntimePolicyStoresWriter } from '@maka/storage/runtime-policy-sto
 import {
   SCHEDULED_TASK_CATALOG_MAX_ITEMS,
   SCHEDULED_TASK_PAGE_MAX_ITEMS,
+  SCHEDULED_TASK_RESULT_MAX_BYTES,
   type OperationOutcome,
   type ScheduledTaskChangedReason,
   type ScheduledTaskMutateInput,
@@ -270,18 +271,17 @@ export class HostScheduledTaskCoordinator implements ScheduledTaskToolAuthority 
           } as const;
         }
         const offset = input.cursor === undefined ? 0 : Number(input.cursor);
-        if (!Number.isSafeInteger(offset) || offset < 0 || offset > tasks.length) {
+        if (
+          !Number.isSafeInteger(offset) ||
+          offset < 0 ||
+          offset > tasks.length ||
+          (input.cursor !== undefined && offset === tasks.length)
+        ) {
           return queryFailure('invalid_request', 'ScheduledTask cursor is invalid');
         }
-        const page = tasks.slice(offset, offset + SCHEDULED_TASK_PAGE_MAX_ITEMS);
         return {
           ok: true,
-          result: {
-            kind: 'page',
-            revision: this.#revision,
-            tasks: page,
-            nextCursor: offset + page.length < tasks.length ? String(offset + page.length) : null,
-          },
+          result: createScheduledTaskPage(tasks, this.#revision, offset),
         } as const;
       });
     } catch {
@@ -697,6 +697,41 @@ function executionTemplateFromHeader(header: SessionHeader): ScheduledTaskExecut
     permissionMode: header.permissionMode,
     collaborationMode: header.collaborationMode ?? 'agent',
     orchestrationMode: header.orchestrationMode ?? 'default',
+  };
+}
+
+function createScheduledTaskPage(
+  tasks: readonly ScheduledTask[],
+  revision: number,
+  offset: number,
+) {
+  const page: ScheduledTask[] = [];
+  for (let index = offset; index < tasks.length; index += 1) {
+    if (page.length >= SCHEDULED_TASK_PAGE_MAX_ITEMS) break;
+    const task = tasks[index];
+    if (!task) throw new Error('ScheduledTask page index is invalid');
+    const candidate = [...page, task];
+    const nextOffset = offset + candidate.length;
+    const result = {
+      kind: 'page' as const,
+      revision,
+      tasks: candidate,
+      nextCursor: nextOffset < tasks.length ? String(nextOffset) : null,
+    };
+    if (Buffer.byteLength(JSON.stringify(result), 'utf8') > SCHEDULED_TASK_RESULT_MAX_BYTES) {
+      break;
+    }
+    page.push(task);
+  }
+  if (page.length === 0 && offset < tasks.length) {
+    throw new Error('A ScheduledTask exceeds the query byte limit');
+  }
+  const nextOffset = offset + page.length;
+  return {
+    kind: 'page' as const,
+    revision,
+    tasks: page,
+    nextCursor: nextOffset < tasks.length ? String(nextOffset) : null,
   };
 }
 

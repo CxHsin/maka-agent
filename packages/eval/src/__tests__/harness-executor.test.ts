@@ -66,7 +66,7 @@ test('preparation failure persists only safe structured facts on the attempt', a
     executable,
     `#!/usr/bin/env node
 process.stderr.write('argv: /private/subject --token=test-only-sensitive-value\\nError: raw diagnostic\\n');
-process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET || process.env.MAKA_UNRELATED_SECRET ? 8 : 9;
+process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET || process.env.MAKA_UNRELATED_SECRET ? 8 : process.env.MAKA_TEST_CONTROL === 'declared-control-plane' ? 9 : 7;
 `,
   );
   await chmod(executable, 0o755);
@@ -75,11 +75,13 @@ process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET
   const previousSecret = process.env.MAKA_TEST_SECRET;
   const previousOtherSecret = process.env.MAKA_OTHER_SECRET;
   const previousUnrelatedSecret = process.env.MAKA_UNRELATED_SECRET;
+  const previousControl = process.env.MAKA_TEST_CONTROL;
   process.env.MAKA_TEST_PYTHON = executable;
   process.env.MAKA_TEST_TRIALS = root;
   process.env.MAKA_TEST_SECRET = 'test-only-sensitive-value';
   process.env.MAKA_OTHER_SECRET = 'other-test-only-secret';
   process.env.MAKA_UNRELATED_SECRET = 'unrelated-test-only-secret';
+  process.env.MAKA_TEST_CONTROL = 'declared-control-plane';
   try {
     const spec: ExperimentSpec = {
       schemaVersion: 'maka.eval.v1',
@@ -96,7 +98,7 @@ process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET
       budget: { timeoutMultiplier: 1 },
       verifier: { reward: 'reward' },
     };
-    const executor = testExecutor(root);
+    const executor = testExecutor(root, ['MAKA_TEST_CONTROL', 'MAKA_TEST_SECRET']);
     const subject: SubjectAdapter = {
       kind: 'external',
       execute: async () => assert.fail('subject must not run'),
@@ -150,6 +152,8 @@ process.exitCode = process.env.MAKA_TEST_SECRET || process.env.MAKA_OTHER_SECRET
     else process.env.MAKA_OTHER_SECRET = previousOtherSecret;
     if (previousUnrelatedSecret === undefined) delete process.env.MAKA_UNRELATED_SECRET;
     else process.env.MAKA_UNRELATED_SECRET = previousUnrelatedSecret;
+    if (previousControl === undefined) delete process.env.MAKA_TEST_CONTROL;
+    else process.env.MAKA_TEST_CONTROL = previousControl;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -317,7 +321,7 @@ function harnessCell(credentials: readonly string[] = [], revision = TEST_REVISI
   };
 }
 
-function testExecutor(root: string) {
+function testExecutor(root: string, preparationEnvironment: readonly string[] = []) {
   return createHarborExecutor(
     {
       frameworkVersion: '0.20.0',
@@ -325,6 +329,7 @@ function testExecutor(root: string) {
       trialsRootEnv: 'MAKA_TEST_TRIALS',
       containerCwd: '/app',
       environment: {},
+      preparationEnvironment,
       mounts: [],
     },
     join(root, 'spec.json'),

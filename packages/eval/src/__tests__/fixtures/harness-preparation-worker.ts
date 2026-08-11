@@ -13,6 +13,7 @@ const executor = createHarborExecutor(
     trialsRootEnv: 'MAKA_TEST_TRIALS',
     containerCwd: '/app',
     environment: {},
+    preparationEnvironment: [],
     mounts: [],
   },
   import.meta.url,

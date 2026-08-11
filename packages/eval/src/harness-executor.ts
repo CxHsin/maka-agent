@@ -223,10 +223,12 @@ async function startTrial(
   const timeoutMultiplier = positive(cell.budget.timeoutMultiplier, 'budget.timeoutMultiplier');
   const environmentConfig = { ...options.environment, mounts: resolveMounts(options.mounts) };
   const relayPath = resolve(dirname(fileURLToPath(import.meta.url)), '../harbor');
-  const environment = preparationEnvironment(framework, relayPath, [
-    ...subjectCredentialNames,
-    ...cell.subject.credentials,
-  ]);
+  const environment = preparationEnvironment(
+    framework,
+    relayPath,
+    [...subjectCredentialNames, ...cell.subject.credentials],
+    options.preparationEnvironment,
+  );
   const server = createServer();
   let child: ChildProcess | undefined;
   let connectedSocket: Socket | undefined;
@@ -327,8 +329,9 @@ function preparationEnvironment(
   framework: Framework,
   relayPath: string,
   subjectCredentialNames: readonly string[],
+  declared: readonly string[],
 ): NodeJS.ProcessEnv {
-  const allowed = [
+  const allowed = new Set([
     'HOME',
     'PATH',
     'TMPDIR',
@@ -341,11 +344,12 @@ function preparationEnvironment(
     'REQUESTS_CA_BUNDLE',
     'CURL_CA_BUNDLE',
     'XDG_CACHE_HOME',
-  ];
+    ...declared,
+  ]);
   const credentials = new Set(subjectCredentialNames);
   return {
     ...Object.fromEntries(
-      allowed.flatMap((name) => {
+      [...allowed].flatMap((name) => {
         const value = process.env[name];
         return value === undefined || credentials.has(name) ? [] : [[name, value]];
       }),
@@ -397,6 +401,7 @@ interface HarnessOptions {
   readonly tasksRootEnv?: string;
   readonly containerCwd: string;
   readonly environment: JsonObject;
+  readonly preparationEnvironment: readonly string[];
   readonly mounts: readonly {
     readonly sourceEnv: string;
     readonly target: string;
@@ -414,13 +419,26 @@ function decodeOptions(value: JsonObject, framework: Framework): HarnessOptions 
     'mounts',
   ];
   if (framework === 'pier') fields.push('tasksRootEnv');
-  const options = exact(value, fields, 'executor.config');
+  const options = exact(value, fields, 'executor.config', ['preparationEnvironment']);
+  const preparationEnvironment =
+    options.preparationEnvironment === undefined
+      ? []
+      : array(options.preparationEnvironment, 'preparationEnvironment').map((name, index) =>
+          machinePathEnv(name, `preparationEnvironment[${index}]`),
+        );
+  if (new Set(preparationEnvironment).size !== preparationEnvironment.length) {
+    throw new Error('preparationEnvironment must contain unique names');
+  }
+  if (preparationEnvironment.some((name) => ['MAKA_EVAL_FRAMEWORK', 'PYTHONPATH'].includes(name))) {
+    throw new Error('preparationEnvironment contains a reserved name');
+  }
   const decoded: HarnessOptions = {
     frameworkVersion: text(options.frameworkVersion, 'frameworkVersion'),
     pythonPathEnv: machinePathEnv(options.pythonPathEnv, 'pythonPathEnv'),
     trialsRootEnv: machinePathEnv(options.trialsRootEnv, 'trialsRootEnv'),
     containerCwd: absolute(options.containerCwd, 'containerCwd'),
     environment: decodeJsonObject(options.environment, 'environment'),
+    preparationEnvironment,
     mounts: array(options.mounts, 'mounts').map((mount, index) => decodeMount(mount, index)),
     ...(framework === 'pier'
       ? { tasksRootEnv: machinePathEnv(options.tasksRootEnv, 'tasksRootEnv') }
@@ -538,13 +556,18 @@ async function within<T>(operation: Promise<T>, timeoutMs: number): Promise<T | 
   }
 }
 
-function exact(value: unknown, fields: readonly string[], where: string): Record<string, unknown> {
+function exact(
+  value: unknown,
+  fields: readonly string[],
+  where: string,
+  optional: readonly string[] = [],
+): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error(`${where} must be an object`);
   const record = value as Record<string, unknown>;
   if (
-    Object.keys(record).length !== fields.length ||
-    fields.some((field) => !Object.hasOwn(record, field))
+    fields.some((field) => !Object.hasOwn(record, field)) ||
+    Object.keys(record).some((field) => !fields.includes(field) && !optional.includes(field))
   ) {
     throw new Error(`${where} fields are invalid`);
   }

@@ -65,7 +65,7 @@ def ready_task(cache_dir: Path, identity: str) -> tuple[Path, Path | None]:
         ):
             return namespace, None
         return namespace, target
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+    except (OSError, TypeError, ValueError):
         return namespace, None
 
 

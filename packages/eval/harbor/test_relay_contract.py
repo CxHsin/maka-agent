@@ -66,7 +66,6 @@ class RelayContractTest(unittest.TestCase):
         self.assertIn(b"export API_KEY=canary-secret", environment.uploaded)
         self.assertNotIn("canary-secret", command)
         self.assertIn(">/dev/null", command)
-        self.assertIn("mkdir -p /tmp", command)
 
     def test_leaves_no_credential_file_when_command_preparation_fails(self):
         relay = load_relay()

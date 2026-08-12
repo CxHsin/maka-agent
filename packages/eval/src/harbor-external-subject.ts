@@ -103,6 +103,7 @@ try {
       usageRequests: proxy.usageRequestCount(),
     });
     artifacts.push(
+      { kind: 'external-process', profile, exitCode: result.exitCode },
       fileArtifact('trajectory', trajectoryPath, profile, result.trajectory),
       fileArtifact('stderr', stderrPath, profile, result.stderr),
       {
@@ -487,7 +488,7 @@ function classifyExecution(
   if (admittedRequests === 0) {
     return { status: 'infra_failed', failureReason: `${selected} failed before model admission` };
   }
-  if (exitCode === 0 && completed && !reportedError) {
+  if (completed && !reportedError) {
     return { status: 'completed', failureReason: null };
   }
   return { status: 'failed', failureReason: `${selected} execution failed` };

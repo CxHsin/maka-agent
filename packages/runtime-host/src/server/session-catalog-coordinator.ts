@@ -27,7 +27,7 @@ import {
   SessionConfigurationRevisionConflictError,
   SessionConfigurationTransitionError,
   type SessionManager,
-} from '@maka/runtime';
+} from '@maka/runtime/session-manager';
 import {
   decodeSessionCatalogProjection,
   SESSION_CATALOG_LABEL_MAX_BYTES,
@@ -156,6 +156,11 @@ export class HostSessionCatalogCoordinator {
       collaborationMode: 'agent',
       orchestrationMode: 'default',
     };
+  }
+
+  async createForHost(input: SessionCreateInput): Promise<void> {
+    const outcome = await this.#create(input);
+    if (!outcome.ok) throw new Error(outcome.error.message);
   }
 
   async #query(

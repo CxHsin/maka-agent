@@ -9,20 +9,15 @@ import {
   type Dispatch,
   type SetStateAction,
 } from 'react';
-import type {
-  ScheduledTask,
-  QuoteRef,
-  SessionSummary,
-  SlashCommandIdForSurface,
-  UiLocale,
-  UiLocalePreference,
-} from '@maka/core';
-import {
-  collapseSessionRevisions,
-  isLinkedSubagentSession,
-  resolveUiLocale,
-  slashCommandsForSurface,
-} from '@maka/core';
+import type { ScheduledTask } from '@maka/core/scheduled-task';
+import type { QuoteRef } from '@maka/core/events';
+import type { SessionSummary } from '@maka/core/session';
+import type { SlashCommandIdForSurface } from '@maka/core/slash-command-catalog';
+import type { UiLocale, UiLocalePreference } from '@maka/core/ui-locale';
+import { collapseSessionRevisions } from '@maka/core/session-revisions';
+import { isLinkedSubagentSession } from '@maka/core/session';
+import { resolveUiLocale } from '@maka/core/ui-locale';
+import { slashCommandsForSurface } from '@maka/core/slash-command-catalog';
 import { hasSettledInitialOnboarding } from '@maka/core/onboarding-milestone';
 import {
   ScheduledTasksPage,
@@ -249,6 +244,7 @@ export function AppShell({ initialOnboardingSnapshot = null }: AppShellProps = {
             title: input.title,
             ...(input.description ? { description: input.description } : {}),
             ...(input.diagnosticDetails ? { details: input.diagnosticDetails } : {}),
+            ...(input.diagnosticTarget ? { execution: input.diagnosticTarget } : {}),
             rendererUserAgent: navigator.userAgent,
             rendererLocale: navigator.language,
           })

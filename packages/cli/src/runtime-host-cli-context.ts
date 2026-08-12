@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { NO_REAL_CONNECTION_CODE } from '@maka/core';
+import { NO_REAL_CONNECTION_CODE } from '@maka/core/connection-error-copy';
 import type { ConnectionCatalogEntry, ConnectionCatalogSnapshot } from '@maka/core/runtime-policy';
 import {
   connectOrSpawnRuntimeHost,
@@ -47,7 +47,6 @@ export async function connectRuntimeHostCli(
   input: {
     readonly rootPath: string;
     readonly surface: ClientSurface;
-    readonly legacyConfigurationRoot?: string;
   },
   overrides: Partial<RuntimeHostCliContextDeps> = {},
 ): Promise<RuntimeHostCliConnectionContext> {
@@ -67,9 +66,6 @@ export async function connectRuntimeHostCli(
     clientInstanceId,
     compositionId: INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
     candidateEntrypoint: deps.executionCandidateEntrypoint,
-    ...(input.legacyConfigurationRoot
-      ? { legacyConfigurationRoot: input.legacyConfigurationRoot }
-      : {}),
   } as const;
   const connect = async (signal?: AbortSignal): Promise<RuntimeHostConnection> => {
     const connected = await deps.connectOrSpawn({ ...connectInput, ...(signal ? { signal } : {}) });

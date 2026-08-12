@@ -1,12 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  buildComputerUseTools,
-  type ComputerUseToolSet,
-  type CuDispatchBackend,
-  type MakaTool,
-  type MakaToolContext,
-} from '@maka/runtime';
+import { buildComputerUseTools, type ComputerUseToolSet } from '@maka/runtime/computer-use-tools';
+import { type CuDispatchBackend } from '@maka/runtime/computer-use-types';
+import { type MakaTool, type MakaToolContext } from '@maka/runtime/tool-runtime';
 import type { ClientCapabilityProvider } from '@maka/runtime-host/client';
 import {
   decodeClientCapabilityReplaceInput,
@@ -125,7 +121,7 @@ test('publishes every production Desktop-owned tool schema through the protocol'
   );
 });
 
-test('publishes and admits additional Desktop authority services', async () => {
+test('publishes and admits additional Desktop native-effect services', async () => {
   let admitted = false;
   const provider = createDesktopNativeCapabilityProvider({
     browserTools: [],
@@ -134,7 +130,7 @@ test('publishes and admits additional Desktop authority services', async () => {
     releaseComputerUseSession() {},
     additionalServices: () => [
       {
-        serviceId: 'maka_scheduled_task_authority',
+        serviceId: 'maka_scheduled_task_native_effect',
         version: '1',
         async call(method, input) {
           return { method, id: input.id };
@@ -143,7 +139,7 @@ test('publishes and admits additional Desktop authority services', async () => {
     ],
   });
   assert.deepEqual(provider.services?.(), [
-    { serviceId: 'maka_scheduled_task_authority', version: '1' },
+    { serviceId: 'maka_scheduled_task_native_effect', version: '1' },
   ]);
   assert.ok(provider.callService);
   const result = await provider.callService(serviceFrame(), {
@@ -153,7 +149,7 @@ test('publishes and admits additional Desktop authority services', async () => {
     },
   });
   assert.equal(admitted, true);
-  assert.deepEqual(result, { method: 'pause', id: 'task-1' });
+  assert.deepEqual(result, { method: 'notify_local', id: 'task-1' });
 });
 
 test('validates before admission and invokes the exact offered tool with Host context', async () => {
@@ -498,9 +494,9 @@ function serviceFrame(): ClientCapabilityServiceCallFrame {
     kind: 'client.capability.service_call',
     invocationId: 'invocation-service-1',
     registrationId: 'registration-1',
-    serviceId: 'maka_scheduled_task_authority',
+    serviceId: 'maka_scheduled_task_native_effect',
     version: '1',
-    method: 'pause',
+    method: 'notify_local',
     input: { id: 'task-1' },
   };
 }

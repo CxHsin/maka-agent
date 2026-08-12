@@ -54,6 +54,7 @@ import {
   type RequestFrame,
   type ResponseFrame,
   type SessionCatalogChangedFrame,
+  type ScheduledTaskChangedFrame,
   type SubscriptionFrame,
   type SubscriptionOpenInput,
   type SessionWorkspaceRelocateInput,
@@ -267,6 +268,7 @@ export interface RuntimeHostConnection {
   subscribeConfigurationChanges(listener: (revision: number) => void): () => void;
   subscribeProjectCatalogChanges(listener: (revision: number) => void): () => void;
   subscribeSessionCatalogChanges(listener: (frame: SessionCatalogChangedFrame) => void): () => void;
+  subscribeScheduledTaskChanges(listener: (frame: ScheduledTaskChangedFrame) => void): () => void;
 }
 
 export type DirectRequestOperationKey = Exclude<
@@ -354,6 +356,7 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
   readonly #configurationChangeListeners = new Set<(revision: number) => void>();
   readonly #projectCatalogChangeListeners = new Set<(revision: number) => void>();
   readonly #sessionCatalogChangeListeners = new Set<(frame: SessionCatalogChangedFrame) => void>();
+  readonly #scheduledTaskChangeListeners = new Set<(frame: ScheduledTaskChangedFrame) => void>();
   #livenessTimer: NodeJS.Timeout | undefined;
   #livenessProbePending = false;
   #inFlightDomainRequests = 0;
@@ -693,6 +696,11 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
     return () => this.#sessionCatalogChangeListeners.delete(listener);
   }
 
+  subscribeScheduledTaskChanges(listener: (frame: ScheduledTaskChangedFrame) => void): () => void {
+    this.#scheduledTaskChangeListeners.add(listener);
+    return () => this.#scheduledTaskChangeListeners.delete(listener);
+  }
+
   async #readResponses(): Promise<void> {
     try {
       while (true) {
@@ -712,6 +720,9 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
               continue;
             case 'session.catalog.changed':
               this.#acceptSessionCatalogChanged(frame);
+              continue;
+            case 'scheduled-task.changed':
+              this.#acceptScheduledTaskChanged(frame);
               continue;
             case 'subscription.session_projection':
             case 'subscription.session_delta':
@@ -793,6 +804,16 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
 
   #acceptSessionCatalogChanged(frame: SessionCatalogChangedFrame): void {
     for (const listener of this.#sessionCatalogChangeListeners) {
+      try {
+        listener(frame);
+      } catch {
+        // A presentation listener cannot invalidate the Host connection.
+      }
+    }
+  }
+
+  #acceptScheduledTaskChanged(frame: ScheduledTaskChangedFrame): void {
+    for (const listener of this.#scheduledTaskChangeListeners) {
       try {
         listener(frame);
       } catch {
@@ -984,6 +1005,7 @@ class RuntimeHostConnectionImpl implements RuntimeHostConnection {
     this.#clientCapabilities.close(error);
     this.#configurationChangeListeners.clear();
     this.#sessionCatalogChangeListeners.clear();
+    this.#scheduledTaskChangeListeners.clear();
     this.#transport.abort();
   }
 }

@@ -43,7 +43,6 @@ export interface ConnectOrSpawnRuntimeHostInput {
   connectTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   candidateEntrypoint: string | URL;
-  legacyConfigurationRoot?: string;
   signal?: AbortSignal;
 }
 
@@ -198,9 +197,6 @@ export async function connectOrSpawnRuntimeHostWithDependencies(
           expectedRootId: capability.rootId,
           entrypoint: input.candidateEntrypoint,
           ...(input.generation === undefined ? {} : { generation: input.generation }),
-          ...(input.legacyConfigurationRoot === undefined
-            ? {}
-            : { legacyConfigurationRoot: input.legacyConfigurationRoot }),
         });
         await settleBeforeDeadline(launch.spawned, deadline, input.signal);
       } catch {

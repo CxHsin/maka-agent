@@ -50,6 +50,7 @@ import type { HostConfigurationChangeService } from './configuration-change-serv
 import type { HostProjectCatalogChangeService } from './project-catalog-change-service.js';
 import { runtimeHostLogBuffer } from '../process-diagnostics.js';
 import type { HostSessionCatalogChangeService } from './session-catalog-change-service.js';
+import type { HostScheduledTaskChangeService } from './scheduled-task-change-service.js';
 import {
   type HostCompositionDescriptor,
   type RuntimeHostCompositionSource,
@@ -102,6 +103,7 @@ export interface RuntimeHostComposition {
   readonly configurationChanges?: HostConfigurationChangeService;
   readonly projectCatalogChanges?: HostProjectCatalogChangeService;
   readonly sessionCatalogChanges?: HostSessionCatalogChangeService;
+  readonly scheduledTaskChanges?: HostScheduledTaskChangeService;
   releaseConnection?(connectionId: string): void;
   beginDrain(): void;
   recover(): Promise<void>;
@@ -351,6 +353,7 @@ export class RuntimeHostKernel {
         resolveConfigurationChanges: () => this.#composition?.configurationChanges,
         resolveProjectCatalogChanges: () => this.#composition?.projectCatalogChanges,
         resolveSessionCatalogChanges: () => this.#composition?.sessionCatalogChanges,
+        resolveScheduledTaskChanges: () => this.#composition?.scheduledTaskChanges,
         beginOperation: (request) => this.#beginOperation(request),
         onTeardown: releaseTransport,
       });

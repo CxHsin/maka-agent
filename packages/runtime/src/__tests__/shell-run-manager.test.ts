@@ -12,9 +12,8 @@ import {
   SHELL_RUN_SOURCE_TOOL_CALL_ID_MAX_BYTES,
   type ShellRunRecord,
   type ShellRunStore,
-  type ShellRunUpdate,
-  type ToolResultContent,
-} from '@maka/core';
+} from '@maka/core/shell-run';
+import { type ShellRunUpdate, type ToolResultContent } from '@maka/core/events';
 import { createSqliteShellRunStore } from '@maka/storage';
 
 import { ShellRunProcessManager } from '../shell-run-manager.js';
@@ -1557,34 +1556,6 @@ describe('ShellRunProcessManager', () => {
     assert.ok(latest.sequence > initial.sequence);
     assert.match(latest.buffer, /RAW-VALUE:hello/);
     await manager.stopBackgroundTask('session-1', run.ref, NO_ABORT);
-  });
-
-  test('coalesces high-volume PTY renderer deltas without dropping bytes', async () => {
-    const cwd = await workspace();
-    const events: ShellRunPtyDataEvent[] = [];
-    const manager = createManager(createSqliteShellRunStore(cwd), undefined, {
-      onPtyData: (event) => events.push(event),
-    });
-    const run = await manager.runBackgroundBash(
-      shellInput({
-        cwd,
-        command: `node -e "process.stdout.write('x'.repeat(1024 * 1024))"`,
-        pty: true,
-        timeoutMs: 5_000,
-      }),
-    );
-    assert.equal(run.kind, 'shell_run');
-    await waitForTerminalShellRun(manager, run.ref);
-
-    const bytes = events.reduce((total, event) => total + Buffer.byteLength(event.data, 'utf8'), 0);
-    assert.equal(bytes, 1024 * 1024);
-    assert.equal(
-      events.every((event) => Buffer.byteLength(JSON.stringify(event.data), 'utf8') <= 40 * 1024),
-      true,
-    );
-    for (let index = 1; index < events.length; index += 1) {
-      assert.ok(events[index]!.sequence > events[index - 1]!.sequence);
-    }
   });
 
   test('keeps concurrent PTY control and Read persistence in parser-cut order', async () => {

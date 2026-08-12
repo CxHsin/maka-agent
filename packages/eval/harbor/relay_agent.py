@@ -44,8 +44,8 @@ class RelayAgent(BaseAgent):
         control: asyncio.Task[bytes] | None = None
         request: dict[str, Any] | None = None
         scope_path = f"/tmp/maka-eval-{self._token}.pid"
-        output_path = f"/tmp/maka-eval-{self._token}.stdout"
-        stderr_path = f"/tmp/maka-eval-{self._token}.stderr"
+        output_path = f"/logs/agent/maka-eval-{self._token}.stdout"
+        stderr_path = f"/logs/agent/maka-eval-{self._token}.stderr"
         try:
             await _send(writer, {"token": self._token, "kind": "ready", "instruction": instruction})
             request = json.loads(await reader.readline())
@@ -162,8 +162,10 @@ async def _prepare_command(
     subject = shlex.join([request["command"], *request["args"]])
     output_target = output_path if capture_stdout else "/dev/null"
     initialize_output = f": > {shlex.quote(output_path)}; " if capture_stdout else ""
+    output_directory = str(Path(output_path).parent)
     inner = (
-        f"umask 077; {initialize_output}: > {shlex.quote(stderr_path)}; "
+        f"umask 077; command -p mkdir -p {shlex.quote(output_directory)}; "
+        f"{initialize_output}: > {shlex.quote(stderr_path)}; "
         f"echo $$ > {shlex.quote(scope_path)}; "
         f". {shlex.quote(container_path)}; command -p rm -f {shlex.quote(container_path)}; "
         f"exec {subject} >{shlex.quote(output_target)} 2>{shlex.quote(stderr_path)}"
@@ -184,6 +186,10 @@ async def _read_subject_output(
             return contents.decode("utf-8", errors="replace")
         except (FileNotFoundError, OSError):
             return ""
+        except RuntimeError as error:
+            if "Could not find the file" in str(error):
+                return ""
+            raise
 
 
 async def _settle(environment: Any, request: dict[str, Any], scope_path: str, execution: Any) -> Any:

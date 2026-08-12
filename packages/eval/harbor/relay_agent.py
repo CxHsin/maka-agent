@@ -43,11 +43,14 @@ class RelayAgent(BaseAgent):
         control: asyncio.Task[bytes] | None = None
         request: dict[str, Any] | None = None
         scope_path = f"/tmp/maka-eval-{self._token}.pid"
+        output_path = f"/tmp/maka-eval-{self._token}.stdout"
         try:
             await _send(writer, {"token": self._token, "kind": "ready", "instruction": instruction})
             request = json.loads(await reader.readline())
             _require_message(request, self._token, "execute")
-            command = await _prepare_command(environment, request, self._token, scope_path)
+            command = await _prepare_command(
+                environment, request, self._token, scope_path, output_path
+            )
             execution = asyncio.create_task(environment.exec(command, cwd=request["cwd"]))
             control = asyncio.create_task(reader.readline())
             done, _ = await asyncio.wait({execution, control}, return_when=asyncio.FIRST_COMPLETED)
@@ -55,6 +58,7 @@ class RelayAgent(BaseAgent):
             if cancelled:
                 _require_message(json.loads(control.result()), self._token, "cancel")
             result = await _settle(environment, request, scope_path, execution)
+            stdout = await _read_subject_output(environment, output_path)
             await _send(
                 writer,
                 {
@@ -62,7 +66,7 @@ class RelayAgent(BaseAgent):
                     "kind": "executed",
                     "termination": "cancelled" if cancelled else "exited",
                     "exitCode": 130 if cancelled else result.return_code,
-                    "stdout": result.stdout or "",
+                    "stdout": stdout,
                 },
             )
             decision = json.loads(await (reader.readline() if cancelled else control))
@@ -71,6 +75,7 @@ class RelayAgent(BaseAgent):
         except asyncio.CancelledError:
             if request is not None and execution is not None:
                 result = await _settle(environment, request, scope_path, execution)
+                stdout = await _read_subject_output(environment, output_path)
                 with contextlib.suppress(BaseException):
                     await _send(
                         writer,
@@ -79,7 +84,7 @@ class RelayAgent(BaseAgent):
                             "kind": "executed",
                             "termination": "framework_timeout",
                             "exitCode": 124,
-                            "stdout": result.stdout or "",
+                            "stdout": stdout,
                         },
                     )
             raise
@@ -92,12 +97,23 @@ class RelayAgent(BaseAgent):
                 control.cancel()
                 with contextlib.suppress(BaseException):
                     await control
+            if request is not None:
+                with contextlib.suppress(BaseException):
+                    await environment.exec(
+                        f"rm -f -- {shlex.quote(scope_path)} {shlex.quote(output_path)}",
+                        cwd=request["cwd"],
+                        timeout_sec=10,
+                    )
             writer.close()
             await writer.wait_closed()
 
 
 async def _prepare_command(
-    environment: Any, request: dict[str, Any], token: str, scope_path: str
+    environment: Any,
+    request: dict[str, Any],
+    token: str,
+    scope_path: str,
+    output_path: str,
 ) -> str:
     credentials = request.get("credentials")
     if not isinstance(credentials, dict) or not all(
@@ -117,8 +133,23 @@ async def _prepare_command(
     finally:
         secret_path.unlink(missing_ok=True)
     subject = shlex.join([request["command"], *request["args"]])
-    inner = f"echo $$ > {shlex.quote(scope_path)}; . {shlex.quote(container_path)}; rm -f {shlex.quote(container_path)}; exec {subject}"
-    return f"setsid sh -c {shlex.quote(inner)}"
+    inner = (
+        f"umask 077; : > {shlex.quote(output_path)}; "
+        f"echo $$ > {shlex.quote(scope_path)}; "
+        f". {shlex.quote(container_path)}; rm -f {shlex.quote(container_path)}; "
+        f"exec {subject} > {shlex.quote(output_path)}"
+    )
+    return f"setsid --wait sh -c {shlex.quote(inner)}"
+
+
+async def _read_subject_output(environment: Any, output_path: str) -> str:
+    with tempfile.TemporaryDirectory() as directory:
+        target = Path(directory) / "stdout"
+        try:
+            await environment.download_file(output_path, target)
+            return target.read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError):
+            return ""
 
 
 async def _settle(environment: Any, request: dict[str, Any], scope_path: str, execution: Any) -> Any:

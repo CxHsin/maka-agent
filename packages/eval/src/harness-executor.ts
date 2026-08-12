@@ -115,7 +115,12 @@ async function runHarnessAttempt(
         cleanupAction = 'terminate-unused';
         state.child.kill('SIGTERM');
       }
-      clean = await waitForTrial(state.child);
+      clean = await waitForTrial(
+        state.child,
+        undefined,
+        cleanupAction === 'terminate-unused',
+        20_000,
+      );
     }
     await state.closeRelay();
   }
@@ -589,32 +594,31 @@ async function waitForTrial(
   child: ChildProcess,
   signal?: AbortSignal,
   terminate = false,
+  completionGraceMs?: number,
 ): Promise<boolean> {
   const exit =
     child.exitCode !== null || child.signalCode !== null
       ? Promise.resolve({ code: child.exitCode, signal: child.signalCode })
       : once(child, 'exit').then(([code, childSignal]) => ({ code, signal: childSignal }));
-  let terminating = terminate;
-  const cancel = () => {
-    terminating = true;
-    child.kill('SIGTERM');
-  };
-  signal?.addEventListener('abort', cancel, { once: true });
-  if (terminate || signal?.aborted) cancel();
-  try {
-    const first = await within(exit, 20_000);
-    if (first) return first.code === 0 && first.signal === null;
-    if (!terminating) {
-      child.kill('SIGTERM');
-      const second = await within(exit, 20_000);
-      if (second) return second.code === 0 && second.signal === null;
+  if (!terminate && !signal?.aborted) {
+    if (completionGraceMs === undefined) {
+      try {
+        const completed = await abortable(exit, signal);
+        return completed.code === 0 && completed.signal === null;
+      } catch (error) {
+        if (!signal?.aborted) throw error;
+      }
+    } else {
+      const completed = await within(exit, completionGraceMs);
+      if (completed) return completed.code === 0 && completed.signal === null;
     }
-    child.kill('SIGKILL');
-    if (!(await within(exit, 5_000))) child.unref();
-    return false;
-  } finally {
-    signal?.removeEventListener('abort', cancel);
   }
+  child.kill('SIGTERM');
+  const terminated = await within(exit, 20_000);
+  if (terminated) return terminated.code === 0 && terminated.signal === null;
+  child.kill('SIGKILL');
+  if (!(await within(exit, 5_000))) child.unref();
+  return false;
 }
 
 async function within<T>(operation: Promise<T>, timeoutMs: number): Promise<T | undefined> {

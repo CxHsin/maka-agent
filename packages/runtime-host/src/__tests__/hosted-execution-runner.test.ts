@@ -51,11 +51,37 @@ test('incomplete usage preserves its fixed safe cause', async () => {
     requestDrain: () => {},
     waitForExecutionResidencies: async () => {},
     waitForAllResidencies: async () => {},
+    usageSettlementTimeoutMs: 0,
   });
 
   const result = await runner.run(input(), new AbortController().signal);
 
   assert.equal(result.failureReason, 'Runtime Host usage did not settle: missing_attempt_usage');
+});
+
+test('hosted execution waits for delayed usage settlement', async () => {
+  const incomplete = usageSummary();
+  incomplete.provenance.coverage.usageMissingAttempts = 1;
+  let reads = 0;
+  const runner = new HostHostedExecutionRunner({
+    handlers: handlers({
+      usage: () => {
+        reads += 1;
+        return reads === 1 ? incomplete : usageSummary();
+      },
+    }),
+    context: context(),
+    requestDrain: () => {},
+    waitForExecutionResidencies: async () => {},
+    waitForAllResidencies: async () => {},
+    usageSettlementTimeoutMs: 1_000,
+    usageSettlementPollMs: 1,
+  });
+
+  const result = await runner.run(input(), new AbortController().signal);
+
+  assert.equal(result.kind, 'settled');
+  assert.equal(reads, 2);
 });
 
 test('abort after terminal completion preserves the completed result', async () => {

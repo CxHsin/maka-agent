@@ -19,6 +19,8 @@ export interface HostHostedExecutionRunnerInput {
   readonly waitForExecutionResidencies: () => Promise<void>;
   readonly waitForAllResidencies: () => Promise<void>;
   readonly now?: () => number;
+  readonly usageSettlementTimeoutMs?: number;
+  readonly usageSettlementPollMs?: number;
 }
 
 export class HostHostedExecutionRunner {
@@ -63,7 +65,7 @@ export class HostHostedExecutionRunner {
       await (signal.aborted
         ? this.input.waitForAllResidencies()
         : this.input.waitForExecutionResidencies());
-      const usage = await this.#readUsage(startedAt, (this.input.now ?? Date.now)());
+      const usage = await this.#readSettledUsage(startedAt);
       const incompleteUsage = incompleteUsageReason(usage);
       if (incompleteUsage) {
         return indeterminate(
@@ -137,6 +139,15 @@ export class HostHostedExecutionRunner {
     if (result.kind !== 'summary') throw new Error('Runtime Host returned non-summary usage');
     return result;
   }
+
+  async #readSettledUsage(from: number) {
+    const deadline = Date.now() + (this.input.usageSettlementTimeoutMs ?? 30_000);
+    for (;;) {
+      const usage = await this.#readUsage(from, (this.input.now ?? Date.now)());
+      if (!incompleteUsageReason(usage) || Date.now() >= deadline) return usage;
+      await delay(this.input.usageSettlementPollMs ?? 100);
+    }
+  }
 }
 
 function incompleteUsageReason(
@@ -173,8 +184,8 @@ async function requireSuccess<K extends OperationKey>(
   return result.result;
 }
 
-function delay(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 25));
+function delay(ms = 25): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function indeterminate(executionId: string, failureReason: string): HostedExecutionProjection {

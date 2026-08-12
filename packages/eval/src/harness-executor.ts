@@ -307,7 +307,13 @@ async function startTrial(
       Symbol.asyncIterator
     ]();
     const ready = await abortable(Promise.race([readLine(lines), exitedBeforeReady]), signal);
-    if (ready.token !== token || ready.kind !== 'ready' || typeof ready.instruction !== 'string') {
+    if (
+      ready.token !== token ||
+      ready.kind !== 'ready' ||
+      typeof ready.instruction !== 'string' ||
+      typeof ready.cwd !== 'string' ||
+      !ready.cwd.startsWith('/')
+    ) {
       throw new Error('relay returned an invalid ready message');
     }
     return {
@@ -325,7 +331,7 @@ async function startTrial(
         trialPath,
         taskInput: ready.instruction,
         credentials,
-        containerCwd: options.containerCwd,
+        containerCwd: ready.cwd,
         used: false,
       },
     };

@@ -47,7 +47,21 @@ class RelayAgent(BaseAgent):
         output_path = f"/app/.maka-eval-{self._token}.stdout"
         stderr_path = f"/app/.maka-eval-{self._token}.stderr"
         try:
-            await _send(writer, {"token": self._token, "kind": "ready", "instruction": instruction})
+            workspace = await environment.exec("pwd")
+            cwd = str(workspace.stdout or "").strip()
+            if workspace.return_code != 0 or not cwd.startswith("/"):
+                raise RuntimeError("Maka Eval could not resolve the task workspace")
+            output_path = f"{cwd}/.maka-eval-{self._token}.stdout"
+            stderr_path = f"{cwd}/.maka-eval-{self._token}.stderr"
+            await _send(
+                writer,
+                {
+                    "token": self._token,
+                    "kind": "ready",
+                    "instruction": instruction,
+                    "cwd": cwd,
+                },
+            )
             request = json.loads(await reader.readline())
             _require_message(request, self._token, "execute")
             command = await _prepare_command(

@@ -62,6 +62,10 @@ class RelayAgent(BaseAgent):
             result = await _settle(environment, request, scope_path, execution)
             stdout = await _read_subject_output(environment, output_path)
             stderr = await _read_subject_output(environment, stderr_path, limit_bytes=64 * 1024)
+            if not stdout:
+                stdout = str(getattr(result, "stdout", "") or "")
+            if not stderr:
+                stderr = str(getattr(result, "stderr", "") or "")[-64 * 1024 :]
             await _send(
                 writer,
                 {
@@ -83,6 +87,10 @@ class RelayAgent(BaseAgent):
                 stderr = await _read_subject_output(
                     environment, stderr_path, limit_bytes=64 * 1024
                 )
+                if not stdout:
+                    stdout = str(getattr(result, "stdout", "") or "")
+                if not stderr:
+                    stderr = str(getattr(result, "stderr", "") or "")[-64 * 1024 :]
                 with contextlib.suppress(BaseException):
                     await _send(
                         writer,

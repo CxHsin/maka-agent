@@ -30,6 +30,7 @@ const DEFAULT_ELECTION_DEADLINE_MS = 45_000;
 const DEFAULT_BACKOFF_MIN_MS = 20;
 const DEFAULT_BACKOFF_MAX_MS = 250;
 const MIN_CANDIDATE_INTERVAL_MS = 250;
+const OWNED_HOST_IDLE_GRACE_MS = 1_000;
 
 export interface ConnectOrSpawnRuntimeHostInput {
   rootPath: string;
@@ -82,8 +83,23 @@ export type ConnectOwnedRuntimeHostResult =
   | Exclude<ConnectOrSpawnRuntimeHostResult, { kind: 'connected' }>
   | { kind: 'failed'; reason: 'existing_host' };
 
+interface ConnectOwnedRuntimeHostDependencies {
+  launchCandidate: typeof launchOwnedRuntimeHostCandidate;
+}
+
+const defaultOwnedDependencies: ConnectOwnedRuntimeHostDependencies = {
+  launchCandidate: launchOwnedRuntimeHostCandidate,
+};
+
 export async function connectOwnedRuntimeHost(
   input: Omit<ConnectOrSpawnRuntimeHostInput, 'candidateEntrypoint'>,
+): Promise<ConnectOwnedRuntimeHostResult> {
+  return connectOwnedRuntimeHostWithDependencies(input, defaultOwnedDependencies);
+}
+
+export async function connectOwnedRuntimeHostWithDependencies(
+  input: Omit<ConnectOrSpawnRuntimeHostInput, 'candidateEntrypoint'>,
+  dependencies: ConnectOwnedRuntimeHostDependencies,
 ): Promise<ConnectOwnedRuntimeHostResult> {
   let launch: ReturnType<typeof launchOwnedRuntimeHostCandidate> | undefined;
   let connection: RuntimeHostConnection | undefined;
@@ -95,7 +111,10 @@ export async function connectOwnedRuntimeHost(
       },
       {
         launchCandidate(candidate) {
-          launch ??= launchOwnedRuntimeHostCandidate({ ...candidate, idleGraceMs: 0 });
+          launch ??= dependencies.launchCandidate({
+            ...candidate,
+            idleGraceMs: OWNED_HOST_IDLE_GRACE_MS,
+          });
           return launch;
         },
         random: Math.random,

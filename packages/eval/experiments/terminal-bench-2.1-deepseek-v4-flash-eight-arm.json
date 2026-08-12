@@ -89,6 +89,7 @@
         "nodePath": "/opt/maka-node-toolchain/bin/node",
         "shimPath": "/opt/maka-agent/packages/eval/dist/harbor-maka-subject.js",
         "runtimeHostsPath": "/tmp/maka-runtime-hosts",
+        "hostSettlementTimeoutMs": 120000,
         "connectionSlug": "env-deepseek",
         "baseUrl": "https://api.deepseek.com",
         "webTools": "disabled",

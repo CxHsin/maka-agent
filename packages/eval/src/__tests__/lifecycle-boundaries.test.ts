@@ -328,7 +328,10 @@ test('eight-arm spec adds Pi with the same pinned DeepSeek execution contract', 
       'utf8',
     ),
   ) as {
-    subjects: Array<{ id: string; config: { args?: string[]; webTools?: string } }>;
+    subjects: Array<{
+      id: string;
+      config: { args?: string[]; webTools?: string; hostSettlementTimeoutMs?: number };
+    }>;
     execution: { maxConcurrentTaskGroups: number };
     executor: { config: { mounts: Array<{ target: string }> } };
   };
@@ -355,6 +358,7 @@ test('eight-arm spec adds Pi with the same pinned DeepSeek execution contract', 
   const maka = spec.subjects.find(({ id }) => id === 'maka')!;
   const zcode = spec.subjects.find(({ id }) => id === 'zcode')!;
   assert.equal(maka.config.webTools, 'disabled');
+  assert.equal(maka.config.hostSettlementTimeoutMs, 120_000);
   assert.deepEqual(
     zcode.config.args?.slice(
       zcode.config.args.indexOf('--disallowedTools'),

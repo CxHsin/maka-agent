@@ -11,7 +11,7 @@ import { connectOwnedRuntimeHostWithDependencies } from '../client/connect-or-sp
 import { runHostedExecution } from '../client/hosted-execution.js';
 import { launchOwnedRuntimeHostCandidate } from '../client/launcher.js';
 
-test('owned connection keeps a fresh Host alive through first client registration', async () => {
+test('owned connection keeps a fresh Host alive for its full election window', async () => {
   const rootPath = await mkdtemp(join(tmpdir(), 'maka-owned-first-connection-'));
   const result = await connectOwnedRuntimeHostWithDependencies(
     {
@@ -22,7 +22,7 @@ test('owned connection keeps a fresh Host alive through first client registratio
         max: RUNTIME_HOST_PROTOCOL_VERSION,
       },
       compositionId: INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
-      electionDeadlineMs: 2_000,
+      electionDeadlineMs: 6_000,
     },
     {
       launchCandidate(input) {
@@ -30,7 +30,7 @@ test('owned connection keeps a fresh Host alive through first client registratio
         return {
           spawned: Promise.all([
             launch.spawned,
-            new Promise((resolve) => setTimeout(resolve, 100)),
+            new Promise((resolve) => setTimeout(resolve, 3_000)),
           ]).then(([candidate]) => candidate),
         };
       },
@@ -45,6 +45,28 @@ test('owned connection keeps a fresh Host alive through first client registratio
       await result.host.settle(3_000);
     }
   }
+});
+
+test('owned Host exits promptly after its first connection closes', async () => {
+  const rootPath = await mkdtemp(join(tmpdir(), 'maka-owned-first-disconnect-'));
+  const result = await connectOwnedRuntimeHostWithDependencies(
+    {
+      rootPath,
+      surface: 'run',
+      protocol: {
+        min: RUNTIME_HOST_PROTOCOL_VERSION,
+        max: RUNTIME_HOST_PROTOCOL_VERSION,
+      },
+      compositionId: INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
+      electionDeadlineMs: 2_000,
+    },
+    { launchCandidate: launchOwnedRuntimeHostCandidate },
+  );
+
+  assert.equal(result.kind, 'connected');
+  if (result.kind !== 'connected') return;
+  await result.connection.close();
+  assert.equal(await result.host.settle(500), true);
 });
 
 test('owned candidate settlement requires a clean process exit', async () => {

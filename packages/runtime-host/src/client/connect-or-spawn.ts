@@ -30,7 +30,6 @@ const DEFAULT_ELECTION_DEADLINE_MS = 45_000;
 const DEFAULT_BACKOFF_MIN_MS = 20;
 const DEFAULT_BACKOFF_MAX_MS = 250;
 const MIN_CANDIDATE_INTERVAL_MS = 250;
-const OWNED_HOST_IDLE_GRACE_MS = 1_000;
 
 export interface ConnectOrSpawnRuntimeHostInput {
   rootPath: string;
@@ -113,7 +112,7 @@ export async function connectOwnedRuntimeHostWithDependencies(
         launchCandidate(candidate) {
           launch ??= dependencies.launchCandidate({
             ...candidate,
-            idleGraceMs: OWNED_HOST_IDLE_GRACE_MS,
+            idleGraceMs: 0,
           });
           return launch;
         },
@@ -214,6 +213,7 @@ export async function connectOrSpawnRuntimeHostWithDependencies(
           rootPath: capability.canonicalPath,
           expectedRootId: capability.rootId,
           entrypoint: input.candidateEntrypoint,
+          initialConnectionTimeoutMs: Math.ceil(remaining),
           ...(input.generation === undefined ? {} : { generation: input.generation }),
         });
         await settleBeforeDeadline(launch.spawned, deadline, input.signal);

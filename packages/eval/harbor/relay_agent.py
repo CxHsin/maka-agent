@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -44,15 +45,13 @@ class RelayAgent(BaseAgent):
         control: asyncio.Task[bytes] | None = None
         request: dict[str, Any] | None = None
         scope_path = f"/tmp/maka-eval-{self._token}.pid"
-        output_path = f"/app/.maka-eval-{self._token}.stdout"
-        stderr_path = f"/app/.maka-eval-{self._token}.stderr"
+        output_path = "/logs/artifacts/maka-subject.stdout.txt"
+        stderr_path = "/logs/artifacts/maka-subject.stderr.txt"
         try:
             workspace = await environment.exec("pwd")
             cwd = str(workspace.stdout or "").strip()
             if workspace.return_code != 0 or not cwd.startswith("/"):
                 raise RuntimeError("Maka Eval could not resolve the task workspace")
-            output_path = f"{cwd}/.maka-eval-{self._token}.stdout"
-            stderr_path = f"{cwd}/.maka-eval-{self._token}.stderr"
             await _send(
                 writer,
                 {
@@ -138,8 +137,7 @@ class RelayAgent(BaseAgent):
             if request is not None:
                 with contextlib.suppress(BaseException):
                     await environment.exec(
-                        f"rm -f -- {shlex.quote(scope_path)} {shlex.quote(output_path)} "
-                        f"{shlex.quote(stderr_path)}",
+                        f"rm -f -- {shlex.quote(scope_path)}",
                         cwd=request["cwd"],
                         timeout_sec=10,
                     )
@@ -193,7 +191,8 @@ async def _prepare_command(
     output_target = output_path if capture_stdout else "/dev/null"
     initialize_output = f": > {shlex.quote(output_path)}; " if capture_stdout else ""
     inner = (
-        f"umask 077; : > {shlex.quote(stderr_path)}; "
+        f"umask 077; mkdir -p {shlex.quote(str(Path(output_path).parent))}; "
+        f": > {shlex.quote(stderr_path)}; "
         f"exec 2>{shlex.quote(stderr_path)}; {initialize_output}"
         f"echo $$ > {shlex.quote(scope_path)}; "
         f". {shlex.quote(container_path)}; command -p rm -f {shlex.quote(container_path)}; "
@@ -213,7 +212,7 @@ async def _read_subject_output(
             if limit_bytes is not None:
                 contents = contents[-limit_bytes:]
             return contents.decode("utf-8", errors="replace")
-        except (FileNotFoundError, OSError):
+        except (FileNotFoundError, OSError, shutil.Error):
             return ""
         except RuntimeError as error:
             if "Could not find the file" in str(error):

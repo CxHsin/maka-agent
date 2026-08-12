@@ -27,8 +27,7 @@
         "NO_PROXY",
         "http_proxy",
         "https_proxy",
-        "no_proxy",
-        "SSH_AUTH_SOCK"
+        "no_proxy"
       ],
       "mounts": [
         {

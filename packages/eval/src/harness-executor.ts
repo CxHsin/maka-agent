@@ -583,18 +583,13 @@ async function within<T>(operation: Promise<T>, timeoutMs: number): Promise<T | 
   }
 }
 
-function exact(
-  value: unknown,
-  fields: readonly string[],
-  where: string,
-  optional: readonly string[] = [],
-): Record<string, unknown> {
+function exact(value: unknown, fields: readonly string[], where: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new Error(`${where} must be an object`);
   const record = value as Record<string, unknown>;
   if (
     fields.some((field) => !Object.hasOwn(record, field)) ||
-    Object.keys(record).some((field) => !fields.includes(field) && !optional.includes(field))
+    Object.keys(record).some((field) => !fields.includes(field))
   ) {
     throw new Error(`${where} fields are invalid`);
   }

@@ -163,10 +163,11 @@ async def _prepare_command(
     output_target = output_path if capture_stdout else "/dev/null"
     initialize_output = f": > {shlex.quote(output_path)}; " if capture_stdout else ""
     inner = (
-        f"umask 077; {initialize_output}: > {shlex.quote(stderr_path)}; "
+        f"umask 077; : > {shlex.quote(stderr_path)}; "
+        f"exec 2>{shlex.quote(stderr_path)}; {initialize_output}"
         f"echo $$ > {shlex.quote(scope_path)}; "
         f". {shlex.quote(container_path)}; command -p rm -f {shlex.quote(container_path)}; "
-        f"exec {subject} >{shlex.quote(output_target)} 2>{shlex.quote(stderr_path)}"
+        f"exec {subject} >{shlex.quote(output_target)}"
     )
     return f"setsid --wait sh -c {shlex.quote(inner)}"
 

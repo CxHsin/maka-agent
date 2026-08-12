@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -17,23 +17,6 @@ test('owned candidate settlement requires a clean process exit', async () => {
 
   const candidate = await launch.spawned;
   assert.equal(await candidate.settle(2_000), false);
-});
-
-test('owned candidate preserves private startup diagnostics in its root', async () => {
-  const rootPath = await mkdtemp(join(tmpdir(), 'maka-owned-candidate-'));
-  const launch = launchOwnedRuntimeHostCandidate({
-    rootPath,
-    expectedRootId: '00000000-0000-4000-8000-000000000001',
-    entrypoint: new URL('./fixtures/owned-candidate-exit.js', import.meta.url),
-    env: { MAKA_TEST_DIAGNOSTIC: 'candidate-startup-failed' },
-  });
-
-  const candidate = await launch.spawned;
-  assert.equal(await candidate.settle(2_000), true);
-  assert.equal(
-    await readFile(join(rootPath, 'runtime-host-candidate.log'), 'utf8'),
-    'candidate-startup-failed\n',
-  );
 });
 
 test('owned candidate can be released to the enclosing environment without termination', async () => {
@@ -69,7 +52,6 @@ test('owned hosted execution closes its fresh Host after configuration fails', a
   });
 
   assert.equal(result.kind, 'indeterminate');
-  assert.equal(result.failureReason, 'Runtime Host connection failed before execution settlement');
 });
 
 test('pre-cancelled hosted execution does not start a Runtime Host', async () => {

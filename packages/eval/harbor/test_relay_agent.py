@@ -31,17 +31,13 @@ class FakeEnvironment:
     def __init__(self):
         self.uploaded = b""
         self.source = None
-        self.result = "result"
 
     async def upload_file(self, source, target):
         self.source = Path(source)
         self.uploaded = self.source.read_bytes()
 
-    async def download_file(self, source, target):
-        Path(target).write_text(self.result, encoding="utf-8")
-
     async def exec(self, command, cwd):
-        return types.SimpleNamespace(return_code=0, stdout="")
+        return types.SimpleNamespace(return_code=0, stdout="result")
 
 
 class RaceReader:
@@ -126,14 +122,11 @@ class RelayAgentTest(unittest.IsolatedAsyncioTestCase):
             },
             "token",
             "/tmp/scope.pid",
-            "/tmp/result.stdout",
         )
 
         self.assertNotIn(secret, command)
         self.assertIn(secret.encode(), environment.uploaded)
         self.assertFalse(environment.source.exists())
-        self.assertIn("> /tmp/result.stdout", command)
-        self.assertTrue(command.startswith("setsid --wait sh -c "))
 
     def test_framework_selection_is_explicit(self):
         harbor = load_relay("harbor")
@@ -164,8 +157,6 @@ class RelayAgentTest(unittest.IsolatedAsyncioTestCase):
             await agent.run("solve", FakeEnvironment(), None)
 
         self.assertEqual(reader.calls, 2)
-        executed = next(message for message in [writer.last] if message["kind"] == "executed")
-        self.assertEqual(executed["stdout"], "result")
 
     async def test_framework_timeout_is_reported_as_an_explicit_termination(self):
         relay = load_relay("harbor")

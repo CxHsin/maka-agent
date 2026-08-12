@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { isModelExplicitlyUnsupportedForChat } from '@maka/core/model-catalog';
-import { modelMetadataIdsForProvider } from '@maka/core/model-metadata';
 import { thinkingVariantsForConnection } from '@maka/core/model-thinking';
 import {
   executionBoundaryDisplayMode,
@@ -594,17 +593,10 @@ export class HostSessionCatalogCoordinator {
       );
     }
     const connection = readiness.connection;
-    const discovered = connection.models.find((candidate) => candidate.id === selected.modelId);
-    const staticallyKnown = modelMetadataIdsForProvider(connection.providerType).includes(
-      selected.modelId,
-    );
-    if (
-      !connection.enabledModelIds.includes(selected.modelId) ||
-      (!discovered && !staticallyKnown)
-    ) {
+    const model = connection.models.find((candidate) => candidate.id === selected.modelId);
+    if (!connection.enabledModelIds.includes(selected.modelId) || !model) {
       throw new SessionOperationFailure('invalid_request', 'Session model is not enabled');
     }
-    const model = discovered ?? { id: selected.modelId };
     if (isModelExplicitlyUnsupportedForChat(model)) {
       throw new SessionOperationFailure('invalid_request', 'Session model is not chat-capable');
     }

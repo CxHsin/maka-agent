@@ -71,32 +71,20 @@ test('maka eval publishes only immutable attempts from one spec', async () => {
 test('competitor wrapper installs declared containment and provider policy', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-profiles-'));
   const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
-  const env = { ...process.env, OPENAI_API_KEY: 'test-only-secret' };
-  await execFileAsync(
-    process.execPath,
-    [wrapper.pathname, 'codex', 'https://provider.test', root, '/usr/bin/true'],
-    { env },
-  );
-  await execFileAsync(
-    process.execPath,
-    [wrapper.pathname, 'zcode', 'https://provider.test/v1', root, '/usr/bin/true'],
-    { env },
-  );
-  await execFileAsync(
-    process.execPath,
-    [wrapper.pathname, 'opencode', 'https://provider.test', root, '/usr/bin/true'],
-    { env },
-  );
-  await execFileAsync(
-    process.execPath,
-    [wrapper.pathname, 'kimi-code', 'https://provider.test', root, '/usr/bin/true'],
-    { env },
-  );
-  await execFileAsync(
-    process.execPath,
-    [wrapper.pathname, 'claude-code', 'https://provider.test', root, '/usr/bin/true'],
-    { env },
-  );
+  await execFileAsync(process.execPath, [
+    wrapper.pathname,
+    'codex',
+    'https://provider.test',
+    root,
+    '/usr/bin/true',
+  ]);
+  await execFileAsync(process.execPath, [
+    wrapper.pathname,
+    'claude-code',
+    'https://provider.test',
+    root,
+    '/usr/bin/true',
+  ]);
   await execFileAsync(
     process.execPath,
     [
@@ -110,7 +98,7 @@ test('competitor wrapper installs declared containment and provider policy', asy
       '--effort',
       'max',
     ],
-    { env },
+    { env: { ...process.env, OPENAI_API_KEY: 'test-only-secret' } },
   );
 
   assert.match(await readFile(join(root, 'etc/codex/requirements.toml'), 'utf8'), /disabled/u);
@@ -119,48 +107,15 @@ test('competitor wrapper installs declared containment and provider policy', asy
     /WebSearch/u,
   );
   assert.match(
-    await readFile(join(root, 'tmp/maka-eval-reasonix/config.toml'), 'utf8'),
+    await readFile(join(root, 'tmp/maka-reasonix/config.toml'), 'utf8'),
     /bash = "off"/u,
   );
-  await assert.rejects(stat(join(root, 'tmp/maka-eval-reasonix/.env')), { code: 'ENOENT' });
-  const zcode = JSON.parse(
-    await readFile(join(root, 'tmp/maka-eval-zcode/.zcode/cli/config.json'), 'utf8'),
-  );
-  assert.equal(zcode.model, 'deepseek/deepseek-v4-flash');
-  assert.equal(zcode.provider.deepseek.models['deepseek-v4-flash'].reasoning.defaultLevel, 'max');
-  const opencode = JSON.parse(
-    await readFile(join(root, 'tmp/maka-eval-opencode/opencode.json'), 'utf8'),
-  );
-  assert.deepEqual(opencode.provider.deepseek.models['deepseek-v4-flash'].limit, {
-    context: 1_048_576,
-    output: 131_072,
-  });
-  assert.equal(opencode.provider.deepseek.models['deepseek-v4-flash'].variants.max.effort, 'max');
-  assert.equal(opencode.permission.webfetch, 'deny');
-  assert.equal(opencode.permission.websearch, 'deny');
-  const kimi = await readFile(join(root, 'tmp/maka-eval-kimi-code/config.toml'), 'utf8');
-  assert.match(kimi, /default_permission_mode = "auto"/u);
-  assert.match(kimi, /decision = "deny".*pattern = "WebSearch"/u);
-  assert.match(kimi, /decision = "deny".*pattern = "FetchURL"/u);
-});
-
-test('competitor wrapper publishes one newline-terminated result envelope', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'maka-eval-result-envelope-'));
-  const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
-  const { stdout } = await execFileAsync(
-    process.execPath,
-    [wrapper.pathname, 'codex', 'https://provider.test', root, '/usr/bin/true'],
-    { env: { ...process.env, OPENAI_API_KEY: 'test-only-secret' } },
-  );
-
-  assert.equal(stdout.endsWith('\n'), true);
-  assert.equal(stdout.trim().split('\n').length, 1);
-  assert.equal(JSON.parse(stdout).schemaVersion, 'maka.external_subject_result.v2');
+  await assert.rejects(stat(join(root, 'tmp/maka-reasonix/.env')), { code: 'ENOENT' });
 });
 
 test('Reasonix wrapper removes its credential before cancellation settles', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-reasonix-cancel-'));
-  const credential = join(root, 'tmp/maka-eval-reasonix/.env');
+  const credential = join(root, 'tmp/maka-reasonix/.env');
   const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
   const child = spawn(
     process.execPath,
@@ -197,38 +152,22 @@ test('Reasonix wrapper removes its credential before cancellation settles', asyn
   await assert.rejects(stat(credential), { code: 'ENOENT' });
 });
 
-test('checked-in primary cohort is one fully expanded seven-arm experiment', async () => {
+test('checked-in cohort is one fully expanded four-arm experiment', async () => {
   const path = new URL(
-    '../../experiments/terminal-bench-2.1-deepseek-v4-flash-seven-arm.json',
+    '../../experiments/terminal-bench-2.1-deepseek-v4-flash-four-arm.json',
     import.meta.url,
   );
   const parsed = parseExperimentSpec(JSON.parse(await readFile(path, 'utf8')) as unknown);
   assert.equal(parsed.tasks.length, 89);
   assert.deepEqual(
     parsed.subjects.map(({ id }) => id),
-    ['maka', 'codex', 'claude-code', 'reasonix', 'opencode', 'kimi-code', 'zcode'],
+    ['maka', 'codex', 'claude-code', 'reasonix'],
   );
-  assert.equal(parsed.execution.maxConcurrentTaskGroups, 10);
-  assert.equal(expandExperiment(parsed).length, 623);
+  assert.equal(expandExperiment(parsed).length, 356);
   const adapters = [createMakaSubjectAdapter(), createExternalSubjectAdapter()];
-  for (const cell of expandExperiment(parsed).slice(0, 7)) {
+  for (const cell of expandExperiment(parsed).slice(0, 4)) {
     adapters.find(({ kind }) => kind === cell.subject.kind)?.validate?.(cell);
   }
-});
-
-test('checked-in six-arm cohort remains the compatibility subset', async () => {
-  const path = new URL(
-    '../../experiments/terminal-bench-2.1-deepseek-v4-flash-six-arm.json',
-    import.meta.url,
-  );
-  const parsed = parseExperimentSpec(JSON.parse(await readFile(path, 'utf8')) as unknown);
-  assert.equal(parsed.tasks.length, 89);
-  assert.deepEqual(
-    parsed.subjects.map(({ id }) => id),
-    ['maka', 'codex', 'claude-code', 'reasonix', 'opencode', 'kimi-code'],
-  );
-  assert.equal(parsed.execution.maxConcurrentTaskGroups, 12);
-  assert.equal(expandExperiment(parsed).length, 534);
 });
 
 function spec() {

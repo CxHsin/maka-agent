@@ -30,8 +30,6 @@ const DEFAULT_ELECTION_DEADLINE_MS = 45_000;
 const DEFAULT_BACKOFF_MIN_MS = 20;
 const DEFAULT_BACKOFF_MAX_MS = 250;
 const MIN_CANDIDATE_INTERVAL_MS = 250;
-// A zero grace can retire a freshly published Host before its owner reconnects.
-const OWNED_HOST_IDLE_GRACE_MS = 1_000;
 
 export interface ConnectOrSpawnRuntimeHostInput {
   rootPath: string;
@@ -98,10 +96,7 @@ export async function connectOwnedRuntimeHost(
       },
       {
         launchCandidate(candidate) {
-          launch ??= launchOwnedRuntimeHostCandidate({
-            ...candidate,
-            idleGraceMs: OWNED_HOST_IDLE_GRACE_MS,
-          });
+          launch ??= launchOwnedRuntimeHostCandidate({ ...candidate, idleGraceMs: 0 });
           return launch;
         },
         random: Math.random,

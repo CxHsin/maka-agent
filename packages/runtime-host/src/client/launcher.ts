@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
-import { closeSync, mkdirSync, openSync } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export interface DetachedCandidateInput {
@@ -80,26 +79,18 @@ function spawnCandidate(input: DetachedCandidateInput, detached: boolean) {
   appendArgument(args, '--legacy-configuration-root', input.legacyConfigurationRoot);
 
   // spawn() commits the side effect synchronously; spawned only reports that commit's outcome.
-  let diagnostics: number | undefined;
-  try {
-    if (!detached) {
-      mkdirSync(input.rootPath, { recursive: true, mode: 0o700 });
-      diagnostics = openSync(join(input.rootPath, 'runtime-host-candidate.log'), 'a', 0o600);
-    }
-    return spawn(executable, args, {
-      cwd: dirname(isAbsolute(executable) ? executable : process.execPath),
-      detached,
-      stdio: diagnostics === undefined ? 'ignore' : ['ignore', diagnostics, diagnostics],
-      windowsHide: true,
-      env: {
-        ...process.env,
-        ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
-        ...input.env,
-      },
-    });
-  } finally {
-    if (diagnostics !== undefined) closeSync(diagnostics);
-  }
+  const child = spawn(executable, args, {
+    cwd: dirname(isAbsolute(executable) ? executable : process.execPath),
+    detached,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: {
+      ...process.env,
+      ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+      ...input.env,
+    },
+  });
+  return child;
 }
 
 function spawnedPid(child: ReturnType<typeof spawn>): Promise<DetachedCandidateAttempt> {

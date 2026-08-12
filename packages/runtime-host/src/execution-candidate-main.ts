@@ -8,10 +8,7 @@ installRuntimeHostLogCapture();
 
 const options = parseInteractiveRuntimeHostCandidateArguments(process.argv.slice(2));
 const result = await startExecutionRuntimeHostCandidate(options);
-if (result.kind === 'loser') {
-  process.stderr.write('Runtime Host candidate lost the storage-root ownership election\n');
-  process.exit(2);
-}
+if (result.kind === 'loser') process.exit(2);
 
 try {
   await runRuntimeHostProcessLifecycle(result.host);

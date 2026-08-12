@@ -14,7 +14,7 @@ export async function configureHostedExecutionTarget(
   connection: TargetConnection,
   input: HostedExecutionTargetInput,
   signal?: AbortSignal,
-): Promise<boolean> {
+): Promise<void> {
   const before = await abortable(() => readRuntimeHostConnectionCatalog(connection), signal);
   const target = before.connections.find((candidate) => candidate.slug === input.connectionSlug);
   if (!target) throw new Error('Runtime Host connection is unavailable');
@@ -22,7 +22,6 @@ export async function configureHostedExecutionTarget(
   const baseUrl = new URL(input.baseUrl).toString();
   const enabledModelIds = [...new Set([...target.enabledModelIds, input.model])];
   const endpointChanged = target.baseUrl !== baseUrl;
-  let changed = false;
   if (endpointChanged || !target.enabled || !target.enabledModelIds.includes(input.model)) {
     const updated = await abortable(
       () =>
@@ -40,7 +39,6 @@ export async function configureHostedExecutionTarget(
     if (updated.kind !== 'committed') {
       throw new Error(`Runtime Host connection update was not committed: ${updated.kind}`);
     }
-    changed = true;
   }
 
   if (endpointChanged || !target.models.some((model) => model.id === input.model)) {
@@ -54,7 +52,6 @@ export async function configureHostedExecutionTarget(
     if (fetched.kind !== 'committed') {
       throw new Error(`Runtime Host model discovery did not commit: ${fetched.kind}`);
     }
-    changed = true;
   }
 
   const after = await abortable(() => readRuntimeHostConnectionCatalog(connection), signal);
@@ -69,5 +66,4 @@ export async function configureHostedExecutionTarget(
   ) {
     throw new Error('Runtime Host did not admit the requested model target');
   }
-  return changed;
 }

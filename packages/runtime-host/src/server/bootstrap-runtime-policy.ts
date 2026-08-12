@@ -12,8 +12,6 @@ import type { RuntimePolicyStoresWriter } from '@maka/storage/runtime-policy-sto
 const JOURNAL_FILE = '.runtime-host-bootstrap.json';
 interface BootstrapEnvironment {
   readonly ANTHROPIC_API_KEY?: string;
-  readonly DEEPSEEK_API_KEY?: string;
-  readonly DEEPSEEK_BASE_URL?: string;
   readonly OPENAI_API_KEY?: string;
 }
 
@@ -22,7 +20,6 @@ interface BootstrapSeed {
   readonly name: string;
   readonly providerType: ProviderType;
   readonly enabledModelIds: readonly string[];
-  readonly baseUrl?: string;
   readonly secret?: string;
 }
 
@@ -81,19 +78,9 @@ function bootstrapSeeds(environment: BootstrapEnvironment): readonly BootstrapSe
       enabledModelIds: OPENCODE_FREE_DEFAULT_ENABLED_MODELS,
     },
   ];
-  const deepseek = environment.DEEPSEEK_API_KEY?.trim();
   const anthropic = environment.ANTHROPIC_API_KEY?.trim();
   const openai = environment.OPENAI_API_KEY?.trim();
-  if (deepseek) {
-    seeds.push({
-      slug: 'env-deepseek',
-      name: 'DeepSeek (env)',
-      providerType: 'deepseek',
-      enabledModelIds: ['deepseek-v4-flash'],
-      baseUrl: environment.DEEPSEEK_BASE_URL?.trim() || 'https://api.deepseek.com',
-      secret: deepseek,
-    });
-  } else if (anthropic) {
+  if (anthropic) {
     seeds.push({
       slug: 'env-anthropic',
       name: 'Anthropic (env)',
@@ -132,7 +119,6 @@ async function ensureConnection(
         slug: seed.slug,
         name: seed.name,
         providerType: seed.providerType,
-        ...(seed.baseUrl === undefined ? {} : { baseUrl: seed.baseUrl }),
         enabled: true,
         enabledModelIds: seed.enabledModelIds,
       },

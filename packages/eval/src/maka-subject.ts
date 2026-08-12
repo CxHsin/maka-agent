@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type { HostedExecutionStartInput } from '@maka/runtime-host/protocol';
 import { decodeHostedExecutionProjection } from '@maka/runtime-host/protocol';
 import type { JsonObject } from './experiment.js';
-import type { NormalizedUsage } from './result.js';
 import type { SubjectAdapter, SubjectExecutionContext } from './runner.js';
 
 export function createMakaSubjectAdapter(): SubjectAdapter {
@@ -83,7 +82,7 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
         failureReason: string | null,
       ) => ({
         usage: projection.usage,
-        costUsd: projection.costUsd ?? estimateDeepSeekCost(projection.usage, config.model),
+        costUsd: projection.costUsd,
         durationMs: Date.now() - startedAt,
         status,
         failureReason,
@@ -119,9 +118,6 @@ function safeFailureReason(value: string, fallback: string): string {
     ) ||
     /^Runtime Host usage did not settle: (?:missing_attempt_usage|partial_attempt_usage|pending_usage_repair|unreadable_usage_record)$/u.test(
       value,
-    ) ||
-    /^Runtime Host could not settle execution: (?:session_create|turn_start|turn_settlement|residency_settlement|usage_settlement):[a-z][a-z0-9_]{0,63}$/u.test(
-      value,
     )
   )
     return value;
@@ -133,6 +129,7 @@ const SAFE_RUNTIME_FAILURE_REASONS = new Set([
   'Hosted execution was cancelled',
   'Hosted execution was cancelled before admission',
   'Runtime Host connection failed before execution settlement',
+  'Runtime Host could not settle execution',
   'Runtime Host did not exit cleanly',
 ]);
 
@@ -221,12 +218,4 @@ function exact(value: unknown, fields: readonly string[]): Record<string, unknow
 function positive(value: unknown, where: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error(`${where} is invalid`);
   return value as number;
-}
-
-function estimateDeepSeekCost(usage: NormalizedUsage, model: string): number | null {
-  if (model !== 'deepseek-v4-flash') return null;
-  const uncached = Math.max(0, usage.inputTokens - usage.cacheReadTokens - usage.cacheWriteTokens);
-  return (
-    (uncached * 0.145 + usage.cacheReadTokens * 0.0029 + usage.outputTokens * 0.29) / 1_000_000
-  );
 }

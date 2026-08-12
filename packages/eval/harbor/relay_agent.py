@@ -63,7 +63,11 @@ class RelayAgent(BaseAgent):
             stdout = await _read_subject_output(environment, output_path)
             stderr = await _read_subject_output(environment, stderr_path, limit_bytes=64 * 1024)
             if not stdout:
-                stdout = str(getattr(result, "stdout", "") or "")
+                process_stdout = str(getattr(result, "stdout", "") or "")
+                if result.return_code != 0 and not stderr:
+                    stderr = process_stdout[-64 * 1024 :]
+                else:
+                    stdout = process_stdout
             if not stderr:
                 stderr = str(getattr(result, "stderr", "") or "")[-64 * 1024 :]
             await _send(
@@ -88,7 +92,11 @@ class RelayAgent(BaseAgent):
                     environment, stderr_path, limit_bytes=64 * 1024
                 )
                 if not stdout:
-                    stdout = str(getattr(result, "stdout", "") or "")
+                    process_stdout = str(getattr(result, "stdout", "") or "")
+                    if result.return_code != 0 and not stderr:
+                        stderr = process_stdout[-64 * 1024 :]
+                    else:
+                        stdout = process_stdout
                 if not stderr:
                     stderr = str(getattr(result, "stderr", "") or "")[-64 * 1024 :]
                 with contextlib.suppress(BaseException):

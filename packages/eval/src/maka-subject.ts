@@ -48,8 +48,8 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
             cell.subject.credentials.map((name) => [name, name]),
           ),
         });
-      } catch {
-        return subjectFailure('relay-execute', startedAt, context.signal);
+      } catch (error) {
+        return subjectFailure('relay-execute', startedAt, context.signal, undefined, error);
       }
       if (process.termination !== 'exited') {
         const projection = tryDecodeMatchingProjection(process.stdout, executionId);
@@ -177,6 +177,7 @@ function subjectFailure(
   startedAt: number,
   signal?: AbortSignal,
   process?: Awaited<ReturnType<SubjectExecutionContext['execute']>>,
+  error?: unknown,
 ) {
   const cancelled = signal?.aborted === true;
   return {
@@ -189,6 +190,11 @@ function subjectFailure(
       {
         kind: 'subject-failure',
         stage,
+        ...(error === undefined
+          ? {}
+          : {
+              errorMessage: String(error instanceof Error ? error.message : error).slice(0, 1024),
+            }),
         ...(process
           ? {
               termination: process.termination,

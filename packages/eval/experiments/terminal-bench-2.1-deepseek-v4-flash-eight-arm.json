@@ -79,7 +79,7 @@
       ]
     }
   },
-  "execution": { "maxConcurrentTaskGroups": 14 },
+  "execution": { "maxConcurrentTaskGroups": 16 },
   "subjects": [
     {
       "id": "maka",

@@ -263,7 +263,7 @@ test('eight-arm spec adds Pi with the same pinned DeepSeek execution contract', 
     execution: { maxConcurrentTaskGroups: number };
     executor: { config: { mounts: Array<{ target: string }> } };
   };
-  assert.equal(spec.execution.maxConcurrentTaskGroups, 14);
+  assert.equal(spec.execution.maxConcurrentTaskGroups, 16);
   assert.deepEqual(
     spec.subjects.map(({ id }) => id),
     ['maka', 'codex', 'claude-code', 'reasonix', 'opencode', 'kimi-code', 'zcode', 'pi'],

@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, rmSync, statSync } from 'node:fs';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import {
@@ -789,8 +789,11 @@ function fileArtifact(
 }
 
 async function writePolicy(directory: string, name: string, contents: string): Promise<void> {
-  await mkdir(directory, { recursive: true });
-  await writeFile(join(directory, name), contents);
+  await mkdir(directory, { recursive: true, mode: 0o755 });
+  await chmod(directory, 0o755);
+  const path = join(directory, name);
+  await writeFile(path, contents, { mode: 0o644 });
+  await chmod(path, 0o644);
 }
 
 function rooted(root: string, absolutePath: string): string {

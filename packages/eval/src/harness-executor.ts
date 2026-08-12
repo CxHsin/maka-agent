@@ -92,8 +92,7 @@ async function runHarnessAttempt(
   const decide = (kind: 'verify' | 'abort') => {
     if (decision) return;
     decision = true;
-    state.socket.write(`${JSON.stringify({ token: state.token, kind })}\n`);
-    state.socket.end();
+    writeRelayMessage(state.socket, { token: state.token, kind }, true);
   };
   try {
     value = await operation({
@@ -164,8 +163,8 @@ function relayContext(
           return [target, value];
         }),
       );
-      state.socket.write(
-        `${JSON.stringify({
+      if (
+        !writeRelayMessage(state.socket, {
           token: state.token,
           kind: 'execute',
           command: input.command,
@@ -175,10 +174,12 @@ function relayContext(
           credentials,
           captureStdout: input.captureStdout ?? true,
           ...(input.cancel ? { cancel: input.cancel } : {}),
-        })}\n`,
-      );
+        })
+      ) {
+        throw new Error('relay socket is unavailable');
+      }
       const cancel = () => {
-        state.socket.write(`${JSON.stringify({ token: state.token, kind: 'cancel' })}\n`);
+        writeRelayMessage(state.socket, { token: state.token, kind: 'cancel' });
       };
       signal?.addEventListener('abort', cancel, { once: true });
       if (signal?.aborted) cancel();
@@ -240,6 +241,7 @@ async function startTrial(
   const connections = new Set<Socket>();
   server.on('connection', (socket) => {
     connections.add(socket);
+    socket.on('error', () => socket.destroy());
     socket.once('close', () => connections.delete(socket));
   });
   let child: ChildProcess | undefined;
@@ -351,6 +353,18 @@ async function startTrial(
       { kind: 'executor-preparation', framework, trialName, path: diagnosticPath },
     ]);
   }
+}
+
+export function writeRelayMessage(
+  socket: Socket,
+  value: Record<string, unknown>,
+  end = false,
+): boolean {
+  if (socket.destroyed || !socket.writable || socket.writableEnded) return false;
+  const payload = `${JSON.stringify(value)}\n`;
+  if (end) socket.end(payload);
+  else socket.write(payload);
+  return true;
 }
 
 function notStarted(

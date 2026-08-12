@@ -3,12 +3,13 @@ import { execFile } from 'node:child_process';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Socket } from 'node:net';
 import test from 'node:test';
 import { promisify } from 'node:util';
 import { FileAttemptStore } from '../attempt-store.js';
 import type { ExperimentCell, ExperimentSpec, JsonObject } from '../experiment.js';
 import { createExternalSubjectAdapter } from '../external-subject.js';
-import { createHarborExecutor } from '../harness-executor.js';
+import { createHarborExecutor, writeRelayMessage } from '../harness-executor.js';
 import { disabledWebToolsRuntimePolicyDocument } from '../maka-runtime-policy.js';
 import { createMakaSubjectAdapter } from '../maka-subject.js';
 import {
@@ -128,6 +129,12 @@ test('subject preflight settles before the attempt timer starts', async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('relay decision ignores a closed socket during cleanup', () => {
+  const socket = new Socket();
+  socket.destroy();
+  assert.equal(writeRelayMessage(socket, { kind: 'abort' }, true), false);
 });
 
 test('resume replaces a terminal attempt whose subject identity is stale', async () => {

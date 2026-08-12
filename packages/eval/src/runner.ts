@@ -38,6 +38,7 @@ export interface SubjectExecutionContext {
     readonly termination: 'exited' | 'framework_timeout' | 'cancelled';
     readonly exitCode: number;
     readonly stdout: string;
+    readonly stderr: string;
   }>;
 }
 

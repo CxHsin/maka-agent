@@ -57,14 +57,15 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
         token = f"test-{os.getpid()}"
         scope_path = f"/tmp/maka-eval-{token}.pid"
         output_path = f"/tmp/maka-eval-{token}.stdout"
+        stderr_path = f"/tmp/maka-eval-{token}.stderr"
         request = {
             "command": "/bin/sh",
-            "args": ["-c", "sleep 0.1; printf result-json"],
+            "args": ["-c", "sleep 0.1; printf result-json; printf runtime-error >&2"],
             "credentials": {},
         }
         try:
             command = await relay._prepare_command(
-                environment, request, token, scope_path, output_path
+                environment, request, token, scope_path, output_path, stderr_path
             )
             started = time.monotonic()
             result = subprocess.run(
@@ -80,9 +81,14 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 await relay._read_subject_output(environment, output_path),
                 "result-json",
             )
+            self.assertEqual(
+                await relay._read_subject_output(environment, stderr_path, limit_bytes=64 * 1024),
+                "runtime-error",
+            )
         finally:
             Path(scope_path).unlink(missing_ok=True)
             Path(output_path).unlink(missing_ok=True)
+            Path(stderr_path).unlink(missing_ok=True)
 
     async def test_settle_kills_descendants_before_verification_boundary(self):
         relay = load_relay()
@@ -90,6 +96,7 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
         token = f"descendant-{os.getpid()}"
         scope_path = f"/tmp/maka-eval-{token}.pid"
         output_path = f"/tmp/maka-eval-{token}.stdout"
+        stderr_path = f"/tmp/maka-eval-{token}.stderr"
         with tempfile.TemporaryDirectory() as directory:
             late_write = Path(directory) / "late-write"
             request = {
@@ -108,7 +115,7 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
             }
             try:
                 command = await relay._prepare_command(
-                    environment, request, token, scope_path, output_path
+                    environment, request, token, scope_path, output_path, stderr_path
                 )
                 execution = asyncio.create_task(
                     asyncio.to_thread(
@@ -138,6 +145,7 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 Path(scope_path).unlink(missing_ok=True)
                 Path(output_path).unlink(missing_ok=True)
+                Path(stderr_path).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

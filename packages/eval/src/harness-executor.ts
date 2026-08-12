@@ -192,7 +192,8 @@ function relayContext(
             executed.termination !== 'framework_timeout' &&
             executed.termination !== 'cancelled') ||
           typeof executed.exitCode !== 'number' ||
-          typeof executed.stdout !== 'string'
+          typeof executed.stdout !== 'string' ||
+          typeof executed.stderr !== 'string'
         ) {
           throw new Error('relay returned an invalid execution result');
         }
@@ -200,6 +201,7 @@ function relayContext(
           termination: executed.termination,
           exitCode: executed.exitCode,
           stdout: executed.stdout,
+          stderr: executed.stderr,
         };
       } finally {
         signal?.removeEventListener('abort', cancel);

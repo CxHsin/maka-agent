@@ -194,6 +194,7 @@ function subjectFailure(
               termination: process.termination,
               exitCode: process.exitCode,
               stdoutBytes: Buffer.byteLength(process.stdout),
+              stderrTail: process.stderr.slice(-4096),
             }
           : {}),
       },

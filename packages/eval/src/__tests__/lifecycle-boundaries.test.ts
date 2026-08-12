@@ -66,7 +66,12 @@ test('Maka framework termination is authoritative before stdout decoding', async
       cwd: '/app',
       taskInput: 'solve',
       metadata: {},
-      execute: async () => ({ termination: 'framework_timeout', exitCode: 124, stdout: '' }),
+      execute: async () => ({
+        termination: 'framework_timeout',
+        exitCode: 124,
+        stdout: '',
+        stderr: '',
+      }),
     },
   });
   assert.equal(external.status, 'failed');
@@ -488,6 +493,7 @@ async function executeMaka(
           termination,
           exitCode: termination === 'framework_timeout' ? 124 : 130,
           stdout: stdout(payload.execution.executionId),
+          stderr: '',
         };
       },
     },

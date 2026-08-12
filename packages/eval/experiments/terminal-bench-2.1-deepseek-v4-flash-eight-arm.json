@@ -149,7 +149,7 @@
           "WebFetch",
           "--dangerously-skip-permissions",
           "--model",
-          "deepseek-v4-flash",
+          "opus",
           "{{task.input}}"
         ]
       }

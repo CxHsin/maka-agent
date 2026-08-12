@@ -84,6 +84,71 @@ test('provider failures remain infrastructure failures until inference admission
   }
 });
 
+test('Claude Code aliases resolve to Flash and reject provider model substitution', async () => {
+  for (const [model, expectedStatus] of [
+    ['deepseek-v4-flash', 'completed'],
+    ['deepseek-v4-pro', 'infra_failed'],
+  ] as const) {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(
+        `data: {"type":"message_start","message":{"id":"msg","model":"${model}","usage":{"input_tokens":10,"output_tokens":0}}}\n\ndata: [DONE]\n\n`,
+      );
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const address = server.address();
+    assert.ok(address && typeof address !== 'string');
+    const root = await mkdtemp(join(tmpdir(), 'maka-claude-model-contract-'));
+    const child = join(root, 'child.mjs');
+    await writeFile(
+      child,
+      [
+        "const expected='deepseek-v4-flash';",
+        "if(process.env.ANTHROPIC_API_KEY!=='maka-eval-local')process.exit(9);",
+        "if(process.env.ANTHROPIC_DEFAULT_OPUS_MODEL!==expected)process.exit(10);",
+        "if(process.env.ANTHROPIC_DEFAULT_SONNET_MODEL!==expected)process.exit(11);",
+        "if(process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL!==expected)process.exit(12);",
+        "await fetch(`${process.env.ANTHROPIC_BASE_URL}/messages`,{method:'POST',body:'{}'});",
+        "console.log(JSON.stringify({type:'result',is_error:false}));",
+        '',
+      ].join('\n'),
+    );
+    try {
+      const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
+      const { stdout } = await execFileAsync(
+        process.execPath,
+        [
+          wrapper.pathname,
+          'claude-code',
+          `http://127.0.0.1:${address.port}`,
+          root,
+          process.execPath,
+          child,
+        ],
+        { env: { ...process.env, ANTHROPIC_API_KEY: 'upstream-test-key' } },
+      );
+      const result = JSON.parse(stdout) as {
+        status: string;
+        artifacts: Array<{
+          kind: string;
+          observedModels?: string[];
+          modelContractFailures?: number;
+        }>;
+      };
+      assert.equal(result.status, expectedStatus);
+      const metering = result.artifacts.find(({ kind }) => kind === 'provider-metering');
+      assert.deepEqual(metering?.observedModels, [model]);
+      assert.equal(metering?.modelContractFailures, model === 'deepseek-v4-flash' ? 0 : 1);
+    } finally {
+      server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('canonical Pi settlement remains completed when the CLI exits nonzero', async () => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { 'content-type': 'text/event-stream' });

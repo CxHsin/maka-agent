@@ -233,6 +233,13 @@ test('eight-arm spec and wrappers freeze the working provider contracts', async 
   assert.equal(codex.config.args?.includes('--skip-git-repo-check'), true);
   assert.equal(claude.config.args?.includes('--bare'), true);
   assert.equal(claude.config.args?.includes('--effort'), true);
+  assert.deepEqual(
+    claude.config.args?.slice(
+      claude.config.args.indexOf('--model'),
+      claude.config.args.indexOf('--model') + 2,
+    ),
+    ['--model', 'opus'],
+  );
   for (const subject of spec.subjects) {
     assert.deepEqual(subject.credentials, ['DEEPSEEK_API_KEY']);
     if (subject.id === 'maka') continue;

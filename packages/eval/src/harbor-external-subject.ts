@@ -68,7 +68,12 @@ try {
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
   if (!key) throw new Error('external subject credential is missing');
-  const proxy = await startMeteringProxy(baseUrl, key, profile === 'claude-code');
+  const proxy = await startMeteringProxy(
+    baseUrl,
+    key,
+    profile === 'claude-code',
+    profile === 'claude-code' ? 'deepseek-v4-flash' : undefined,
+  );
   try {
     await writeState('proxy_started');
     const prepared = await prepareProfile(profile, proxy.baseUrl, systemRoot, command, args);
@@ -101,6 +106,8 @@ try {
       requests: proxy.requestCount(),
       admittedRequests: proxy.admittedRequestCount(),
       usageRequests: proxy.usageRequestCount(),
+      observedModels: proxy.observedModels(),
+      modelContractFailures: proxy.modelContractFailureCount(),
     });
     artifacts.push(
       { kind: 'external-process', profile, exitCode: result.exitCode },
@@ -113,6 +120,8 @@ try {
         admittedRequests: proxy.admittedRequestCount(),
         usageRequests: proxy.usageRequestCount(),
         usageComplete: proxy.usageComplete(),
+        observedModels: proxy.observedModels(),
+        modelContractFailures: proxy.modelContractFailureCount(),
       },
       fileArtifact('wrapper-state', statePath, profile),
       ...profileArtifacts,
@@ -191,6 +200,9 @@ async function prepareProfile(
   } else if (selected === 'claude-code') {
     env.ANTHROPIC_BASE_URL = proxyBaseUrl;
     env.ANTHROPIC_API_KEY = 'maka-eval-local';
+    env.ANTHROPIC_DEFAULT_OPUS_MODEL = 'deepseek-v4-flash';
+    env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'deepseek-v4-flash';
+    env.ANTHROPIC_DEFAULT_HAIKU_MODEL = 'deepseek-v4-flash';
     env.CLAUDE_CODE_HOME = home;
     await writePolicy(
       rooted(root, '/etc/claude-code'),
@@ -498,6 +510,7 @@ async function startMeteringProxy(
   upstreamBaseUrl: string,
   upstreamKey: string,
   anthropic: boolean,
+  expectedModel?: string,
 ): Promise<{
   baseUrl: string;
   usage(): Usage | null;
@@ -505,6 +518,8 @@ async function startMeteringProxy(
   admittedRequestCount(): number;
   usageRequestCount(): number;
   usageComplete(): boolean;
+  observedModels(): string[];
+  modelContractFailureCount(): number;
   close(): Promise<void>;
 }> {
   const total = zeroUsage();
@@ -512,6 +527,8 @@ async function startMeteringProxy(
   let requests = 0;
   let admittedRequests = 0;
   let usageRequests = 0;
+  let modelContractFailures = 0;
+  const observedModels = new Set<string>();
   const active = new Set<Promise<void>>();
   const server = createServer((request, response) => {
     const operation = (async () => {
@@ -558,11 +575,20 @@ async function startMeteringProxy(
       } finally {
         const parsed = parser.finish();
         if (upstream.ok && parsed.admitted) {
-          admittedRequests += 1;
-          if (parsed.usage) {
-            usageRequests += 1;
-            measured = true;
-            addUsage(total, parsed.usage);
+          for (const model of parsed.models) observedModels.add(model);
+          const modelContractFailed =
+            expectedModel &&
+            (parsed.models.length === 0 ||
+              parsed.models.some((model) => model !== expectedModel));
+          if (modelContractFailed) {
+            modelContractFailures += 1;
+          } else {
+            admittedRequests += 1;
+            if (parsed.usage) {
+              usageRequests += 1;
+              measured = true;
+              addUsage(total, parsed.usage);
+            }
           }
         }
       }
@@ -584,6 +610,8 @@ async function startMeteringProxy(
     admittedRequestCount: () => admittedRequests,
     usageRequestCount: () => usageRequests,
     usageComplete: () => admittedRequests > 0 && usageRequests === admittedRequests,
+    observedModels: () => [...observedModels].sort(),
+    modelContractFailureCount: () => modelContractFailures,
     close: async () => {
       await Promise.allSettled([...active]);
       await closeServer(server);
@@ -593,17 +621,23 @@ async function startMeteringProxy(
 
 function usageParser(anthropic: boolean): {
   push(text: string): void;
-  finish(): { usage: Usage | null; admitted: boolean };
+  finish(): { usage: Usage | null; admitted: boolean; models: string[] };
 } {
   let buffered = '';
   let current: Usage | null = null;
   let admitted = false;
+  const models = new Set<string>();
   const consume = (line: string) => {
     const raw = line.trim().replace(/^data:\s*/u, '');
     if (!raw || raw === '[DONE]') return;
     try {
       const value = JSON.parse(raw) as Record<string, unknown>;
       admitted ||= isInferenceAdmissionEvent(value, anthropic);
+      const response =
+        value.type === 'response.completed' && isRecord(value.response) ? value.response : value;
+      const message =
+        value.type === 'message_start' && isRecord(value.message) ? value.message : response;
+      if (typeof message.model === 'string') models.add(message.model);
       current = mergeUsage(current, usageFromEvent(value, anthropic));
     } catch {
       return;
@@ -621,7 +655,7 @@ function usageParser(anthropic: boolean): {
     },
     finish() {
       if (buffered.trim()) consume(buffered);
-      return { usage: current, admitted };
+      return { usage: current, admitted, models: [...models] };
     },
   };
 }

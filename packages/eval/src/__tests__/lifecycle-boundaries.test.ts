@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { FileAttemptStore } from '../attempt-store.js';
 import type { ExperimentCell, ExperimentSpec, JsonObject } from '../experiment.js';
 import { createExternalSubjectAdapter } from '../external-subject.js';
-import { createHarborExecutor } from '../harness-executor.js';
+import { createHarborExecutor, createPierExecutor } from '../harness-executor.js';
 import { makaEvalRuntimePolicyDocument } from '../maka-runtime-policy.js';
 import { createMakaSubjectAdapter } from '../maka-subject.js';
 import {
@@ -816,9 +816,17 @@ test('eight-arm spec adds Pi with the same pinned DeepSeek execution contract', 
   );
   assert.doesNotMatch(egressCompose, /^\s*ports:/mu);
   assert.match(egressCompose, /condition: service_healthy/u);
-  assert.match(egressCompose, /maka-eval-egress-state:\/opt\/maka-egress/u);
+  assert.match(egressCompose, /maka-eval-egress-ca:\/opt\/maka-egress:ro/u);
   assert.match(egressCompose, /networks:\s*\n\s+- default/u);
   assert.match(egressCompose, /target: \/usr\/local\/bin\/network-policy/u);
+  // The subject shares the sidecar's network namespace, so any packet mark it
+  // could set is one the subject can set too. The namespace test proves this in
+  // a live cell; this keeps the rule from reappearing where that test is opt-in.
+  const networkPolicy = await readFile(
+    new URL('../../harbor/egress-proxy/network-policy', import.meta.url),
+    'utf8',
+  );
+  assert.doesNotMatch(networkPolicy, /meta mark \S+ (?:accept|return)/u);
   assert.deepEqual(
     spec.executor.config.mounts.map(({ target }) => target),
     [
@@ -1003,6 +1011,25 @@ function experiment(): ExperimentSpec {
     verifier: { reward: 'reward' },
   };
 }
+
+test('pier cannot declare an egress proxy it never enforces', () => {
+  const egressProxy = {
+    composeSourceEnv: 'MAKA_TEST_BUNDLE',
+    composeRelativePath: 'packages/eval/harbor/docker-compose-egress-proxy.yaml',
+    networkPolicyRelativePath: 'packages/eval/harbor/egress-proxy/network-policy',
+    proxyUrl: 'http://maka-eval-mitmproxy:8080',
+    allowedHost: 'maka-eval-mitmproxy',
+    containerCaPath: '/opt/maka-egress/mitmproxy-ca-cert.pem',
+  };
+  assert.throws(
+    () =>
+      createPierExecutor(
+        { ...executorConfig(), tasksRootEnv: 'MAKA_TEST_TASKS', egressProxy },
+        'experiment.json',
+      ),
+    /egressProxy is Harbor-only/u,
+  );
+});
 
 function executorConfig(): JsonObject {
   return {

@@ -30,6 +30,8 @@ class EgressFilterTest(unittest.TestCase):
             "https://example.test/search?q=TeRmInAlBeNcH": "terminal_bench_url",
             "https://google.com/search?q=terminal+bench": "terminal_bench_url",
             "https://github.com/harbor-framework/terminal%252Dbench-2-1.git": "benchmark_repository",
+            "https://terminal-bench.io/tasks/answers": "terminal_bench_url",
+            "https://sub.tbench.ai/x": "tbench_domain",
         }
         for url, rule_id in blocked.items():
             matched = MODULE.contamination_rule(url)
@@ -43,6 +45,7 @@ class EgressFilterTest(unittest.TestCase):
             "https://huggingface.co/datasets/mteb/leaderboard",
             "https://pypi.org/simple/requests/",
             "https://deb.debian.org/debian/",
+            "https://my-terminal/bench",
         ]
         for url in allowed:
             self.assertIsNone(MODULE.contamination_rule(url), url)

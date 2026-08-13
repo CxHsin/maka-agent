@@ -406,7 +406,7 @@ async function startTrial(
           ? {
               artifacts: [
                 {
-                  source: '/opt/maka-egress/hits.jsonl',
+                  source: '/opt/maka-egress-state/hits.jsonl',
                   destination: 'egress-hits.jsonl',
                   service: 'maka-eval-mitmproxy',
                 },
@@ -788,6 +788,14 @@ function decodeOptions(value: JsonObject, framework: Framework): HarnessOptions 
     'preparationEnvironment',
     'mounts',
   ];
+  // Only the Harbor branch of run_trial.py applies the namespace policy, so a
+  // pier spec declaring egressProxy would set the proxy up and inject its
+  // environment while enforcement silently did not exist.
+  if (framework === 'pier' && Object.hasOwn(value, 'egressProxy')) {
+    throw new Error(
+      'executor.config.egressProxy is Harbor-only: pier does not apply the subject namespace policy',
+    );
+  }
   if (Object.hasOwn(value, 'egressProxy')) fields.push('egressProxy');
   if (framework === 'pier') fields.push('tasksRootEnv');
   const options = exact(value, fields, 'executor.config');

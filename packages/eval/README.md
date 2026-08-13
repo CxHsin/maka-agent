@@ -42,15 +42,29 @@ the Eval metering proxy, which structurally removes named and provider-native we
 requests. Shell networking remains enabled. The configured HTTPS egress proxy blocks only
 benchmark and public-solution contamination URLs, including normalized or recursively wrapped
 `terminal-bench` references, pinned benchmark revisions, task registries, benchmark repositories,
-public trajectories, and known patch mirrors. The checked-in Compose overlay gives every cell its
-own MITM proxy, CA, bounded audit log, and health gate. During `Agent.run()`, Harbor's Docker egress
-sidecar applies an nftables allowlist containing only that proxy service; direct subject egress is
-therefore rejected even when a command unsets proxy variables or requests `--noproxy`. Harbor task
+public trajectories, and known patch mirrors. The general `terminal-bench` match searches the host
+and the path separately, so a contamination surface named only in the hostname is blocked too, and
+no rule can match across the boundary between the two fields. Only Harbor applies
+the namespace policy, so a pier executor spec that declares `egressProxy` is rejected when it is
+decoded rather than running with the proxy set up and enforcement absent. The checked-in Compose
+overlay gives every cell its own MITM proxy, CA, bounded audit log, and health gate. The proxy keeps its confdir and audit log
+private and publishes only `mitmproxy-ca-cert.pem` into the certificate-only volume the subject
+mounts read-only, so the CA private key and the audit log never enter the subject namespace. During
+`Agent.run()`, Harbor's Docker egress sidecar applies an nftables allowlist containing only that
+proxy service; direct subject egress is therefore rejected even when a command unsets proxy
+variables or requests `--noproxy`. The namespace policy accepts TCP to that proxy and traffic to
+namespace-local addresses, which keeps the loopback provider proxies and Docker's embedded DNS
+resolver reachable, and rejects every other protocol, ICMP included. It exempts no packet mark: the
+sidecar shares the subject's network namespace, so a mark the sidecar can set is one the subject can
+set too, and gost forwards nothing in this mode anyway. Harbor task
 download and verifier phases retain their native network policy. Build the pinned
 `maka-eval-egress-proxy:12.2.3` image from `harbor/egress-proxy/Dockerfile` before running the
-cohort. This URL policy is a blocklist for known benchmark and public-solution contamination
-surfaces, not a complete defense against a deliberately invented lookup channel; the network
-namespace still forces all subject traffic through the audited proxy. Collected Maka runtime files
+cohort. `MAKA_EVAL_EGRESS_NAMESPACE_TEST=1 python3 harbor/test_cell_egress_namespace.py` brings up
+the overlay and the checked-in policy and asserts that contract in a real cell namespace; it needs
+a Docker daemon and outbound network, and skips otherwise. This URL policy is a blocklist for known
+benchmark and public-solution contamination surfaces, not a complete defense against a deliberately
+invented lookup channel; the network namespace still forces all subject traffic through the audited
+proxy. Collected Maka runtime files
 and egress audit logs are represented in attempt artifacts with byte counts and SHA-256 digests.
 The local image tag remains a machine deployment identity rather than a registry digest; digest
 pinning is tracked in issue #2953.

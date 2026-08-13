@@ -2,8 +2,11 @@
 set -eu
 
 ALLOWLIST=/opt/egress-sidecar/allowlist.txt
+# The proxy-only ruleset carries no packet-mark exemption. gost only needs one
+# when it forwards, and this mode empties its allowlist so it forwards nothing;
+# trusting a mark here would let the subject set the same mark on its own socket
+# and leave the namespace unproxied.
 GOST_PORT=12345
-GOST_MARK=114514
 NFTABLES_RULESET_NAME=gost_egress
 PROXY_HOST=maka-eval-mitmproxy
 PROXY_PORT=8080
@@ -32,7 +35,6 @@ table inet $NFTABLES_RULESET_NAME {
   chain output {
     type nat hook output priority dstnat; policy accept;
 
-    meta mark $GOST_MARK return
     fib daddr type local return
     ip daddr $proxy_ip tcp dport $PROXY_PORT return
     meta l4proto tcp redirect to :$GOST_PORT
@@ -41,11 +43,8 @@ table inet $NFTABLES_RULESET_NAME {
   chain egress {
     type filter hook output priority filter; policy accept;
 
-    meta mark $GOST_MARK accept
     fib daddr type local accept
     ip daddr $proxy_ip tcp dport $PROXY_PORT accept
-    ip protocol icmp accept
-    ip6 nexthdr icmpv6 accept
     meta l4proto != tcp reject
   }
 }

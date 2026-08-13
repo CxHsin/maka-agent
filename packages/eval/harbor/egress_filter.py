@@ -12,7 +12,9 @@ from urllib.parse import unquote, urlsplit
 PINNED_REVISION = "d49e28f1e4ddd13d289e85a5f312a66750951932"
 MAX_DECODE_PASSES = 4
 MAX_AUDIT_BYTES = 1024 * 1024
-AUDIT_PATH = Path(os.environ.get("MAKA_EVAL_EGRESS_AUDIT", "/opt/maka-egress/hits.jsonl"))
+AUDIT_PATH = Path(
+    os.environ.get("MAKA_EVAL_EGRESS_AUDIT", "/opt/maka-egress-state/hits.jsonl")
+)
 PERCENT_ESCAPE = re.compile(r"%(?![0-9a-fA-F]{2})")
 TERMINAL_BENCH = re.compile(r"terminal[-_.%/+\s]*bench", re.IGNORECASE)
 
@@ -33,7 +35,7 @@ def contamination_rule(raw_url: str) -> tuple[str, str, str] | None:
 
     if PINNED_REVISION in lowered:
         return ("pinned_revision", host, path_query)
-    if host == "tbench.ai":
+    if host == "tbench.ai" or host.endswith(".tbench.ai"):
         return ("tbench_domain", host, path_query)
     if host == "hub.harborframework.com" and "/tasks/terminal-bench" in lowered:
         return ("harbor_task_registry", host, path_query)
@@ -43,7 +45,10 @@ def contamination_rule(raw_url: str) -> tuple[str, str, str] | None:
         return ("public_trajectory", host, path_query)
     if "patches-terminalbench-" in lowered:
         return ("known_patch_artifact", host, path_query)
-    if TERMINAL_BENCH.search(lowered):
+    # Search the host and the path separately. A benchmark name in the hostname
+    # is a contamination surface, and searching the two fields joined would let
+    # a rule match across their boundary.
+    if TERMINAL_BENCH.search(host) or TERMINAL_BENCH.search(lowered):
         return ("terminal_bench_url", host, path_query)
     return None
 

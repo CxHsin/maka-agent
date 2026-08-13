@@ -10,7 +10,8 @@ export type ExternalProfile =
   | 'opencode'
   | 'kimi-code'
   | 'zcode'
-  | 'pi';
+  | 'pi'
+  | 'deepseek-harness';
 
 export interface ToolchainIdentity {
   readonly root: string;
@@ -55,6 +56,11 @@ export const TOOLCHAIN_IDENTITIES: Readonly<Record<ExternalProfile, ToolchainIde
     root: '/opt/maka-pi-toolchain',
     version: '0.84.1',
     fingerprint: 'sha256:995a47ce9e2a5cd38865d22c932775b86484396d61889968310246cf7e82e3ec',
+  },
+  'deepseek-harness': {
+    root: '/opt/maka-deepseek-harness-toolchain',
+    version: '0.1.0-rc.6',
+    fingerprint: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
   },
 };
 

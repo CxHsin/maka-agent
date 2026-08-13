@@ -882,6 +882,58 @@ test('eight-arm spec adds Pi with the same pinned DeepSeek execution contract', 
   assert.equal(pi.config.args?.includes('max'), true);
 });
 
+test('the DeepSeek Harness arm pins its own minimal composition', async () => {
+  const spec = JSON.parse(
+    await readFile(
+      new URL(
+        '../../experiments/terminal-bench-2.1-deepseek-v4-flash-deepseek-harness.json',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+  ) as {
+    subjects: Array<{ id: string; config: { args?: string[] } }>;
+    executor: { config: { mounts: Array<{ target: string }>; egressProxy: { proxyUrl: string } } };
+  };
+  assert.deepEqual(
+    spec.subjects.map(({ id }) => id),
+    ['deepseek-harness'],
+  );
+  assert.deepEqual(
+    spec.executor.config.mounts.map(({ target }) => target),
+    ['/opt/maka-agent', '/opt/maka-node-toolchain', '/opt/maka-deepseek-harness-toolchain'],
+  );
+  // The single-arm spec keeps the cohort's egress enforcement rather than
+  // running the harness with unaudited network access.
+  assert.equal(spec.executor.config.egressProxy.proxyUrl, 'http://maka-eval-mitmproxy:8080');
+
+  const subject = spec.subjects[0]!;
+  const args = subject.config.args ?? [];
+  assert.equal(args.includes('/opt/maka-deepseek-harness-toolchain/bin/dsh'), true);
+  assert.deepEqual(args.slice(args.indexOf('--profile'), args.indexOf('--profile') + 2), [
+    '--profile',
+    'headless',
+  ]);
+  assert.deepEqual(args.slice(args.indexOf('--patch'), args.indexOf('--patch') + 2), [
+    '--patch',
+    '/opt/maka-agent/packages/eval/harbor/deepseek-harness-eval.patch.yml',
+  ]);
+
+  // The patch layer is what makes this arm comparable: upstream's minimal tool
+  // surface, upstream's persona, and the cohort's reasoning strength.
+  const patch = await readFile(
+    new URL('../../harbor/deepseek-harness-eval.patch.yml', import.meta.url),
+    'utf8',
+  );
+  assert.match(patch, /reasoningEffort: max/u);
+  assert.match(patch, /includeHarnessIdentity: false/u);
+  assert.match(patch, /persona: You are a helpful software engineer assistant\./u);
+  assert.match(patch, /- id: persistent-bash/u);
+  for (const disabled of ['tool-fs', 'tool-fs-search', 'tool-subagent', 'tool-web', 'tool-bash']) {
+    assert.match(patch, new RegExp(`- id: ${disabled}\\n  disabled: true`, 'u'));
+  }
+});
+
 test('Maka Eval policy enables privacy independently of the tool profile', () => {
   const document = makaEvalRuntimePolicyDocument();
   assert.equal(document.policy.privacy.incognitoActive, true);

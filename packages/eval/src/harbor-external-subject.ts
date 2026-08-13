@@ -153,6 +153,7 @@ async function prepareProfile(
   const home = rooted(root, `/tmp/maka-eval-${selected}`);
   await mkdir(home, { recursive: true, mode: 0o700 });
   env.HOME = home;
+  let profileArgs = executableArgs;
 
   if (selected === 'codex') {
     env.OPENAI_API_KEY = 'maka-eval-local';
@@ -334,6 +335,26 @@ async function prepareProfile(
       })}\n`,
       { mode: 0o600 },
     );
+  } else if (selected === 'deepseek-harness') {
+    // The harness reads its route, credential, and model from the environment;
+    // the checked-in patch layer names none of them. DSH_HOME has to be
+    // writable because the CLI scaffolds its profile there on first use, which
+    // it does offline from its own bundled packages.
+    const modelIndex = executableArgs.indexOf('--model');
+    const model = executableArgs[modelIndex + 1];
+    if (modelIndex < 0 || !model) throw new Error('DeepSeek Harness model is required');
+    // `dsh` has no --model flag; the model reaches the composition as DSH_MODEL.
+    profileArgs = executableArgs.filter(
+      (_, index) => index !== modelIndex && index !== modelIndex + 1,
+    );
+    env.DSH_HOME = join(home, 'dsh');
+    await mkdir(env.DSH_HOME, { recursive: true, mode: 0o700 });
+    env.DEEPSEEK_API_KEY = 'maka-eval-local';
+    env.DEEPSEEK_BASE_URL = proxyBaseUrl;
+    env.DSH_MODEL = model;
+    // The launcher's `#!/usr/bin/env node` shebang needs the pinned Node on
+    // PATH; the toolchain mount carries no interpreter of its own.
+    env.PATH = `${rooted(root, '/opt/maka-node-toolchain/bin')}:${env.PATH ?? ''}`;
   } else {
     const zcodeHome = join(home, '.zcode');
     const configRoot = join(zcodeHome, 'cli');
@@ -388,7 +409,7 @@ async function prepareProfile(
   }
   return {
     command: executable,
-    args: executableArgs,
+    args: profileArgs,
     env,
     home,
     ...(credentialPath ? { credentialPath } : {}),
@@ -533,7 +554,13 @@ function classifyExecution(
       failureReason: `${selected} output record exceeded the classification limit`,
     };
   }
-  const completed = output.completed || (selected === 'zcode' && exitCode === 0 && output.nonempty);
+  // zcode and the DeepSeek Harness SDK both print only the final assistant
+  // message, so a clean exit with output is the completion signal they offer.
+  const completed =
+    output.completed ||
+    ((selected === 'zcode' || selected === 'deepseek-harness') &&
+      exitCode === 0 &&
+      output.nonempty);
   const reportedError = output.reportedError;
   if (admittedRequests === 0) {
     return { status: 'infra_failed', failureReason: `${selected} failed before model admission` };

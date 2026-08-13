@@ -5,7 +5,7 @@ import { chmod, copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
-import { fetch as undiciFetch, ProxyAgent } from 'undici';
+import { Agent, fetch as undiciFetch, ProxyAgent } from 'undici';
 import {
   decodePreverifiedToolchain,
   isExternalProfile,
@@ -22,6 +22,17 @@ const resultToken = takeRelayResultToken();
 // lifecycle test pins the two together.
 const DEEPSEEK_HARNESS_PROFILE = 'maka-eval';
 
+interface MeteringReport {
+  readonly usage: Usage | null;
+  readonly requests: number;
+  readonly admittedRequests: number;
+  readonly usageRequests: number;
+  readonly usageComplete: boolean;
+  readonly removedWebTools: number;
+  readonly models: readonly string[];
+  readonly toolNames: readonly string[];
+}
+
 type SubjectStatus = 'completed' | 'failed' | 'infra_failed' | 'indeterminate';
 const CLASSIFIABLE_RECORD_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -34,130 +45,20 @@ interface Usage {
   totalTokens: number;
 }
 
-const [rawProfile, baseUrl, systemRoot, command, ...args] = process.argv.slice(2);
-if (!isExternalProfile(rawProfile)) throw new Error('external subject profile is required');
-const profile = rawProfile;
-if (!command) throw new Error('external subject command is required');
-if (!baseUrl || !URL.canParse(baseUrl)) throw new Error('external subject base URL is required');
-if (!systemRoot?.startsWith('/')) throw new Error('external subject system root is required');
-
-let credentialPath: string | undefined;
-let child: ChildProcess | undefined;
-let stopped = false;
-const stop = (signal: NodeJS.Signals) => {
-  stopped = true;
-  removeCredential();
-  child?.kill(signal);
-};
-const terminate = () => stop('SIGTERM');
-const interrupt = () => stop('SIGINT');
-process.once('SIGTERM', terminate);
-process.once('SIGINT', interrupt);
-
-const logsRoot = rooted(systemRoot, '/logs/agent');
-const statePath = join(logsRoot, `${profile}.wrapper-state.json`);
-const artifacts: Record<string, unknown>[] = [];
-let usage: Usage | null = null;
-let costUsd: number | null = null;
-let status: SubjectStatus = 'infra_failed';
-let failureReason: string | null = 'external subject setup failed';
-
-try {
-  await mkdir(logsRoot, { recursive: true, mode: 0o700 });
-  await writeState('started');
-  const identity = decodePreverifiedToolchain(profile, systemRoot, command);
-  artifacts.push({ kind: 'toolchain', profile, ...identity });
-  await writeState('toolchain_verified');
-
-  const key =
-    process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? process.env.DEEPSEEK_API_KEY;
-  delete process.env.OPENAI_API_KEY;
-  delete process.env.ANTHROPIC_API_KEY;
-  delete process.env.DEEPSEEK_API_KEY;
-  if (!key) throw new Error('external subject credential is missing');
-  const proxy = await startMeteringProxy(baseUrl, key, profile === 'claude-code');
-  try {
-    await writeState('proxy_started');
-    const prepared = await prepareProfile(profile, proxy.baseUrl, systemRoot, args);
-    credentialPath = prepared.credentialPath;
-    if (profile === 'claude-code') prepareClaudeWorkspace(systemRoot, prepared.home);
-    const result = await runChild(command, args, prepared.env, profile);
-    child = undefined;
-    await writeState('child_exited', { exitCode: result.exitCode });
-    usage = proxy.usage();
-    costUsd = usage && proxy.usageComplete() ? estimateCost(usage) : null;
-    const classified = classifyExecution(
-      profile,
-      result.exitCode,
-      result.stdout,
-      proxy.admittedRequestCount(),
-    );
-    status = stopped ? 'indeterminate' : classified.status;
-    failureReason = stopped ? 'external subject cancelled' : classified.failureReason;
-    await writeState('result_ready', {
-      status,
-      requests: proxy.requestCount(),
-      admittedRequests: proxy.admittedRequestCount(),
-      usageRequests: proxy.usageRequestCount(),
-      removedWebTools: proxy.removedWebToolCount(),
-    });
-    artifacts.push(
-      { kind: 'external-process', profile, exitCode: result.exitCode },
-      streamArtifact('stdout', profile, result.stdout),
-      streamArtifact('stderr', profile, result.stderr),
-      {
-        kind: 'provider-metering',
-        profile,
-        requests: proxy.requestCount(),
-        admittedRequests: proxy.admittedRequestCount(),
-        usageRequests: proxy.usageRequestCount(),
-        usageComplete: proxy.usageComplete(),
-        removedWebTools: proxy.removedWebToolCount(),
-        models: proxy.requestModels(),
-        toolNames: proxy.observedToolNames(),
-      },
-      fileArtifact('wrapper-state', statePath, profile),
-    );
-  } finally {
-    await proxy.close();
-  }
-} catch (error) {
-  status = stopped ? 'indeterminate' : 'infra_failed';
-  failureReason = stopped
-    ? 'external subject cancelled'
-    : safeFailure(error, 'external subject setup failed');
-  await writeState('setup_failed', { failureReason }).catch(() => undefined);
-} finally {
-  process.removeListener('SIGTERM', terminate);
-  process.removeListener('SIGINT', interrupt);
-  removeCredential();
+interface ProfileSetup {
+  readonly env: NodeJS.ProcessEnv;
+  readonly home: string;
+  readonly root: string;
+  readonly proxyBaseUrl: string;
+  readonly executableArgs: readonly string[];
 }
 
-writeRelayResult(resultToken, {
-  schemaVersion: 'maka.external_subject_result.v2',
-  status,
-  failureReason,
-  usage,
-  costUsd,
-  artifacts,
-});
-
-async function prepareProfile(
-  selected: Profile,
-  proxyBaseUrl: string,
-  root: string,
-  executableArgs: string[],
-): Promise<{
-  env: NodeJS.ProcessEnv;
-  home: string;
-  credentialPath?: string;
-}> {
-  const env = { ...process.env };
-  const home = rooted(root, `/tmp/maka-eval-${selected}`);
-  await mkdir(home, { recursive: true, mode: 0o700 });
-  env.HOME = home;
-
-  if (selected === 'codex') {
+// One preparer per admissible profile, returning the path of any credential
+// file it wrote. Keying the table by ExternalProfile is what makes adding a
+// profile to TOOLCHAIN_IDENTITIES without preparing it a compile error, rather
+// than a silent fallthrough into whichever branch happened to be written last.
+const PROFILE_PREPARERS: Record<Profile, (setup: ProfileSetup) => Promise<string | undefined>> = {
+  codex: async ({ env, home, root, proxyBaseUrl }) => {
     env.OPENAI_API_KEY = 'maka-eval-local';
     env.CODEX_HOME = home;
     const catalog = rooted(root, '/opt/maka-agent/packages/eval/harbor/deepseek-codex-models.json');
@@ -183,7 +84,9 @@ async function prepareProfile(
       'requirements.toml',
       'allowed_web_search_modes = ["disabled"]\n',
     );
-  } else if (selected === 'claude-code') {
+  },
+
+  'claude-code': async ({ env, home, root, proxyBaseUrl }) => {
     env.ANTHROPIC_BASE_URL = proxyBaseUrl;
     env.ANTHROPIC_API_KEY = 'maka-eval-local';
     env.CLAUDE_CODE_HOME = home;
@@ -192,7 +95,9 @@ async function prepareProfile(
       'managed-settings.json',
       '{"permissions":{"deny":["WebSearch","WebFetch","FetchURL"]}}\n',
     );
-  } else if (selected === 'reasonix') {
+  },
+
+  reasonix: async ({ env, home, proxyBaseUrl, executableArgs }) => {
     const modelReference = executableArgs[executableArgs.indexOf('--model') + 1];
     const effort = executableArgs[executableArgs.indexOf('--effort') + 1];
     const [provider, model] = modelReference?.split('/') ?? [];
@@ -208,8 +113,10 @@ async function prepareProfile(
     await writeFile(path, 'OPENAI_API_KEY=maka-eval-local\n', { mode: 0o600 });
     env.OPENAI_API_KEY = 'maka-eval-local';
     env.REASONIX_HOME = home;
-    credentialPath = path;
-  } else if (selected === 'opencode') {
+    return path;
+  },
+
+  opencode: async ({ env, home, proxyBaseUrl }) => {
     env.DEEPSEEK_API_KEY = 'maka-eval-local';
     env.DEEPSEEK_BASE_URL = proxyBaseUrl;
     env.OPENCODE_CONFIG = join(home, 'opencode.json');
@@ -254,7 +161,9 @@ async function prepareProfile(
       })}\n`,
       { mode: 0o600 },
     );
-  } else if (selected === 'kimi-code') {
+  },
+
+  'kimi-code': async ({ env, home, proxyBaseUrl }) => {
     env.KIMI_CODE_HOME = home;
     env.KIMI_MODEL_NAME = 'deepseek-v4-flash';
     env.KIMI_MODEL_API_KEY = 'maka-eval-local';
@@ -284,7 +193,9 @@ async function prepareProfile(
       ].join('\n'),
       { mode: 0o600 },
     );
-  } else if (selected === 'pi') {
+  },
+
+  pi: async ({ env, home, proxyBaseUrl }) => {
     env.OPENAI_API_KEY = 'maka-eval-local';
     env.PI_CODING_AGENT_DIR = home;
     env.PI_CODING_AGENT_SESSION_DIR = join(home, 'sessions');
@@ -337,7 +248,9 @@ async function prepareProfile(
       })}\n`,
       { mode: 0o600 },
     );
-  } else if (selected === 'deepseek-harness') {
+  },
+
+  'deepseek-harness': async ({ env, home, root, proxyBaseUrl }) => {
     // The arm supplies its own profile rather than patching a stock one, so the
     // composition names every entry the model can observe. DSH_HOME must be
     // writable: the harness links its bundled packages into
@@ -351,7 +264,9 @@ async function prepareProfile(
     }
     env.DEEPSEEK_API_KEY = 'maka-eval-local';
     env.DEEPSEEK_BASE_URL = proxyBaseUrl;
-  } else {
+  },
+
+  zcode: async ({ env, home, proxyBaseUrl }) => {
     const zcodeHome = join(home, '.zcode');
     const configRoot = join(zcodeHome, 'cli');
     await mkdir(configRoot, { recursive: true, mode: 0o700 });
@@ -402,8 +317,136 @@ async function prepareProfile(
       })}\n`,
       { mode: 0o600 },
     );
+  },
+};
+
+const [rawProfile, baseUrl, systemRoot, command, ...args] = process.argv.slice(2);
+if (!isExternalProfile(rawProfile)) throw new Error('external subject profile is required');
+const profile = rawProfile;
+if (!command) throw new Error('external subject command is required');
+if (!baseUrl || !URL.canParse(baseUrl)) throw new Error('external subject base URL is required');
+if (!systemRoot?.startsWith('/')) throw new Error('external subject system root is required');
+
+let credentialPath: string | undefined;
+let child: ChildProcess | undefined;
+let stopped = false;
+const stop = (signal: NodeJS.Signals) => {
+  stopped = true;
+  removeCredential();
+  child?.kill(signal);
+};
+const terminate = () => stop('SIGTERM');
+const interrupt = () => stop('SIGINT');
+process.once('SIGTERM', terminate);
+process.once('SIGINT', interrupt);
+
+const logsRoot = rooted(systemRoot, '/logs/agent');
+const statePath = join(logsRoot, `${profile}.wrapper-state.json`);
+const artifacts: Record<string, unknown>[] = [];
+let usage: Usage | null = null;
+let costUsd: number | null = null;
+let status: SubjectStatus = 'infra_failed';
+let failureReason: string | null = 'external subject setup failed';
+
+try {
+  await mkdir(logsRoot, { recursive: true, mode: 0o700 });
+  await writeState('started');
+  const identity = decodePreverifiedToolchain(profile, systemRoot, command);
+  artifacts.push({ kind: 'toolchain', profile, ...identity });
+  await writeState('toolchain_verified');
+
+  const key =
+    process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? process.env.DEEPSEEK_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  if (!key) throw new Error('external subject credential is missing');
+  const proxy = await startMeteringProxy(baseUrl, key, profile === 'claude-code');
+  try {
+    await writeState('proxy_started');
+    const prepared = await prepareProfile(profile, proxy.baseUrl, systemRoot, args);
+    credentialPath = prepared.credentialPath;
+    if (profile === 'claude-code') prepareClaudeWorkspace(systemRoot, prepared.home);
+    const result = await runChild(command, args, prepared.env, profile);
+    child = undefined;
+    await writeState('child_exited', { exitCode: result.exitCode });
+    const metering = await proxy.report();
+    usage = metering.usage;
+    costUsd = usage && metering.usageComplete ? estimateCost(usage) : null;
+    const classified = classifyExecution(
+      profile,
+      result.exitCode,
+      result.stdout,
+      metering.admittedRequests,
+    );
+    status = stopped ? 'indeterminate' : classified.status;
+    failureReason = stopped ? 'external subject cancelled' : classified.failureReason;
+    await writeState('result_ready', {
+      status,
+      requests: metering.requests,
+      admittedRequests: metering.admittedRequests,
+      usageRequests: metering.usageRequests,
+      removedWebTools: metering.removedWebTools,
+    });
+    artifacts.push(
+      { kind: 'external-process', profile, exitCode: result.exitCode },
+      streamArtifact('stdout', profile, result.stdout),
+      streamArtifact('stderr', profile, result.stderr),
+      {
+        kind: 'provider-metering',
+        profile,
+        requests: metering.requests,
+        admittedRequests: metering.admittedRequests,
+        usageRequests: metering.usageRequests,
+        usageComplete: metering.usageComplete,
+        removedWebTools: metering.removedWebTools,
+        models: metering.models,
+        toolNames: metering.toolNames,
+      },
+      fileArtifact('wrapper-state', statePath, profile),
+    );
+  } finally {
+    await proxy.close();
   }
-  return { env, home, ...(credentialPath ? { credentialPath } : {}) };
+} catch (error) {
+  status = stopped ? 'indeterminate' : 'infra_failed';
+  failureReason = stopped
+    ? 'external subject cancelled'
+    : safeFailure(error, 'external subject setup failed');
+  await writeState('setup_failed', { failureReason }).catch(() => undefined);
+} finally {
+  process.removeListener('SIGTERM', terminate);
+  process.removeListener('SIGINT', interrupt);
+  removeCredential();
+}
+
+writeRelayResult(resultToken, {
+  schemaVersion: 'maka.external_subject_result.v2',
+  status,
+  failureReason,
+  usage,
+  costUsd,
+  artifacts,
+});
+
+async function prepareProfile(
+  selected: Profile,
+  proxyBaseUrl: string,
+  root: string,
+  executableArgs: string[],
+): Promise<{ env: NodeJS.ProcessEnv; home: string; credentialPath?: string }> {
+  const env = { ...process.env };
+  const home = rooted(root, `/tmp/maka-eval-${selected}`);
+  await mkdir(home, { recursive: true, mode: 0o700 });
+  env.HOME = home;
+  const credential = await PROFILE_PREPARERS[selected]({
+    env,
+    home,
+    root,
+    proxyBaseUrl,
+    executableArgs,
+  });
+  return { env, home, ...(credential ? { credentialPath: credential } : {}) };
 }
 
 async function runChild(
@@ -609,14 +652,10 @@ async function startMeteringProxy(
   anthropic: boolean,
 ): Promise<{
   baseUrl: string;
-  usage(): Usage | null;
-  requestCount(): number;
-  admittedRequestCount(): number;
-  usageRequestCount(): number;
-  usageComplete(): boolean;
-  removedWebToolCount(): number;
-  requestModels(): readonly string[];
-  observedToolNames(): readonly string[];
+  // Metering is only readable as one settled snapshot: a request still in
+  // flight when the child exits would otherwise be missing from the counts that
+  // decide admission, usage, and cost.
+  report(): Promise<MeteringReport>;
   close(): Promise<void>;
 }> {
   const total = zeroUsage();
@@ -627,7 +666,14 @@ async function startMeteringProxy(
   let removedWebTools = 0;
   const requestModels = new Set<string>();
   const observedToolNames = new Set<string>();
-  const dispatcher = process.env.HTTPS_PROXY ? new ProxyAgent(process.env.HTTPS_PROXY) : undefined;
+  // Undici defaults to aborting a request after 300s without headers or body
+  // bytes. A reasoning model can legitimately be quiet for longer, and killing
+  // it here would turn a slow answer into an infrastructure failure. The
+  // benchmark's own agent timeout stays the only deadline.
+  const timeouts = { headersTimeout: 0, bodyTimeout: 0 };
+  const dispatcher = process.env.HTTPS_PROXY
+    ? new ProxyAgent({ uri: process.env.HTTPS_PROXY, ...timeouts })
+    : new Agent(timeouts);
   const active = new Set<Promise<void>>();
   const server = createServer((request, response) => {
     const operation = (async () => {
@@ -654,7 +700,7 @@ async function startMeteringProxy(
         method: request.method,
         headers,
         body: projected.body.length === 0 ? undefined : new Uint8Array(projected.body),
-        ...(dispatcher ? { dispatcher } : {}),
+        dispatcher,
       });
       response.statusCode = upstream.status;
       upstream.headers.forEach((value, name) => {
@@ -698,19 +744,23 @@ async function startMeteringProxy(
   if (!address || typeof address === 'string') throw new Error('provider proxy did not bind');
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    usage: () =>
-      measured ? { ...total, totalTokens: total.inputTokens + total.outputTokens } : null,
-    requestCount: () => requests,
-    admittedRequestCount: () => admittedRequests,
-    usageRequestCount: () => usageRequests,
-    usageComplete: () => admittedRequests > 0 && usageRequests === admittedRequests,
-    removedWebToolCount: () => removedWebTools,
-    requestModels: () => [...requestModels].sort(),
-    observedToolNames: () => [...observedToolNames].sort(),
+    report: async () => {
+      await Promise.allSettled([...active]);
+      return {
+        usage: measured ? { ...total, totalTokens: total.inputTokens + total.outputTokens } : null,
+        requests,
+        admittedRequests,
+        usageRequests,
+        usageComplete: admittedRequests > 0 && usageRequests === admittedRequests,
+        removedWebTools,
+        models: [...requestModels].sort(),
+        toolNames: [...observedToolNames].sort(),
+      };
+    },
     close: async () => {
       await Promise.allSettled([...active]);
       await closeServer(server);
-      await dispatcher?.close();
+      await dispatcher.close();
     },
   };
 }

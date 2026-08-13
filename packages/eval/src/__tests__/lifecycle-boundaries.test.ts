@@ -971,6 +971,12 @@ test('the DeepSeek Harness arm pins its own minimal composition', async () => {
   // has no --model flag, and the composition is the only place it is named.
   assert.equal(args.includes('--model'), false);
   assert.equal(args.includes('--patch'), false);
+  // The task prompt is the last argument and is fenced from option parsing, the
+  // same way the other arms fence theirs. `dsh` combines allowUnknownOption with
+  // passThroughOptions, so a dash-leading prompt already reaches the profile
+  // without this; the separator is what stops a prompt that exactly matches a
+  // known option, and what keeps every arm's contract readable as one rule.
+  assert.deepEqual(args.slice(-2), ['--', '{{task.input}}']);
 
   // Every subject in a task group runs its own container, so a single-arm cohort
   // at the eight-arm limit would run at an eighth of its machine load.

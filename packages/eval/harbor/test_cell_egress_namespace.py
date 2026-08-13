@@ -360,6 +360,21 @@ class CellEgressNamespaceTest(unittest.TestCase):
     def ping(cls) -> subprocess.CompletedProcess[str]:
         return cls.exec_main(["ping", "-c", "1", "-W", "5", "1.1.1.1"])
 
+    def test_no_network_phase_is_not_answered_with_proxy_access(self) -> None:
+        # Harbor's deny-all denies controlled egress outright, so answering it
+        # with the proxy-only ruleset would grant a phase that asked for no
+        # network a route this override invented.
+        reachable = self.curl([], environment=PROXY_ENVIRONMENT)
+        self.assertEqual(reachable.returncode, 0, reachable.stderr)
+        try:
+            denied = self.exec_service(SIDECAR, ["network-policy", "deny-all"])
+            self.assertEqual(denied.returncode, 0, denied.stderr)
+            blocked = self.curl([], environment=PROXY_ENVIRONMENT)
+            self.assertNotEqual(blocked.returncode, 0)
+        finally:
+            restored = self.exec_service(SIDECAR, ["network-policy", "allow", PROXY_HOST])
+            self.assertEqual(restored.returncode, 0, restored.stderr)
+
     def test_relay_admits_only_a_subject_the_policy_governs(self) -> None:
         # The gate runs against live containers rather than a fixture, so what
         # it parses is a real `/proc` and what it judges is a real namespace.

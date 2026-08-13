@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { HostedExecutionStartInput } from '@maka/runtime-host/protocol';
-import { decodeHostedExecutionProjection } from '@maka/runtime-host/protocol';
+import {
+  decodeHostedExecutionProjection,
+  HOSTED_EXECUTION_TOOL_PROFILES,
+  type HostedExecutionStartInput,
+} from '@maka/runtime-host/protocol';
 import type { JsonObject } from './experiment.js';
 import type { NormalizedUsage } from './result.js';
 import type { SubjectAdapter, SubjectExecutionContext } from './runner.js';
@@ -28,6 +31,7 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
         },
         content: { text: context.taskInput },
         maxSteps: positive(cell.budget.maxSteps, 'budget.maxSteps'),
+        toolProfile: config.toolProfile,
       };
       const payload = Buffer.from(
         JSON.stringify({
@@ -212,6 +216,7 @@ interface MakaConfig {
   readonly permissionMode: HostedExecutionStartInput['session']['permissionMode'];
   readonly collaborationMode: HostedExecutionStartInput['session']['collaborationMode'];
   readonly orchestrationMode: HostedExecutionStartInput['session']['orchestrationMode'];
+  readonly toolProfile: NonNullable<HostedExecutionStartInput['toolProfile']>;
 }
 
 function decodeConfig(value: JsonObject): MakaConfig {
@@ -226,6 +231,7 @@ function decodeConfig(value: JsonObject): MakaConfig {
     'permissionMode',
     'collaborationMode',
     'orchestrationMode',
+    'toolProfile',
   ];
   if (Object.hasOwn(value, 'webTools')) fields.push('webTools');
   const config = exact(value, fields);
@@ -233,6 +239,9 @@ function decodeConfig(value: JsonObject): MakaConfig {
   const webTools = config.webTools ?? 'enabled';
   if (webTools !== 'enabled' && webTools !== 'disabled') {
     throw new Error('Maka config.webTools is invalid');
+  }
+  if (!(HOSTED_EXECUTION_TOOL_PROFILES as readonly unknown[]).includes(config.toolProfile)) {
+    throw new Error('Maka config.toolProfile is invalid');
   }
   return { ...config, webTools } as unknown as MakaConfig;
 }

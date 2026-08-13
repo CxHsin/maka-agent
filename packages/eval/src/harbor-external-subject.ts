@@ -353,9 +353,6 @@ async function prepareProfile(
     env.DEEPSEEK_API_KEY = 'maka-eval-local';
     env.DEEPSEEK_BASE_URL = proxyBaseUrl;
     env.DSH_MODEL = model;
-    // The launcher's `#!/usr/bin/env node` shebang needs the pinned Node on
-    // PATH; the toolchain mount carries no interpreter of its own.
-    env.PATH = `${rooted(root, '/opt/maka-node-toolchain/bin')}:${env.PATH ?? ''}`;
   } else {
     const zcodeHome = join(home, '.zcode');
     const configRoot = join(zcodeHome, 'cli');

@@ -909,7 +909,15 @@ test('the DeepSeek Harness arm pins its own minimal composition', async () => {
 
   const subject = spec.subjects[0]!;
   const args = subject.config.args ?? [];
-  assert.equal(args.includes('/opt/maka-deepseek-harness-toolchain/bin/dsh'), true);
+  // The toolchain carries its own Node so the executed path resolves inside the
+  // mounted root, which is what makes the preflight identity check meaningful.
+  assert.equal(args.includes('/opt/maka-deepseek-harness-toolchain/bin/node'), true);
+  assert.equal(
+    args.includes(
+      '/opt/maka-deepseek-harness-toolchain/lib/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js',
+    ),
+    true,
+  );
   assert.deepEqual(args.slice(args.indexOf('--profile'), args.indexOf('--profile') + 2), [
     '--profile',
     'headless',

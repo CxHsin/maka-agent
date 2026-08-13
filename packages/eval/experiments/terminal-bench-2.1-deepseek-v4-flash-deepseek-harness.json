@@ -60,7 +60,7 @@
     }
   },
   "execution": {
-    "maxConcurrentTaskGroups": 16
+    "maxConcurrentTaskGroups": 128
   },
   "subjects": [
     {
@@ -80,11 +80,7 @@
           "/opt/maka-deepseek-harness-toolchain/bin/node",
           "/opt/maka-deepseek-harness-toolchain/lib/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js",
           "--profile",
-          "headless",
-          "--patch",
-          "/opt/maka-agent/packages/eval/harbor/deepseek-harness-eval.patch.yml",
-          "--model",
-          "deepseek-v4-flash",
+          "maka-eval",
           "{{task.input}}"
         ]
       }

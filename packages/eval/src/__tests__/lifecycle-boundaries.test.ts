@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -673,6 +683,16 @@ test('eight-arm spec and wrappers freeze the working provider contracts', async 
     ANTHROPIC_API_KEY: 'test-only-key',
     MAKA_EVAL_RESULT_TOKEN: '0123456789abcdef0123456789abcdef',
   };
+  // The DeepSeek Harness arm copies its checked-in profile out of the repo
+  // mount, so the wrapper needs to find it under the fake system root.
+  const profileSource = join(root, 'opt/maka-agent/packages/eval/harbor/deepseek-harness-profile');
+  await mkdir(profileSource, { recursive: true });
+  for (const file of ['package.json', 'cordis.yml', 'cordis.patch.yml']) {
+    await copyFile(
+      new URL(`../../harbor/deepseek-harness-profile/${file}`, import.meta.url),
+      join(profileSource, file),
+    );
+  }
   try {
     for (const args of [
       ['codex', 'https://api.deepseek.com', root, '/usr/bin/true'],
@@ -688,6 +708,7 @@ test('eight-arm spec and wrappers freeze the working provider contracts', async 
         'max',
       ],
       ['pi', 'https://api.deepseek.com', root, '/usr/bin/true'],
+      ['deepseek-harness', 'https://api.deepseek.com', root, '/usr/bin/true'],
     ]) {
       const { stdout } = await execFileAsync(process.execPath, [wrapper.pathname, ...args], {
         env,
@@ -753,6 +774,32 @@ test('eight-arm spec and wrappers freeze the working provider contracts', async 
         cacheWrite: 0.145,
       },
     });
+
+    // The harness resolves `--profile <name>` against DSH_HOME. The wrapper
+    // names the directory and the spec repeats that name in argv; this pins the
+    // two together and checks all three files were materialized.
+    const profileRoot = join(root, 'tmp/maka-eval-deepseek-harness/dsh/profiles');
+    const harnessSpec = JSON.parse(
+      await readFile(
+        new URL(
+          '../../experiments/terminal-bench-2.1-deepseek-v4-flash-deepseek-harness.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ) as { subjects: Array<{ config: { args: string[] } }> };
+    const declared = harnessSpec.subjects[0]!.config.args;
+    const profileName = declared[declared.indexOf('--profile') + 1]!;
+    assert.deepEqual(await readdir(profileRoot), [profileName]);
+    for (const file of ['package.json', 'cordis.yml', 'cordis.patch.yml']) {
+      assert.equal(
+        await readFile(join(profileRoot, profileName, file), 'utf8'),
+        await readFile(
+          new URL(`../../harbor/deepseek-harness-profile/${file}`, import.meta.url),
+          'utf8',
+        ),
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -893,6 +940,7 @@ test('the DeepSeek Harness arm pins its own minimal composition', async () => {
     ),
   ) as {
     subjects: Array<{ id: string; config: { args?: string[] } }>;
+    execution: { maxConcurrentTaskGroups: number };
     executor: { config: { mounts: Array<{ target: string }>; egressProxy: { proxyUrl: string } } };
   };
   assert.deepEqual(
@@ -918,28 +966,31 @@ test('the DeepSeek Harness arm pins its own minimal composition', async () => {
     ),
     true,
   );
-  assert.deepEqual(args.slice(args.indexOf('--profile'), args.indexOf('--profile') + 2), [
-    '--profile',
-    'headless',
-  ]);
-  assert.deepEqual(args.slice(args.indexOf('--patch'), args.indexOf('--patch') + 2), [
-    '--patch',
-    '/opt/maka-agent/packages/eval/harbor/deepseek-harness-eval.patch.yml',
-  ]);
+  assert.equal(args.includes('--profile'), true);
+  // The model reaches the harness through the profile, not through argv: `dsh`
+  // has no --model flag, and the composition is the only place it is named.
+  assert.equal(args.includes('--model'), false);
+  assert.equal(args.includes('--patch'), false);
 
-  // The patch layer is what makes this arm comparable: upstream's minimal tool
-  // surface, upstream's persona, and the cohort's reasoning strength.
-  const patch = await readFile(
-    new URL('../../harbor/deepseek-harness-eval.patch.yml', import.meta.url),
+  // Every subject in a task group runs its own container, so a single-arm cohort
+  // at the eight-arm limit would run at an eighth of its machine load.
+  assert.equal(spec.execution.maxConcurrentTaskGroups, 128);
+
+  // The arm's comparability rests on composing over an empty entry list: with no
+  // bundles inherited, an upstream bundle gaining a plugin cannot widen this
+  // arm's tool surface, and nothing needs to be disabled to keep it narrow.
+  const profile = JSON.parse(
+    await readFile(
+      new URL('../../harbor/deepseek-harness-profile/package.json', import.meta.url),
+      'utf8',
+    ),
+  ) as { dsh: { profile: { bundles: string[] } } };
+  assert.deepEqual(profile.dsh.profile.bundles, []);
+  const composition = await readFile(
+    new URL('../../harbor/deepseek-harness-profile/cordis.patch.yml', import.meta.url),
     'utf8',
   );
-  assert.match(patch, /reasoningEffort: max/u);
-  assert.match(patch, /includeHarnessIdentity: false/u);
-  assert.match(patch, /persona: You are a helpful software engineer assistant\./u);
-  assert.match(patch, /- id: persistent-bash/u);
-  for (const disabled of ['tool-fs', 'tool-fs-search', 'tool-subagent', 'tool-web', 'tool-bash']) {
-    assert.match(patch, new RegExp(`- id: ${disabled}\\n  disabled: true`, 'u'));
-  }
+  assert.equal(/^\s*disabled:/mu.test(composition), false);
 });
 
 test('Maka Eval policy enables privacy independently of the tool profile', () => {

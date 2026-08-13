@@ -7,10 +7,15 @@
 // installed on a macOS host and mounted into a linux/amd64 task container; it
 // is built inside a matching container, which also supplies the pinned Node.
 //
-// The fingerprint identifies the pinned specification, not the resulting file
-// tree, matching how the other arms' toolchains are identified. File-level
-// integrity is carried separately by checksums.sha256, which the Eval executor
-// verifies before every cohort.
+// The fingerprint is the digest of checksums.sha256, which in turn covers every
+// regular file in the toolchain. That closes the chain: the constant committed
+// in src/toolchain-verification.ts pins the checksum manifest, and the manifest
+// pins the tree. A fingerprint derived from the build inputs alone would match
+// two different installs of the same version, which is exactly the drift a
+// benchmark needs to detect.
+//
+// `npm i` is not reproducible, so rebuilding produces a new fingerprint. That
+// is the point: re-pin it with --write and the change is visible in review.
 
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -24,10 +29,9 @@ const execFileAsync = promisify(execFile);
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const identityPath = join(repoRoot, 'packages', 'eval', 'src', 'toolchain-verification.ts');
 
-export const DEEPSEEK_HARNESS_TOOLCHAIN_SPEC = {
-  schemaVersion: 1,
-  platform: 'linux',
-  arch: 'x64',
+const DEEPSEEK_HARNESS_TOOLCHAIN_SPEC = {
+  // The task images are linux/amd64, and the native modules must match them.
+  platform: 'linux/amd64',
   node: {
     version: '22.23.2',
     // The build image is the interpreter's provenance: its Node is copied into
@@ -42,24 +46,25 @@ export const DEEPSEEK_HARNESS_TOOLCHAIN_SPEC = {
   },
 };
 
-export const DEEPSEEK_HARNESS_TOOLCHAIN_FINGERPRINT = `sha256:${createHash('sha256')
-  .update(JSON.stringify(DEEPSEEK_HARNESS_TOOLCHAIN_SPEC))
-  .digest('hex')}`;
-
-export async function prepareDeepSeekHarnessToolchain({
-  outputRoot,
-  write = false,
-  run = execFileAsync,
-} = {}) {
+async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {}) {
   if (!outputRoot) throw new Error('--out is required');
   const spec = DEEPSEEK_HARNESS_TOOLCHAIN_SPEC;
   const root = resolve(outputRoot);
+  // --out is rebuilt from scratch. Refuse a directory that holds anything other
+  // than a previous build of this toolchain.
+  const existing = await readdir(root).catch(() => []);
+  if (existing.length > 0 && !existing.includes('manifest.json')) {
+    throw new Error(`${root} is not empty and does not look like a toolchain build`);
+  }
   await rm(root, { recursive: true, force: true });
   await mkdir(join(root, 'bin'), { recursive: true });
   await mkdir(join(root, 'lib', 'dsh'), { recursive: true });
 
   const image = `${spec.node.image}@${spec.node.imageDigest}`;
   const install = [
+    // The image digest fixes the interpreter; this asserts the version the spec
+    // claims for it.
+    `test "$(node -v)" = "v${spec.node.version}"`,
     'npm init -y >/dev/null',
     `npm i ${spec.deepseekHarness.package}@${spec.deepseekHarness.version} >/dev/null 2>&1`,
     // Fail the build here rather than at benchmark time if the native module
@@ -68,11 +73,11 @@ export async function prepareDeepSeekHarnessToolchain({
     'cp "$(command -v node)" /out/bin/node',
     'cp -R package.json node_modules /out/lib/dsh/',
   ].join(' && ');
-  await run('docker', [
+  await execFileAsync('docker', [
     'run',
     '--rm',
     '--platform',
-    `${spec.platform}/amd64`,
+    spec.platform,
     '-v',
     `${root}:/out`,
     '-w',
@@ -83,32 +88,22 @@ export async function prepareDeepSeekHarnessToolchain({
     install,
   ]);
 
-  const entrypoint = join(root, spec.deepseekHarness.entrypoint);
-  await requireRegularFile(entrypoint, 'harness entrypoint');
-  await requireRegularFile(join(root, 'bin', 'node'), 'pinned Node');
-  await requireRegularFile(
-    join(root, 'lib', 'dsh', 'node_modules', 'node-pty', 'build', 'Release', 'pty.node'),
-    'compiled node-pty binding',
-  );
+  // The entrypoint path is a shape assumption the spec and the experiment args
+  // both depend on; the container's `&&` chain already fails the build if the
+  // copies or the native module did not work.
+  await requireRegularFile(join(root, spec.deepseekHarness.entrypoint), 'harness entrypoint');
 
   const checksums = await checksumTree(root);
   await writeFile(join(root, 'checksums.sha256'), checksums, { mode: 0o644 });
+  const fingerprint = `sha256:${createHash('sha256').update(checksums).digest('hex')}`;
   await writeFile(
     join(root, 'manifest.json'),
-    `${JSON.stringify(
-      { schemaVersion: 1, fingerprint: DEEPSEEK_HARNESS_TOOLCHAIN_FINGERPRINT, spec },
-      null,
-      2,
-    )}\n`,
+    `${JSON.stringify({ fingerprint, spec }, null, 2)}\n`,
     { mode: 0o644 },
   );
 
-  if (write) await recordFingerprint();
-  return {
-    root,
-    version: spec.deepseekHarness.version,
-    fingerprint: DEEPSEEK_HARNESS_TOOLCHAIN_FINGERPRINT,
-  };
+  if (write) await recordFingerprint(fingerprint);
+  return { root, version: spec.deepseekHarness.version, fingerprint };
 }
 
 // Checksums cover every regular file, sorted by toolchain-relative path so the
@@ -146,14 +141,14 @@ async function requireRegularFile(path, label) {
   if (!info?.isFile()) throw new Error(`${label} is missing at ${path}`);
 }
 
-async function recordFingerprint() {
+async function recordFingerprint(fingerprint) {
   const source = await readFile(identityPath, 'utf8');
   const pattern =
     /('deepseek-harness': \{\n\s*root: '[^']+',\n\s*version: ')([^']+)(',\n\s*fingerprint: ')([^']+)(')/u;
   if (!pattern.test(source)) throw new Error('deepseek-harness toolchain identity was not found');
   const next = source.replace(
     pattern,
-    `$1${DEEPSEEK_HARNESS_TOOLCHAIN_SPEC.deepseekHarness.version}$3${DEEPSEEK_HARNESS_TOOLCHAIN_FINGERPRINT}$5`,
+    `$1${DEEPSEEK_HARNESS_TOOLCHAIN_SPEC.deepseekHarness.version}$3${fingerprint}$5`,
   );
   await writeFile(identityPath, next, 'utf8');
 }

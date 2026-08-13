@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, rmSync, statSync } from 'node:fs';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -16,6 +16,11 @@ import { removeEvalWebTools } from './provider-web-tool-surface.js';
 import { takeRelayResultToken, writeRelayResult } from './relay-result-frame.js';
 
 const resultToken = takeRelayResultToken();
+
+// The profile directory this wrapper writes. `dsh` has no environment variable
+// for profile selection, so the spec repeats this name in `--profile`; the
+// lifecycle test pins the two together.
+const DEEPSEEK_HARNESS_PROFILE = 'maka-eval';
 
 type SubjectStatus = 'completed' | 'failed' | 'infra_failed' | 'indeterminate';
 const CLASSIFIABLE_RECORD_LIMIT_BYTES = 16 * 1024 * 1024;
@@ -73,10 +78,10 @@ try {
   const proxy = await startMeteringProxy(baseUrl, key, profile === 'claude-code');
   try {
     await writeState('proxy_started');
-    const prepared = await prepareProfile(profile, proxy.baseUrl, systemRoot, command, args);
+    const prepared = await prepareProfile(profile, proxy.baseUrl, systemRoot, args);
     credentialPath = prepared.credentialPath;
     if (profile === 'claude-code') prepareClaudeWorkspace(systemRoot, prepared.home);
-    const result = await runChild(prepared.command, prepared.args, prepared.env, profile);
+    const result = await runChild(command, args, prepared.env, profile);
     child = undefined;
     await writeState('child_exited', { exitCode: result.exitCode });
     usage = proxy.usage();
@@ -141,11 +146,8 @@ async function prepareProfile(
   selected: Profile,
   proxyBaseUrl: string,
   root: string,
-  executable: string,
   executableArgs: string[],
 ): Promise<{
-  command: string;
-  args: string[];
   env: NodeJS.ProcessEnv;
   home: string;
   credentialPath?: string;
@@ -154,7 +156,6 @@ async function prepareProfile(
   const home = rooted(root, `/tmp/maka-eval-${selected}`);
   await mkdir(home, { recursive: true, mode: 0o700 });
   env.HOME = home;
-  let profileArgs = executableArgs;
 
   if (selected === 'codex') {
     env.OPENAI_API_KEY = 'maka-eval-local';
@@ -337,22 +338,19 @@ async function prepareProfile(
       { mode: 0o600 },
     );
   } else if (selected === 'deepseek-harness') {
-    // The harness reads its route, credential, and model from the environment;
-    // the checked-in patch layer names none of them. DSH_HOME has to be
-    // writable because the CLI scaffolds its profile there on first use, which
-    // it does offline from its own bundled packages.
-    const modelIndex = executableArgs.indexOf('--model');
-    const model = executableArgs[modelIndex + 1];
-    if (modelIndex < 0 || !model) throw new Error('DeepSeek Harness model is required');
-    // `dsh` has no --model flag; the model reaches the composition as DSH_MODEL.
-    profileArgs = executableArgs.filter(
-      (_, index) => index !== modelIndex && index !== modelIndex + 1,
-    );
+    // The arm supplies its own profile rather than patching a stock one, so the
+    // composition names every entry the model can observe. DSH_HOME must be
+    // writable: the harness links its bundled packages into
+    // profiles/node_modules on first use, which it does offline.
     env.DSH_HOME = join(home, 'dsh');
-    await mkdir(env.DSH_HOME, { recursive: true, mode: 0o700 });
+    const profile = join(env.DSH_HOME, 'profiles', DEEPSEEK_HARNESS_PROFILE);
+    await mkdir(profile, { recursive: true, mode: 0o700 });
+    const source = rooted(root, '/opt/maka-agent/packages/eval/harbor/deepseek-harness-profile');
+    for (const file of ['package.json', 'cordis.yml', 'cordis.patch.yml']) {
+      await copyFile(join(source, file), join(profile, file));
+    }
     env.DEEPSEEK_API_KEY = 'maka-eval-local';
     env.DEEPSEEK_BASE_URL = proxyBaseUrl;
-    env.DSH_MODEL = model;
   } else {
     const zcodeHome = join(home, '.zcode');
     const configRoot = join(zcodeHome, 'cli');
@@ -405,13 +403,7 @@ async function prepareProfile(
       { mode: 0o600 },
     );
   }
-  return {
-    command: executable,
-    args: profileArgs,
-    env,
-    home,
-    ...(credentialPath ? { credentialPath } : {}),
-  };
+  return { env, home, ...(credentialPath ? { credentialPath } : {}) };
 }
 
 async function runChild(
@@ -552,8 +544,11 @@ function classifyExecution(
       failureReason: `${selected} output record exceeded the classification limit`,
     };
   }
-  // zcode and the DeepSeek Harness SDK both print only the final assistant
-  // message, so a clean exit with output is the completion signal they offer.
+  // Neither harness emits a structured completion event: zcode and the DeepSeek
+  // Harness one-shot CLI (whose only options are the task text and --help) print
+  // the final assistant message and nothing else, so a clean exit with output is
+  // the whole signal on offer. Scores come from the verifier either way; this
+  // only decides whether the attempt reads as completed or failed.
   const completed =
     output.completed ||
     ((selected === 'zcode' || selected === 'deepseek-harness') &&

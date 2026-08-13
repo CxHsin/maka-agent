@@ -67,7 +67,10 @@ policy only constrains what the IP output hooks can see, the overlay drops `NET_
 otherwise grant an `AF_PACKET` socket that writes beneath them; a task's own Compose can add that
 capability back, and a `cap_add` wins over an overlay's `cap_drop`, so once the policy is live the
 relay reads every capability set the subject could raise or reacquire one from, the bounding set
-included, and refuses to start the subject when any of them carries `NET_RAW` or `NET_ADMIN`. The
+included, and refuses to start the subject when any of them carries `NET_RAW` or `NET_ADMIN`. Both
+the drop and the gate cover the subject alone, not the namespace: a sibling service a task declares
+joins the same namespace with the default capability set, so a task that declares one is less
+isolated than a task that does not. The
 same gate refuses when the subject is not in the namespace the policy was applied to: Harbor applies
 the policy inside the sidecar but respects a task's own networking on the subject service, so a task
 that declares it would otherwise leave the subject unpoliced. The evidence is the sidecar proxy's

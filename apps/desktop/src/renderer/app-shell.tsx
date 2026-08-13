@@ -1948,6 +1948,12 @@ function AppShellContent({
       revision && activeIdRef.current === revision.draftSessionId,
     );
     const slashCommand = parseDesktopSlashCommand(text);
+    // The composer has one submit; mid-turn it means steering, and this is
+    // where that reading lives. Slash commands are exempt because they are
+    // control instructions to the shell, not text for the running turn.
+    if (!slashCommand && (turnActive || activeStreamingLive)) {
+      return steerWithText(text);
+    }
     if (
       revisionSend &&
       revision &&
@@ -2139,15 +2145,6 @@ function AppShellContent({
       }
       return false;
     }
-  }
-
-  function submitWhileStreaming(
-    text: string,
-    metadata?: ComposerSendMetadata,
-  ): Promise<boolean | void> {
-    return parseDesktopSlashCommand(text)
-      ? sendWithAttachments(text, metadata)
-      : steerWithText(text);
   }
 
   const stop = createAppShellStopAction({
@@ -2798,7 +2795,6 @@ function AppShellContent({
                   processing={showProcessingIndicator && !activeStreamingLive}
                   continuing={showContinuingIndicator && !activeStreamingLive}
                   onSend={sendWithAttachments}
-                  onStreamingSubmit={submitWhileStreaming}
                   onStop={stop}
                   revisionNotice={
                     revisionDraft && activeId === revisionDraft.draftSessionId

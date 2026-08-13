@@ -8,6 +8,7 @@ import type { Readable } from 'node:stream';
 import { fetch as undiciFetch, ProxyAgent } from 'undici';
 import {
   decodePreverifiedToolchain,
+  isExternalProfile,
   type ExternalProfile as Profile,
 } from './toolchain-verification.js';
 import { isInferenceAdmissionEvent } from './provider-admission.js';
@@ -29,7 +30,7 @@ interface Usage {
 }
 
 const [rawProfile, baseUrl, systemRoot, command, ...args] = process.argv.slice(2);
-if (!isProfile(rawProfile)) throw new Error('external subject profile is required');
+if (!isExternalProfile(rawProfile)) throw new Error('external subject profile is required');
 const profile = rawProfile;
 if (!command) throw new Error('external subject command is required');
 if (!baseUrl || !URL.canParse(baseUrl)) throw new Error('external subject base URL is required');
@@ -896,18 +897,6 @@ function safeFailure(error: unknown, fallback: string): string {
   if (/credential is missing/u.test(error.message)) return error.message;
   if (/workspace ownership/u.test(error.message)) return error.message;
   return fallback;
-}
-
-function isProfile(value: string | undefined): value is Profile {
-  return (
-    value === 'codex' ||
-    value === 'claude-code' ||
-    value === 'reasonix' ||
-    value === 'opencode' ||
-    value === 'kimi-code' ||
-    value === 'zcode' ||
-    value === 'pi'
-  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

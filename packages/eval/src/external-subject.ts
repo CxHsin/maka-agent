@@ -5,6 +5,7 @@ import {
   TOOLCHAIN_IDENTITIES,
   TOOLCHAIN_IDENTITY_ENV,
   type ExternalProfile,
+  isExternalProfile,
   type ToolchainIdentity,
   verifyToolchainDirectory,
 } from './toolchain-verification.js';
@@ -255,19 +256,7 @@ function wrapperToolchain(
 
 function bundledProfile(args: readonly string[]): ExternalProfile | undefined {
   if (args[0] !== BUNDLED_EXTERNAL_WRAPPER) return undefined;
-  const profile = args[1];
-  if (
-    profile !== 'codex' &&
-    profile !== 'claude-code' &&
-    profile !== 'reasonix' &&
-    profile !== 'opencode' &&
-    profile !== 'kimi-code' &&
-    profile !== 'zcode' &&
-    profile !== 'pi'
-  ) {
-    return undefined;
-  }
-  return profile;
+  return isExternalProfile(args[1]) ? args[1] : undefined;
 }
 
 function uniqueSubjects(cells: readonly import('./experiment.js').ExperimentCell[]) {

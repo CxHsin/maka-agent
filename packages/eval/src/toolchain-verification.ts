@@ -64,6 +64,13 @@ export const TOOLCHAIN_IDENTITIES: Readonly<Record<ExternalProfile, ToolchainIde
   },
 };
 
+// The identity table is the profile registry: a profile without a pinned
+// toolchain identity cannot be admitted, so nothing may recognize a name the
+// table does not carry.
+export function isExternalProfile(value: string | undefined): value is ExternalProfile {
+  return value !== undefined && Object.hasOwn(TOOLCHAIN_IDENTITIES, value);
+}
+
 export async function verifyToolchainDirectory(
   profile: ExternalProfile,
   root: string,

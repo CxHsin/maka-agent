@@ -56,7 +56,12 @@ variables or requests `--noproxy`. The namespace policy accepts TCP to that prox
 namespace-local addresses, which keeps the loopback provider proxies and Docker's embedded DNS
 resolver reachable, and rejects every other protocol, ICMP included. It exempts no packet mark: the
 sidecar shares the subject's network namespace, so a mark the sidecar can set is one the subject can
-set too, and gost forwards nothing in this mode anyway. Harbor task
+set too, and gost forwards nothing in this mode anyway. Because that shared namespace also means the
+policy only constrains what the IP output hooks can see, the overlay drops `NET_RAW`, which would
+otherwise grant an `AF_PACKET` socket that writes beneath them; a task's own Compose can add that
+capability back, and a `cap_add` wins over an overlay's `cap_drop`, so the relay reads the subject's
+effective capability set once the policy is live and refuses to start the subject when it holds
+`NET_RAW` or `NET_ADMIN`. Harbor task
 download and verifier phases retain their native network policy. Build the pinned
 `maka-eval-egress-proxy:12.2.3` image from `harbor/egress-proxy/Dockerfile` before running the
 cohort. `MAKA_EVAL_EGRESS_NAMESPACE_TEST=1 python3 harbor/test_cell_egress_namespace.py` brings up

@@ -817,6 +817,7 @@ test('eight-arm spec adds Pi with the same pinned DeepSeek execution contract', 
   assert.doesNotMatch(egressCompose, /^\s*ports:/mu);
   assert.match(egressCompose, /condition: service_healthy/u);
   assert.match(egressCompose, /maka-eval-egress-ca:\/opt\/maka-egress:ro/u);
+  assert.match(egressCompose, /cap_drop:\s*\n\s+- NET_RAW/u);
   assert.match(egressCompose, /networks:\s*\n\s+- default/u);
   assert.match(egressCompose, /target: \/usr\/local\/bin\/network-policy/u);
   // The subject shares the sidecar's network namespace, so any packet mark it

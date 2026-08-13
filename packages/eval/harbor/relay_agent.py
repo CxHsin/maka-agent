@@ -33,6 +33,13 @@ RESULT_PAYLOAD_LIMIT_BYTES = 2 * 1024
 RESULT_CARRIER_LIMIT_BYTES = 64 * 1024
 SUBJECT_STDOUT_PATH = "/logs/artifacts/maka-subject.stdout.txt"
 SUBJECT_STDERR_PATH = "/logs/artifacts/maka-subject.stderr.txt"
+CAPABILITY_PREFIX = "MAKA-EVAL-CAPABILITIES-V1 "
+# The egress policy only constrains what the IP output hooks can see. NET_RAW
+# grants an AF_PACKET socket that writes beneath them, and NET_ADMIN grants the
+# ability to delete the ruleset outright. The overlay drops NET_RAW, but a
+# task's own compose can add either back, and a `cap_add` wins over an
+# overlay's `cap_drop`.
+BYPASS_CAPABILITIES = {"NET_RAW": 1 << 13, "NET_ADMIN": 1 << 12}
 
 _host_teardown_requested = False
 
@@ -91,6 +98,7 @@ class RelayAgent(BaseAgent):
             cwd = cwd_lines[0] if len(cwd_lines) == 1 else ""
             if working_directory.return_code != 0 or not cwd.startswith("/") or "\x00" in cwd:
                 raise RuntimeError("Maka Eval could not resolve the task working directory")
+            await _require_constrained_subject(environment)
             if not await _send(
                 writer,
                 {
@@ -282,6 +290,39 @@ async def _prepare_command(
         f"exec {subject}{output_redirect}"
     )
     return f"setsid --wait sh -c {shlex.quote(inner)}"
+
+
+async def _require_constrained_subject(environment: Any) -> None:
+    """Refuse to start the subject when it holds a capability the policy cannot see.
+
+    Runs after the egress policy is applied and before the subject exists, so a
+    task that restores one of these capabilities fails the attempt instead of
+    producing a result the isolation contract never actually covered.
+    """
+    if os.environ.get("MAKA_EVAL_EGRESS_REQUIRED") != "1":
+        return
+    probe = await environment.exec(
+        f"printf {shlex.quote(CAPABILITY_PREFIX)}; "
+        "sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status"
+    )
+    reported = [
+        line[len(CAPABILITY_PREFIX) :]
+        for line in str(probe.stdout or "").splitlines()
+        if line.startswith(CAPABILITY_PREFIX)
+    ]
+    if probe.return_code != 0 or len(reported) != 1:
+        raise RuntimeError("Maka Eval could not read the subject capability set")
+    try:
+        effective = int(reported[0].strip(), 16)
+    except ValueError:
+        raise RuntimeError("Maka Eval could not read the subject capability set") from None
+    held = sorted(name for name, bit in BYPASS_CAPABILITIES.items() if effective & bit)
+    if held:
+        raise RuntimeError(
+            "the subject holds "
+            + ", ".join(held)
+            + ", which bypasses the Eval egress policy; remove it from the task"
+        )
 
 
 async def _persist_subject_outputs(environment: Any, result: Any) -> None:

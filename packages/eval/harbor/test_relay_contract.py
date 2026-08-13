@@ -293,5 +293,61 @@ class RelayContractTest(unittest.TestCase):
                 target.unlink(missing_ok=True)
 
 
+class CapabilityEnvironment:
+    """Reports one `CapEff` mask, the way `/proc/self/status` does."""
+
+    def __init__(self, effective: int) -> None:
+        self.effective = effective
+        self.commands: list[str] = []
+
+    async def exec(self, command: str, cwd=None, timeout_sec=None):
+        self.commands.append(command)
+        return types.SimpleNamespace(
+            return_code=0,
+            stdout=f"MAKA-EVAL-CAPABILITIES-V1 {self.effective:016x}\n",
+            stderr="",
+        )
+
+
+class SubjectCapabilityTest(unittest.IsolatedAsyncioTestCase):
+    async def test_subject_holding_a_bypass_capability_never_starts(self):
+        relay = load_relay()
+        # Named here rather than read from the module: sourcing the expectation
+        # from the code under test would let deleting a capability delete its
+        # own coverage. NET_RAW grants AF_PACKET, NET_ADMIN grants `nft flush`.
+        for name, bit in (("NET_RAW", 1 << 13), ("NET_ADMIN", 1 << 12)):
+            with self.subTest(name):
+                environment = CapabilityEnvironment(bit | (1 << 21))
+                with patch.dict(os.environ, {"MAKA_EVAL_EGRESS_REQUIRED": "1"}):
+                    with self.assertRaises(RuntimeError) as raised:
+                        await relay._require_constrained_subject(environment)
+                self.assertIn(name, str(raised.exception))
+
+    async def test_constrained_subject_proceeds(self):
+        relay = load_relay()
+        # Every default Docker capability except the two that bypass the policy.
+        environment = CapabilityEnvironment(0xA80425FB & ~(1 << 13) & ~(1 << 12))
+        with patch.dict(os.environ, {"MAKA_EVAL_EGRESS_REQUIRED": "1"}):
+            await relay._require_constrained_subject(environment)
+
+    async def test_unreadable_capability_set_fails_closed(self):
+        relay = load_relay()
+
+        class SilentEnvironment:
+            async def exec(self, command, cwd=None, timeout_sec=None):
+                return types.SimpleNamespace(return_code=0, stdout="", stderr="")
+
+        with patch.dict(os.environ, {"MAKA_EVAL_EGRESS_REQUIRED": "1"}):
+            with self.assertRaises(RuntimeError):
+                await relay._require_constrained_subject(SilentEnvironment())
+
+    async def test_check_is_scoped_to_runs_that_require_the_proxy(self):
+        relay = load_relay()
+        environment = CapabilityEnvironment(1 << 13)
+        with patch.dict(os.environ, {"MAKA_EVAL_EGRESS_REQUIRED": ""}):
+            await relay._require_constrained_subject(environment)
+        self.assertEqual(environment.commands, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,12 @@ services:
     depends_on:
       maka-eval-mitmproxy:
         condition: service_healthy
+    # An AF_PACKET socket writes below the IP output hooks the policy installs,
+    # so no nftables rule can constrain it. NET_RAW is what gates that socket.
+    # A task's own compose can add the capability back, which this cannot
+    # prevent — the relay refuses to start the subject when that happens.
+    cap_drop:
+      - NET_RAW
     volumes:
       - maka-eval-egress-ca:/opt/maka-egress:ro
 

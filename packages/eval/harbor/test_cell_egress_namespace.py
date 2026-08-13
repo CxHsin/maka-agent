@@ -95,6 +95,66 @@ UDP_PROBE = (
     "    print('blocked')\n"
 )
 
+# An AF_PACKET socket writes at the link layer, below the IP output hooks the
+# policy installs, so no nftables rule can see this traffic at all. Only the
+# absence of NET_RAW stops it. The frame is addressed to the default gateway's
+# hardware address, which the pre-policy reachability assertions leave in the
+# neighbour table.
+PACKET_PROBE = (
+    "import socket, struct\n"
+    "query = (\n"
+    "    b'\\xab\\xcd\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00'\n"
+    "    b'\\x07example\\x03com\\x00\\x00\\x01\\x00\\x01'\n"
+    ")\n"
+    "def route():\n"
+    "    with open('/proc/net/route') as handle:\n"
+    "        for line in handle.readlines()[1:]:\n"
+    "            f = line.split()\n"
+    "            if f[1] == '00000000':\n"
+    "                return f[0], socket.inet_ntoa(struct.pack('<L', int(f[2], 16)))\n"
+    "    return None, None\n"
+    "def neighbour(address):\n"
+    "    with open('/proc/net/arp') as handle:\n"
+    "        for line in handle.readlines()[1:]:\n"
+    "            f = line.split()\n"
+    "            if f[0] == address and f[3] != '00:00:00:00:00:00':\n"
+    "                return bytes.fromhex(f[3].replace(':', ''))\n"
+    "    return None\n"
+    "def checksum(data):\n"
+    "    total = sum(struct.unpack('!%dH' % (len(data) // 2), data))\n"
+    "    while total >> 16:\n"
+    "        total = (total & 0xFFFF) + (total >> 16)\n"
+    "    return ~total & 0xFFFF\n"
+    "interface, gateway = route()\n"
+    "mac = neighbour(gateway) if gateway else None\n"
+    "if not interface or not mac:\n"
+    "    print('unusable')\n"
+    "else:\n"
+    "    try:\n"
+    "        sock = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, 0x0800)\n"
+    "    except PermissionError:\n"
+    "        print('denied')\n"
+    "        raise SystemExit\n"
+    "    try:\n"
+    "        source = socket.gethostbyname(socket.gethostname())\n"
+    "        sock.bind((interface, 0x0800))\n"
+    "        sock.settimeout(5)\n"
+    "        udp = struct.pack('!HHHH', 40000, 53, 8 + len(query), 0) + query\n"
+    "        header = struct.pack(\n"
+    "            '!BBHHHBBH4s4s', 0x45, 0, 20 + len(udp), 0x1234, 0, 64, 17, 0,\n"
+    "            socket.inet_aton(source), socket.inet_aton('8.8.8.8'),\n"
+    "        )\n"
+    "        header = header[:10] + struct.pack('!H', checksum(header)) + header[12:]\n"
+    "        sock.sendto(header + udp, (interface, 0x0800, 0, 0, mac))\n"
+    "        while True:\n"
+    "            packet = sock.recv(2048)\n"
+    "            if len(packet) >= 20 and packet[12:16] == socket.inet_aton('8.8.8.8'):\n"
+    "                print('reachable')\n"
+    "                break\n"
+    "    except OSError:\n"
+    "        print('blocked')\n"
+)
+
 # SO_MARK is 36 on Linux. gost marks its forwarded traffic, so a policy that
 # exempted that mark would let any subject able to set it leave unproxied.
 MARK_PROBE = (
@@ -313,6 +373,13 @@ class CellEgressNamespaceTest(unittest.TestCase):
 
         with self.subTest("forged sidecar packet mark"):
             self.assertEqual(self.probe_main(MARK_PROBE), "blocked")
+
+        # Not preceded by a reachability assertion like the others: this path is
+        # closed by the missing capability rather than by the policy, so it is
+        # already shut before the policy exists. `denied` rather than `blocked`
+        # so a probe that breaks for any other reason cannot report success.
+        with self.subTest("link-layer AF_PACKET"):
+            self.assertEqual(self.probe_main(PACKET_PROBE), "denied")
 
         with self.subTest("external UDP"):
             self.assertEqual(self.probe_main(UDP_PROBE), "blocked")

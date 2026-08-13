@@ -34,12 +34,22 @@ RESULT_CARRIER_LIMIT_BYTES = 64 * 1024
 SUBJECT_STDOUT_PATH = "/logs/artifacts/maka-subject.stdout.txt"
 SUBJECT_STDERR_PATH = "/logs/artifacts/maka-subject.stderr.txt"
 CAPABILITY_PREFIX = "MAKA-EVAL-CAPABILITIES-V1 "
+NAMESPACE_PREFIX = "MAKA-EVAL-POLICY-NAMESPACE-V1 "
 # The egress policy only constrains what the IP output hooks can see. NET_RAW
 # grants an AF_PACKET socket that writes beneath them, and NET_ADMIN grants the
 # ability to delete the ruleset outright. The overlay drops NET_RAW, but a
 # task's own compose can add either back, and a `cap_add` wins over an
 # overlay's `cap_drop`.
 BYPASS_CAPABILITIES = {"NET_RAW": 1 << 13, "NET_ADMIN": 1 << 12}
+# Every set is read, not just the effective one: a non-root subject reports an
+# empty effective set while a file-capability executable still reacquires
+# anything the bounding set kept, and the permitted, inheritable and ambient
+# sets each raise into the effective set without an exec at all.
+CAPABILITY_FIELDS = ("CapEff", "CapPrm", "CapBnd")
+# The port the policy redirects to, and therefore the port the sidecar's gost
+# listens on. A listening socket is visible only inside its own network
+# namespace, so seeing it from the subject is what proves the two share one.
+POLICY_PROXY_PORT = 12345
 
 _host_teardown_requested = False
 
@@ -293,36 +303,67 @@ async def _prepare_command(
 
 
 async def _require_constrained_subject(environment: Any) -> None:
-    """Refuse to start the subject when it holds a capability the policy cannot see.
+    """Refuse to start the subject unless the egress policy actually governs it.
 
-    Runs after the egress policy is applied and before the subject exists, so a
-    task that restores one of these capabilities fails the attempt instead of
+    Runs after the policy is applied and before the subject exists, so a task
+    that keeps a capability the policy cannot see, or that keeps the subject out
+    of the namespace the policy was applied to, fails the attempt instead of
     producing a result the isolation contract never actually covered.
     """
     if os.environ.get("MAKA_EVAL_EGRESS_REQUIRED") != "1":
         return
-    probe = await environment.exec(
-        f"printf {shlex.quote(CAPABILITY_PREFIX)}; "
-        "sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status"
+    listening = (
+        "^[[:space:]]*[0-9]+: [0-9A-F]+:"
+        f"{POLICY_PROXY_PORT:04X}"
+        " [0-9A-F]+:0000 0A"
     )
-    reported = [
-        line[len(CAPABILITY_PREFIX) :]
-        for line in str(probe.stdout or "").splitlines()
-        if line.startswith(CAPABILITY_PREFIX)
-    ]
-    if probe.return_code != 0 or len(reported) != 1:
+    probe = await environment.exec(
+        f"printf %s {shlex.quote(CAPABILITY_PREFIX)}; "
+        r"sed -n 's/^\(Cap[A-Za-z]*\):[[:space:]]*/\1=/p' /proc/self/status | tr '\n' ' '; "
+        "echo; "
+        f"printf %s {shlex.quote(NAMESPACE_PREFIX)}; "
+        f"if cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -qE {shlex.quote(listening)}; "
+        "then echo shared; else echo separate; fi"
+    )
+    if probe.return_code != 0:
+        raise RuntimeError("Maka Eval could not read the subject isolation evidence")
+    capabilities = _sole_probe_line(probe, CAPABILITY_PREFIX)
+    namespace = _sole_probe_line(probe, NAMESPACE_PREFIX)
+    reported: dict[str, int] = {}
+    for field in capabilities.split():
+        name, _, value = field.partition("=")
+        try:
+            reported[name] = int(value, 16)
+        except ValueError:
+            raise RuntimeError("Maka Eval could not read the subject capability set") from None
+    if not all(field in reported for field in CAPABILITY_FIELDS):
         raise RuntimeError("Maka Eval could not read the subject capability set")
-    try:
-        effective = int(reported[0].strip(), 16)
-    except ValueError:
-        raise RuntimeError("Maka Eval could not read the subject capability set") from None
-    held = sorted(name for name, bit in BYPASS_CAPABILITIES.items() if effective & bit)
+    granted = 0
+    for value in reported.values():
+        granted |= value
+    held = sorted(name for name, bit in BYPASS_CAPABILITIES.items() if granted & bit)
     if held:
         raise RuntimeError(
             "the subject holds "
             + ", ".join(held)
             + ", which bypasses the Eval egress policy; remove it from the task"
         )
+    if namespace != "shared":
+        raise RuntimeError(
+            "the subject does not share the network namespace the Eval egress policy "
+            "was applied to; remove the task's own networking on the subject service"
+        )
+
+
+def _sole_probe_line(probe: Any, prefix: str) -> str:
+    reported = [
+        line[len(prefix) :]
+        for line in str(probe.stdout or "").splitlines()
+        if line.startswith(prefix)
+    ]
+    if len(reported) != 1:
+        raise RuntimeError("Maka Eval could not read the subject isolation evidence")
+    return reported[0].strip()
 
 
 async def _persist_subject_outputs(environment: Any, result: Any) -> None:

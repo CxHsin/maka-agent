@@ -14,12 +14,17 @@ It needs a working Docker daemon and outbound network, so it is opt-in:
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shutil
 import subprocess
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from test_relay_contract import load_relay
 
 HARBOR_DIR = Path(__file__).parent
 OVERLAY = HARBOR_DIR / "docker-compose-egress-proxy.yaml"
@@ -42,7 +47,11 @@ services:
 
   {SIDECAR}:
     image: {SIDECAR_IMAGE}
-    command: ["sleep", "infinity"]
+    # Harbor's own sidecar runs gost on the port the policy redirects to, so a
+    # redirected connection is accepted and then goes nowhere. Standing in for
+    # it keeps the negative assertions honest: without a listener they would
+    # hold on a refused connection instead of on the policy.
+    command: ["sh", "-c", "nc -l -k 12345 >/dev/null 2>&1 & exec sleep infinity"]
     network_mode: "service:main"
     cap_add:
       - NET_ADMIN
@@ -62,16 +71,23 @@ RUN apt-get update \\
 SIDECAR_DOCKERFILE = """\
 FROM debian:trixie-slim
 RUN apt-get update \\
-  && apt-get install -y --no-install-recommends nftables \\
+  && apt-get install -y --no-install-recommends nftables netcat-openbsd \\
   && rm -rf /var/lib/apt/lists/* \\
   && mkdir -p /opt/egress-sidecar
 """
 
+# The policy redirects TCP to the sidecar's proxy port rather than dropping it,
+# so the connection still completes and only the response tells a direct route
+# from a redirected one. Judging this on `connect` would assert nothing in a
+# cell where that proxy is listening, which is every real one.
 TCP_PROBE = (
     "import socket\n"
+    "request = b'GET / HTTP/1.0\\r\\nHost: one.one.one.one\\r\\n\\r\\n'\n"
     "try:\n"
-    "    socket.create_connection(('1.1.1.1', 443), 5).close()\n"
-    "    print('reachable')\n"
+    "    with socket.create_connection(('1.1.1.1', 80), 5) as sock:\n"
+    "        sock.settimeout(5)\n"
+    "        sock.sendall(request)\n"
+    "        print('reachable' if sock.recv(16).startswith(b'HTTP/') else 'blocked')\n"
     "except OSError:\n"
     "    print('blocked')\n"
 )
@@ -151,24 +167,6 @@ PACKET_PROBE = (
     "            if len(packet) >= 20 and packet[12:16] == socket.inet_aton('8.8.8.8'):\n"
     "                print('reachable')\n"
     "                break\n"
-    "    except OSError:\n"
-    "        print('blocked')\n"
-)
-
-# SO_MARK is 36 on Linux. gost marks its forwarded traffic, so a policy that
-# exempted that mark would let any subject able to set it leave unproxied.
-MARK_PROBE = (
-    "import socket\n"
-    "sock = socket.socket()\n"
-    "try:\n"
-    "    sock.setsockopt(socket.SOL_SOCKET, 36, 114514)\n"
-    "except OSError:\n"
-    "    print('blocked')\n"
-    "else:\n"
-    "    try:\n"
-    "        sock.settimeout(5)\n"
-    "        sock.connect(('1.1.1.1', 443))\n"
-    "        print('reachable')\n"
     "    except OSError:\n"
     "        print('blocked')\n"
 )
@@ -340,6 +338,14 @@ class CellEgressNamespaceTest(unittest.TestCase):
     def ping(cls) -> subprocess.CompletedProcess[str]:
         return cls.exec_main(["ping", "-c", "1", "-W", "5", "1.1.1.1"])
 
+    def test_relay_admits_a_subject_the_policy_governs(self) -> None:
+        # The relay's precondition gate runs against the live cell rather than a
+        # fixture, so the port it looks for and the shape it parses are the ones
+        # a real sidecar and a real `/proc` produce.
+        relay = load_relay()
+        with patch.dict(os.environ, {"MAKA_EVAL_EGRESS_REQUIRED": "1"}):
+            asyncio.run(relay._require_constrained_subject(CellEnvironment()))
+
     def test_subject_sees_only_the_ca_certificate(self) -> None:
         listed = self.exec_main(["ls", "--almost-all", "/opt/maka-egress"])
         self.assertEqual(listed.returncode, 0, listed.stderr)
@@ -371,9 +377,6 @@ class CellEgressNamespaceTest(unittest.TestCase):
         with self.subTest("direct IP TCP"):
             self.assertEqual(self.probe_main(TCP_PROBE), "blocked")
 
-        with self.subTest("forged sidecar packet mark"):
-            self.assertEqual(self.probe_main(MARK_PROBE), "blocked")
-
         # Not preceded by a reachability assertion like the others: this path is
         # closed by the missing capability rather than by the policy, so it is
         # already shut before the policy exists. `denied` rather than `blocked`
@@ -393,6 +396,16 @@ class CellEgressNamespaceTest(unittest.TestCase):
         with self.subTest("Docker DNS"):
             resolved = self.exec_main(["getent", "hosts", PROXY_HOST])
             self.assertEqual(resolved.returncode, 0, resolved.stderr)
+
+class CellEnvironment:
+    """Presents the live cell's `main` service as the relay's environment."""
+
+    async def exec(self, command: str, cwd=None, timeout_sec=None):
+        result = CellEgressNamespaceTest.exec_main(["sh", "-c", command])
+        return types.SimpleNamespace(
+            return_code=result.returncode, stdout=result.stdout, stderr=result.stderr
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

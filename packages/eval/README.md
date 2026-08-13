@@ -59,9 +59,13 @@ sidecar shares the subject's network namespace, so a mark the sidecar can set is
 set too, and gost forwards nothing in this mode anyway. Because that shared namespace also means the
 policy only constrains what the IP output hooks can see, the overlay drops `NET_RAW`, which would
 otherwise grant an `AF_PACKET` socket that writes beneath them; a task's own Compose can add that
-capability back, and a `cap_add` wins over an overlay's `cap_drop`, so the relay reads the subject's
-effective capability set once the policy is live and refuses to start the subject when it holds
-`NET_RAW` or `NET_ADMIN`. Harbor task
+capability back, and a `cap_add` wins over an overlay's `cap_drop`, so once the policy is live the
+relay reads every capability set the subject could raise or reacquire one from, the bounding set
+included, and refuses to start the subject when any of them carries `NET_RAW` or `NET_ADMIN`. The
+same gate refuses when the subject is not in the namespace the policy was applied to: Harbor applies
+the policy inside the sidecar but respects a task's own networking on the subject service, so a task
+that declares it would otherwise leave the subject unpoliced. The evidence is the sidecar proxy's
+listening socket, which is visible only from inside its own network namespace. Harbor task
 download and verifier phases retain their native network policy. Build the pinned
 `maka-eval-egress-proxy:12.2.3` image from `harbor/egress-proxy/Dockerfile` before running the
 cohort. `MAKA_EVAL_EGRESS_NAMESPACE_TEST=1 python3 harbor/test_cell_egress_namespace.py` brings up

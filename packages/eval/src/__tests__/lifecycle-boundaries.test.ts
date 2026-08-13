@@ -821,13 +821,23 @@ test('eight-arm spec adds Pi with the same pinned DeepSeek execution contract', 
   assert.match(egressCompose, /networks:\s*\n\s+- default/u);
   assert.match(egressCompose, /target: \/usr\/local\/bin\/network-policy/u);
   // The subject shares the sidecar's network namespace, so any packet mark it
-  // could set is one the subject can set too. The namespace test proves this in
-  // a live cell; this keeps the rule from reappearing where that test is opt-in.
+  // could set is one the subject can set too. No live probe can show this any
+  // more — without NET_RAW the subject cannot set a mark at all — so the rule's
+  // absence is asserted where it is written.
   const networkPolicy = await readFile(
     new URL('../../harbor/egress-proxy/network-policy', import.meta.url),
     'utf8',
   );
   assert.doesNotMatch(networkPolicy, /meta mark \S+ (?:accept|return)/u);
+  // The relay proves the subject shares the policy's namespace by looking for
+  // the proxy's listening socket, so its port has to be the one the policy
+  // redirects to. The two constants live in different languages.
+  const relayAgent = await readFile(
+    new URL('../../harbor/relay_agent.py', import.meta.url),
+    'utf8',
+  );
+  const policyPort = /^GOST_PORT=(\d+)$/mu.exec(networkPolicy)![1];
+  assert.match(relayAgent, new RegExp(`^POLICY_PROXY_PORT = ${policyPort}$`, 'mu'));
   assert.deepEqual(
     spec.executor.config.mounts.map(({ target }) => target),
     [

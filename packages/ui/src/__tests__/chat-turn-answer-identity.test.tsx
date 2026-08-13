@@ -93,24 +93,39 @@ const RUNNING_TOOL: TurnTimelineItem = {
  * The transition here is the real one from `timeline-fold.ts`: a run's last
  * tools group is projected away, so the Processing block dissolves and the
  * leading entry stops being a fold.
+ *
+ * Both halves of the fix are pinned: the segment `<article>` (the key), and the
+ * bubble inside it (the single component type). Splitting the bubble back into
+ * a streaming and a historical component leaves the article identical and
+ * remounts only the bubble — which is the node a Selection actually lives in.
  */
 test('keeps the assistant answer element as a turn settles around it', async () => {
   const { container, root } = domRoot();
 
   await renderTurn(root, turnWith([RUNNING_TOOL, ANSWER]));
   const streaming = container.querySelector('.maka-assistant-answer');
+  const streamingBubble = container.querySelector('.maka-chat-message-bubble-assistant');
   assert.ok(streaming, 'the answer renders while the turn runs');
+  assert.ok(streamingBubble, 'the answer bubble renders while the turn runs');
 
   await renderTurn(root, turnWith([{ ...ANSWER, live: false }]));
   const settled = container.querySelector('.maka-assistant-answer');
+  const settledBubble = container.querySelector('.maka-chat-message-bubble-assistant');
   assert.ok(settled, 'the answer still renders once the turn settles');
+  assert.ok(settledBubble, 'the answer bubble still renders once the turn settles');
   assert.equal(settled.isSameNode(streaming), true, 'the answer element survives the turn settling');
+  assert.equal(
+    settledBubble.isSameNode(streamingBubble),
+    true,
+    'the answer bubble survives the turn settling',
+  );
 });
 
 /**
- * Locks the keying scheme rather than the regression above: two answers in one
- * turn must not collide on a shared key. This is what catches an identity that
- * is constant across segments — the sentinel-vs-real-id collision, say.
+ * Extends the regression above to a steered turn: both segments exist side by
+ * side and each keeps its own element across the settle. It does not pin the
+ * keying scheme — React reconciles duplicate-key siblings of one component type
+ * by position, so a key collision would still leave both elements identical.
  */
 test('gives each answer in a steered turn its own stable element', async () => {
   const { container, root } = domRoot();

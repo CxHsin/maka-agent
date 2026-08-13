@@ -104,5 +104,19 @@ test.fixme('a drag begun while the answer streams still offers a quote', async (
   await page.mouse.move(bounds.x + bounds.width - 2, y, { steps: 5 });
   await page.mouse.up();
 
-  await expect(page.locator('.maka-quote-actions')).toBeVisible();
+  // Assert the contract that is actually broken, not the quote bar: the bar is
+  // also reachable while the gap is open, because the hook's 350ms read can win
+  // the race against the stream close and leave a bar standing over a Selection
+  // the browser has already erased. Wait for the close, then require the
+  // Selection to still be there — that is the state the quote hook needs and
+  // the one the fragment rebuild destroys.
+  await expect
+    .poll(() => page.evaluate(() => window.getSelection()?.isCollapsed === false))
+    .toBe(true);
+  await expect(page.getByRole('button', { name: '重新生成' })).toHaveCount(1, {
+    timeout: 20_000,
+  });
+  await expect
+    .poll(() => page.evaluate(() => window.getSelection()?.isCollapsed === false))
+    .toBe(true);
 });

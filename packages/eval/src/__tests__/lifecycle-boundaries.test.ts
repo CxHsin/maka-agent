@@ -816,8 +816,13 @@ test('eight-arm spec adds Pi with the same pinned DeepSeek execution contract', 
   );
   assert.doesNotMatch(egressCompose, /^\s*ports:/mu);
   assert.match(egressCompose, /condition: service_healthy/u);
-  assert.match(egressCompose, /maka-eval-egress-ca:\/opt\/maka-egress:ro/u);
-  assert.match(egressCompose, /cap_drop:\s*\n\s+- NET_RAW/u);
+  // Scoped to the subject's own block: a whole-file match would still hold with
+  // the capability drop or the read-only flag moved onto the proxy service.
+  const subjectService = egressCompose
+    .split(/\n(?= {2}\S)/u)
+    .find((block) => block.trimStart().startsWith('main:'))!;
+  assert.match(subjectService, /maka-eval-egress-ca:\/opt\/maka-egress:ro/u);
+  assert.match(subjectService, /cap_drop:\s*\n\s+- NET_RAW/u);
   assert.match(egressCompose, /networks:\s*\n\s+- default/u);
   assert.match(egressCompose, /target: \/usr\/local\/bin\/network-policy/u);
   // The subject shares the sidecar's network namespace, so any packet mark it

@@ -26,6 +26,12 @@ def contamination_rule(raw_url: str) -> tuple[str, str, str] | None:
     path_query = f"{url.path}?{url.query}" if url.query else url.path
     lowered = path_query.lower()
 
+    # Search the host and the path separately. A benchmark name in the hostname
+    # is a contamination surface, and searching the two fields joined would let
+    # a rule match across their boundary.
+    def anywhere(needle: str) -> bool:
+        return needle in host or needle in lowered
+
     if host == "r.jina.ai":
         inner = unquote(url.path.lstrip("/"))
         if inner.startswith(("http://", "https://")):
@@ -33,7 +39,7 @@ def contamination_rule(raw_url: str) -> tuple[str, str, str] | None:
             if nested:
                 return (f"jina_recursive:{nested[0]}", host, path_query)
 
-    if PINNED_REVISION in lowered:
+    if anywhere(PINNED_REVISION):
         return ("pinned_revision", host, path_query)
     if host == "tbench.ai" or host.endswith(".tbench.ai"):
         return ("tbench_domain", host, path_query)
@@ -43,11 +49,8 @@ def contamination_rule(raw_url: str) -> tuple[str, str, str] | None:
         return ("benchmark_repository", host, path_query)
     if public_trajectory_repository(host, lowered):
         return ("public_trajectory", host, path_query)
-    if "patches-terminalbench-" in lowered:
+    if anywhere("patches-terminalbench-"):
         return ("known_patch_artifact", host, path_query)
-    # Search the host and the path separately. A benchmark name in the hostname
-    # is a contamination surface, and searching the two fields joined would let
-    # a rule match across their boundary.
     if TERMINAL_BENCH.search(host) or TERMINAL_BENCH.search(lowered):
         return ("terminal_bench_url", host, path_query)
     return None

@@ -53,8 +53,14 @@ mounts read-only, so the CA private key and the audit log never enter the subjec
 `Agent.run()`, Harbor's Docker egress sidecar applies an nftables allowlist containing only that
 proxy service; direct subject egress is therefore rejected even when a command unsets proxy
 variables or requests `--noproxy`. The namespace policy accepts TCP to that proxy and traffic to
-namespace-local addresses, which keeps the loopback provider proxies and Docker's embedded DNS
-resolver reachable, and rejects every other protocol, ICMP included. It exempts no packet mark: the
+namespace-local addresses, and rejects everything else, ICMP included. Rejecting rather than
+redirecting the remainder also closes a connection the subject inherits from an earlier phase: the
+redirect is a NAT rule, and NAT is evaluated only on a connection's first packet. The
+namespace-local exemption keeps the loopback provider proxies reachable and, with them, Docker's
+embedded resolver at `127.0.0.11`, which forwards names it does not own to the host's upstream
+resolvers. That is an unaudited channel out of the cell and back; removing it is tracked separately,
+and until then the audited proxy is the only path for everything except DNS. The policy exempts no
+packet mark: the
 sidecar shares the subject's network namespace, so a mark the sidecar can set is one the subject can
 set too, and gost forwards nothing in this mode anyway. Because that shared namespace also means the
 policy only constrains what the IP output hooks can see, the overlay drops `NET_RAW`, which would
@@ -65,15 +71,19 @@ included, and refuses to start the subject when any of them carries `NET_RAW` or
 same gate refuses when the subject is not in the namespace the policy was applied to: Harbor applies
 the policy inside the sidecar but respects a task's own networking on the subject service, so a task
 that declares it would otherwise leave the subject unpoliced. The evidence is the sidecar proxy's
-listening socket, which is visible only from inside its own network namespace. Harbor task
+listening socket, which is visible only from inside its own network namespace. The gate reads that
+evidence through the task image's own userland, so it establishes that a task did not lose the
+isolation by accident, not that a task could not lie about it; a task image that lies already
+controls everything else in the cell. What it does hold against is the subject, which starts only
+after the gate has passed. Harbor task
 download and verifier phases retain their native network policy. Build the pinned
 `maka-eval-egress-proxy:12.2.3` image from `harbor/egress-proxy/Dockerfile` before running the
 cohort. `MAKA_EVAL_EGRESS_NAMESPACE_TEST=1 python3 harbor/test_cell_egress_namespace.py` brings up
 the overlay and the checked-in policy and asserts that contract in a real cell namespace; it needs
 a Docker daemon and outbound network, and skips otherwise. This URL policy is a blocklist for known
 benchmark and public-solution contamination surfaces, not a complete defense against a deliberately
-invented lookup channel; the network namespace still forces all subject traffic through the audited
-proxy. Collected Maka runtime files
+invented lookup channel. It classifies what it can read: a `CONNECT` tunnel carrying something other
+than TLS or HTTP reaches no rule and no audit record, which is tracked separately. Collected Maka runtime files
 and egress audit logs are represented in attempt artifacts with byte counts and SHA-256 digests.
 The local image tag remains a machine deployment identity rather than a registry digest; digest
 pinning is tracked in issue #2953.

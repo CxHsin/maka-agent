@@ -35,6 +35,8 @@ SIDECAR_IMAGE = "maka-eval-egress-namespace-sidecar:test"
 PROJECT = "maka-eval-egress-namespace-test"
 PROXY_HOST = "maka-eval-mitmproxy"
 SIDECAR = "harbor-docker-egress-control-sidecar"
+OUTSIDER = "maka-eval-outside-the-namespace"
+BOUNDED = "maka-eval-bounded-capability"
 CA_PATH = "/opt/maka-egress/mitmproxy-ca-cert.pem"
 BUILD_TIMEOUT_S = 900
 COMMAND_TIMEOUT_S = 120
@@ -55,6 +57,26 @@ services:
     network_mode: "service:main"
     cap_add:
       - NET_ADMIN
+    depends_on:
+      - main
+
+  # Two services the gate must refuse, so its live coverage is not only the
+  # positive case. This one keeps its own network namespace, the way Harbor
+  # leaves a subject whose task declares its own networking.
+  {OUTSIDER}:
+    image: {MAIN_IMAGE}
+    command: ["sleep", "infinity"]
+    cap_drop:
+      - NET_RAW
+
+  # This one shares the policy's namespace and reports an empty effective set,
+  # while the bounding set still lets a file-capability executable take NET_RAW
+  # back. Reading only the effective set would admit it.
+  {BOUNDED}:
+    image: {MAIN_IMAGE}
+    command: ["sleep", "infinity"]
+    network_mode: "service:main"
+    user: "1000"
     depends_on:
       - main
 """
@@ -338,13 +360,20 @@ class CellEgressNamespaceTest(unittest.TestCase):
     def ping(cls) -> subprocess.CompletedProcess[str]:
         return cls.exec_main(["ping", "-c", "1", "-W", "5", "1.1.1.1"])
 
-    def test_relay_admits_a_subject_the_policy_governs(self) -> None:
-        # The relay's precondition gate runs against the live cell rather than a
-        # fixture, so the port it looks for and the shape it parses are the ones
-        # a real sidecar and a real `/proc` produce.
+    def test_relay_admits_only_a_subject_the_policy_governs(self) -> None:
+        # The gate runs against live containers rather than a fixture, so what
+        # it parses is a real `/proc` and what it judges is a real namespace.
+        # The refusals matter more than the admission: without them nothing
+        # would catch a probe that reports one constant answer.
         relay = load_relay()
         with patch.dict(os.environ, {"MAKA_EVAL_EGRESS_REQUIRED": "1"}):
-            asyncio.run(relay._require_constrained_subject(CellEnvironment()))
+            asyncio.run(relay._require_constrained_subject(CellEnvironment("main")))
+            with self.assertRaises(RuntimeError) as outside:
+                asyncio.run(relay._require_constrained_subject(CellEnvironment(OUTSIDER)))
+            with self.assertRaises(RuntimeError) as bounded:
+                asyncio.run(relay._require_constrained_subject(CellEnvironment(BOUNDED)))
+        self.assertIn("network namespace", str(outside.exception))
+        self.assertIn("NET_RAW", str(bounded.exception))
 
     def test_subject_sees_only_the_ca_certificate(self) -> None:
         listed = self.exec_main(["ls", "--almost-all", "/opt/maka-egress"])
@@ -398,10 +427,13 @@ class CellEgressNamespaceTest(unittest.TestCase):
             self.assertEqual(resolved.returncode, 0, resolved.stderr)
 
 class CellEnvironment:
-    """Presents the live cell's `main` service as the relay's environment."""
+    """Presents one live cell service as the relay's environment."""
+
+    def __init__(self, service: str) -> None:
+        self.service = service
 
     async def exec(self, command: str, cwd=None, timeout_sec=None):
-        result = CellEgressNamespaceTest.exec_main(["sh", "-c", command])
+        result = CellEgressNamespaceTest.exec_service(self.service, ["sh", "-c", command])
         return types.SimpleNamespace(
             return_code=result.returncode, stdout=result.stdout, stderr=result.stderr
         )

@@ -1,11 +1,11 @@
 #!/bin/sh
 set -eu
 
-ALLOWLIST=/opt/egress-sidecar/allowlist.txt
-# The proxy-only ruleset carries no packet-mark exemption. gost only needs one
-# when it forwards, and this mode empties its allowlist so it forwards nothing;
-# trusting a mark here would let the subject set the same mark on its own socket
-# and leave the namespace unproxied.
+# gost's allowlist is never written here: the sidecar entrypoint empties it at
+# start and this policy only ever forwards through the audited proxy, so gost
+# forwards nothing on its own. That also removes the packet-mark exemption gost
+# needs when it does forward — the sidecar shares the subject's network
+# namespace, so a mark the sidecar can set is one the subject can set too.
 GOST_PORT=12345
 NFTABLES_RULESET_NAME=gost_egress
 PROXY_HOST=maka-eval-mitmproxy
@@ -25,8 +25,6 @@ setup_proxy_only() {
     echo "could not resolve Eval egress proxy" >&2
     exit 1
   fi
-  : > "$ALLOWLIST"
-  sleep 2
   nft --file - <<EOF
 add table inet $NFTABLES_RULESET_NAME
 flush table inet $NFTABLES_RULESET_NAME
@@ -45,7 +43,11 @@ table inet $NFTABLES_RULESET_NAME {
 
     fib daddr type local accept
     ip daddr $proxy_ip tcp dport $PROXY_PORT accept
-    meta l4proto != tcp reject
+    # Rejecting everything else rather than only non-TCP: the nat chain above
+    # rewrote every TCP destination this policy admits to a local one, so what
+    # reaches here still carrying a public destination is traffic the nat hook
+    # never saw — a connection conntrack established before the policy existed.
+    reject
   }
 }
 EOF
@@ -55,12 +57,9 @@ EOF
 case "${1:-}" in
   allow-all)
     remove_nftables
-    : > "$ALLOWLIST"
     echo "ok: allow all egress"
     ;;
   deny-all)
-    : > "$ALLOWLIST"
-    sleep 2
     setup_proxy_only
     ;;
   allow)

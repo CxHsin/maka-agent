@@ -58,8 +58,8 @@ redirecting the remainder also closes a connection the subject inherits from an 
 redirect is a NAT rule, and NAT is evaluated only on a connection's first packet. The
 namespace-local exemption keeps the loopback provider proxies reachable and, with them, Docker's
 embedded resolver at `127.0.0.11`, which forwards names it does not own to the host's upstream
-resolvers. That is an unaudited channel out of the cell and back; removing it is tracked separately,
-and until then the audited proxy is the only path for everything except DNS. The policy exempts no
+resolvers. That is an unaudited channel out of the cell and back, tracked in issue #2976; until it is
+closed the audited proxy is the only path for everything except DNS. The policy exempts no
 packet mark: the
 sidecar shares the subject's network namespace, so a mark the sidecar can set is one the subject can
 set too, and gost forwards nothing in this mode anyway. Because that shared namespace also means the
@@ -83,7 +83,7 @@ the overlay and the checked-in policy and asserts that contract in a real cell n
 a Docker daemon and outbound network, and skips otherwise. This URL policy is a blocklist for known
 benchmark and public-solution contamination surfaces, not a complete defense against a deliberately
 invented lookup channel. It classifies what it can read: a `CONNECT` tunnel carrying something other
-than TLS or HTTP reaches no rule and no audit record, which is tracked separately. Collected Maka runtime files
+than TLS or HTTP reaches no rule and no audit record, which is tracked in issue #2977. Collected Maka runtime files
 and egress audit logs are represented in attempt artifacts with byte counts and SHA-256 digests.
 The local image tag remains a machine deployment identity rather than a registry digest; digest
 pinning is tracked in issue #2953.

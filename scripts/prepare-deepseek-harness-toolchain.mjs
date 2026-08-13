@@ -21,6 +21,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -28,6 +29,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const identityPath = join(repoRoot, 'packages', 'eval', 'src', 'toolchain-verification.ts');
+const manifestDir = join(repoRoot, 'packages', 'eval', 'harbor', 'deepseek-harness-toolchain');
 
 const DEEPSEEK_HARNESS_TOOLCHAIN_SPEC = {
   // The task images are linux/amd64, and the native modules must match them.
@@ -50,12 +52,26 @@ async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {
   if (!outputRoot) throw new Error('--out is required');
   const spec = DEEPSEEK_HARNESS_TOOLCHAIN_SPEC;
   const root = resolve(outputRoot);
-  // --out is rebuilt from scratch. Refuse a directory that holds anything other
-  // than a previous build of this toolchain.
-  const existing = await readdir(root).catch(() => []);
-  if (existing.length > 0 && !existing.includes('manifest.json')) {
+  // --out is rebuilt from scratch, so it is the one destructive path here. It
+  // must name either nothing or a previous build of this toolchain, and never a
+  // directory someone works out of.
+  for (const reserved of [resolve('/'), repoRoot, process.cwd(), homedir()]) {
+    if (root === reserved) throw new Error(`--out must not be ${reserved}`);
+  }
+  const existing = await readdir(root).catch(() => undefined);
+  if (existing && !existing.includes('manifest.json')) {
     throw new Error(`${root} is not empty and does not look like a toolchain build`);
   }
+  // Both the lockfile and the spec name a harness version. If they disagree the
+  // manifest would describe something other than what was installed.
+  const lock = JSON.parse(await readFile(join(manifestDir, 'package-lock.json'), 'utf8'));
+  const locked = lock.packages?.[`node_modules/${spec.deepseekHarness.package}`]?.version;
+  if (locked !== spec.deepseekHarness.version) {
+    throw new Error(
+      `lockfile pins ${spec.deepseekHarness.package}@${locked}, spec says ${spec.deepseekHarness.version}`,
+    );
+  }
+
   await rm(root, { recursive: true, force: true });
   await mkdir(join(root, 'bin'), { recursive: true });
   await mkdir(join(root, 'lib', 'dsh'), { recursive: true });
@@ -65,13 +81,16 @@ async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {
     // The image digest fixes the interpreter; this asserts the version the spec
     // claims for it.
     `test "$(node -v)" = "v${spec.node.version}"`,
-    'npm init -y >/dev/null',
-    `npm i ${spec.deepseekHarness.package}@${spec.deepseekHarness.version} >/dev/null 2>&1`,
+    // `npm ci` installs exactly the reviewed lockfile. `npm i` would re-resolve
+    // several hundred caret ranges, so two builds of the same harness version
+    // could disagree on what they actually installed.
+    'cp /manifest/package.json /manifest/package-lock.json .',
+    'npm ci >/dev/null 2>&1',
     // Fail the build here rather than at benchmark time if the native module
     // did not compile.
     'node -e "require(\'node-pty\')"',
     'cp "$(command -v node)" /out/bin/node',
-    'cp -R package.json node_modules /out/lib/dsh/',
+    'cp -R package.json package-lock.json node_modules /out/lib/dsh/',
   ].join(' && ');
   await execFileAsync('docker', [
     'run',
@@ -80,6 +99,8 @@ async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {
     spec.platform,
     '-v',
     `${root}:/out`,
+    '-v',
+    `${manifestDir}:/manifest:ro`,
     '-w',
     '/build',
     image,

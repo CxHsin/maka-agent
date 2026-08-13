@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { JsonObject } from './experiment.js';
 import type { NormalizedUsage } from './result.js';
 import type { SubjectAdapter } from './runner.js';
@@ -58,6 +61,7 @@ export function createExternalSubjectAdapter(): SubjectAdapter {
     async execute({ cell, context }) {
       const config = decodeConfig(cell.subject.config, cell.subject.credentials);
       const toolchain = wrapperToolchain(config, cell.executor.config);
+      const profile = bundledProfile(config.args);
       const identity = toolchain ? verifiedToolchains.get(cell.subject.id) : undefined;
       if (toolchain && !identity) {
         throw new Error(`${cell.subject.id} toolchain was not verified before execution`);
@@ -84,29 +88,35 @@ export function createExternalSubjectAdapter(): SubjectAdapter {
           ...(config.result === 'exit-code' ? { captureStdout: false } : {}),
         });
         const decoded = execution.stdout.length === 0 ? undefined : decodeResult(execution.stdout);
+        const recovered = await recoverExternalMetering(context.metadata, profile);
+        const recoveryArtifacts = externalRecoveryArtifacts(profile, identity, recovered);
         if (execution.termination === 'framework_timeout') {
           return {
-            usage: decoded?.usage ?? null,
-            costUsd: decoded?.costUsd ?? null,
+            usage: decoded?.usage ?? recovered?.usage ?? null,
+            costUsd: decoded?.costUsd ?? recovered?.costUsd ?? null,
             durationMs: Date.now() - startedAt,
             status: 'failed' as const,
             failureReason: 'external subject exceeded the framework timeout',
             artifacts: [
-              ...(decoded?.artifacts ?? []),
+              ...(decoded?.artifacts ?? recoveryArtifacts),
+              ...(decoded?.usage == null && recovered && decoded ? [recovered.artifact] : []),
               { kind: 'external_process', exitCode: execution.exitCode },
             ],
           };
         }
         if (execution.diagnostic?.category === 'execution-scope-unavailable') {
           return {
-            usage: null,
-            costUsd: null,
+            usage: recovered?.usage ?? null,
+            costUsd: recovered?.costUsd ?? null,
             durationMs: Date.now() - startedAt,
             status: context.signal?.aborted
               ? ('indeterminate' as const)
               : ('infra_failed' as const),
             failureReason: 'external subject execution scope was unavailable',
-            artifacts: [{ kind: 'external_process', exitCode: execution.exitCode }],
+            artifacts: [
+              ...recoveryArtifacts,
+              { kind: 'external_process', exitCode: execution.exitCode },
+            ],
           };
         }
         if (config.result === 'exit-code') {
@@ -127,36 +137,49 @@ export function createExternalSubjectAdapter(): SubjectAdapter {
         }
         if (execution.diagnostic?.category.startsWith('result-frame-')) {
           return {
-            usage: null,
-            costUsd: null,
+            usage: recovered?.usage ?? null,
+            costUsd: recovered?.costUsd ?? null,
             durationMs: Date.now() - startedAt,
             status: context.signal?.aborted
               ? ('indeterminate' as const)
-              : ('infra_failed' as const),
+              : recovered && recovered.admittedRequests > 0
+                ? ('failed' as const)
+                : ('infra_failed' as const),
             failureReason: 'external subject result transport failed',
-            artifacts: [{ kind: 'external_process', exitCode: execution.exitCode }],
+            artifacts: [
+              ...recoveryArtifacts,
+              { kind: 'external_process', exitCode: execution.exitCode },
+            ],
           };
         }
         if (execution.exitCode !== 0) {
           return {
-            usage: null,
-            costUsd: null,
+            usage: recovered?.usage ?? null,
+            costUsd: recovered?.costUsd ?? null,
             durationMs: Date.now() - startedAt,
             status: context.signal?.aborted ? ('indeterminate' as const) : ('failed' as const),
             failureReason: `external subject exited ${execution.exitCode}`,
-            artifacts: [{ kind: 'external_process', exitCode: execution.exitCode }],
+            artifacts: [
+              ...recoveryArtifacts,
+              { kind: 'external_process', exitCode: execution.exitCode },
+            ],
           };
         }
         if (!decoded) {
           return {
-            usage: null,
-            costUsd: null,
+            usage: recovered?.usage ?? null,
+            costUsd: recovered?.costUsd ?? null,
             durationMs: Date.now() - startedAt,
             status: context.signal?.aborted
               ? ('indeterminate' as const)
-              : ('infra_failed' as const),
+              : recovered && recovered.admittedRequests > 0
+                ? ('failed' as const)
+                : ('infra_failed' as const),
             failureReason: 'external subject returned no result',
-            artifacts: [{ kind: 'external_process', exitCode: execution.exitCode }],
+            artifacts: [
+              ...recoveryArtifacts,
+              { kind: 'external_process', exitCode: execution.exitCode },
+            ],
           };
         }
         return {
@@ -173,19 +196,159 @@ export function createExternalSubjectAdapter(): SubjectAdapter {
           artifacts: decoded.artifacts,
         };
       } catch {
+        const recovered = await recoverExternalMetering(context.metadata, profile);
         return {
-          usage: null,
-          costUsd: null,
+          usage: recovered?.usage ?? null,
+          costUsd: recovered?.costUsd ?? null,
           durationMs: Date.now() - startedAt,
-          status: context.signal?.aborted ? ('indeterminate' as const) : ('infra_failed' as const),
+          status: context.signal?.aborted
+            ? ('indeterminate' as const)
+            : recovered && recovered.admittedRequests > 0
+              ? ('failed' as const)
+              : ('infra_failed' as const),
           failureReason: context.signal?.aborted
             ? 'external subject cancelled'
-            : 'external subject failed',
-          artifacts: [],
+            : recovered && recovered.admittedRequests > 0
+              ? 'external subject interrupted after model admission'
+              : 'external subject failed',
+          artifacts: externalRecoveryArtifacts(profile, identity, recovered),
         };
       }
     },
   };
+}
+
+function externalRecoveryArtifacts(
+  profile: ExternalProfile | undefined,
+  identity: ToolchainIdentity | undefined,
+  recovered: Awaited<ReturnType<typeof recoverExternalMetering>>,
+): JsonObject[] {
+  return [
+    ...(profile && identity ? [{ kind: 'toolchain', profile, ...identity }] : []),
+    ...(recovered ? [recovered.artifact] : []),
+  ];
+}
+
+export async function recoverExternalMetering(
+  metadata: JsonObject,
+  profile: ExternalProfile | undefined,
+): Promise<
+  | {
+      readonly usage: NormalizedUsage | null;
+      readonly costUsd: number | null;
+      readonly admittedRequests: number;
+      readonly artifact: JsonObject;
+    }
+  | undefined
+> {
+  if (!profile || typeof metadata.trialPath !== 'string') return undefined;
+  const path = join(metadata.trialPath, 'agent', `${profile}.provider-usage.json`);
+  const bytes = await readFile(path).catch(() => undefined);
+  if (!bytes) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    return undefined;
+  }
+  try {
+    const checkpoint = exact(
+      value,
+      [
+        'schemaVersion',
+        'profile',
+        'usage',
+        'costUsd',
+        'requests',
+        'settledRequests',
+        'inFlightRequests',
+        'admittedRequests',
+        'usageRequests',
+        'missingUsageRequests',
+        'usageComplete',
+        'removedWebTools',
+        'models',
+        'toolNames',
+      ],
+      'external metering checkpoint',
+    );
+    if (
+      checkpoint.schemaVersion !== 'maka.external_provider_usage.v1' ||
+      checkpoint.profile !== profile ||
+      typeof checkpoint.usageComplete !== 'boolean'
+    ) {
+      return undefined;
+    }
+    const usage = checkpoint.usage === null ? null : decodeUsage(checkpoint.usage);
+    const costUsd =
+      checkpoint.costUsd === null
+        ? null
+        : nonnegative(checkpoint.costUsd, 'external metering cost');
+    if ((usage === null) !== (costUsd === null)) return undefined;
+    const requests = count(checkpoint.requests, 'external metering requests');
+    const settledRequests = count(checkpoint.settledRequests, 'external metering settled requests');
+    const inFlightRequests = count(
+      checkpoint.inFlightRequests,
+      'external metering in-flight requests',
+    );
+    const admittedRequests = count(
+      checkpoint.admittedRequests,
+      'external metering admitted requests',
+    );
+    const usageRequests = count(checkpoint.usageRequests, 'external metering usage requests');
+    const missingUsageRequests = count(
+      checkpoint.missingUsageRequests,
+      'external metering missing usage requests',
+    );
+    const removedWebTools = count(
+      checkpoint.removedWebTools,
+      'external metering removed web tools',
+    );
+    const models = stringList(checkpoint.models, 'external metering models');
+    const toolNames = stringList(checkpoint.toolNames, 'external metering tool names');
+    if (
+      settledRequests + inFlightRequests !== requests ||
+      admittedRequests > settledRequests ||
+      usageRequests > admittedRequests ||
+      missingUsageRequests !== admittedRequests - usageRequests ||
+      (usageRequests > 0 && usage === null)
+    ) {
+      return undefined;
+    }
+    const complete = checkpoint.usageComplete;
+    if (
+      complete !==
+      (inFlightRequests === 0 && admittedRequests > 0 && usageRequests === admittedRequests)
+    ) {
+      return undefined;
+    }
+    return {
+      usage,
+      costUsd,
+      admittedRequests,
+      artifact: {
+        kind: 'provider-metering-recovery',
+        profile,
+        path: `agent/${profile}.provider-usage.json`,
+        bytes: bytes.byteLength,
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        requests,
+        settledRequests,
+        inFlightRequests,
+        admittedRequests,
+        usageRequests,
+        missingUsageRequests,
+        usageComplete: complete,
+        tokenBasis: complete ? 'complete' : 'lower-bound',
+        costBasis: complete ? 'complete' : 'lower-bound',
+        removedWebTools,
+        models,
+        toolNames,
+      },
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 interface ExternalSubjectConfig {
@@ -398,5 +561,18 @@ function text(value: unknown, where: string): string {
 function nonnegative(value: unknown, where: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0)
     throw new Error(`${where} is invalid`);
+  return value;
+}
+
+function count(value: unknown, where: string): number {
+  const decoded = nonnegative(value, where);
+  if (!Number.isSafeInteger(decoded)) throw new Error(`${where} is invalid`);
+  return decoded;
+}
+
+function stringList(value: unknown, where: string): readonly string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new Error(`${where} is invalid`);
+  }
   return value;
 }

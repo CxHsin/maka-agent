@@ -32,6 +32,14 @@ Build that arm's toolchain with `node scripts/prepare-deepseek-harness-toolchain
 
 Single-arm results are not drawn from the same run as the multi-arm cohort. Task groups hold every subject for one task, so each arm adds a container: the eight-arm cohort reaches 128 concurrent trials at its declared limit, and this spec raises its own limit so its 89 cells run under comparable machine load. They remain separate runs on separate occasions, which no setting can change.
 
+External provider metering does not depend on the subject exiting cleanly. The wrapper's proxy writes
+`agent/<profile>.provider-usage.json` at the start and the settlement of every request, renaming it into
+place so a reader sees one whole snapshot or the previous one. When the result frame is missing — the
+wrapper was killed rather than asked to stop — the executor recovers usage and cost from that file and
+records whether the figure is complete or a lower bound, along with the in-flight and missing-usage
+request counts that make it one. A run that was cut off after admitted model work is therefore scored
+and attributed rather than discarded.
+
 A subject that exhausts the framework timeout is reported as `subject_failed` with its verifier reward intact. The reward is the outcome; the status records that the run was cut off rather than finishing on its own. Only a missing reward is an infrastructure failure.
 
 Maka benchmark subjects freeze a versioned Session profile. `headless-coding-v1` is persisted in

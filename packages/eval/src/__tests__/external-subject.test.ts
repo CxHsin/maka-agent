@@ -4,10 +4,146 @@ import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { createExternalSubjectAdapter } from '../external-subject.js';
+import { createExternalSubjectAdapter, recoverExternalMetering } from '../external-subject.js';
 import type { ExperimentCell, ExperimentSpec } from '../experiment.js';
 import type { CellAttempt } from '../result.js';
 import { TOOLCHAIN_IDENTITIES, TOOLCHAIN_IDENTITY_ENV } from '../toolchain-verification.js';
+
+test('recovers lower-bound metering when external settlement is interrupted', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-metering-recovery-'));
+  const trialPath = join(root, 'trial');
+  const toolchainRoot = join(root, 'toolchain');
+  const executable = join(toolchainRoot, 'bin/codex');
+  const sourceEnv = 'MAKA_TEST_CODEX_RECOVERY_TOOLCHAIN';
+  const previous = process.env[sourceEnv];
+  const usage = {
+    inputTokens: 100,
+    outputTokens: 20,
+    cacheReadTokens: 80,
+    cacheWriteTokens: 0,
+    reasoningTokens: 10,
+    totalTokens: 120,
+  };
+  process.env[sourceEnv] = toolchainRoot;
+  try {
+    await mkdir(join(toolchainRoot, 'bin'), { recursive: true });
+    await writeFile(executable, 'codex');
+    const digest = createHash('sha256').update('codex').digest('hex');
+    await writeFile(join(toolchainRoot, 'checksums.sha256'), `${digest}  bin/codex\n`);
+    await writeFile(
+      join(toolchainRoot, 'manifest.json'),
+      `${JSON.stringify({ fingerprint: TOOLCHAIN_IDENTITIES.codex.fingerprint })}\n`,
+    );
+    await mkdir(join(trialPath, 'agent'), { recursive: true });
+    await writeFile(
+      join(trialPath, 'agent/codex.provider-usage.json'),
+      `${JSON.stringify({
+        schemaVersion: 'maka.external_provider_usage.v1',
+        profile: 'codex',
+        usage,
+        costUsd: 0.01,
+        requests: 3,
+        settledRequests: 2,
+        inFlightRequests: 1,
+        admittedRequests: 2,
+        usageRequests: 1,
+        missingUsageRequests: 1,
+        usageComplete: false,
+        removedWebTools: 0,
+        models: ['deepseek-v4-flash'],
+        toolNames: ['shell'],
+      })}\n`,
+    );
+    const cell = {
+      ...externalCell({
+        command: '/opt/maka-node-toolchain/bin/node',
+        args: [
+          '/opt/maka-agent/packages/eval/dist/harbor-external-subject.js',
+          'codex',
+          'https://api.deepseek.com',
+          '/',
+          '/opt/maka-codex-toolchain/bin/codex',
+        ],
+      }),
+      executor: {
+        kind: 'harbor',
+        config: {
+          mounts: [
+            {
+              sourceEnv,
+              target: TOOLCHAIN_IDENTITIES.codex.root,
+              readOnly: true,
+            },
+          ],
+        },
+      },
+    } satisfies ExperimentCell;
+    const adapter = createExternalSubjectAdapter();
+    await adapter.prepare?.({ spec: {} as ExperimentSpec, cells: [cell] });
+
+    const recovered = await recoverExternalMetering({ trialPath }, 'codex');
+    assert.deepEqual(recovered?.usage, usage);
+    assert.equal(recovered?.costUsd, 0.01);
+    assert.equal(recovered?.artifact.usageComplete, false);
+    assert.equal(recovered?.artifact.tokenBasis, 'lower-bound');
+    assert.equal(recovered?.artifact.costBasis, 'lower-bound');
+
+    for (const execute of [
+      async () => ({
+        termination: 'framework_timeout' as const,
+        exitCode: 124,
+        stdout: '',
+        diagnostic: {
+          category: 'result-frame-missing' as const,
+          bytes: 0,
+          sha256: '0'.repeat(64),
+        },
+      }),
+      async () => ({
+        termination: 'exited' as const,
+        exitCode: 1,
+        stdout: '',
+        diagnostic: {
+          category: 'result-frame-missing' as const,
+          bytes: 0,
+          sha256: '0'.repeat(64),
+        },
+      }),
+      async () => {
+        throw new Error('relay interrupted');
+      },
+    ]) {
+      const result = await adapter.execute({
+        cell,
+        context: {
+          cwd: '/workspace',
+          taskInput: 'solve',
+          metadata: { trialPath },
+          execute,
+        },
+      });
+      assert.equal(result.status, 'failed');
+      assert.deepEqual(result.usage, usage);
+      assert.equal(result.costUsd, 0.01);
+      assert.deepEqual(
+        result.artifacts.find(({ kind }) => kind === 'toolchain'),
+        {
+          kind: 'toolchain',
+          profile: 'codex',
+          ...TOOLCHAIN_IDENTITIES.codex,
+        },
+      );
+      assert.equal(
+        result.artifacts.find(({ kind }) => kind === 'provider-metering-recovery')?.usageComplete,
+        false,
+      );
+    }
+  } finally {
+    if (previous === undefined) delete process.env[sourceEnv];
+    else process.env[sourceEnv] = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('passes declared environment and credential bindings to one external command', async () => {
   const cell = externalCell({

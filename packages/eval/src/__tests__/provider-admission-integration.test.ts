@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,61 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const RESULT_TOKEN = '0123456789abcdef0123456789abcdef';
+
+test('provider metering checkpoint survives an abrupt wrapper exit', async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write('data: {"type":"response.created"}\n\n');
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const root = await mkdtemp(join(tmpdir(), 'maka-provider-checkpoint-'));
+  const childPath = join(root, 'child.mjs');
+  await writeFile(
+    childPath,
+    "await fetch(`${process.env.DEEPSEEK_BASE_URL}/responses`,{method:'POST',body:'{}'});",
+  );
+  const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
+  const wrapperProcess = spawn(
+    process.execPath,
+    [
+      wrapper.pathname,
+      'opencode',
+      `http://127.0.0.1:${address.port}`,
+      root,
+      process.execPath,
+      childPath,
+    ],
+    {
+      env: {
+        ...process.env,
+        OPENAI_API_KEY: 'upstream-test-key',
+        MAKA_EVAL_RESULT_TOKEN: RESULT_TOKEN,
+      },
+      stdio: 'ignore',
+    },
+  );
+  try {
+    const checkpointPath = join(root, 'logs/agent/opencode.provider-usage.json');
+    const checkpoint = await waitForCheckpoint(checkpointPath, (value) => {
+      return value.requests === 1 && value.inFlightRequests === 1;
+    });
+    assert.equal(checkpoint.schemaVersion, 'maka.external_provider_usage.v1');
+    assert.equal(checkpoint.profile, 'opencode');
+    assert.equal(checkpoint.usage, null);
+    assert.equal(checkpoint.usageComplete, false);
+  } finally {
+    wrapperProcess.kill('SIGKILL');
+    await once(wrapperProcess, 'exit').catch(() => undefined);
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('provider failures remain infrastructure failures until inference admission', async () => {
   for (const [
@@ -84,6 +140,23 @@ test('provider failures remain infrastructure failures until inference admission
       assert.equal(metering?.usageComplete, usageComplete);
       assert.equal(result.usage?.cacheWriteTokens ?? null, expectedCacheWrite);
       assert.equal(result.costUsd === null, !usageComplete);
+      const checkpoint = JSON.parse(
+        await readFile(join(root, 'logs/agent/opencode.provider-usage.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      assert.equal(
+        (await stat(join(root, 'logs/agent/opencode.provider-usage.json'))).mode & 0o777,
+        0o644,
+      );
+      assert.equal(checkpoint.requests, 1);
+      assert.equal(checkpoint.settledRequests, 1);
+      assert.equal(checkpoint.inFlightRequests, 0);
+      assert.equal(checkpoint.admittedRequests, admittedRequests);
+      assert.equal(checkpoint.usageRequests, expectedCacheWrite === null ? 0 : 1);
+      assert.equal(
+        checkpoint.missingUsageRequests,
+        expectedCacheWrite === null ? admittedRequests : 0,
+      );
+      assert.equal(checkpoint.usageComplete, usageComplete);
       assert.doesNotMatch(
         JSON.stringify(result),
         /(?:credential|stdout|stderr)-sentinel-must-not-persist/u,
@@ -192,4 +265,20 @@ function decodeResultFrame(stdout: string): unknown {
   const payload = Buffer.from(encoded ?? '', 'base64url');
   assert.equal(payload.byteLength, Number(length));
   return JSON.parse(payload.toString()) as unknown;
+}
+
+async function waitForCheckpoint(
+  path: string,
+  predicate: (value: Record<string, unknown>) => boolean,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const text = await readFile(path, 'utf8').catch(() => undefined);
+    if (text) {
+      const value = JSON.parse(text) as Record<string, unknown>;
+      if (predicate(value)) return value;
+    }
+    if (Date.now() >= deadline) throw new Error('provider checkpoint did not settle');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
 }

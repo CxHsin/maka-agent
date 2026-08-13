@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, rmSync, statSync } from 'node:fs';
-import { chmod, copyFile, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -22,16 +22,28 @@ const resultToken = takeRelayResultToken();
 // lifecycle test pins the two together.
 const DEEPSEEK_HARNESS_PROFILE = 'maka-eval';
 
+// One shape serves both readers. `report()` returns it after settling, and the
+// on-disk checkpoint is the same snapshot taken at an arbitrary moment, so the
+// two can never disagree about what a field means. `inFlightRequests` is the
+// only field that distinguishes them: it is zero by construction in a settled
+// report and may be positive in a checkpoint written mid-request.
 interface MeteringReport {
   readonly usage: Usage | null;
+  readonly costUsd: number | null;
   readonly requests: number;
+  readonly settledRequests: number;
+  readonly inFlightRequests: number;
   readonly admittedRequests: number;
   readonly usageRequests: number;
+  readonly missingUsageRequests: number;
   readonly usageComplete: boolean;
   readonly removedWebTools: number;
   readonly models: readonly string[];
   readonly toolNames: readonly string[];
 }
+
+const PROVIDER_USAGE_CHECKPOINT_SCHEMA = 'maka.external_provider_usage.v1';
+let atomicWriteSequence = 0;
 
 type SubjectStatus = 'completed' | 'failed' | 'infra_failed' | 'indeterminate';
 const CLASSIFIABLE_RECORD_LIMIT_BYTES = 16 * 1024 * 1024;
@@ -342,6 +354,7 @@ process.once('SIGINT', interrupt);
 
 const logsRoot = rooted(systemRoot, '/logs/agent');
 const statePath = join(logsRoot, `${profile}.wrapper-state.json`);
+const usagePath = join(logsRoot, `${profile}.provider-usage.json`);
 const artifacts: Record<string, unknown>[] = [];
 let usage: Usage | null = null;
 let costUsd: number | null = null;
@@ -361,7 +374,13 @@ try {
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
   if (!key) throw new Error('external subject credential is missing');
-  const proxy = await startMeteringProxy(baseUrl, key, profile === 'claude-code');
+  const proxy = await startMeteringProxy(
+    baseUrl,
+    key,
+    profile === 'claude-code',
+    profile,
+    usagePath,
+  );
   try {
     await writeState('proxy_started');
     const prepared = await prepareProfile(profile, proxy.baseUrl, systemRoot, args);
@@ -404,6 +423,7 @@ try {
         toolNames: metering.toolNames,
       },
       fileArtifact('wrapper-state', statePath, profile),
+      fileArtifact('provider-metering-snapshot', usagePath, profile),
     );
   } finally {
     await proxy.close();
@@ -650,6 +670,8 @@ async function startMeteringProxy(
   upstreamBaseUrl: string,
   upstreamKey: string,
   anthropic: boolean,
+  selected: Profile,
+  checkpointPath: string,
 ): Promise<{
   baseUrl: string;
   // Metering is only readable as one settled snapshot: a request still in
@@ -661,11 +683,50 @@ async function startMeteringProxy(
   const total = zeroUsage();
   let measured = false;
   let requests = 0;
+  let settledRequests = 0;
+  let inFlightRequests = 0;
   let admittedRequests = 0;
   let usageRequests = 0;
   let removedWebTools = 0;
   const requestModels = new Set<string>();
   const observedToolNames = new Set<string>();
+  const snapshot = (): MeteringReport => {
+    const usage = measured
+      ? { ...total, totalTokens: total.inputTokens + total.outputTokens }
+      : null;
+    return {
+      usage,
+      costUsd: usage ? estimateCost(usage) : null,
+      requests,
+      settledRequests,
+      inFlightRequests,
+      admittedRequests,
+      usageRequests,
+      missingUsageRequests: admittedRequests - usageRequests,
+      usageComplete:
+        inFlightRequests === 0 && admittedRequests > 0 && usageRequests === admittedRequests,
+      removedWebTools,
+      models: [...requestModels].sort(),
+      toolNames: [...observedToolNames].sort(),
+    };
+  };
+  // The wrapper's own result frame is lost when the process is killed rather
+  // than asked to stop, and a run that is cut off is exactly the run with the
+  // most tokens spent. The checkpoint is therefore written at the start and the
+  // settlement of every request, so whatever survives on disk is a truthful
+  // lower bound at worst. Writes are serialized through one chain: two
+  // concurrent requests must not interleave into a half-written file.
+  let checkpointWrites = Promise.resolve();
+  const persistCheckpoint = () => {
+    const value = {
+      schemaVersion: PROVIDER_USAGE_CHECKPOINT_SCHEMA,
+      profile: selected,
+      ...snapshot(),
+    };
+    checkpointWrites = checkpointWrites.then(() => writeJsonAtomic(checkpointPath, value));
+    return checkpointWrites;
+  };
+  await persistCheckpoint();
   // Undici defaults to aborting a request after 300s without headers or body
   // bytes. A reasoning model can legitimately be quiet for longer, and killing
   // it here would turn a slow answer into an infrastructure failure. The
@@ -678,59 +739,69 @@ async function startMeteringProxy(
   const server = createServer((request, response) => {
     const operation = (async () => {
       requests += 1;
-      const projected = removeEvalWebTools(await readRequest(request));
-      removedWebTools += projected.removed;
-      if (projected.model) requestModels.add(projected.model);
-      for (const name of projected.toolNames) observedToolNames.add(name);
-      const target = joinUpstream(upstreamBaseUrl, request.url ?? '/');
-      const headers: Record<string, string> = {};
-      for (const [name, value] of Object.entries(request.headers)) {
-        if (
-          value === undefined ||
-          ['host', 'content-length', 'connection', 'authorization', 'x-api-key'].includes(
-            name.toLowerCase(),
-          )
-        )
-          continue;
-        headers[name] = Array.isArray(value) ? value.join(', ') : value;
-      }
-      if (anthropic) headers['x-api-key'] = upstreamKey;
-      else headers.authorization = `Bearer ${upstreamKey}`;
-      const upstream = await undiciFetch(target, {
-        method: request.method,
-        headers,
-        body: projected.body.length === 0 ? undefined : new Uint8Array(projected.body),
-        dispatcher,
-      });
-      response.statusCode = upstream.status;
-      upstream.headers.forEach((value, name) => {
-        if (
-          !['content-length', 'content-encoding', 'transfer-encoding', 'connection'].includes(name)
-        )
-          response.setHeader(name, value);
-      });
-      const parser = usageParser(anthropic);
+      inFlightRequests += 1;
       try {
-        if (upstream.body) {
-          const reader = upstream.body.getReader();
-          for (;;) {
-            const next = await reader.read();
-            if (next.done) break;
-            response.write(Buffer.from(next.value));
-            parser.push(Buffer.from(next.value).toString('utf8'));
+        await persistCheckpoint();
+        const projected = removeEvalWebTools(await readRequest(request));
+        removedWebTools += projected.removed;
+        if (projected.model) requestModels.add(projected.model);
+        for (const name of projected.toolNames) observedToolNames.add(name);
+        const target = joinUpstream(upstreamBaseUrl, request.url ?? '/');
+        const headers: Record<string, string> = {};
+        for (const [name, value] of Object.entries(request.headers)) {
+          if (
+            value === undefined ||
+            ['host', 'content-length', 'connection', 'authorization', 'x-api-key'].includes(
+              name.toLowerCase(),
+            )
+          )
+            continue;
+          headers[name] = Array.isArray(value) ? value.join(', ') : value;
+        }
+        if (anthropic) headers['x-api-key'] = upstreamKey;
+        else headers.authorization = `Bearer ${upstreamKey}`;
+        const upstream = await undiciFetch(target, {
+          method: request.method,
+          headers,
+          body: projected.body.length === 0 ? undefined : new Uint8Array(projected.body),
+          dispatcher,
+        });
+        response.statusCode = upstream.status;
+        upstream.headers.forEach((value, name) => {
+          if (
+            !['content-length', 'content-encoding', 'transfer-encoding', 'connection'].includes(
+              name,
+            )
+          )
+            response.setHeader(name, value);
+        });
+        const parser = usageParser(anthropic);
+        try {
+          if (upstream.body) {
+            const reader = upstream.body.getReader();
+            for (;;) {
+              const next = await reader.read();
+              if (next.done) break;
+              response.write(Buffer.from(next.value));
+              parser.push(Buffer.from(next.value).toString('utf8'));
+            }
+          }
+          response.end();
+        } finally {
+          const parsed = parser.finish();
+          if (upstream.ok && parsed.admitted) {
+            admittedRequests += 1;
+            if (parsed.usage) {
+              usageRequests += 1;
+              measured = true;
+              addUsage(total, parsed.usage);
+            }
           }
         }
-        response.end();
       } finally {
-        const parsed = parser.finish();
-        if (upstream.ok && parsed.admitted) {
-          admittedRequests += 1;
-          if (parsed.usage) {
-            usageRequests += 1;
-            measured = true;
-            addUsage(total, parsed.usage);
-          }
-        }
+        settledRequests += 1;
+        inFlightRequests -= 1;
+        await persistCheckpoint();
       }
     })().catch((error: unknown) => {
       response.statusCode = 502;
@@ -746,23 +817,29 @@ async function startMeteringProxy(
     baseUrl: `http://127.0.0.1:${address.port}`,
     report: async () => {
       await Promise.allSettled([...active]);
-      return {
-        usage: measured ? { ...total, totalTokens: total.inputTokens + total.outputTokens } : null,
-        requests,
-        admittedRequests,
-        usageRequests,
-        usageComplete: admittedRequests > 0 && usageRequests === admittedRequests,
-        removedWebTools,
-        models: [...requestModels].sort(),
-        toolNames: [...observedToolNames].sort(),
-      };
+      await checkpointWrites;
+      return snapshot();
     },
     close: async () => {
       await Promise.allSettled([...active]);
+      await checkpointWrites;
       await closeServer(server);
       await dispatcher.close();
     },
   };
+}
+
+// The checkpoint is read by a different process after this one may have died
+// mid-write, so it is renamed into place rather than written in place: a reader
+// sees either the previous snapshot or the next one, never a truncated file.
+// /logs/agent is created under umask 077, which silently downgrades the mode
+// argument to 0600 and leaves the file unreadable by the host Eval process, so
+// the mode is restated after the rename where the umask no longer applies.
+async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
+  const temporary = `${path}.tmp-${process.pid}-${atomicWriteSequence++}`;
+  await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o644 });
+  await rename(temporary, path);
+  await chmod(path, 0o644);
 }
 
 function usageParser(anthropic: boolean): {

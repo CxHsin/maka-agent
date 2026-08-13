@@ -26,6 +26,12 @@ The result kernel contains only score, normalized usage, attributable cost, dura
 
 The checked-in Terminal-Bench 2.1 four-arm cohort is `experiments/terminal-bench-2.1-deepseek-v4-flash-four-arm.json`. It freezes provider endpoints, framework version, container paths and read-only mount policy. Set each declared machine-path environment variable to its trusted prepared directory, and set the declared API-key credentials. Machine-local paths select artifacts; they do not alter experiment semantics and are not presented as a cryptographic identity scheme.
 
+The single-arm DeepSeek Harness cohort is `experiments/terminal-bench-2.1-deepseek-v4-flash-deepseek-harness.json`. The harness ships no benchmark runner: its `BENCHMARK.md` names the checked-in `examples/jsonrpc-agent` minimal composition and asks for one workspace and session id per task. `harbor/deepseek-harness-eval.patch.yml` reproduces that composition's model-facing surface — persistent bash and the string-replace editor, no glob or grep — on the published CLI, which keeps the toolchain an ordinary npm install directory. The patch layer was validated against the upstream composition request-for-request: identical tool names, byte-identical tool schemas, byte-identical system prompt. It deviates upstream in two places, both recorded in the file: reasoning is pinned to max because the adapter default resolves to `reasoning_effort=high` on the wire, and the headless profile's extra session-title model call is disabled because no other arm spends one.
+
+Build that arm's toolchain with `node scripts/prepare-deepseek-harness-toolchain.mjs --out <dir> --write`. It runs inside a pinned `linux/amd64` container because the composition depends on `node-pty`, which publishes no Linux prebuild, and it copies that container's Node into the toolchain so the executed path resolves inside the mounted root. `--write` records the resulting fingerprint in `src/toolchain-verification.ts`; verification fails closed until it matches.
+
+A subject that exhausts the framework timeout is reported as `subject_failed` with its verifier reward intact. The reward is the outcome; the status records that the run was cut off rather than finishing on its own. Only a missing reward is an infrastructure failure.
+
 Maka benchmark subjects freeze a versioned Session profile. `headless-coding-v1` is persisted in
 the Session header, so later turns and backend rebuilds retain the same contract. It fixes the
 system prompt, disables product identity/personalization/skills/workspace-memory prompt fragments,

@@ -136,8 +136,13 @@ class RelayAgent(BaseAgent):
             result = execution.result()
             await _persist_subject_outputs(environment, result)
             stdout, diagnostic = _project_result(result, request)
-            if diagnostic["category"] != "execution-scope-unavailable":
-                await _finalize_exited_scope(environment, cwd, scope_path, result.return_code)
+            # A subject that exited on its own leaves the shared environment as
+            # it left it, and the verifier reads that environment. Nothing is
+            # waiting on those processes here — `environment.exec` has already
+            # returned — so tearing them down would not unblock anything; it
+            # would only edit the thing about to be measured, and edit it for
+            # some subjects and not others. Cancellation still quiesces, because
+            # there the subject has not stopped and the trial is being abandoned.
             if not await _send(
                 writer,
                 {
@@ -463,25 +468,6 @@ async def _settle(environment: Any, cwd: str, scope_path: str, execution: Any) -
             raise RuntimeError("Maka Eval subject did not settle")
     await _quiesce_scope(environment, cwd, scope_path)
     return result
-
-
-async def _finalize_exited_scope(
-    environment: Any,
-    cwd: str,
-    scope_path: str,
-    exit_code: int,
-) -> None:
-    """Tear the subject's process group down unless the subject succeeded.
-
-    A task may start a service the shared-environment verifier is meant to
-    reach, and killing the scope would remove it before verification. Only a
-    subject that reported success is entitled to leave anything running: the
-    exit code carries that status, so the rule is the same for every subject
-    rather than a property one arm can be granted and another not.
-    """
-    if exit_code == 0:
-        return
-    await _quiesce_scope(environment, cwd, scope_path)
 
 
 async def _settle_or_destroy(

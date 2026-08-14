@@ -55,8 +55,9 @@ complete figure; a partial token count is kept as a lower bound, because a cost 
 enter the result kernel indistinguishable from a settled one.
 
 The wrapper's process exit code projects its semantic status: zero only when the subject completed.
-The relay cannot read the result frame, so this is the form in which the status reaches it, and the
-executor prefers the frame wherever the frame is readable.
+The executor prefers the result frame wherever the frame is readable, and falls back to the exit code
+only for a frame that carries no status of its own. Nothing else decides anything from it, but the
+two must not be able to say different things.
 
 A subject that exhausts the framework timeout is reported as `subject_failed` with its verifier reward intact. The reward is the outcome; the status records that the run was cut off rather than finishing on its own. Only a missing reward is an infrastructure failure.
 
@@ -124,13 +125,21 @@ invented lookup channel. It classifies what it can read: a `CONNECT` tunnel carr
 than TLS or HTTP reaches no rule and no audit record, which is tracked in issue #2977. Collected Maka runtime files
 and egress audit logs are represented in attempt artifacts with byte counts and SHA-256 digests.
 
-A task may start a service its verifier is meant to reach, so the relay leaves the subject's process
-group standing when the subject reports success, and quiesces it otherwise — on failure, cancellation
-and framework timeout alike. That rule is the same for every subject: it follows from the reported
-status, and is not a property one arm can be granted and another not. The DeepSeek Harness needs one
-extra thing to reach it, because it owns a persistent PTY tree and kills every descendant on
-shutdown: the Eval-patched DSH subprocess skips that kill under `DSH_PRESERVE_BACKGROUND_PROCESSES`,
-which brings the arm level with the others rather than ahead of them.
+What the verifier scores is the environment the task was left in, so a subject that exits on its own
+keeps whatever it started, whatever it reported. The relay does not tear the subject's process group
+down at that point: nothing is waiting on those processes — the execution call has already returned —
+so the teardown would not unblock anything, and it would edit the thing about to be measured for the
+subjects Eval classifies as failed and not for the others. Cancellation and framework timeout still
+quiesce, because there the subject has not stopped and the trial is being abandoned rather than
+scored. The same rule binds the agent frameworks: the DeepSeek Harness owns a persistent PTY tree and
+kills every descendant on shutdown, so the Eval-patched DSH subprocess skips that kill under
+`DSH_PRESERVE_BACKGROUND_PROCESSES`, which Eval always sets.
+
+A process group is not a reliable handle on a subject's processes in any case. `forkpty` makes the
+shell a session leader, and an interactive shell puts each background job in a group of its own, so a
+service started through a PTY is two removes from the group the relay records — measured, not
+assumed. Any rule that depended on signalling that group would hold for some agent frameworks and
+silently not for others.
 
 The DeepSeek Harness Eval profile also extends its persistent Bash deadline beyond Terminal-Bench's
 longest native subject timeout, so the benchmark remains the authoritative deadline and a local

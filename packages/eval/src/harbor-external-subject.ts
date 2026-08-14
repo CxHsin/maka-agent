@@ -254,8 +254,10 @@ const PROFILE_PREPARERS: Record<Profile, (setup: ProfileSetup) => Promise<string
     env.DEEPSEEK_BASE_URL = proxyBaseUrl;
     // The harness kills every descendant of its persistent PTY on shutdown,
     // which removes a task's own background service before the shared-environment
-    // verifier can reach it. The patched subprocess package honours this flag by
-    // closing the shell without killing the process group, and only for it.
+    // verifier can reach it. What the verifier scores is the environment the
+    // task was left in, so no framework — this one, Maka, or the relay — may
+    // edit it after the subject stops. The patched subprocess package honours
+    // this flag by closing the shell without killing the process group.
     env.DSH_PRESERVE_BACKGROUND_PROCESSES = '1';
   },
 
@@ -422,11 +424,10 @@ try {
   removeCredential();
 }
 
-// The relay cannot read the result frame, so this process's exit code is the
-// only form in which the semantic status reaches it. Projecting the status here
-// is what lets the relay decide scope teardown from the fact itself rather than
-// from a flag set before the subject ran: only a completed subject is entitled
-// to leave its background services standing for the verifier.
+// A process's exit code reports what it did, and anything that can read only
+// the exit code — the relay, a log, an operator — should read the same status
+// the frame carries. The adapter still prefers the frame where it has one; this
+// is what it falls back to when the frame carries no status of its own.
 process.exitCode = status === 'completed' ? 0 : 1;
 
 writeRelayResult(resultToken, {

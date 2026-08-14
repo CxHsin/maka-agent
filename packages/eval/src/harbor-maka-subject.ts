@@ -70,9 +70,8 @@ const framedResult =
       }
     : result;
 writeRelayResult(resultToken, framedResult);
-// The relay cannot read the result frame, and decides from this exit code alone
-// whether the subject's process group may outlive it — a task's own service has
-// to survive to reach the verifier, and only a completed subject is entitled to
-// leave one standing. Every wrapper therefore has to project its status the
-// same way, or the rule the relay applies uniformly stops meaning one thing.
+// Same projection as every other wrapper: the exit code reports what this
+// process did, so whatever can read only the exit code reads the status the
+// frame carries. Nothing decides the subject's fate from it while the frame is
+// readable, but the two must not be able to say different things.
 process.exitCode = result.kind === 'settled' && result.status === 'completed' ? 0 : 1;

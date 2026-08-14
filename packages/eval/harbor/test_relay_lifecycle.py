@@ -3,6 +3,7 @@ import base64
 import contextlib
 import hashlib
 import importlib
+import json
 import os
 import shutil
 import subprocess
@@ -13,7 +14,6 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
 
 
 class BaseAgent:
@@ -156,6 +156,52 @@ class SettleCompletionEnvironment(SimultaneousEnvironment):
             self.release.set()
             return SimpleNamespace(return_code=0, stdout="", stderr=None)
         return await super().exec(command, cwd=cwd, timeout_sec=timeout_sec)
+
+
+def _is_teardown(command: str) -> bool:
+    # `kill -0` is how the relay asks whether the scope is still there; only
+    # TERM and KILL end it.
+    return "kill -TERM" in command or "kill -KILL" in command
+
+
+class RecordingEnvironment:
+    """Runs a subject that exits with a chosen code and records every command."""
+
+    def __init__(self, return_code, status):
+        self.return_code = return_code
+        self.status = status
+        self.signalled = False
+        self.commands = []
+
+    async def upload_file(self, source, target):
+        return None
+
+    async def download_file(self, source, target):
+        shutil.copyfile(source, target)
+
+    async def exec(self, command, cwd=None, timeout_sec=None):
+        self.commands.append(command)
+        if command.startswith("printf ") and "MAKA-EVAL-CWD-V1" in command:
+            prefix = command.split("'", 2)[1]
+            return SimpleNamespace(return_code=0, stdout=f"{prefix}/workspace\n", stderr=None)
+        if command.startswith("setsid"):
+            payload = ('{"kind":"settled","status":"%s"}' % self.status).encode()
+            encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+            frame = (
+                f"MAKA-EVAL-RESULT-V1 {'0' * 32} {len(payload)} "
+                f"{hashlib.sha256(payload).hexdigest()} {encoded}\n"
+            )
+            return SimpleNamespace(return_code=self.return_code, stdout=frame, stderr=None)
+        # The subject's process group outlives it, as a task's own service does,
+        # and dies once something signals it. A teardown would therefore succeed
+        # here rather than fail for its own reasons -- what this test asserts is
+        # that no teardown is attempted at all.
+        if _is_teardown(command):
+            self.signalled = True
+            return SimpleNamespace(return_code=0, stdout="", stderr="")
+        if command.startswith("pgid="):
+            return SimpleNamespace(return_code=3 if self.signalled else 0, stdout="", stderr="")
+        return SimpleNamespace(return_code=0, stdout="", stderr="")
 
 
 def load_relay():
@@ -557,61 +603,69 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 Path(scope_path).unlink(missing_ok=True)
 
-    @unittest.skipUnless(shutil.which("setsid"), "requires GNU setsid")
-    async def test_successful_subject_can_preserve_background_service_for_verifier(self):
-        relay = load_relay()
-        environment = LocalEnvironment()
-        token = f"background-service-{os.getpid()}"
-        scope_path = f"/tmp/maka-eval-{token}.pid"
-        with tempfile.TemporaryDirectory() as directory:
-            marker = Path(directory) / "service-ready"
-            request = {
-                "command": sys.executable,
-                "args": [
-                    "-c",
-                    (
-                        "import os,time;"
-                        "child=os.fork();"
-                        f"(os.close(1),os.close(2),time.sleep(0.3),"
-                        f"open({str(marker)!r},'w').write('ready'),os._exit(0))"
-                        " if child==0 else os._exit(0)"
-                    ),
-                ],
-                "credentials": {},
-                "resultToken": "0" * 32,
-            }
-            try:
-                command = await relay._prepare_command(environment, request, token, scope_path)
-                execution = asyncio.create_task(
-                    asyncio.to_thread(
-                        subprocess.run,
-                        command,
-                        cwd=directory,
-                        shell=True,
-                        check=False,
-                        timeout=2,
+    async def test_an_exited_subject_is_left_alone_whatever_it_reported(self):
+        # The verifier scores the environment the task was left in, so a subject
+        # that stopped on its own keeps whatever it started — a service the task
+        # was asked to run has to still be there. Reading the exit code here to
+        # decide otherwise would make the measurement depend on the framework's
+        # own classification, and only for the subjects it classifies as failed.
+        for return_code, status in ((0, "completed"), (1, "failed")):
+            with self.subTest(return_code=return_code):
+                relay = load_relay()
+                environment = RecordingEnvironment(return_code, status)
+                token = f"exited-{return_code}-{os.getpid()}"
+                connected = asyncio.get_running_loop().create_future()
+
+                async def accept(reader, writer):
+                    connected.set_result((reader, writer))
+
+                server = await asyncio.start_server(accept, "127.0.0.1", 0)
+                port = server.sockets[0].getsockname()[1]
+                agent = relay.RelayAgent(
+                    logs_dir=Path(tempfile.gettempdir()),
+                    relay_host="127.0.0.1",
+                    relay_port=port,
+                    relay_token=token,
+                    teardown_timeout_ms=1_000,
+                )
+                running = asyncio.create_task(agent.run("solve", environment, None))
+                reader, writer = await connected
+                try:
+                    await reader.readline()
+                    writer.write(
+                        (
+                            json.dumps(
+                                {
+                                    "token": token,
+                                    "kind": "execute",
+                                    "command": "/bin/true",
+                                    "args": [],
+                                    "credentials": {},
+                                    "resultToken": "0" * 32,
+                                }
+                            )
+                            + "\n"
+                        ).encode()
                     )
+                    await writer.drain()
+                    executed = json.loads(await reader.readline())
+                    self.assertEqual(executed["termination"], "exited")
+                    self.assertEqual(executed["exitCode"], return_code)
+                    writer.write(
+                        (json.dumps({"token": token, "kind": "verify"}) + "\n").encode()
+                    )
+                    await writer.drain()
+                    await asyncio.wait_for(running, timeout=2)
+                finally:
+                    writer.close()
+                    with contextlib.suppress(Exception):
+                        await writer.wait_closed()
+                    server.close()
+                    await server.wait_closed()
+                self.assertEqual(
+                    [command for command in environment.commands if _is_teardown(command)],
+                    [],
                 )
-                completed = await execution
-                self.assertEqual(completed.returncode, 0)
-                await relay._finalize_exited_scope(
-                    environment, directory, scope_path, completed.returncode
-                )
-                await asyncio.sleep(0.4)
-                self.assertEqual(marker.read_text(), "ready")
-            finally:
-                Path(scope_path).unlink(missing_ok=True)
-
-    async def test_only_a_successful_subject_keeps_its_process_group(self):
-        relay = load_relay()
-        environment = LocalEnvironment()
-        with patch.object(relay, "_quiesce_scope", new=AsyncMock()) as quiesce:
-            await relay._finalize_exited_scope(environment, "/", "/scope", 1)
-            quiesce.assert_awaited_once_with(environment, "/", "/scope")
-
-            quiesce.reset_mock()
-            await relay._finalize_exited_scope(environment, "/", "/scope", 0)
-            quiesce.assert_not_awaited()
 
     @unittest.skipUnless(shutil.which("node"), "requires Node.js")
     def test_deepseek_harness_toolchain_patch_preserves_background_descendants(self):

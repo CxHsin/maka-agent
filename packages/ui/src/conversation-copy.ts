@@ -114,9 +114,6 @@ export interface ConversationCopy {
     switching: string;
     model: string;
     switchAriaLabel: string;
-    switchSession: string;
-    pinnedSession: (connection: string, model: string) => string;
-    switchTitle: (sessionTitle: string) => string;
     switchWarning: string;
     newChatAriaLabel: (label: string) => string;
     newChatTitle: (label: string) => string;
@@ -364,10 +361,8 @@ const CONVERSATION_COPY = {
       // Short single-token labels — trigger + popout size to content.
       // Canonical ladder: 默认 / 关 / 低 / 中 / 高 / 超高 (minimal/max when offered).
       level: { off: '关', minimal: '最少', low: '低', medium: '中', high: '高', xhigh: '超高', max: '最高' },
-      switching: '切换中', model: '模型', switchAriaLabel: '切换当前会话模型', switchSession: '切换当前会话使用的模型',
-      pinnedSession: (connection, model) => `本会话固定模型：${connection} · ${model}`,
-      switchTitle: (title) => `${title}。设置里的默认模型只影响新建会话；这里会更新当前会话。`,
-      switchWarning: '在已有对话中切换模型可能需要重新建立服务商提示缓存，下一次请求可能更慢或更贵。',
+      switching: '切换中', model: '模型', switchAriaLabel: '切换当前会话模型',
+      switchWarning: '切换模型可能需要重建服务商提示缓存，使下一次请求更慢或成本更高。',
       newChatAriaLabel: (label) => `选择新对话模型，当前 ${label}`, newChatTitle: (label) => `新对话使用的模型：${label}`,
       configureAriaLabel: (label) => `配置模型连接，当前 ${label}`, configureTitle: '配置模型连接',
     },
@@ -504,10 +499,8 @@ const CONVERSATION_COPY = {
     model: {
       thinkingLevel: 'Thinking level', thinkingUnsupported: 'This model does not support thinking-level changes', changeThinkingLevel: 'Change the current model thinking level', defaultLevel: 'Model default',
       level: { off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum' },
-      switching: 'Switching', model: 'Model', switchAriaLabel: 'Switch model for this conversation', switchSession: 'Switch the model used by this conversation',
-      pinnedSession: (connection, model) => `Model fixed for this conversation: ${connection} · ${model}`,
-      switchTitle: (title) => `${title}. The default model in Settings affects only new conversations; this updates the current conversation.`,
-      switchWarning: 'Changing the model in an existing conversation may rebuild the provider prompt cache, so the next request can be slower or cost more.',
+      switching: 'Switching', model: 'Model', switchAriaLabel: 'Switch model for this conversation',
+      switchWarning: 'Switching may rebuild the provider prompt cache, making the next request slower or more expensive.',
       newChatAriaLabel: (label) => `Choose a model for the new conversation, currently ${label}`, newChatTitle: (label) => `Model for the new conversation: ${label}`,
       configureAriaLabel: (label) => `Configure model connections, currently ${label}`, configureTitle: 'Configure model connections',
     },

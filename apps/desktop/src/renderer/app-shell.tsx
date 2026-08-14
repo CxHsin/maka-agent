@@ -1248,6 +1248,13 @@ function AppShellContent({
     content: <PlanProposalCard proposal={proposal} planMode={planMode} />,
   }));
   const activeMessageLoading = Boolean(activeId && messageLoadPending);
+  // Session switches clear the transcript projection before its async read.
+  // Keep the switch warning anchored to the durable session summary, while
+  // retaining the local projection for an optimistic first message that has
+  // not reached the catalog yet.
+  const modelSwitchHasHistory =
+    activeSessionForView?.lastMessageAt !== undefined ||
+    messages.some((message) => message.type === 'user' || message.type === 'assistant');
   // PR110c: OnboardingState is now the single source of truth for
   // first-run UI. The renderer never re-derives provider readiness;
   // `useOnboardingSnapshot()` pulls the derived state from the main
@@ -2945,14 +2952,11 @@ function AppShellContent({
                   }
                   modelLabel={activeModelLabel ?? newChatModelLabel ?? undefined}
                   activeSession={activeSessionForView}
-                  activeConnectionLabel={activeConnectionLabel}
                   activeModel={activeModel}
                   activeModelLabel={activeModelLabel}
                   activeProviderType={activeConnection?.providerType}
                   modelChoices={chatModelChoices}
-                  modelSwitchHasHistory={messages.some(
-                    (message) => message.type === 'user' || message.type === 'assistant',
-                  )}
+                  modelSwitchHasHistory={modelSwitchHasHistory}
                   renderProviderMark={(type) => <ProviderBrandMark type={type} />}
                   modelChangePending={activeId ? pendingSessionModelBySession[activeId] === true : false}
                   onModelChange={(input) => setSessionModel(input)}

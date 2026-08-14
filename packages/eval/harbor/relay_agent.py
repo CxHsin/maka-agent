@@ -168,10 +168,12 @@ class RelayAgent(BaseAgent):
                 if execution_terminal:
                     terminal_result = execution.result()
                     terminal_projection = _project_result(terminal_result, request)
-                if (
-                    terminal_projection is not None
-                    and terminal_projection[1]["category"] == "execution-scope-unavailable"
-                ):
+                # A subject that already exited has nothing left to settle, and
+                # tearing its scope down here would remove what the verifier is
+                # about to score -- the same environment edit this relay stopped
+                # making on the ordinary path. Only a subject still running is
+                # brought to a stop.
+                if terminal_projection is not None:
                     result = terminal_result
                 else:
                     result = await _settle_or_destroy(

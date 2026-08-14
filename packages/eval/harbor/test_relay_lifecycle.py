@@ -142,6 +142,24 @@ class FrameworkTimeoutEnvironment(SimultaneousEnvironment):
         self.stopped = delete
 
 
+class LiveScopeEnvironment(SimultaneousEnvironment):
+    """A subject whose process group outlives it, as a task's own service does."""
+
+    def __init__(self):
+        super().__init__()
+        self.signalled = False
+        self.commands = []
+
+    async def exec(self, command, cwd=None, timeout_sec=None):
+        self.commands.append(command)
+        if _is_teardown(command):
+            self.signalled = True
+            return SimpleNamespace(return_code=0, stdout="", stderr="")
+        if command.startswith("pgid="):
+            return SimpleNamespace(return_code=3 if self.signalled else 0, stdout="", stderr="")
+        return await super().exec(command, cwd=cwd, timeout_sec=timeout_sec)
+
+
 class TransportLossEnvironment(SimultaneousEnvironment):
     async def exec(self, command, cwd=None, timeout_sec=None):
         if "kill -TERM" in command:
@@ -391,7 +409,7 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_terminal_execution_wins_when_framework_cancellation_is_observed(self):
         relay = load_relay()
-        environment = SimultaneousEnvironment()
+        environment = LiveScopeEnvironment()
         token = f"simultaneous-{os.getpid()}"
         connected = asyncio.get_running_loop().create_future()
 
@@ -436,6 +454,15 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
             executed = __import__("json").loads(await reader.readline())
             self.assertEqual(executed["termination"], "exited")
             self.assertEqual(executed["exitCode"], 0)
+            # Cancellation found the subject already stopped, and a stopped
+            # subject is reported as one -- so the verifier reads the same
+            # environment it would have read without the cancellation. Tearing
+            # its scope down here would edit that environment for exactly the
+            # runs the framework happened to interrupt.
+            self.assertEqual(
+                [command for command in environment.commands if _is_teardown(command)],
+                [],
+            )
             with self.assertRaises(asyncio.CancelledError):
                 await running
         finally:

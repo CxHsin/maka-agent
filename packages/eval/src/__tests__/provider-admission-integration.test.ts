@@ -77,7 +77,7 @@ test('provider metering checkpoint records admission before the request settles'
     const checkpoint = await waitForCheckpoint(checkpointPath, (value) => {
       return value.admittedRequests === 1;
     });
-    assert.equal(checkpoint.schemaVersion, 'maka.external_provider_usage.v1');
+    assert.equal(checkpoint.schemaVersion, 'maka.external_provider_usage.v2');
     assert.equal(checkpoint.profile, 'opencode');
     assert.equal(checkpoint.requests, 1);
     // Admitted while unsettled: the state the old counter could not express.

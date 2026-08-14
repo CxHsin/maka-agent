@@ -266,7 +266,7 @@ export async function recoverExternalMetering(
       'external metering checkpoint',
     );
     if (
-      checkpoint.schemaVersion !== 'maka.external_provider_usage.v1' ||
+      checkpoint.schemaVersion !== 'maka.external_provider_usage.v2' ||
       checkpoint.profile !== profile
     ) {
       return undefined;

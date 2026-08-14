@@ -28,7 +28,7 @@ const resultToken = takeRelayResultToken();
 // lifecycle test pins the two together.
 const DEEPSEEK_HARNESS_PROFILE = 'maka-eval';
 
-const PROVIDER_USAGE_CHECKPOINT_SCHEMA = 'maka.external_provider_usage.v1';
+const PROVIDER_USAGE_CHECKPOINT_SCHEMA = 'maka.external_provider_usage.v2';
 let atomicWriteSequence = 0;
 
 type SubjectStatus = 'completed' | 'failed' | 'infra_failed' | 'indeterminate';

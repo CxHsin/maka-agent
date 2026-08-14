@@ -33,7 +33,7 @@ test('recovers lower-bound metering when external settlement is interrupted', as
       // only one of them: a killed wrapper's usage is a lower bound, and the
       // counts are what establish that. Nothing derivable is stored.
       `${JSON.stringify({
-        schemaVersion: 'maka.external_provider_usage.v1',
+        schemaVersion: 'maka.external_provider_usage.v2',
         profile: 'codex',
         usage,
         settled: false,
@@ -81,7 +81,7 @@ test('a checkpoint the proxy never settled is a lower bound however complete it 
   // written between two requests looks exactly like this one, and the requests
   // that followed it are missing from it precisely because its writes failed.
   const checkpoint = {
-    schemaVersion: 'maka.external_provider_usage.v1',
+    schemaVersion: 'maka.external_provider_usage.v2',
     profile: 'codex',
     usage,
     settled: false,
@@ -145,7 +145,7 @@ test('refuses a metering checkpoint whose counts cannot describe one run', async
       writeFile(
         join(trialPath, 'agent/codex.provider-usage.json'),
         `${JSON.stringify({
-          schemaVersion: 'maka.external_provider_usage.v1',
+          schemaVersion: 'maka.external_provider_usage.v2',
           profile: 'codex',
           usage: null,
           settled: false,

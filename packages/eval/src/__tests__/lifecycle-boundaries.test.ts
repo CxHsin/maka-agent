@@ -21,7 +21,7 @@ import { createExternalSubjectAdapter } from '../external-subject.js';
 import { createHarborExecutor, createPierExecutor } from '../harness-executor.js';
 import { makaEvalRuntimePolicyDocument } from '../maka-runtime-policy.js';
 import { createMakaSubjectAdapter } from '../maka-subject.js';
-import { deepSeekCostUsd } from '../provider-metering.js';
+import { DEEPSEEK_V4_FLASH_COST, deepSeekCostUsd } from '../provider-metering.js';
 import {
   runExperiment,
   type ExperimentExecutor,
@@ -897,12 +897,10 @@ test('eight-arm spec and wrappers freeze the working provider contracts', async 
       input: ['text'],
       contextWindow: 1_048_576,
       maxTokens: 131_072,
-      cost: {
-        input: 0.145,
-        output: 0.29,
-        cacheRead: 0.0029,
-        cacheWrite: 0.145,
-      },
+      // The table itself, not a second transcription of it: what this pins is
+      // that the config the framework reads and the table Eval bills from are
+      // the same values, which is the drift a literal here would hide.
+      cost: { ...DEEPSEEK_V4_FLASH_COST },
     });
 
     // The harness resolves `--profile <name>` against DSH_HOME. The wrapper

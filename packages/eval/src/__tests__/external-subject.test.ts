@@ -123,17 +123,19 @@ test('every token kind is billed at the rate the model config declares', () => {
   const cost = DEEPSEEK_V4_FLASH_COST;
   // One million of each kind, so the sum is the table read back. A kind that is
   // subtracted from the input total and then never charged reads as zero here.
-  assert.equal(
-    deepSeekCostUsd({
-      inputTokens: 3_000_000,
-      outputTokens: 1_000_000,
-      cacheReadTokens: 1_000_000,
-      cacheWriteTokens: 1_000_000,
-      reasoningTokens: 0,
-      totalTokens: 4_000_000,
-    }),
-    cost.input + cost.cacheRead + cost.cacheWrite + cost.output,
-  );
+  const billed = deepSeekCostUsd({
+    inputTokens: 3_000_000,
+    outputTokens: 1_000_000,
+    cacheReadTokens: 1_000_000,
+    cacheWriteTokens: 1_000_000,
+    reasoningTokens: 0,
+    totalTokens: 4_000_000,
+  });
+  const declared = cost.input + cost.cacheRead + cost.cacheWrite + cost.output;
+  // Compared within a rounding error rather than exactly: the two sums add the
+  // same four rates in different orders. Any kind going unbilled is a shortfall
+  // of at least its own rate, which is larger than this by many orders.
+  assert.ok(Math.abs(billed - declared) < declared * 1e-12, `${billed} !== ${declared}`);
 });
 
 test('refuses a metering checkpoint whose counts cannot describe one run', async () => {

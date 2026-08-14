@@ -65,11 +65,18 @@ export function deriveMetering(counts: ProviderMeteringCounts): DerivedMetering 
 // the agent spent. Pi is additionally handed the table for its own display; the
 // other frameworks are given no cost block at all, which is why their figures
 // are not consulted here.
+//
+// DeepSeek bills input in exactly two kinds, cache hit and cache miss, and
+// charges nothing for writing the cache — a written token is a miss token. So
+// `cacheWrite` is the miss rate rather than a rate of its own: it exists to
+// keep a provider that reports cache writes separately from being billed at
+// zero, and for DeepSeek itself it never applies, because the API reports only
+// `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`.
 export const DEEPSEEK_V4_FLASH_COST = {
-  input: 0.145,
-  output: 0.29,
-  cacheRead: 0.0029,
-  cacheWrite: 0.145,
+  input: 0.14,
+  output: 0.28,
+  cacheRead: 0.0028,
+  cacheWrite: 0.14,
 } as const;
 
 // `inputTokens` is normalized to include both cached kinds, so each kind is

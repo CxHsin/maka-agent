@@ -254,6 +254,7 @@ export async function recoverExternalMetering(
         'schemaVersion',
         'profile',
         'usage',
+        'settled',
         'requests',
         'inFlightRequests',
         'admittedRequests',
@@ -273,6 +274,7 @@ export async function recoverExternalMetering(
     const usage = checkpoint.usage === null ? null : decodeUsage(checkpoint.usage);
     const counts = {
       usage,
+      settled: boolean(checkpoint.settled, 'external metering settlement'),
       requests: count(checkpoint.requests, 'external metering requests'),
       inFlightRequests: count(checkpoint.inFlightRequests, 'external metering in-flight requests'),
       admittedRequests: count(checkpoint.admittedRequests, 'external metering admitted requests'),
@@ -282,8 +284,11 @@ export async function recoverExternalMetering(
       toolNames: stringList(checkpoint.toolNames, 'external metering tool names'),
     };
     // A request may be admitted while still in flight, so admission is bounded
-    // by the requests made rather than by the requests settled.
+    // by the requests made rather than by the requests settled. Settlement is
+    // the one claim the counts can contradict: nothing is in flight once the
+    // proxy has stopped.
     if (
+      (counts.settled && counts.inFlightRequests > 0) ||
       counts.inFlightRequests > counts.requests ||
       counts.admittedRequests > counts.requests ||
       counts.usageRequests > counts.admittedRequests ||
@@ -537,6 +542,11 @@ function count(value: unknown, where: string): number {
   const decoded = nonnegative(value, where);
   if (!Number.isSafeInteger(decoded)) throw new Error(`${where} is invalid`);
   return decoded;
+}
+
+function boolean(value: unknown, where: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`${where} is invalid`);
+  return value;
 }
 
 function stringList(value: unknown, where: string): readonly string[] {

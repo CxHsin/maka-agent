@@ -31,6 +31,7 @@ test('recovers lower-bound metering when external settlement is interrupted', as
         schemaVersion: 'maka.external_provider_usage.v1',
         profile: 'codex',
         usage,
+        settled: false,
         requests: 3,
         inFlightRequests: 1,
         admittedRequests: 2,
@@ -59,6 +60,60 @@ test('recovers lower-bound metering when external settlement is interrupted', as
   }
 });
 
+test('a checkpoint the proxy never settled is a lower bound however complete it looks', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-metering-stale-'));
+  const trialPath = join(root, 'trial');
+  const usage = {
+    inputTokens: 100,
+    outputTokens: 20,
+    cacheReadTokens: 80,
+    cacheWriteTokens: 0,
+    reasoningTokens: 10,
+    totalTokens: 120,
+  };
+  // Every request this file knows about was admitted, settled and accounted
+  // for. What it cannot say is whether it is the last word: a checkpoint
+  // written between two requests looks exactly like this one, and the requests
+  // that followed it are missing from it precisely because its writes failed.
+  const checkpoint = {
+    schemaVersion: 'maka.external_provider_usage.v1',
+    profile: 'codex',
+    usage,
+    settled: false,
+    requests: 1,
+    inFlightRequests: 0,
+    admittedRequests: 1,
+    usageRequests: 1,
+    removedWebTools: 0,
+    models: [],
+    toolNames: [],
+  };
+  try {
+    await mkdir(join(trialPath, 'agent'), { recursive: true });
+    const write = (settled: boolean) =>
+      writeFile(
+        join(trialPath, 'agent/codex.provider-usage.json'),
+        `${JSON.stringify({ ...checkpoint, settled })}\n`,
+      );
+
+    await write(false);
+    const unsettled = await recoverExternalMetering({ trialPath }, 'codex');
+    assert.deepEqual(unsettled?.usage, usage);
+    assert.equal(unsettled?.costUsd, null);
+    assert.equal(unsettled?.artifact.usageComplete, false);
+    assert.equal(unsettled?.artifact.tokenBasis, 'lower-bound');
+
+    // The same counts, from a proxy that reported them as its last word.
+    await write(true);
+    const settled = await recoverExternalMetering({ trialPath }, 'codex');
+    assert.equal(settled?.artifact.usageComplete, true);
+    assert.equal(settled?.artifact.tokenBasis, 'complete');
+    assert.ok((settled?.costUsd ?? 0) > 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('refuses a metering checkpoint whose counts cannot describe one run', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-metering-invalid-'));
   const trialPath = join(root, 'trial');
@@ -71,6 +126,7 @@ test('refuses a metering checkpoint whose counts cannot describe one run', async
           schemaVersion: 'maka.external_provider_usage.v1',
           profile: 'codex',
           usage: null,
+          settled: false,
           requests: 1,
           inFlightRequests: 0,
           admittedRequests: 0,
@@ -90,6 +146,10 @@ test('refuses a metering checkpoint whose counts cannot describe one run', async
 
     // Usage counted but no usage recorded.
     await write({ admittedRequests: 1, usageRequests: 1 });
+    assert.equal(await recoverExternalMetering({ trialPath }, 'codex'), undefined);
+
+    // Nothing is in flight once the proxy has stopped.
+    await write({ settled: true, requests: 1, inFlightRequests: 1, admittedRequests: 1 });
     assert.equal(await recoverExternalMetering({ trialPath }, 'codex'), undefined);
 
     // A request admitted while still in flight is the state the checkpoint

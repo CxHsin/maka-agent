@@ -21,6 +21,10 @@ export interface ProviderUsage {
 
 export interface ProviderMeteringCounts {
   readonly usage: ProviderUsage | null;
+  // Whether the proxy had settled when these counts were taken. Only the proxy
+  // can observe that, and no arrangement of the counts implies it: a checkpoint
+  // written between two requests carries the same zero in flight as a final one.
+  readonly settled: boolean;
   readonly requests: number;
   readonly inFlightRequests: number;
   readonly admittedRequests: number;
@@ -43,7 +47,7 @@ export interface DerivedMetering {
 // result kernel as a number indistinguishable from a settled one.
 export function deriveMetering(counts: ProviderMeteringCounts): DerivedMetering {
   const usageComplete =
-    counts.inFlightRequests === 0 &&
+    counts.settled &&
     counts.admittedRequests > 0 &&
     counts.usageRequests === counts.admittedRequests;
   return {

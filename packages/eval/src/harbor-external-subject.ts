@@ -407,7 +407,6 @@ try {
         toolNames: metering.toolNames,
       },
       fileArtifact('wrapper-state', statePath, profile),
-      fileArtifact('provider-metering-snapshot', usagePath, profile),
     );
   } finally {
     await proxy.close();
@@ -676,11 +675,13 @@ async function startMeteringProxy(
   let admittedRequests = 0;
   let usageRequests = 0;
   let removedWebTools = 0;
+  let settled = false;
   const requestModels = new Set<string>();
   const observedToolNames = new Set<string>();
   const snapshot = (): ProviderMeteringCounts => ({
     usage:
       usageRequests > 0 ? { ...total, totalTokens: total.inputTokens + total.outputTokens } : null,
+    settled,
     requests,
     inFlightRequests,
     admittedRequests,
@@ -818,7 +819,12 @@ async function startMeteringProxy(
     baseUrl: `http://127.0.0.1:${address.port}`,
     report: async () => {
       await Promise.allSettled([...active]);
-      await checkpointWrites;
+      // Settlement is something this process observes; it is not recoverable
+      // from the counts. A checkpoint whose last successful write happened
+      // mid-run also has no requests in flight as of that write, so a reader
+      // cannot tell it from this one except by being told.
+      settled = true;
+      await persistCheckpoint();
       return snapshot();
     },
     close: async () => {

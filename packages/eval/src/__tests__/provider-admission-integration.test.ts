@@ -82,6 +82,9 @@ test('provider metering checkpoint records admission before the request settles'
     assert.equal(checkpoint.requests, 1);
     // Admitted while unsettled: the state the old counter could not express.
     assert.equal(checkpoint.inFlightRequests, 1);
+    // This is not the proxy's last word, and says so rather than leaving the
+    // host to infer it from a count that will read the same either way.
+    assert.equal(checkpoint.settled, false);
     // No usage event arrived, so there is nothing to report as spent yet.
     assert.equal(checkpoint.usage, null);
     // Nothing derivable is stored — the host works those out from the counts.
@@ -179,6 +182,9 @@ test('provider failures remain infrastructure failures until inference admission
       );
       assert.equal(checkpoint.requests, 1);
       assert.equal(checkpoint.inFlightRequests, 0);
+      // The wrapper survived, so its final checkpoint is the proxy's last word
+      // and a host reading it recovers the same figure the frame carries.
+      assert.equal(checkpoint.settled, true);
       assert.equal(checkpoint.admittedRequests, admittedRequests);
       assert.equal(checkpoint.usageRequests, expectedCacheWrite === null ? 0 : 1);
       assert.doesNotMatch(

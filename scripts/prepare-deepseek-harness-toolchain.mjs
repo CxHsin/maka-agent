@@ -48,6 +48,10 @@ const DEEPSEEK_HARNESS_TOOLCHAIN_SPEC = {
   },
 };
 
+// Written into the build's own manifest, and the only thing that authorizes
+// this script to remove a non-empty --out.
+const TOOLCHAIN_BUILD_MARKER = 'maka-eval/prepare-deepseek-harness-toolchain';
+
 async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {}) {
   if (!outputRoot) throw new Error('--out is required');
   const spec = DEEPSEEK_HARNESS_TOOLCHAIN_SPEC;
@@ -58,9 +62,18 @@ async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {
   for (const reserved of [resolve('/'), repoRoot, process.cwd(), homedir()]) {
     if (root === reserved) throw new Error(`--out must not be ${reserved}`);
   }
+  // Only a directory this script produced may be removed. A `manifest.json`
+  // entry is not proof of that — plenty of directories have one — so the marker
+  // this script writes into its own manifest is what has to be found. An empty
+  // directory has nothing to lose and is accepted as it is.
   const existing = await readdir(root).catch(() => undefined);
-  if (existing && !existing.includes('manifest.json')) {
-    throw new Error(`${root} is not empty and does not look like a toolchain build`);
+  if (existing && existing.length > 0) {
+    const produced = await readFile(join(root, 'manifest.json'), 'utf8')
+      .then((raw) => JSON.parse(raw).producedBy === TOOLCHAIN_BUILD_MARKER)
+      .catch(() => false);
+    if (!produced) {
+      throw new Error(`${root} is not empty and was not produced by ${TOOLCHAIN_BUILD_MARKER}`);
+    }
   }
   // Both the lockfile and the spec name a harness version. If they disagree the
   // manifest would describe something other than what was installed.
@@ -118,9 +131,11 @@ async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {
   const checksums = await checksumTree(root);
   await writeFile(join(root, 'checksums.sha256'), checksums, { mode: 0o644 });
   const fingerprint = `sha256:${createHash('sha256').update(checksums).digest('hex')}`;
+  // `fingerprint` is provenance here, not identity: verification recomputes it
+  // from checksums.sha256 and never reads this file.
   await writeFile(
     join(root, 'manifest.json'),
-    `${JSON.stringify({ fingerprint, spec }, null, 2)}\n`,
+    `${JSON.stringify({ producedBy: TOOLCHAIN_BUILD_MARKER, fingerprint, spec }, null, 2)}\n`,
     { mode: 0o644 },
   );
 

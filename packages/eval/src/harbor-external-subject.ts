@@ -14,7 +14,6 @@ import {
 import { isInferenceAdmissionEvent } from './provider-admission.js';
 import {
   deriveMetering,
-  estimateCost,
   type ProviderMeteringCounts,
   type ProviderUsage as Usage,
 } from './provider-metering.js';
@@ -671,7 +670,6 @@ async function startMeteringProxy(
   close(): Promise<void>;
 }> {
   const total = zeroUsage();
-  let measured = false;
   let requests = 0;
   let inFlightRequests = 0;
   let admittedRequests = 0;
@@ -680,7 +678,8 @@ async function startMeteringProxy(
   const requestModels = new Set<string>();
   const observedToolNames = new Set<string>();
   const snapshot = (): ProviderMeteringCounts => ({
-    usage: measured ? { ...total, totalTokens: total.inputTokens + total.outputTokens } : null,
+    usage:
+      usageRequests > 0 ? { ...total, totalTokens: total.inputTokens + total.outputTokens } : null,
     requests,
     inFlightRequests,
     admittedRequests,
@@ -695,6 +694,11 @@ async function startMeteringProxy(
   // settlement of every request, so whatever survives on disk is a truthful
   // lower bound at worst. Writes are serialized through one chain: two
   // concurrent requests must not interleave into a half-written file.
+  // A failed write leaves the previous snapshot on disk, which is still a
+  // truthful lower bound. It must not do more than that: an unhandled rejection
+  // here would propagate down the chain and turn a run that finished into an
+  // infrastructure failure over a file that exists only in case the run does
+  // not finish.
   let checkpointWrites = Promise.resolve();
   const persistCheckpoint = () => {
     const value = {
@@ -702,7 +706,9 @@ async function startMeteringProxy(
       profile: selected,
       ...snapshot(),
     };
-    checkpointWrites = checkpointWrites.then(() => writeJsonAtomic(checkpointPath, value));
+    checkpointWrites = checkpointWrites.then(() =>
+      writeJsonAtomic(checkpointPath, value).catch(() => undefined),
+    );
     return checkpointWrites;
   };
   await persistCheckpoint();
@@ -775,9 +781,13 @@ async function startMeteringProxy(
             for (;;) {
               const next = await reader.read();
               if (next.done) break;
-              response.write(Buffer.from(next.value));
-              parser.push(Buffer.from(next.value).toString('utf8'));
+              const chunk = Buffer.from(next.value);
+              parser.push(chunk.toString('utf8'));
+              // Before the chunk is handed to a downstream this process does not
+              // control: once it is written, a disconnect or a kill can end this
+              // request at any point, and the admission would be lost with it.
               await admit();
+              response.write(chunk);
             }
           }
           response.end();
@@ -786,7 +796,6 @@ async function startMeteringProxy(
           await admit();
           if (counted && parsed.usage) {
             usageRequests += 1;
-            measured = true;
             addUsage(total, parsed.usage);
           }
         }

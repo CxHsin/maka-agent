@@ -55,7 +55,7 @@ export function deriveMetering(counts: ProviderMeteringCounts): DerivedMetering 
   };
 }
 
-export function estimateCost(value: ProviderUsage): number {
+function estimateCost(value: ProviderUsage): number {
   const uncached = Math.max(0, value.inputTokens - value.cacheReadTokens - value.cacheWriteTokens);
   return (
     (uncached * 0.145 + value.cacheReadTokens * 0.0029 + value.outputTokens * 0.29) / 1_000_000

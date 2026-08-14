@@ -70,4 +70,9 @@ const framedResult =
       }
     : result;
 writeRelayResult(resultToken, framedResult);
-if (result.kind === 'indeterminate') process.exitCode = 1;
+// The relay cannot read the result frame, and decides from this exit code alone
+// whether the subject's process group may outlive it — a task's own service has
+// to survive to reach the verifier, and only a completed subject is entitled to
+// leave one standing. Every wrapper therefore has to project its status the
+// same way, or the rule the relay applies uniformly stops meaning one thing.
+process.exitCode = result.kind === 'settled' && result.status === 'completed' ? 0 : 1;

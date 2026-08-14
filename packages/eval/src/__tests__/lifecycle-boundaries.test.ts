@@ -510,6 +510,99 @@ test('Maka forwards the configured Runtime Host settlement budget', async () => 
   );
 });
 
+// The relay tears the subject's process group down unless the wrapper exits
+// zero, so every wrapper has to project the same status the same way — an arm
+// whose failures exit zero would keep its background services through the
+// verifier while the others lose theirs. This pins both halves of the Maka
+// side: what the shim projects, and that the adapter reads the frame rather
+// than re-deciding from the code it just projected.
+test('the Maka shim projects only a completed subject as a zero exit', async () => {
+  const shim = new URL('../harbor-maka-subject.js', import.meta.url);
+  for (const [projection, expectedExit, expectedStatus] of [
+    [{ kind: 'settled', status: 'completed' }, 0, 'completed'],
+    [{ kind: 'settled', status: 'failed' }, 1, 'failed'],
+    [{ kind: 'settled', status: 'cancelled' }, 1, 'indeterminate'],
+    [{ kind: 'indeterminate' }, 1, 'indeterminate'],
+  ] as const) {
+    const root = await mkdtemp(join(tmpdir(), 'maka-eval-shim-exit-'));
+    try {
+      const executionId = '00000000-0000-4000-8000-000000000000';
+      // An indeterminate projection carries no usage; the decoder rejects a
+      // frame that offers any.
+      const frame =
+        projection.kind === 'indeterminate'
+          ? { executionId, kind: 'indeterminate', failureReason: 'did not settle' }
+          : { executionId, usage: usage(), costUsd: null, ...projection };
+      // A fake Runtime Host client: the shim is the unit under test, and what
+      // it does with a settled projection is the whole question.
+      const client = join(root, 'client.mjs');
+      await writeFile(
+        client,
+        `export async function runHostedExecution() { return ${JSON.stringify(frame)}; }\n`,
+      );
+      const { exitCode, stdout } = await execFileAsync(
+        process.execPath,
+        [
+          '--import',
+          `data:text/javascript,${encodeURIComponent(
+            `import{register}from"node:module";register("data:text/javascript,${encodeURIComponent(
+              `export async function resolve(s,c,n){return s==="@maka/runtime-host/client"?{url:${JSON.stringify(
+                new URL(`file://${client}`).href,
+              )},shortCircuit:true}:n(s,c)}`,
+            )}",import.meta.url)`,
+          )}`,
+          shim.pathname,
+          Buffer.from(
+            JSON.stringify({
+              rootPath: join(root, 'state'),
+              artifactRoot: join(root, 'artifacts'),
+              baseUrl: 'https://provider.test/v1',
+              hostSettlementTimeoutMs: 1000,
+              execution: { executionId },
+            }),
+          ).toString('base64url'),
+        ],
+        { env: { ...process.env, MAKA_EVAL_RESULT_TOKEN: '0'.repeat(32) } },
+      )
+        .then((settled) => ({ exitCode: 0, stdout: settled.stdout }))
+        .catch((error: { code?: number; stdout?: string }) => ({
+          exitCode: error.code ?? -1,
+          stdout: error.stdout ?? '',
+        }));
+
+      assert.equal(
+        exitCode,
+        expectedExit,
+        `${projection.kind}/${'status' in projection ? projection.status : ''}`,
+      );
+
+      // And the adapter takes its status from the frame, not from that code.
+      const result = await createMakaSubjectAdapter().execute({
+        cell: cell('maka', makaConfig()),
+        context: {
+          cwd: '/workspace',
+          taskInput: 'solve',
+          metadata: {},
+          execute: async (input) => {
+            const payload = JSON.parse(
+              Buffer.from(input.args[1] ?? '', 'base64url').toString(),
+            ) as { execution: { executionId: string } };
+            return {
+              termination: 'exited',
+              exitCode: expectedExit,
+              stdout: JSON.stringify({ ...frame, executionId: payload.execution.executionId }),
+            };
+          },
+        },
+      });
+      assert.equal(result.status, expectedStatus);
+      assert.ok(stdout.includes('MAKA-EVAL-RESULT-V1'));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('subject preflight settles before the attempt timer starts', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-preflight-order-'));
   const events: string[] = [];

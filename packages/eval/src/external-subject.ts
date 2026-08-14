@@ -189,21 +189,20 @@ export function createExternalSubjectAdapter(): SubjectAdapter {
           artifacts: decoded.artifacts,
         };
       } catch {
+        // Reaching here means `execute` itself threw: the relay transport, the
+        // executor, or this process — not the subject, which may never have run
+        // at all. Recovered usage is still worth keeping and attributing, but
+        // admitted model work says nothing about whose failure this was, so it
+        // does not turn an infrastructure failure into a recorded zero.
         const recovered = await recoverExternalMetering(context.metadata, profile);
         return {
           usage: recovered?.usage ?? null,
           costUsd: recovered?.costUsd ?? null,
           durationMs: Date.now() - startedAt,
-          status: context.signal?.aborted
-            ? ('indeterminate' as const)
-            : recovered && recovered.admittedRequests > 0
-              ? ('failed' as const)
-              : ('infra_failed' as const),
+          status: context.signal?.aborted ? ('indeterminate' as const) : ('infra_failed' as const),
           failureReason: context.signal?.aborted
             ? 'external subject cancelled'
-            : recovered && recovered.admittedRequests > 0
-              ? 'external subject interrupted after model admission'
-              : 'external subject failed',
+            : 'external subject execution failed',
           artifacts: externalRecoveryArtifacts(profile, identity, recovered),
         };
       }
@@ -311,7 +310,6 @@ export async function recoverExternalMetering(
         missingUsageRequests: derived.missingUsageRequests,
         usageComplete: derived.usageComplete,
         tokenBasis: derived.tokenBasis,
-        costBasis: derived.tokenBasis,
         removedWebTools: counts.removedWebTools,
         models: counts.models,
         toolNames: counts.toolNames,

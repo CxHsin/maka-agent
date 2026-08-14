@@ -579,7 +579,6 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 ],
                 "credentials": {},
                 "resultToken": "0" * 32,
-                "preserveProcessGroupOnExit": True,
             }
             try:
                 command = await relay._prepare_command(environment, request, token, scope_path)
@@ -596,7 +595,7 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 completed = await execution
                 self.assertEqual(completed.returncode, 0)
                 await relay._finalize_exited_scope(
-                    environment, directory, scope_path, request, completed.returncode
+                    environment, directory, scope_path, completed.returncode
                 )
                 await asyncio.sleep(0.4)
                 self.assertEqual(marker.read_text(), "ready")

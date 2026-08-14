@@ -116,9 +116,10 @@ export function createMakaSubjectAdapter(): SubjectAdapter {
         failureReason,
         artifacts: makaArtifacts(executionId, process),
       });
-      if (process.exitCode !== 0) {
-        return result('indeterminate', 'Maka execution shim did not settle cleanly');
-      }
+      // The shim's exit code projects this same projection's status for the
+      // relay's benefit, so reading it here would only ask the same question
+      // twice and get a coarser answer. A shim that died without settling
+      // leaves no decodable projection, and the branches above catch that.
       if (projection.status === 'cancelled') {
         return result('indeterminate', 'Maka subject cancelled');
       }

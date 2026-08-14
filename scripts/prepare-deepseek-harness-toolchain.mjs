@@ -7,12 +7,15 @@
 // installed on a macOS host and mounted into a linux/amd64 task container; it
 // is built inside a matching container, which also supplies the pinned Node.
 //
-// The fingerprint is the digest of checksums.sha256, which in turn covers every
-// regular file in the toolchain. That closes the chain: the constant committed
-// in src/toolchain-verification.ts pins the checksum manifest, and the manifest
-// pins the tree. A fingerprint derived from the build inputs alone would match
-// two different installs of the same version, which is exactly the drift a
-// benchmark needs to detect.
+// The fingerprint is the digest of checksums.sha256, which lists every regular
+// file this build put in the tree, itself and manifest.json aside. So the
+// constant committed in src/toolchain-verification.ts pins the checksum
+// manifest, and the manifest pins the content of every file it names. It does
+// not pin the tree's closure: verification walks the manifest, not the
+// directory, so a file added afterwards is neither named nor refused. That gap
+// predates this arm and belongs to verifyToolchainDirectory. A fingerprint
+// derived from the build inputs alone would match two different installs of
+// the same version, which is exactly the drift a benchmark needs to detect.
 //
 // `npm i` is not reproducible, so rebuilding produces a new fingerprint. That
 // is the point: re-pin it with --write and the change is visible in review.
@@ -66,7 +69,13 @@ async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {
   // entry is not proof of that — plenty of directories have one — so the marker
   // this script writes into its own manifest is what has to be found. An empty
   // directory has nothing to lose and is accepted as it is.
-  const existing = await readdir(root).catch(() => undefined);
+  //
+  // What the path is has to be established before what it contains: `readdir`
+  // fails the same way for a path that does not exist and for one that is a
+  // file, and reading the second as the first would delete the file.
+  const target = await stat(root).catch(() => undefined);
+  if (target && !target.isDirectory()) throw new Error(`--out must be a directory: ${root}`);
+  const existing = target ? await readdir(root) : undefined;
   if (existing && existing.length > 0) {
     const produced = await readFile(join(root, 'manifest.json'), 'utf8')
       .then((raw) => JSON.parse(raw).producedBy === TOOLCHAIN_BUILD_MARKER)

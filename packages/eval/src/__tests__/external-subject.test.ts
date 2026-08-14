@@ -7,7 +7,11 @@ import { test } from 'node:test';
 import { createExternalSubjectAdapter, recoverExternalMetering } from '../external-subject.js';
 import type { ExperimentCell, ExperimentSpec } from '../experiment.js';
 import type { CellAttempt } from '../result.js';
-import { TOOLCHAIN_IDENTITIES, verifyToolchainDirectory } from '../toolchain-verification.js';
+import {
+  TOOLCHAIN_IDENTITIES,
+  TOOLCHAIN_IDENTITY_ENV,
+  verifyToolchainDirectory,
+} from '../toolchain-verification.js';
 
 test('recovers lower-bound metering when external settlement is interrupted', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-metering-recovery-'));
@@ -378,6 +382,93 @@ test('refuses a mounted toolchain that is not the pinned tree', async () => {
   } finally {
     if (previous === undefined) delete process.env[sourceEnv];
     else process.env[sourceEnv] = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a verified toolchain reaches the subject and its later attempts', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-toolchain-verified-'));
+  const sourceEnv = 'MAKA_TEST_CODEX_TOOLCHAIN';
+  const previousEnv = process.env[sourceEnv];
+  process.env[sourceEnv] = root;
+  // The pin is what a real tree cannot be built to match, so the pin moves to
+  // this tree for the length of the test. What is under test is everything
+  // after verification passes: that the identity reaches the child's
+  // environment, and that a later attempt carrying it is reusable.
+  const pinned = TOOLCHAIN_IDENTITIES.codex as { fingerprint: string };
+  const previousFingerprint = pinned.fingerprint;
+  try {
+    await mkdir(join(root, 'bin'), { recursive: true });
+    await writeFile(join(root, 'bin/codex'), 'codex');
+    const digest = createHash('sha256').update('codex').digest('hex');
+    const checksums = `${digest}  bin/codex\n`;
+    await writeFile(join(root, 'checksums.sha256'), checksums);
+    pinned.fingerprint = `sha256:${createHash('sha256').update(checksums).digest('hex')}`;
+    const cell = {
+      ...externalCell({
+        command: '/opt/maka-node-toolchain/bin/node',
+        args: [
+          '/opt/maka-agent/packages/eval/dist/harbor-external-subject.js',
+          'codex',
+          'https://api.deepseek.com',
+          '/',
+          '/opt/maka-codex-toolchain/bin/codex',
+        ],
+      }),
+      executor: {
+        kind: 'harbor',
+        config: {
+          mounts: [{ sourceEnv, target: TOOLCHAIN_IDENTITIES.codex.root, readOnly: true }],
+        },
+      },
+    } satisfies ExperimentCell;
+    const adapter = createExternalSubjectAdapter();
+    await adapter.prepare?.({ spec: {} as ExperimentSpec, cells: [cell] });
+
+    assert.equal(
+      adapter.canReuse?.({ cell, attempt: toolchainAttempt(cell.id, pinned.fingerprint) }),
+      true,
+    );
+    assert.equal(
+      adapter.canReuse?.({ cell, attempt: toolchainAttempt(cell.id, 'sha256:stale') }),
+      false,
+    );
+
+    let environment: Readonly<Record<string, string>> | undefined;
+    const result = await adapter.execute({
+      cell,
+      context: {
+        cwd: '/app',
+        taskInput: 'solve',
+        metadata: {},
+        execute: async (input) => {
+          environment = input.environment;
+          return {
+            termination: 'exited',
+            exitCode: 0,
+            stdout: JSON.stringify({
+              schemaVersion: 'maka.external_subject_result.v1',
+              usage: null,
+              costUsd: null,
+              status: 'completed',
+              failureReason: null,
+              artifacts: [],
+            }),
+            stderr: '',
+          };
+        },
+      },
+    });
+    assert.equal(result.status, 'completed');
+    assert.deepEqual(JSON.parse(environment?.[TOOLCHAIN_IDENTITY_ENV] ?? ''), {
+      root: TOOLCHAIN_IDENTITIES.codex.root,
+      version: TOOLCHAIN_IDENTITIES.codex.version,
+      fingerprint: pinned.fingerprint,
+    });
+  } finally {
+    pinned.fingerprint = previousFingerprint;
+    if (previousEnv === undefined) delete process.env[sourceEnv];
+    else process.env[sourceEnv] = previousEnv;
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -597,9 +597,8 @@ function classifyExecution(
     };
   }
   // Neither harness emits a structured completion event: zcode and the DeepSeek
-  // Harness one-shot CLI (whose only options are the task text and --help) print
-  // the final assistant message and nothing else, so a clean exit with output is
-  // the whole signal on offer. Scores come from the verifier either way; this
+  // Harness one-shot CLI print the final assistant message and nothing else, so
+  // a clean exit with output is the whole signal on offer. Scores come from the verifier either way; this
   // only decides whether the attempt reads as completed or failed.
   const completed =
     output.completed ||

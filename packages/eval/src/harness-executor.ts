@@ -640,7 +640,9 @@ function mergeExecutionEnvironment(
 ): Record<string, string> {
   const overlap = Object.keys(required).filter((name) => Object.hasOwn(subject, name));
   if (overlap.length > 0) {
-    throw new Error(`subject environment overrides Eval egress policy: ${overlap.join(', ')}`);
+    throw new Error(
+      `subject environment overrides Eval execution environment: ${overlap.join(', ')}`,
+    );
   }
   return { ...subject, ...required };
 }

@@ -28,7 +28,7 @@ The checked-in Terminal-Bench 2.1 four-arm cohort is `experiments/terminal-bench
 
 The single-arm DeepSeek Harness cohort is `experiments/terminal-bench-2.1-deepseek-v4-flash-deepseek-harness.json`. The harness ships no benchmark runner: its `BENCHMARK.md` names the checked-in `examples/jsonrpc-agent` minimal composition and asks for one workspace and session id per task. `harbor/deepseek-harness-profile/` is that composition, carried as a complete harness profile whose manifest declares no bundles. Because the tree is composed over an empty entry list, every entry the model can observe is named in one file, an upstream bundle gaining a plugin cannot widen this arm's tool surface, and a missing service is a boot failure rather than a silent downgrade. The composition was validated against upstream request-for-request: identical tool names, byte-identical tool schemas, byte-identical system prompt, identical message sequence. The one deviation, recorded in the file, is that reasoning is pinned to max because the adapter default resolves to `reasoning_effort=high` on the wire.
 
-Build that arm's toolchain with `node scripts/prepare-deepseek-harness-toolchain.mjs --out <dir> --write`. It runs inside a pinned `linux/amd64` container because the composition depends on `node-pty`, which publishes no Linux prebuild, and it copies that container's Node into the toolchain so the executed path resolves inside the mounted root. Dependencies are installed with `npm ci` from the reviewed lockfile in `harbor/deepseek-harness-toolchain/`, so a harness version does not silently mean two different trees. The recorded fingerprint is the digest of `checksums.sha256`, which covers every regular file, and verification recomputes that digest from the manifest on disk rather than reading the value the tree reports for itself. The constant in `src/toolchain-verification.ts` therefore pins the manifest and the manifest pins the tree. Native modules are compiled during the build and need not come out byte-identical on another machine, so a rebuild can still produce a new fingerprint; `--write` re-pins it and verification fails closed until the two agree. `--out` is rebuilt from scratch and refuses any directory that is neither empty nor a previous build.
+Build that arm's toolchain with `node scripts/prepare-deepseek-harness-toolchain.mjs --out <dir> --write`. It runs inside a pinned `linux/amd64` container because the composition depends on `node-pty`, which publishes no Linux prebuild, and it copies that container's Node into the toolchain so the executed path resolves inside the mounted root. Dependencies are installed with `npm ci` from the reviewed lockfile in `harbor/deepseek-harness-toolchain/`, so a harness version does not silently mean two different trees. The recorded fingerprint is the digest of `checksums.sha256`, which lists every regular file the build put in the tree, and verification recomputes that digest from the manifest on disk rather than reading the value the tree reports for itself. The constant in `src/toolchain-verification.ts` therefore pins the manifest, and the manifest pins the content of every file it names. It does not pin the tree's closure: verification walks the manifest rather than the directory, so a file added to a mounted toolchain afterwards is neither named nor refused. That is the existing behaviour of `verifyToolchainDirectory` for all eight arms and belongs to it. Native modules are compiled during the build and need not come out byte-identical on another machine, so a rebuild can still produce a new fingerprint; `--write` re-pins it and verification fails closed until the two agree. `--out` is rebuilt from scratch: it must name a directory, and one that is either empty or a previous build of this toolchain.
 
 `experiments/terminal-bench-2.1-deepseek-v4-flash-maka-vs-deepseek-harness.json` runs Maka and the harness arm in one task group, so each task starts one container of each at the same moment rather than comparing two runs on two occasions. Two properties of that spec do not follow from the framework and belong to whoever reads its results.
 
@@ -47,10 +47,21 @@ stream end. When the result frame is missing — the wrapper was killed rather t
 the executor recovers usage from that file. A run that was cut off after admitted model work is
 therefore scored as a failed subject rather than retried as infrastructure.
 
-The checkpoint carries only what the proxy observed: usage and the request, in-flight, admitted, and
-usage-request counts. Whether the figure is complete, how many admitted requests are missing usage,
-and what the run cost are worked out from those counts by one function both sides call, so the two
-processes cannot hold two versions of a value neither of them owns. Cost is reported only for a
+That last rule reads the evidence, not the symptom, so it applies where the evidence supports it and
+not elsewhere. A subject whose execution returned — the relay observed it exit, and only its result
+frame is missing — did stop on its own terms, so admitted model work makes that a recorded failure
+rather than a cell to run again at the same cost. A subject whose execution call *threw* is a
+different claim: the relay, the executor or the host process failed, and it may never have started.
+There, admitted work is still recorded and attributed, but it does not turn an infrastructure
+failure into a zero.
+
+The checkpoint carries only what the proxy observed: usage, whether the proxy had settled, and the
+request, in-flight, admitted, and usage-request counts. Settlement is there because no arrangement of
+the counts implies it — a checkpoint written between two requests has nothing in flight either — and
+a stale file that claimed to be complete would report a fraction of a run's cost as a settled figure.
+Whether the figure is complete, how many admitted requests are missing usage, and what the run cost
+are worked out from those raw facts by one function both sides call, so the two processes cannot hold
+two versions of a value neither of them owns. Cost is reported only for a
 complete figure; a partial token count is kept as a lower bound, because a cost derived from it would
 enter the result kernel indistinguishable from a settled one.
 

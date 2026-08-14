@@ -6,18 +6,35 @@ Maka Desktop、TUI 和 CLI 可以通过 TLS、SSH 或明确启用的明文 WebSo
 
 ## 准备 Host
 
-在远程机器构建 Maka，选择持久的 State Root，并注册允许 remote Client 使用的 Project：
+在远程机器构建 Maka，然后打开交互式管理器：
 
 ```sh
 npm run build
-npm --workspace maka-agent exec -- maka runtime-host project add /srv/projects/example --root /srv/maka
-npm --workspace maka-agent exec -- maka runtime-host project list --root /srv/maka
+npm --workspace maka-agent exec -- maka runtime-host manage
+# `runtime-host bootstrap` 是它的别名。
 ```
 
-Project path 始终留在 Host。为每个 Client 签发 credential：
+管理器会持久保存配置目录，并在每次进入时重新检测已有 Host。该 catalog 位于 Maka Client Data Root 下的 `runtime-host-services/catalog.json`，不保存 access credential。
+
+创建配置时需要选择：
+
+- 稳定的配置 ID 与显示名称；
+- 一个持久的 State Root；
+- SSH tunnel、Direct TLS 或明确确认风险的明文连接；
+- 不与其他配置冲突的监听地址和端口。
+
+一个配置会永久绑定到一个 canonical State Root identity。修改 listener 前必须先停止 Host。不同配置的 State Root 和 listener 都不冲突时，可以同时运行；退出管理器不会停止它们。
+
+启动配置后，在 **Projects** 页面注册 Host path，在 **Credentials** 页面选择 fail-closed 权限包或逐项选择额外的 protocol operation；每个 credential 都会保留必需的 `host.status` liveness grant。Project path 始终留在 Host。新 credential 只显示一次，离开页面前必须复制；之后只能查看不含 secret 的 metadata 或撤销 credential，不能再次显示 secret。
+
+如果管理器检测到 State Root 被替换、配置漂移，或同一 Root 正由手工/其他 Host 占用，它会拒绝启动、停止或修改该实例。停止请求通过 local-owner connection 发给 registration 完全匹配的 Host；remote credential 不能终止 service。
+
+手工或脚本化配置时，应先启动并保持 `runtime-host serve` 运行，再从另一个本地 shell 注册 Project、签发 credential：
 
 ```sh
-npm --workspace maka-agent exec -- maka runtime-host access issue \
+maka runtime-host project add /srv/projects/example --root /srv/maka
+maka runtime-host project list --root /srv/maka
+maka runtime-host access issue \
   --root /srv/maka \
   --principal my-desktop \
   --preset desktop-client

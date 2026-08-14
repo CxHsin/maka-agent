@@ -237,6 +237,13 @@ export function createUnavailableDomainOperationHandlers(): DomainOperationHandl
 
 export function createUnavailableAccessAuthorityOperationHandlers(): AccessAuthorityOperationHandlerMap {
   return {
+    'access.credential.query': async () => ({
+      ok: false,
+      error: {
+        code: 'operation_unavailable',
+        message: 'Runtime Host access credentials are unavailable',
+      },
+    }),
     'access.credential.issue': async () => ({
       ok: false,
       error: {

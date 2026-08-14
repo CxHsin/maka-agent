@@ -7,6 +7,7 @@ export {
   type RuntimeHostKernelOptions,
   type RuntimeHostLifecycleMode,
   type RuntimeHostResidency,
+  type RuntimeHostServiceIdentity,
 } from './host-kernel.js';
 export {
   beginRuntimeHostDomainModuleDrain,
@@ -31,6 +32,7 @@ export {
 export { createUnavailableDomainOperationHandlers } from './operation-dispatcher.js';
 export {
   RuntimeHostRootAlreadyOwnedError,
+  RuntimeHostRootIdentityMismatchError,
   startExecutionRuntimeHostService,
   type ExecutionRuntimeHostServiceDependencies,
   type ExecutionRuntimeHostServiceOptions,

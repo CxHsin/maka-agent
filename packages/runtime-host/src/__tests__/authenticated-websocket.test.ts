@@ -20,6 +20,7 @@ import {
 } from '../protocol/index.js';
 import {
   openRuntimeHostAccessAuthority,
+  RuntimeHostRootIdentityMismatchError,
   startExecutionRuntimeHostService,
 } from '../server/index.js';
 import { authorizeRuntimeHostOperation } from '../server/connection-authority.js';
@@ -28,6 +29,30 @@ const PROTOCOL = {
   min: RUNTIME_HOST_PROTOCOL_VERSION,
   max: RUNTIME_HOST_PROTOCOL_VERSION,
 } as const;
+
+test('managed service startup rejects a replaced State Root before taking ownership', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'maka-managed-root-identity-'));
+  const root = join(base, 'root');
+  try {
+    const capability = await resolveStorageRoot({ path: root, kind: 'interactive' });
+    await assert.rejects(
+      startExecutionRuntimeHostService({
+        rootPath: root,
+        expectedRootId: 'f'.repeat(64),
+      }),
+      (error: unknown) =>
+        error instanceof RuntimeHostRootIdentityMismatchError &&
+        error.actualRootId === capability.rootId,
+    );
+    const host = await startExecutionRuntimeHostService({
+      rootPath: root,
+      expectedRootId: capability.rootId,
+    });
+    await host.close();
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
 
 test('one Local IPC owner and one authenticated WebSocket Client control the same Session', {
   timeout: 120_000,
@@ -124,6 +149,19 @@ test('one Local IPC owner and one authenticated WebSocket Client control the sam
     remote = connected.connection;
     assert.equal(remote.rootId, local.rootId);
     assert.equal(remote.hostEpoch, local.hostEpoch);
+    const credentialPage = await local.request('access.credential.query', {
+      kind: 'list_start',
+    });
+    assert.equal(credentialPage.kind, 'page');
+    if (credentialPage.kind === 'page') {
+      assert.equal(credentialPage.credentials[0]?.credentialId, issued.credentialId);
+      assert.equal(JSON.stringify(credentialPage).includes('credentialHash'), false);
+    }
+    await assert.rejects(
+      remote.request('access.credential.query', { kind: 'list_start' }),
+      (error: unknown) =>
+        error instanceof RuntimeHostOperationError && error.code === 'unauthorized',
+    );
     await assert.rejects(
       remote.request('host.diagnostics.query', {}),
       (error: unknown) =>
@@ -397,11 +435,37 @@ test('access credentials persist only as hashes and stay revoked after reload', 
     );
     assert.equal(authority.authenticate(credential)?.principalId, 'device-1');
     assert.equal(authority.authenticate(credential)?.principalKind, 'remote_owner');
+    const credentialPage = await authority.query({ kind: 'list_start' });
+    assert.equal(credentialPage.kind, 'page');
+    if (credentialPage.kind === 'page') {
+      assert.deepEqual(credentialPage.credentials, [
+        {
+          credentialId: issued.credentialId,
+          principalId: 'device-1',
+          principalKind: 'remote_owner',
+          status: 'active',
+          operationGrants: ['host.status', 'session.catalog.query'],
+          canPublishClientCapabilities: false,
+          canUseHostPaths: false,
+          createdAt: credentialPage.credentials[0]?.createdAt,
+        },
+      ]);
+    }
     await assert.rejects(
       authority.issue({
         principalKind: 'remote_owner',
         principalId: 'upgrader',
         operationGrants: ['host.upgrade.prepare'],
+        canPublishClientCapabilities: false,
+        canUseHostPaths: false,
+      }),
+      /local-owner only/u,
+    );
+    await assert.rejects(
+      authority.issue({
+        principalKind: 'remote_owner',
+        principalId: 'remote-stopper',
+        operationGrants: ['host.service.stop'],
         canPublishClientCapabilities: false,
         canUseHostPaths: false,
       }),

@@ -1,9 +1,11 @@
 type RuntimeHostCliError = { kind: 'error'; message: string; exitCode: number };
 
 export type RuntimeHostCliCommand =
+  | { kind: 'runtime-host-manage' }
   | {
       kind: 'runtime-host-serve';
       rootPath?: string;
+      managedConfigId?: string;
       json: boolean;
       websocket?: {
         host: string;
@@ -62,6 +64,11 @@ export type RuntimeHostCliCommand =
   | RuntimeHostCliError;
 
 export function parseRuntimeHostCommand(argv: string[]): RuntimeHostCliCommand {
+  if (argv[0] === 'manage' || argv[0] === 'bootstrap') {
+    return argv.length === 1
+      ? { kind: 'runtime-host-manage' }
+      : error(`Unexpected argument: ${argv[1] ?? ''}`);
+  }
   if (argv[0] === 'serve') return parseServeCommand(argv.slice(1));
   if (argv[0] === 'access') return parseAccessCommand(argv.slice(1));
   if (argv[0] === 'project') return parseProjectCommand(argv.slice(1));
@@ -72,7 +79,7 @@ export function parseRuntimeHostCommand(argv: string[]): RuntimeHostCliCommand {
   return error(
     argv[0]
       ? `Unexpected runtime-host command: ${argv[0]}`
-      : 'runtime-host requires the serve, access, project, profile, or capability-provider command',
+      : 'runtime-host requires the manage, serve, access, project, profile, or capability-provider command',
   );
 }
 
@@ -284,6 +291,7 @@ function parseCapabilityProviderCommand(argv: string[]): RuntimeHostCliCommand {
 
 function parseServeCommand(argv: string[]): RuntimeHostCliCommand {
   let rootPath: string | undefined;
+  let managedConfigId: string | undefined;
   let json = false;
   let websocketHost = '127.0.0.1';
   let websocketConfigured = false;
@@ -308,6 +316,13 @@ function parseServeCommand(argv: string[]): RuntimeHostCliCommand {
       const parsed = optionValue(argv, index, argument);
       if (typeof parsed !== 'string') return parsed;
       rootPath = parsed;
+      index += 1;
+      continue;
+    }
+    if (argument === '--managed-config') {
+      const parsed = optionValue(argv, index, argument);
+      if (typeof parsed !== 'string') return parsed;
+      managedConfigId = parsed;
       index += 1;
       continue;
     }
@@ -366,9 +381,13 @@ function parseServeCommand(argv: string[]): RuntimeHostCliCommand {
   if (websocketConfigured && websocketPort === undefined) {
     return error('--websocket-port is required for WebSocket options');
   }
+  if (managedConfigId !== undefined && (rootPath !== undefined || websocketConfigured)) {
+    return error('--managed-config cannot be combined with --root or WebSocket options');
+  }
   return {
     kind: 'runtime-host-serve',
     json,
+    ...(managedConfigId ? { managedConfigId } : {}),
     ...(rootPath ? { rootPath } : {}),
     ...(websocketPort === undefined
       ? {}

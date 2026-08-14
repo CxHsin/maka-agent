@@ -48,6 +48,8 @@ export type {
   HostDiagnosticsResult,
   HostActivitySnapshot,
   HostLifecycleState,
+  HostServiceStopInput,
+  HostServiceStopResult,
   HostStatusInput,
   HostStatusResult,
   HostUpgradePrepareInput,

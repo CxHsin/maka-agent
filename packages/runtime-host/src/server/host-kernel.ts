@@ -40,6 +40,7 @@ import {
 } from './operation-dispatcher.js';
 import {
   issueAccessCredential,
+  queryAccessCredentials,
   revokeAccessCredential,
   type RuntimeHostAccessAuthority,
 } from './access-authority.js';
@@ -123,6 +124,11 @@ interface RuntimeHostKernelCommonOptions<K extends StorageRootKind> {
   accessAuthority?: RuntimeHostAccessAuthority;
 }
 
+export interface RuntimeHostServiceIdentity {
+  readonly configId: string;
+  readonly configRevision: string;
+}
+
 export type RuntimeHostLifecycleMode = 'ephemeral' | 'service';
 
 export type RuntimeHostKernelOptions<K extends StorageRootKind = 'interactive'> =
@@ -133,12 +139,14 @@ export type RuntimeHostKernelOptions<K extends StorageRootKind = 'interactive'> 
           initialConnectionTimeoutMs?: number;
           idleGraceMs?: number;
           generation?: string;
+          serviceIdentity?: never;
         }
       | {
           lifecycleMode: 'service';
           initialConnectionTimeoutMs?: never;
           idleGraceMs?: never;
           generation?: never;
+          serviceIdentity?: RuntimeHostServiceIdentity;
         }
     );
 
@@ -626,8 +634,32 @@ export class RuntimeHostKernel {
           this.#requestDrain();
           return { ok: true, result: { kind: 'prepared', pid: process.pid } };
         },
+        'host.service.stop': async (input) => {
+          if (this.#lifecycle.kind !== 'service') {
+            return {
+              ok: false,
+              error: {
+                code: 'operation_unavailable',
+                message: 'Only a Runtime Host service can be stopped by an operator',
+              },
+            };
+          }
+          if (input.expectedHostEpoch !== this.hostEpoch) {
+            return {
+              ok: false,
+              error: {
+                code: 'operation_conflict',
+                message: 'Runtime Host identity changed before service stop',
+              },
+            };
+          }
+          this.#requestDrain();
+          return { ok: true, result: { kind: 'accepted', hostEpoch: this.hostEpoch } };
+        },
         'access.credential.issue': async (input) =>
           issueAccessCredential(this.#options.accessAuthority, input),
+        'access.credential.query': async (input) =>
+          queryAccessCredentials(this.#options.accessAuthority, input),
         'access.credential.revoke': async (input) =>
           revokeAccessCredential(this.#options.accessAuthority, input),
       },
@@ -845,6 +877,12 @@ export class RuntimeHostKernel {
       compositionId: this.compositionDescriptor.id,
       compositionRevision: this.compositionDescriptor.revision,
       lifecycleMode: this.#lifecycle.kind,
+      ...(this.#options.lifecycleMode === 'service' && this.#options.serviceIdentity
+        ? {
+            serviceConfigId: this.#options.serviceIdentity.configId,
+            serviceConfigRevision: this.#options.serviceIdentity.configRevision,
+          }
+        : {}),
       ...(this.#options.generation === undefined ? {} : { generation: this.#options.generation }),
       state: this.#state,
       pid: process.pid,
@@ -899,6 +937,7 @@ function normalizeLifecycle<K extends StorageRootKind>(
     ) {
       throw new TypeError('Runtime Host service lifecycle does not accept idle timeouts');
     }
+    if (options.serviceIdentity) validateServiceIdentity(options.serviceIdentity);
     return { kind: 'service' };
   }
   if (lifecycleMode !== undefined && lifecycleMode !== 'ephemeral') {
@@ -909,6 +948,15 @@ function normalizeLifecycle<K extends StorageRootKind>(
   assertDuration(initialConnectionTimeoutMs, 'initialConnectionTimeoutMs', 0);
   assertDuration(idleGraceMs, 'idleGraceMs', 0);
   return { kind: 'ephemeral', initialConnectionTimeoutMs, idleGraceMs };
+}
+
+function validateServiceIdentity(identity: RuntimeHostServiceIdentity): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u.test(identity.configId)) {
+    throw new TypeError('Runtime Host service config id is invalid');
+  }
+  if (!/^sha256:[a-f0-9]{64}$/u.test(identity.configRevision)) {
+    throw new TypeError('Runtime Host service config revision is invalid');
+  }
 }
 
 function eraseRootKind<K extends StorageRootKind>(

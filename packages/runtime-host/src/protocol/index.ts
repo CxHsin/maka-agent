@@ -170,6 +170,8 @@ export interface HostRegistration {
   compositionId: string;
   compositionRevision: string;
   lifecycleMode?: 'ephemeral' | 'service';
+  serviceConfigId?: string;
+  serviceConfigRevision?: string;
   generation?: string;
   state: HostLifecycleState;
   pid: number;
@@ -319,6 +321,14 @@ export function decodeHostRegistration(value: unknown): HostRegistration {
     ...(registration.lifecycleMode === undefined
       ? {}
       : { lifecycleMode: requireHostLifecycleMode(registration.lifecycleMode) }),
+    ...(registration.serviceConfigId === undefined
+      ? {}
+      : { serviceConfigId: requireId(registration.serviceConfigId, 'serviceConfigId') }),
+    ...(registration.serviceConfigRevision === undefined
+      ? {}
+      : {
+          serviceConfigRevision: requireServiceConfigRevision(registration.serviceConfigRevision),
+        }),
     ...(registration.generation === undefined
       ? {}
       : { generation: requireHostGeneration(registration.generation) }),
@@ -326,6 +336,14 @@ export function decodeHostRegistration(value: unknown): HostRegistration {
     pid,
     createdAt: requireString(registration.createdAt, 'createdAt', 64),
   };
+}
+
+function requireServiceConfigRevision(value: unknown): string {
+  const revision = requireString(value, 'serviceConfigRevision', 71);
+  if (!/^sha256:[a-f0-9]{64}$/u.test(revision)) {
+    throw invalidProtocolFrame('Invalid serviceConfigRevision');
+  }
+  return revision;
 }
 
 function requireHostLifecycleMode(value: unknown): 'ephemeral' | 'service' {

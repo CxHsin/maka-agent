@@ -260,6 +260,10 @@ describe('non-serving Runtime Host kernel', () => {
       const host = await RuntimeHostKernel.start({
         owner,
         lifecycleMode: 'service',
+        serviceIdentity: {
+          configId: 'office-host',
+          configRevision: `sha256:${'a'.repeat(64)}`,
+        },
         composition: KERNEL_COMPOSITION,
       });
 
@@ -276,6 +280,8 @@ describe('non-serving Runtime Host kernel', () => {
       assert.equal(connected.kind, 'connected');
       if (connected.kind !== 'connected') return;
       assert.equal(connected.registration.lifecycleMode, 'service');
+      assert.equal(connected.registration.serviceConfigId, 'office-host');
+      assert.equal(connected.registration.serviceConfigRevision, `sha256:${'a'.repeat(64)}`);
       await assert.rejects(
         connected.connection.request('host.upgrade.prepare', {
           expectedHostEpoch: connected.connection.hostEpoch,
@@ -300,7 +306,27 @@ describe('non-serving Runtime Host kernel', () => {
         assert.equal(incompatible.handshake.replacement, 'blocked_by_residency');
       }
 
-      await host.close();
+      const operator = await connectRuntimeHost({
+        rootPath: paths.root,
+        surface: 'inspect',
+        protocol: CURRENT_PROTOCOL,
+      });
+      assert.equal(operator.kind, 'connected');
+      if (operator.kind !== 'connected') return;
+      await assert.rejects(
+        operator.connection.request('host.service.stop', {
+          expectedHostEpoch: 'stale-host-epoch',
+        }),
+        (error: unknown) =>
+          error instanceof RuntimeHostOperationError && error.code === 'operation_conflict',
+      );
+      assert.deepEqual(
+        await operator.connection.request('host.service.stop', {
+          expectedHostEpoch: operator.connection.hostEpoch,
+        }),
+        { kind: 'accepted', hostEpoch: operator.connection.hostEpoch },
+      );
+      await host.closed;
       const successor = await tryAcquireInteractiveRootOwner(capability);
       assert.ok(successor);
       await successor.close();

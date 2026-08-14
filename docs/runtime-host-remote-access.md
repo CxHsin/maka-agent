@@ -6,18 +6,35 @@ Maka Desktop, TUI, and CLI can connect to a Runtime Host through TLS, SSH, or ex
 
 ## Prepare the Host
 
-Build Maka on the remote machine, choose a persistent State Root, and register each Project remote Clients may use:
+Build Maka on the remote machine, then open the interactive manager:
 
 ```sh
 npm run build
-npm --workspace maka-agent exec -- maka runtime-host project add /srv/projects/example --root /srv/maka
-npm --workspace maka-agent exec -- maka runtime-host project list --root /srv/maka
+npm --workspace maka-agent exec -- maka runtime-host manage
+# "runtime-host bootstrap" is an alias.
 ```
 
-Project paths stay on the Host. Issue a credential for each Client:
+The manager keeps a persistent catalog and detects configured Hosts every time it opens. The catalog is stored under Maka's Client Data Root at `runtime-host-services/catalog.json` and never contains access credentials.
+
+Create a config by choosing:
+
+- a stable config ID and display name;
+- one persistent State Root;
+- SSH tunnel, direct TLS, or explicitly acknowledged plaintext transport;
+- a listener address and port that do not conflict with another config.
+
+One config is permanently bound to one canonical State Root identity. Stop a Host before editing its listener. Different configs can run at the same time when both their State Roots and listeners are distinct. Closing the manager does not stop them.
+
+Start the config, then use its **Projects** screen to register Host paths and its **Credentials** screen to choose a fail-closed permission pack or exact additional protocol operations; every credential retains the required `host.status` liveness grant. Project paths stay on the Host. A newly issued credential is shown once; copy it before leaving that screen. Existing credentials can be listed by metadata and revoked, but their secrets cannot be shown again.
+
+The manager refuses to start, stop, or mutate a config when it detects a replaced State Root, configuration drift, or a Host owned by another/manual launch. Stop is sent through the local-owner connection to the exact registered Host; remote credentials cannot terminate the service.
+
+For manual or scripted setup, start `runtime-host serve` first, keep it running, then use another local shell to register Projects and issue credentials:
 
 ```sh
-npm --workspace maka-agent exec -- maka runtime-host access issue \
+maka runtime-host project add /srv/projects/example --root /srv/maka
+maka runtime-host project list --root /srv/maka
+maka runtime-host access issue \
   --root /srv/maka \
   --principal my-desktop \
   --preset desktop-client

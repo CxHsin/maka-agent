@@ -51,6 +51,32 @@ describe('Runtime Host bootstrap protocol', () => {
     assert.throws(() => negotiateProtocol({ min: -1, max: 0 }, { min: 0, max: 0 }), isInvalidFrame);
   });
 
+  test('keeps managed service registration identity bounded', () => {
+    const registration = {
+      kind: 'maka-runtime-host' as const,
+      schemaVersion: 1 as const,
+      rootId: 'a'.repeat(64),
+      hostEpoch: 'host-1',
+      endpoint: '/tmp/runtime-host.sock',
+      protocolMin: 0,
+      protocolMax: 0,
+      compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
+      compositionId: 'maka.interactive',
+      compositionRevision: '1',
+      lifecycleMode: 'service' as const,
+      serviceConfigId: 'office-host',
+      serviceConfigRevision: `sha256:${'b'.repeat(64)}`,
+      state: 'ready' as const,
+      pid: 123,
+      createdAt: '2026-08-14T00:00:00.000Z',
+    };
+    assert.deepEqual(decodeHostRegistration(registration), registration);
+    assert.throws(
+      () => decodeHostRegistration({ ...registration, serviceConfigRevision: 'not-a-revision' }),
+      isInvalidFrame,
+    );
+  });
+
   test('keeps the subscription queue Epoch correlated', () => {
     assert.equal(SESSION_CONTINUITY_SCHEMA_VERSION, 3);
     const opened = {

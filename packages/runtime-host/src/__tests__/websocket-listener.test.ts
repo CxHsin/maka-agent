@@ -170,6 +170,7 @@ test('credential revocation during WebSocket upgrade cannot admit stale authorit
         canUseHostPaths: false,
       });
     },
+    query: async () => assert.fail('Credential query is not expected'),
     issue: async () => assert.fail('Credential issue is not expected'),
     revoke: async () => assert.fail('Credential revoke is not expected'),
     subscribeRevocations: () => () => undefined,

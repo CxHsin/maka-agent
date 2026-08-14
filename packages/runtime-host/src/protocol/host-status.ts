@@ -29,6 +29,15 @@ export type HostUpgradePrepareResult =
   | { readonly kind: 'active_tasks' }
   | { readonly kind: 'prepared'; readonly pid: number };
 
+export interface HostServiceStopInput {
+  readonly expectedHostEpoch: string;
+}
+
+export interface HostServiceStopResult {
+  readonly kind: 'accepted';
+  readonly hostEpoch: string;
+}
+
 export const HOST_DIAGNOSTICS_RESULT_MAX_BYTES = 72 * 1024;
 export const HOST_DIAGNOSTIC_LOG_MAX_ENTRIES = 256;
 export const HOST_DIAGNOSTIC_LOG_MAX_ENTRY_BYTES = 10 * 1024;
@@ -78,6 +87,13 @@ export const HOST_BOOTSTRAP_OPERATION_SPECS = {
     errors: ['operation_conflict', 'operation_unavailable', 'internal_failure'] as const,
     decodeInput: decodeHostUpgradePrepareInput,
     decodeOutput: decodeHostUpgradePrepareResult,
+  }),
+  'host.service.stop': defineOperation({
+    mode: 'command',
+    availability: 'ready',
+    errors: ['operation_conflict', 'operation_unavailable', 'internal_failure'] as const,
+    decodeInput: decodeHostServiceStopInput,
+    decodeOutput: decodeHostServiceStopResult,
   }),
 } as const;
 
@@ -208,6 +224,29 @@ function decodeHostUpgradePrepareInput(value: unknown): HostUpgradePrepareInput 
       record.allowInterruptActiveTasks,
       'Runtime Host upgrade interrupt authority',
     ),
+  };
+}
+
+function decodeHostServiceStopInput(value: unknown): HostServiceStopInput {
+  const record = requireExactRecord(value, 'Runtime Host service stop input', [
+    'expectedHostEpoch',
+  ]);
+  return {
+    expectedHostEpoch: requireId(record.expectedHostEpoch, 'Runtime Host expected Host Epoch'),
+  };
+}
+
+function decodeHostServiceStopResult(value: unknown): HostServiceStopResult {
+  const record = requireExactRecord(value, 'Runtime Host service stop result', [
+    'kind',
+    'hostEpoch',
+  ]);
+  if (record.kind !== 'accepted') {
+    throw invalidProtocolFrame('Invalid Runtime Host service stop result kind');
+  }
+  return {
+    kind: 'accepted',
+    hostEpoch: requireId(record.hostEpoch, 'Runtime Host stopped Host Epoch'),
   };
 }
 

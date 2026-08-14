@@ -15,9 +15,12 @@ import {
 import { parseRuntimeHostCommand } from '../runtime-host-cli.js';
 import { runRuntimeHostProjectCli } from '../runtime-host-project-command.js';
 import { createRuntimeHostServiceReadyEvent } from '../runtime-host-service-command.js';
+import { RUNTIME_HOST_PERMISSION_PACKS } from '../runtime-host-service-operations.js';
 
 describe('Runtime Host operator commands', () => {
   test('parses project management and machine-readable service readiness', () => {
+    assert.deepEqual(parseRuntimeHostCommand(['manage']), { kind: 'runtime-host-manage' });
+    assert.deepEqual(parseRuntimeHostCommand(['bootstrap']), { kind: 'runtime-host-manage' });
     assert.deepEqual(parseRuntimeHostCommand(['project', 'list', '--root', '/srv/maka']), {
       kind: 'runtime-host-project-list',
       rootPath: '/srv/maka',
@@ -34,6 +37,15 @@ describe('Runtime Host operator commands', () => {
       kind: 'runtime-host-serve',
       json: true,
     });
+    assert.deepEqual(parseRuntimeHostCommand(['serve', '--managed-config', 'office']), {
+      kind: 'runtime-host-serve',
+      managedConfigId: 'office',
+      json: false,
+    });
+    assert.equal(
+      parseRuntimeHostCommand(['serve', '--managed-config', 'office', '--root', '/srv/maka']).kind,
+      'error',
+    );
     assert.deepEqual(
       parseRuntimeHostCommand([
         'serve',
@@ -105,12 +117,38 @@ describe('Runtime Host operator commands', () => {
         .sort(),
       [
         'access.credential.issue',
+        'access.credential.query',
         'access.credential.revoke',
+        'host.service.stop',
         'host.upgrade.prepare',
         'hosted.execution.cancel',
         'hosted.execution.start',
       ],
     );
+  });
+
+  test('keeps interactive permission packs explicit and complete', () => {
+    const terminal = RUNTIME_HOST_PERMISSION_PACKS.find(({ id }) => id === 'terminal-owner');
+    const desktop = RUNTIME_HOST_PERMISSION_PACKS.find(({ id }) => id === 'desktop-owner');
+    const provider = RUNTIME_HOST_PERMISSION_PACKS.find(({ id }) => id === 'capability-provider');
+    assert.ok(terminal);
+    assert.ok(desktop);
+    assert.ok(provider);
+    assert.deepEqual(
+      [...terminal.operationGrants].sort(),
+      REMOTE_OWNER_OPERATION_GRANTS.filter(
+        (operation) => !operation.startsWith('client.capability.'),
+      ).sort(),
+    );
+    assert.deepEqual(
+      [...desktop.operationGrants].sort(),
+      [...REMOTE_OWNER_OPERATION_GRANTS].sort(),
+    );
+    assert.deepEqual(provider.operationGrants, [
+      'host.status',
+      'client.capability.replace',
+      'client.capability.unregister',
+    ]);
   });
 
   test('emits bounded service identity and listener facts without credentials', () => {

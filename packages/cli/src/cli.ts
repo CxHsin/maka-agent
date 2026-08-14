@@ -102,6 +102,8 @@ function helpText(cliCommand: string): string {
     `  ${cliCommand} activate ... Run one Cloud Session activation and emit JSONL`,
     `  ${cliCommand} -p ...       Alias for ${cliCommand} run`,
     `  ${cliCommand} eval ...     Run one declarative multi-arm experiment`,
+    `  ${cliCommand} runtime-host manage           Open the interactive Remote Host Manager`,
+    `  ${cliCommand} runtime-host bootstrap        Alias for runtime-host manage`,
     `  ${cliCommand} runtime-host serve [options]  Run a Runtime Host service`,
     `  ${cliCommand} runtime-host access issue --principal <id> --grant <operation>`,
     `  ${cliCommand} runtime-host access issue --principal <id> --preset <desktop-client|terminal-client>`,
@@ -186,13 +188,27 @@ export async function runMakaCli(
       const { runMakaEvalCli } = await import('@maka/eval');
       return runMakaEvalCli(command.args);
     }
+    case 'runtime-host-manage': {
+      const { runRuntimeHostManagerTui } = await import('./runtime-host-manager-tui.js');
+      return runRuntimeHostManagerTui({
+        clientDataRoot: dataRoots.clientDataRoot,
+        cliCommand: options.cliCommand,
+      });
+    }
     case 'runtime-host-serve': {
       const { runRuntimeHostServiceCli } = await import('./runtime-host-service-command.js');
-      return runRuntimeHostServiceCli({
-        rootPath: command.rootPath ?? dataRoots.workspaceRoot,
-        json: command.json,
-        ...(command.websocket ? { websocket: command.websocket } : {}),
-      });
+      return command.managedConfigId
+        ? runRuntimeHostServiceCli({
+            managedConfigId: command.managedConfigId,
+            clientDataRoot:
+              process.env.MAKA_RUNTIME_HOST_MANAGED_CLIENT_DATA_ROOT ?? dataRoots.clientDataRoot,
+            json: command.json,
+          })
+        : runRuntimeHostServiceCli({
+            rootPath: command.rootPath ?? dataRoots.workspaceRoot,
+            json: command.json,
+            ...(command.websocket ? { websocket: command.websocket } : {}),
+          });
     }
     case 'runtime-host-access-issue': {
       const { runRuntimeHostAccessIssueCli } = await import('./runtime-host-access-command.js');

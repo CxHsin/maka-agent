@@ -1,8 +1,13 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 import {
+  ACCESS_CREDENTIAL_QUERY_PAGE_MAX_BYTES,
+  ACCESS_CREDENTIAL_QUERY_PAGE_MAX_ITEMS,
   type AccessCredentialIssueInput,
   type AccessCredentialIssueResult,
+  type AccessCredentialMetadata,
+  type AccessCredentialQueryInput,
+  type AccessCredentialQueryResult,
   type AccessCredentialRevokeInput,
   type AccessCredentialRevokeResult,
 } from '../protocol/index.js';
@@ -37,6 +42,7 @@ const CAPABILITY_PROVIDER_GRANTS = new Set([
 
 export interface RuntimeHostAccessAuthority {
   authenticate(credential: string): RuntimeHostConnectionAuthority | undefined;
+  query(input: AccessCredentialQueryInput): Promise<AccessCredentialQueryResult>;
   issue(input: AccessCredentialIssueInput): Promise<AccessCredentialIssueResult>;
   revoke(input: AccessCredentialRevokeInput): Promise<AccessCredentialRevokeResult>;
   subscribeRevocations(listener: (credentialId: string) => void): () => void;
@@ -86,6 +92,51 @@ class FileRuntimeHostAccessAuthority implements RuntimeHostAccessAuthority {
           canUseHostPaths: match.canUseHostPaths,
         })
       : undefined;
+  }
+
+  async query(input: AccessCredentialQueryInput): Promise<AccessCredentialQueryResult> {
+    const credentials = this.#file.credentials.map(accessCredentialMetadata);
+    const revision = accessCredentialRevision(credentials);
+    if (input.kind === 'list_continue' && input.revision !== revision) {
+      return { kind: 'revision_changed', expected: input.revision, actual: revision };
+    }
+    const offset = input.kind === 'list_start' ? 0 : Number(input.cursor);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > credentials.length) {
+      throw new RuntimeHostAccessInputError('Access credential query cursor is out of range');
+    }
+    const page: AccessCredentialMetadata[] = [];
+    for (
+      let index = offset;
+      index < credentials.length && page.length < ACCESS_CREDENTIAL_QUERY_PAGE_MAX_ITEMS;
+      index += 1
+    ) {
+      const candidate = [...page, credentials[index]!];
+      const projected = {
+        kind: 'page' as const,
+        revision,
+        credentialCount: credentials.length,
+        credentials: candidate,
+        nextCursor: index + 1 < credentials.length ? String(index + 1) : null,
+      };
+      if (
+        Buffer.byteLength(JSON.stringify(projected), 'utf8') >
+        ACCESS_CREDENTIAL_QUERY_PAGE_MAX_BYTES
+      ) {
+        break;
+      }
+      page.push(credentials[index]!);
+    }
+    if (offset < credentials.length && page.length === 0) {
+      throw new Error('One access credential exceeds the query page boundary');
+    }
+    const nextOffset = offset + page.length;
+    return {
+      kind: 'page',
+      revision,
+      credentialCount: credentials.length,
+      credentials: page,
+      nextCursor: nextOffset < credentials.length ? String(nextOffset) : null,
+    };
   }
 
   issue(input: AccessCredentialIssueInput): Promise<AccessCredentialIssueResult> {
@@ -222,6 +273,24 @@ export async function issueAccessCredential(
   }
 }
 
+export async function queryAccessCredentials(
+  authority: RuntimeHostAccessAuthority | undefined,
+  input: AccessCredentialQueryInput,
+): Promise<OperationOutcome<'access.credential.query'>> {
+  if (!authority) return unavailable('query');
+  try {
+    return { ok: true, result: await authority.query(input) };
+  } catch (error) {
+    if (error instanceof RuntimeHostAccessInputError) {
+      return { ok: false, error: { code: 'invalid_request', message: error.message } };
+    }
+    return {
+      ok: false,
+      error: { code: 'internal_failure', message: 'Access credentials could not be queried' },
+    };
+  }
+}
+
 export async function revokeAccessCredential(
   authority: RuntimeHostAccessAuthority | undefined,
   input: AccessCredentialRevokeInput,
@@ -239,9 +308,13 @@ export async function revokeAccessCredential(
 
 function unavailable(operation: 'issue'): OperationOutcome<'access.credential.issue'>;
 function unavailable(operation: 'revoke'): OperationOutcome<'access.credential.revoke'>;
+function unavailable(operation: 'query'): OperationOutcome<'access.credential.query'>;
 function unavailable(
-  _operation: 'issue' | 'revoke',
-): OperationOutcome<'access.credential.issue'> | OperationOutcome<'access.credential.revoke'> {
+  _operation: 'issue' | 'revoke' | 'query',
+):
+  | OperationOutcome<'access.credential.issue'>
+  | OperationOutcome<'access.credential.revoke'>
+  | OperationOutcome<'access.credential.query'> {
   return {
     ok: false,
     error: {
@@ -249,6 +322,26 @@ function unavailable(
       message: 'Runtime Host access credentials are unavailable in this composition',
     },
   };
+}
+
+function accessCredentialMetadata(stored: StoredAccessCredential): AccessCredentialMetadata {
+  return {
+    credentialId: stored.credentialId,
+    principalId: stored.principalId,
+    principalKind: stored.principalKind,
+    status: stored.status,
+    operationGrants: stored.operationGrants,
+    canPublishClientCapabilities: stored.canPublishClientCapabilities,
+    canUseHostPaths: stored.canUseHostPaths,
+    createdAt: stored.createdAt,
+    ...(stored.revokedAt === undefined ? {} : { revokedAt: stored.revokedAt }),
+  };
+}
+
+function accessCredentialRevision(
+  credentials: readonly AccessCredentialMetadata[],
+): `sha256:${string}` {
+  return `sha256:${createHash('sha256').update(JSON.stringify(credentials)).digest('hex')}`;
 }
 
 function hashCredential(credential: string): Buffer {

@@ -59,9 +59,12 @@ export function deriveMetering(counts: ProviderMeteringCounts): DerivedMetering 
   };
 }
 
-// Published DeepSeek V4 Flash prices, in USD per million tokens. The agent
-// frameworks are handed this table so their own accounting agrees with Eval's,
-// and Eval bills from it rather than from a second transcription of it.
+// Published DeepSeek V4 Flash prices, in USD per million tokens. Eval bills
+// every arm from this table rather than from each arm's own transcription of
+// it, so a difference in reported cost can only come from a difference in what
+// the agent spent. Pi is additionally handed the table for its own display; the
+// other frameworks are given no cost block at all, which is why their figures
+// are not consulted here.
 export const DEEPSEEK_V4_FLASH_COST = {
   input: 0.145,
   output: 0.29,

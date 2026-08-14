@@ -345,6 +345,10 @@ test('the pinned fingerprint is the digest of the checksum manifest', async () =
 test('refuses a mounted toolchain that is not the pinned tree', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-toolchain-'));
   const executable = join(root, 'bin/codex');
+  // Process-wide state, restored in the finally below. This and the toolchain
+  // test after it are only safe because the runner executes a file's tests
+  // serially; adding a concurrency option to this file would let one test see
+  // the other's pin.
   const sourceEnv = 'MAKA_TEST_CODEX_TOOLCHAIN';
   const previous = process.env[sourceEnv];
   process.env[sourceEnv] = root;

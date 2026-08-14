@@ -718,7 +718,16 @@ async function startMeteringProxy(
     ? new ProxyAgent({ uri: process.env.HTTPS_PROXY, ...timeouts })
     : new Agent(timeouts);
   const active = new Set<Promise<void>>();
+  let accepting = true;
   const server = createServer((request, response) => {
+    // Refused rather than counted: a request the proxy declined was never
+    // admitted by the provider and never billed, so it is not part of what
+    // this run spent.
+    if (!accepting) {
+      response.statusCode = 503;
+      response.end(JSON.stringify({ error: 'provider proxy has settled' }));
+      return;
+    }
     const operation = (async () => {
       requests += 1;
       inFlightRequests += 1;
@@ -813,6 +822,15 @@ async function startMeteringProxy(
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     report: async () => {
+      // Admission closes before anything is drained, so settlement is made
+      // true rather than asserted about a moment. The subject's own process has
+      // exited by now, but the processes it left behind have not — they run in
+      // this container and this proxy is still bound — and a request accepted
+      // after the flag was set would leave a checkpoint claiming settlement
+      // with work in flight. Closing the socket would not do this: it stops new
+      // connections while leaving established ones free to send another
+      // request, and it waits on idle keep-alive sockets that may never close.
+      accepting = false;
       await Promise.allSettled([...active]);
       // Settlement is something this process observes; it is not recoverable
       // from the counts. A checkpoint whose last successful write happened

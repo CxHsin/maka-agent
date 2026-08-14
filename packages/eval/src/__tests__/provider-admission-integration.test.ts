@@ -281,6 +281,120 @@ async function executePiWithTerminalRecord(contentBytes: number): Promise<{
   }
 }
 
+// A subject that leaves processes behind is now the ordinary case: the relay
+// stops tearing an exited subject's scope down, because a task's own service has
+// to reach the verifier. Those processes can reach this proxy too, and one
+// arriving while the proxy is draining an earlier request would be admitted
+// after the drain had already snapshotted what it was waiting for -- leaving a
+// checkpoint that claims settlement over counts that no longer describe the run.
+test('a request arriving while the proxy drains is refused, not counted', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-provider-late-'));
+  const admitted = join(root, 'admitted');
+  const outcome = join(root, 'late-request.json');
+  let upstreamRequests = 0;
+  const server = createServer(async (_request, response) => {
+    upstreamRequests += 1;
+    // Held open so the drain is a window and not an instant, which is the only
+    // shape in which a late request can be observed at all.
+    await writeFile(admitted, '');
+    setTimeout(() => {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      response.end(
+        'data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":2}}}\n\ndata: [DONE]\n\n',
+      );
+    }, 800);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const child = join(root, 'child.mjs');
+  const straggler = join(root, 'straggler.mjs');
+  // Outlives its parent, holds one request open across the subject's exit, then
+  // starts another -- the shape of a background service the agent left running.
+  await writeFile(
+    straggler,
+    `import { writeFileSync } from 'node:fs';
+const [, , baseUrl, outcomePath] = process.argv;
+const held = fetch(\`\${baseUrl}/responses\`, { method: 'POST', body: '{}' }).catch(() => undefined);
+await new Promise((resolve) => setTimeout(resolve, 300));
+let status = 0;
+try {
+  status = (await fetch(\`\${baseUrl}/responses\`, { method: 'POST', body: '{}' })).status;
+} catch {
+  status = -1;
+}
+writeFileSync(outcomePath, JSON.stringify({ status }));
+await held;
+`,
+  );
+  await writeFile(
+    child,
+    `import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+spawn(process.execPath, [${JSON.stringify(straggler)}, process.env.DEEPSEEK_BASE_URL, ${JSON.stringify(outcome)}], {
+  detached: true,
+  stdio: 'ignore',
+}).unref();
+// Exits only once the proxy has a request to drain, so what follows is the
+// drain window rather than a race against it.
+while (!existsSync(${JSON.stringify(admitted)})) await new Promise((resolve) => setTimeout(resolve, 10));
+console.log(JSON.stringify({ type: 'error' }));
+process.exit(1);
+`,
+  );
+  try {
+    const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
+    const { stdout } = await runWrapper(
+      [
+        wrapper.pathname,
+        'opencode',
+        `http://127.0.0.1:${address.port}`,
+        root,
+        process.execPath,
+        child,
+      ],
+      { OPENAI_API_KEY: 'upstream-test-key', MAKA_EVAL_RESULT_TOKEN: RESULT_TOKEN },
+    );
+    const result = decodeResultFrame(stdout) as {
+      artifacts: Array<{ kind: string; requests?: number; usageRequests?: number }>;
+    };
+    const metering = result.artifacts.find(({ kind }) => kind === 'provider-metering');
+    // The held request was waited out rather than abandoned: its usage is what
+    // the run spent, and reporting before it landed would understate the bill.
+    assert.equal(metering?.requests, 1);
+    assert.equal(metering?.usageRequests, 1);
+
+    const late = JSON.parse(await waitForFile(outcome)) as { status: number };
+    // Refused rather than forwarded: the provider was never asked, so there is
+    // nothing to count, and the settlement the checkpoint states stays true.
+    assert.equal(late.status, 503);
+    assert.equal(upstreamRequests, 1);
+
+    const checkpoint = JSON.parse(
+      await readFile(join(root, 'logs/agent/opencode.provider-usage.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    assert.equal(checkpoint.settled, true);
+    assert.equal(checkpoint.requests, 1);
+    assert.equal(checkpoint.inFlightRequests, 0);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function waitForFile(path: string): Promise<string> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const contents = await readFile(path, 'utf8').catch(() => undefined);
+    if (contents !== undefined) return contents;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`timed out waiting for ${path}`);
+}
+
 function decodeResultFrame(stdout: string): unknown {
   const [prefix, token, length, _digest, encoded] = stdout.trim().split(' ');
   assert.equal(prefix, 'MAKA-EVAL-RESULT-V1');

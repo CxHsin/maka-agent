@@ -73,8 +73,9 @@ joins the same namespace with the default capability set, so a task that declare
 isolated than a task that does not. The
 same gate refuses when the subject is not in the namespace the policy was applied to: Harbor applies
 the policy inside the sidecar but respects a task's own networking on the subject service, so a task
-that declares it would otherwise leave the subject unpoliced. The evidence is the sidecar proxy's
-listening socket, which is visible only from inside its own network namespace. The gate reads that
+that declares it would otherwise leave the subject unpoliced. The evidence is the namespace identity
+itself: the gate reads `/proc/self/ns/net` in the subject and in the service Harbor installs the
+policy in, and requires the two to name one namespace. The gate reads that
 evidence through the task image's own userland, so it establishes that a task did not lose the
 isolation by accident, not that a task could not lie about it; a task image that lies already
 controls everything else in the cell. What it does hold against is the subject, which starts only

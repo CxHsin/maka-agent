@@ -834,15 +834,17 @@ test('eight-arm spec adds Pi with the same pinned DeepSeek execution contract', 
     'utf8',
   );
   assert.doesNotMatch(networkPolicy, /meta mark \S+ (?:accept|return)/u);
-  // The relay proves the subject shares the policy's namespace by looking for
-  // the proxy's listening socket, so its port has to be the one the policy
-  // redirects to. The two constants live in different languages.
+  // The relay compares the subject's namespace against the namespace of the
+  // service that installs the policy, so the service it reads has to be the one
+  // the overlay mounts the policy script into. The two names live in different
+  // languages, and a rename on either side leaves the comparison meaningless
+  // rather than failing.
   const relayAgent = await readFile(
     new URL('../../harbor/relay_agent.py', import.meta.url),
     'utf8',
   );
-  const policyPort = /^GOST_PORT=(\d+)$/mu.exec(networkPolicy)![1];
-  assert.match(relayAgent, new RegExp(`^POLICY_PROXY_PORT = ${policyPort}$`, 'mu'));
+  const policyService = /^POLICY_SERVICE = "([^"]+)"$/mu.exec(relayAgent)![1];
+  assert.match(egressCompose, new RegExp(`^ {2}${policyService}:$`, 'mu'));
   assert.deepEqual(
     spec.executor.config.mounts.map(({ target }) => target),
     [

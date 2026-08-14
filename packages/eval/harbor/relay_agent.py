@@ -46,10 +46,15 @@ BYPASS_CAPABILITIES = {"NET_RAW": 1 << 13, "NET_ADMIN": 1 << 12}
 # anything the bounding set kept, and the permitted, inheritable and ambient
 # sets each raise into the effective set without an exec at all.
 CAPABILITY_FIELDS = ("CapEff", "CapPrm", "CapBnd")
-# The port the policy redirects to, and therefore the port the sidecar's gost
-# listens on. A listening socket is visible only inside its own network
-# namespace, so seeing it from the subject is what proves the two share one.
-POLICY_PROXY_PORT = 12345
+# Harbor installs the policy by running `network-policy` inside this service, so
+# its network namespace is what "the namespace the policy was applied to" means.
+# Reading the identity from both sides answers that question directly, rather
+# than inferring it from something only the shared namespace would expose.
+POLICY_SERVICE = "harbor-docker-egress-control-sidecar"
+NAMESPACE_PROBE = f"printf %s {shlex.quote(NAMESPACE_PREFIX)}; readlink /proc/self/ns/net"
+# The kernel's own form for a namespace link target. Matching it keeps an
+# unexpected answer from being compared as if it were an identity.
+NAMESPACE_IDENTITY = re.compile(r"^net:\[[0-9]+\]$")
 
 _host_teardown_requested = False
 
@@ -312,23 +317,19 @@ async def _require_constrained_subject(environment: Any) -> None:
     """
     if os.environ.get("MAKA_EVAL_EGRESS_REQUIRED") != "1":
         return
-    listening = (
-        "^[[:space:]]*[0-9]+: [0-9A-F]+:"
-        f"{POLICY_PROXY_PORT:04X}"
-        " [0-9A-F]+:0000 0A"
-    )
     probe = await environment.exec(
         f"printf %s {shlex.quote(CAPABILITY_PREFIX)}; "
         r"sed -n 's/^\(Cap[A-Za-z]*\):[[:space:]]*/\1=/p' /proc/self/status | tr '\n' ' '; "
-        "echo; "
-        f"printf %s {shlex.quote(NAMESPACE_PREFIX)}; "
-        f"if cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -qE {shlex.quote(listening)}; "
-        "then echo shared; else echo separate; fi"
+        "echo; " + NAMESPACE_PROBE
     )
-    if probe.return_code != 0:
+    policy = await environment.service_exec(NAMESPACE_PROBE, service=POLICY_SERVICE)
+    if probe.return_code != 0 or policy.return_code != 0:
         raise RuntimeError("Maka Eval could not read the subject isolation evidence")
     capabilities = _sole_probe_line(probe, CAPABILITY_PREFIX)
     namespace = _sole_probe_line(probe, NAMESPACE_PREFIX)
+    policy_namespace = _sole_probe_line(policy, NAMESPACE_PREFIX)
+    if not all(NAMESPACE_IDENTITY.match(value) for value in (namespace, policy_namespace)):
+        raise RuntimeError("Maka Eval could not read the subject isolation evidence")
     reported: dict[str, int] = {}
     for field in capabilities.split():
         name, _, value = field.partition("=")
@@ -348,7 +349,7 @@ async def _require_constrained_subject(environment: Any) -> None:
             + ", ".join(held)
             + ", which bypasses the Eval egress policy; remove it from the task"
         )
-    if namespace != "shared":
+    if namespace != policy_namespace:
         raise RuntimeError(
             "the subject does not share the network namespace the Eval egress policy "
             "was applied to; remove the task's own networking on the subject service"

@@ -448,7 +448,14 @@ class CellEnvironment:
         self.service = service
 
     async def exec(self, command: str, cwd=None, timeout_sec=None):
-        result = CellEgressNamespaceTest.exec_service(self.service, ["sh", "-c", command])
+        return self._run(self.service, command)
+
+    async def service_exec(self, command: str, *, service: str, **kwargs):
+        return self._run(service, command)
+
+    @staticmethod
+    def _run(service: str, command: str):
+        result = CellEgressNamespaceTest.exec_service(service, ["sh", "-c", command])
         return types.SimpleNamespace(
             return_code=result.returncode, stdout=result.stdout, stderr=result.stderr
         )

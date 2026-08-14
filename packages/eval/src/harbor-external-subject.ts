@@ -922,7 +922,14 @@ function usageFromEvent(event: Record<string, unknown>, anthropic: boolean): Usa
     : isRecord(raw.completion_tokens_details)
       ? raw.completion_tokens_details
       : {};
-  const cacheRead = number(raw.cache_read_input_tokens ?? inputDetails.cached_tokens);
+  // `prompt_cache_hit_tokens` is where DeepSeek's chat-completions responses
+  // put cache reads, and the runtime's own adapter reads it ahead of the
+  // OpenAI-shaped field. Omitting it here would not lose the tokens — they
+  // stay in `prompt_tokens`, and would then be billed as uncached input at
+  // fifty times the cached rate.
+  const cacheRead = number(
+    raw.cache_read_input_tokens ?? raw.prompt_cache_hit_tokens ?? inputDetails.cached_tokens,
+  );
   const cacheWrite = number(
     raw.cache_creation_input_tokens ??
       raw.cache_write_input_tokens ??

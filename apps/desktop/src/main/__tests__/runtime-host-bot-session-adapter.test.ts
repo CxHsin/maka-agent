@@ -217,7 +217,7 @@ test('reply snapshot observers cannot interrupt the authoritative Host Turn', as
   const events = new AsyncFrameQueue();
   const adapter = createRuntimeHostBotSessionAdapter({
     client: botClient({
-      openSession: async () => ({
+      openSession: async () => runtimeHostSessionFixture({
         snapshot: continuitySnapshot(null),
         activeAssistantStreams: [],
         transcript: Promise.resolve([]),

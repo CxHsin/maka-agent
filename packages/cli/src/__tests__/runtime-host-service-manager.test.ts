@@ -1,13 +1,27 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import type { ConnectRuntimeHostResult, RuntimeHostConnection } from '@maka/runtime-host/client';
+import {
+  RuntimeHostOperationError,
+  type ConnectRuntimeHostResult,
+  type RuntimeHostConnection,
+} from '@maka/runtime-host/client';
 import type { HostRegistration } from '@maka/runtime-host/protocol';
 import {
   createManagedRuntimeHostServiceConfig,
+  createRuntimeHostServiceCatalog,
+  publishRuntimeHostServiceStartAttempt,
+  readRuntimeHostServiceStartAttempt,
   runtimeHostServiceConfigRevision,
+  updateManagedRuntimeHostServiceConfig,
 } from '../runtime-host-service-catalog.js';
 import {
   inspectManagedRuntimeHostService,
+  removeStoppedManagedRuntimeHostServiceConfig,
+  restartManagedRuntimeHostService,
+  saveStoppedManagedRuntimeHostServiceConfig,
   startManagedRuntimeHostService,
   stopManagedRuntimeHostService,
 } from '../runtime-host-service-manager.js';
@@ -85,8 +99,9 @@ describe('managed Runtime Host service lifecycle', () => {
     let now = 0;
     const result = await startManagedRuntimeHostService(
       config,
-      { timeoutMs: 1_000 },
+      { clientDataRoot: '/tmp/maka-managed-service-test', timeoutMs: 1_000 },
       {
+        ...lifecycleOperationDeps(),
         discoverRoot: async () => rootCapability(),
         connect: async () =>
           ready
@@ -94,7 +109,7 @@ describe('managed Runtime Host service lifecycle', () => {
             : { kind: 'unavailable', reason: 'not_registered' },
         launch: async (configId) => {
           launchedConfigId = configId;
-          return { pid: 321, exited: new Promise(() => undefined) };
+          return { pid: 123, exited: new Promise(() => undefined) };
         },
         now: () => now,
         delay: async (durationMs) => {
@@ -115,6 +130,33 @@ describe('managed Runtime Host service lifecycle', () => {
     });
   });
 
+  test('recovers an exact managed config from a stale registration', async () => {
+    const config = serviceConfig();
+    let launched = false;
+    let launchedRevision: string | undefined;
+    const registration = serviceRegistration(config);
+    const result = await startManagedRuntimeHostService(
+      config,
+      { clientDataRoot: '/tmp/maka-managed-service-test' },
+      {
+        ...lifecycleOperationDeps(),
+        discoverRoot: async () => rootCapability(),
+        connect: async () =>
+          launched
+            ? connected(registration)
+            : { kind: 'unavailable', reason: 'connect_failed', registration },
+        launch: async (_configId, expectedRevision) => {
+          launched = true;
+          launchedRevision = expectedRevision;
+          return { pid: 123, exited: new Promise(() => undefined) };
+        },
+      },
+    );
+
+    assert.equal(launchedRevision, runtimeHostServiceConfigRevision(config));
+    assert.equal(result.kind, 'started');
+  });
+
   test('stops only the exact local managed instance through the Host protocol', async () => {
     const config = serviceConfig();
     let stopped = false;
@@ -127,8 +169,9 @@ describe('managed Runtime Host service lifecycle', () => {
     });
     const result = await stopManagedRuntimeHostService(
       config,
-      {},
+      { clientDataRoot: '/tmp/maka-managed-service-test' },
       {
+        ...lifecycleOperationDeps(),
         discoverRoot: async () => rootCapability(),
         connect: async () =>
           stopped
@@ -141,6 +184,263 @@ describe('managed Runtime Host service lifecycle', () => {
     assert.deepEqual(result, { kind: 'stopped' });
   });
 
+  test('cancels a pending detached start before reporting the service stopped', async () => {
+    const clientDataRoot = await mkdtemp(join(tmpdir(), 'maka-managed-service-pending-start-'));
+    try {
+      const config = serviceConfig();
+      await createRuntimeHostServiceCatalog(clientDataRoot).create(config);
+      const attempt = await publishRuntimeHostServiceStartAttempt(
+        clientDataRoot,
+        config.id,
+        runtimeHostServiceConfigRevision(config),
+        new Date(Date.now() + 30_000).toISOString(),
+      );
+      assert.equal(
+        (await readRuntimeHostServiceStartAttempt(clientDataRoot, config.id))?.attemptId,
+        attempt.attemptId,
+      );
+
+      assert.deepEqual(
+        await stopManagedRuntimeHostService(
+          config,
+          { clientDataRoot },
+          {
+            discoverRoot: async () => rootCapability(),
+            connect: async () => ({ kind: 'unavailable', reason: 'not_registered' }),
+            acquireOwner: async () => ({ close: async () => undefined }) as never,
+          },
+        ),
+        { kind: 'already_stopped' },
+      );
+      assert.equal(await readRuntimeHostServiceStartAttempt(clientDataRoot, config.id), undefined);
+    } finally {
+      await rm(clientDataRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('stale lifecycle operations cannot replace a newer config start attempt', async () => {
+    const clientDataRoot = await mkdtemp(join(tmpdir(), 'maka-managed-service-stale-'));
+    try {
+      const catalog = createRuntimeHostServiceCatalog(clientDataRoot);
+      const stale = serviceConfig();
+      await catalog.create(stale);
+      const current = updateManagedRuntimeHostServiceConfig(stale, {
+        name: 'Office current',
+        now: new Date('2026-01-02T00:00:00.000Z'),
+      });
+      await catalog.save(current, runtimeHostServiceConfigRevision(stale));
+      const currentRevision = runtimeHostServiceConfigRevision(current);
+      const attempt = await publishRuntimeHostServiceStartAttempt(
+        clientDataRoot,
+        current.id,
+        currentRevision,
+        new Date(Date.now() + 30_000).toISOString(),
+      );
+      const staleEdit = updateManagedRuntimeHostServiceConfig(stale, {
+        name: 'Stale edit',
+        now: new Date('2026-01-03T00:00:00.000Z'),
+      });
+      const operations = [
+        () => startManagedRuntimeHostService(stale, { clientDataRoot }),
+        () => stopManagedRuntimeHostService(stale, { clientDataRoot }),
+        () => restartManagedRuntimeHostService(stale, { clientDataRoot }),
+        () => saveStoppedManagedRuntimeHostServiceConfig(catalog, stale, staleEdit, clientDataRoot),
+        () => removeStoppedManagedRuntimeHostServiceConfig(catalog, stale, clientDataRoot),
+      ];
+
+      for (const operation of operations) {
+        await assert.rejects(operation(), /config changed before the operation started/u);
+        assert.deepEqual(
+          await readRuntimeHostServiceStartAttempt(clientDataRoot, current.id),
+          attempt,
+        );
+      }
+    } finally {
+      await rm(clientDataRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('restarts by stopping and spawning one pinned attempt in the same config transaction', async () => {
+    const config = serviceConfig();
+    let inTransaction = false;
+    let stopped = false;
+    let launched = false;
+    const events: string[] = [];
+    const connection = fakeConnection(async () => {
+      assert.equal(inTransaction, true);
+      events.push('stop');
+      stopped = true;
+      return { kind: 'accepted', hostEpoch: 'host-1' };
+    });
+
+    const result = await restartManagedRuntimeHostService(
+      config,
+      { clientDataRoot: '/tmp/maka-managed-service-test' },
+      {
+        ...lifecycleOperationDeps(),
+        runConfigOperation: async <T>(
+          _clientDataRoot: string,
+          _configId: string,
+          operation: () => Promise<T>,
+        ) => {
+          assert.equal(inTransaction, false);
+          inTransaction = true;
+          try {
+            return await operation();
+          } finally {
+            inTransaction = false;
+          }
+        },
+        clearStartAttempt: async () => {
+          assert.equal(inTransaction, true);
+          events.push('cancel-pending');
+        },
+        publishStartAttempt: async (_root, configId, configRevision, expiresAt) => {
+          assert.equal(inTransaction, true);
+          events.push('publish');
+          return {
+            schemaVersion: 1,
+            configId,
+            configRevision,
+            attemptId: '00000000-0000-4000-8000-000000000000',
+            expiresAt,
+          };
+        },
+        launch: async () => {
+          assert.equal(inTransaction, true);
+          events.push('spawn');
+          launched = true;
+          return { pid: 123, exited: new Promise(() => undefined) };
+        },
+        discoverRoot: async () => rootCapability(),
+        acquireOwner: async () => ({ close: async () => undefined }) as never,
+        connect: async () => {
+          if (!stopped) {
+            return { kind: 'connected', connection, registration: serviceRegistration(config) };
+          }
+          return launched
+            ? connected(serviceRegistration(config))
+            : { kind: 'unavailable', reason: 'not_registered' };
+        },
+      },
+    );
+
+    assert.equal(result.kind, 'started');
+    assert.deepEqual(events, ['cancel-pending', 'stop', 'publish', 'spawn']);
+  });
+
+  test('stops a recovering service and follows an already draining stop', async () => {
+    const config = serviceConfig();
+    const recovering = { ...serviceRegistration(config), state: 'recovering' as const };
+    let stopped = false;
+    const connection = fakeConnection(async () => {
+      stopped = true;
+      return { kind: 'accepted', hostEpoch: recovering.hostEpoch };
+    });
+    assert.deepEqual(
+      await stopManagedRuntimeHostService(
+        config,
+        { clientDataRoot: '/tmp/maka-managed-service-test' },
+        {
+          ...lifecycleOperationDeps(),
+          discoverRoot: async () => rootCapability(),
+          connect: async () =>
+            stopped
+              ? { kind: 'unavailable', reason: 'not_registered' }
+              : { kind: 'connected', connection, registration: recovering },
+          acquireOwner: async () => ({ close: async () => undefined }) as never,
+        },
+      ),
+      { kind: 'stopped' },
+    );
+
+    let draining = true;
+    assert.deepEqual(
+      await stopManagedRuntimeHostService(
+        config,
+        { clientDataRoot: '/tmp/maka-managed-service-test' },
+        {
+          ...lifecycleOperationDeps(),
+          discoverRoot: async () => rootCapability(),
+          connect: async () => {
+            if (draining) {
+              draining = false;
+              return { kind: 'draining', registration: serviceRegistration(config) };
+            }
+            return { kind: 'unavailable', reason: 'not_registered' };
+          },
+        },
+      ),
+      { kind: 'stopped' },
+    );
+  });
+
+  test('polls a stop command that raced with Host draining', async () => {
+    const config = serviceConfig();
+    let requestAttempted = false;
+    const connection = fakeConnection(async () => {
+      requestAttempted = true;
+      throw new RuntimeHostOperationError(
+        'host.service.stop',
+        'host_draining',
+        'Runtime Host is draining',
+      );
+    });
+    assert.deepEqual(
+      await stopManagedRuntimeHostService(
+        config,
+        { clientDataRoot: '/tmp/maka-managed-service-test' },
+        {
+          ...lifecycleOperationDeps(),
+          discoverRoot: async () => rootCapability(),
+          connect: async () =>
+            requestAttempted
+              ? { kind: 'unavailable', reason: 'not_registered' }
+              : { kind: 'connected', connection, registration: serviceRegistration(config) },
+        },
+      ),
+      { kind: 'stopped' },
+    );
+  });
+
+  test('waits for Root owner release after the stop registration disappears', async () => {
+    const clientDataRoot = await mkdtemp(join(tmpdir(), 'maka-managed-service-stop-'));
+    try {
+      const config = serviceConfig();
+      await createRuntimeHostServiceCatalog(clientDataRoot).create(config);
+      let stopped = false;
+      let ownerAvailable = false;
+      let now = 0;
+      const connection = fakeConnection(async () => {
+        stopped = true;
+        return { kind: 'accepted', hostEpoch: 'host-1' };
+      });
+      assert.deepEqual(
+        await stopManagedRuntimeHostService(
+          config,
+          { clientDataRoot, timeoutMs: 1_000 },
+          {
+            discoverRoot: async () => rootCapability(),
+            connect: async () =>
+              stopped
+                ? { kind: 'unavailable', reason: 'not_registered' }
+                : { kind: 'connected', connection, registration: serviceRegistration(config) },
+            acquireOwner: async () =>
+              ownerAvailable ? ({ close: async () => undefined } as never) : undefined,
+            now: () => now,
+            delay: async (durationMs) => {
+              now += durationMs;
+              ownerAvailable = true;
+            },
+          },
+        ),
+        { kind: 'stopped' },
+      );
+    } finally {
+      await rm(clientDataRoot, { recursive: true, force: true });
+    }
+  });
+
   test('refuses stop when the connected registration belongs to a replacement Root', async () => {
     const config = serviceConfig();
     const registration = { ...serviceRegistration(config), rootId: 'b'.repeat(64) };
@@ -148,8 +448,9 @@ describe('managed Runtime Host service lifecycle', () => {
     assert.deepEqual(
       await stopManagedRuntimeHostService(
         config,
-        {},
+        { clientDataRoot: '/tmp/maka-managed-service-test' },
         {
+          ...lifecycleOperationDeps(),
           connect: async () => ({ kind: 'connected', connection, registration }),
         },
       ),
@@ -162,6 +463,42 @@ describe('managed Runtime Host service lifecycle', () => {
         },
       },
     );
+  });
+
+  test('mutates configs only while holding the exact State Root owner', async () => {
+    const clientDataRoot = await mkdtemp(join(tmpdir(), 'maka-managed-service-mutation-'));
+    try {
+      const catalog = createRuntimeHostServiceCatalog(clientDataRoot);
+      const current = serviceConfig();
+      await catalog.create(current);
+      const next = updateManagedRuntimeHostServiceConfig(current, {
+        name: 'Office updated',
+        now: new Date('2026-01-02T00:00:00.000Z'),
+      });
+      let ownerClosed = false;
+      await saveStoppedManagedRuntimeHostServiceConfig(catalog, current, next, clientDataRoot, {
+        discoverRoot: async () => rootCapability(),
+        acquireOwner: async () =>
+          ({
+            close: async () => {
+              ownerClosed = true;
+            },
+          }) as never,
+      });
+      assert.equal(ownerClosed, true);
+      assert.equal((await catalog.read()).configs[0]?.name, 'Office updated');
+
+      await assert.rejects(
+        removeStoppedManagedRuntimeHostServiceConfig(catalog, next, clientDataRoot, {
+          discoverRoot: async () => rootCapability(),
+          acquireOwner: async () => undefined,
+        }),
+        /cannot be removed while its State Root is owned/u,
+      );
+      assert.equal((await catalog.read()).configs.length, 1);
+    } finally {
+      await rm(clientDataRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -231,4 +568,29 @@ function fakeConnection(
     request,
     close: async () => undefined,
   } as unknown as RuntimeHostConnection;
+}
+
+function lifecycleOperationDeps() {
+  return {
+    runConfigOperation: async <T>(
+      _clientDataRoot: string,
+      _configId: string,
+      operation: () => Promise<T>,
+    ) => operation(),
+    publishStartAttempt: async (
+      _clientDataRoot: string,
+      configId: string,
+      configRevision: `sha256:${string}`,
+      expiresAt: string,
+    ) => ({
+      schemaVersion: 1 as const,
+      configId,
+      configRevision,
+      attemptId: '00000000-0000-4000-8000-000000000000',
+      expiresAt,
+    }),
+    clearStartAttempt: async () => undefined,
+    acquireOwner: async () => ({ close: async () => undefined }) as never,
+    readCatalog: async () => ({ schemaVersion: 1 as const, configs: [serviceConfig()] }),
+  };
 }

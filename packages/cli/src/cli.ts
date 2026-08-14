@@ -197,18 +197,24 @@ export async function runMakaCli(
     }
     case 'runtime-host-serve': {
       const { runRuntimeHostServiceCli } = await import('./runtime-host-service-command.js');
-      return command.managedConfigId
-        ? runRuntimeHostServiceCli({
-            managedConfigId: command.managedConfigId,
-            clientDataRoot:
-              process.env.MAKA_RUNTIME_HOST_MANAGED_CLIENT_DATA_ROOT ?? dataRoots.clientDataRoot,
-            json: command.json,
-          })
-        : runRuntimeHostServiceCli({
-            rootPath: command.rootPath ?? dataRoots.workspaceRoot,
-            json: command.json,
-            ...(command.websocket ? { websocket: command.websocket } : {}),
-          });
+      if (command.managedConfigId) {
+        if (!command.expectedConfigRevision || !command.startAttemptId) {
+          throw new Error('Managed Runtime Host command is missing startup authority');
+        }
+        return runRuntimeHostServiceCli({
+          managedConfigId: command.managedConfigId,
+          expectedConfigRevision: command.expectedConfigRevision,
+          startAttemptId: command.startAttemptId,
+          clientDataRoot:
+            process.env.MAKA_RUNTIME_HOST_MANAGED_CLIENT_DATA_ROOT ?? dataRoots.clientDataRoot,
+          json: command.json,
+        });
+      }
+      return runRuntimeHostServiceCli({
+        rootPath: command.rootPath ?? dataRoots.workspaceRoot,
+        json: command.json,
+        ...(command.websocket ? { websocket: command.websocket } : {}),
+      });
     }
     case 'runtime-host-access-issue': {
       const { runRuntimeHostAccessIssueCli } = await import('./runtime-host-access-command.js');

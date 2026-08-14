@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { chmod, lstat, mkdir, open, readFile, rename, rm, unlink } from 'node:fs/promises';
+import { isIP } from 'node:net';
+import { dirname, isAbsolute, join } from 'node:path';
+import { withProcessFileLock } from '@maka/storage/file-update-lock';
 
 export const RUNTIME_HOST_SERVICE_CATALOG_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_HOST_SERVICE_CONFIG_SCHEMA_VERSION = 1 as const;
@@ -12,6 +14,9 @@ const CONFIG_COUNT_MAX = 64;
 const CONFIG_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 const ROOT_ID_PATTERN = /^[a-f0-9]{64}$/u;
 const CONFIG_REVISION_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+const START_ATTEMPT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const START_ATTEMPT_MAX_BYTES = 1_024;
 const UNSAFE_DISPLAY_CHARACTER_PATTERN =
   /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 
@@ -60,12 +65,26 @@ export interface RuntimeHostServiceCatalogDocument {
   readonly configs: readonly ManagedRuntimeHostServiceConfig[];
 }
 
+export interface RuntimeHostServiceStartAttempt {
+  readonly schemaVersion: 1;
+  readonly configId: string;
+  readonly configRevision: `sha256:${string}`;
+  readonly attemptId: string;
+  readonly expiresAt: string;
+}
+
 export interface RuntimeHostServiceCatalog {
   readonly path: string;
   read(): Promise<RuntimeHostServiceCatalogDocument>;
   create(config: ManagedRuntimeHostServiceConfig): Promise<RuntimeHostServiceCatalogDocument>;
-  save(config: ManagedRuntimeHostServiceConfig): Promise<RuntimeHostServiceCatalogDocument>;
-  remove(configId: string): Promise<RuntimeHostServiceCatalogDocument>;
+  save(
+    config: ManagedRuntimeHostServiceConfig,
+    expectedRevision: `sha256:${string}`,
+  ): Promise<RuntimeHostServiceCatalogDocument>;
+  remove(
+    configId: string,
+    expectedRevision: `sha256:${string}`,
+  ): Promise<RuntimeHostServiceCatalogDocument>;
 }
 
 export type RuntimeHostServiceConfigConflict =
@@ -85,6 +104,87 @@ export type RuntimeHostServiceConfigConflict =
 export function createRuntimeHostServiceCatalog(clientDataRoot: string): RuntimeHostServiceCatalog {
   if (!isAbsolute(clientDataRoot)) throw new Error('Maka client data root must be absolute');
   return new FileRuntimeHostServiceCatalog(join(clientDataRoot, CATALOG_DIRECTORY));
+}
+
+export async function withRuntimeHostServiceConfigOperation<T>(
+  clientDataRoot: string,
+  configId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (!isAbsolute(clientDataRoot)) throw new Error('Maka client data root must be absolute');
+  const id = requireConfigId(configId);
+  const directory = join(clientDataRoot, CATALOG_DIRECTORY, 'locks');
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') await chmod(directory, 0o700);
+  return withProcessFileLock(join(directory, `${id}.lock`), operation);
+}
+
+export async function publishRuntimeHostServiceStartAttempt(
+  clientDataRoot: string,
+  configId: string,
+  configRevision: `sha256:${string}`,
+  expiresAt: string,
+): Promise<RuntimeHostServiceStartAttempt> {
+  const attempt = decodeRuntimeHostServiceStartAttempt({
+    schemaVersion: 1,
+    configId,
+    configRevision,
+    attemptId: randomUUID(),
+    expiresAt,
+  });
+  const path = runtimeHostServiceStartAttemptPath(clientDataRoot, attempt.configId);
+  await publishPrivateJson(path, attempt);
+  return attempt;
+}
+
+export async function readRuntimeHostServiceStartAttempt(
+  clientDataRoot: string,
+  configId: string,
+): Promise<RuntimeHostServiceStartAttempt | undefined> {
+  const id = requireConfigId(configId);
+  const path = runtimeHostServiceStartAttemptPath(clientDataRoot, id);
+  let bytes: Buffer;
+  try {
+    const entry = await lstat(path);
+    if (!entry.isFile() || entry.size > START_ATTEMPT_MAX_BYTES) {
+      throw new Error('Runtime Host service start attempt must be a bounded regular file');
+    }
+    bytes = await readFile(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  const attempt = decodeRuntimeHostServiceStartAttempt(
+    JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown,
+  );
+  if (attempt.configId !== id) {
+    throw new Error('Runtime Host service start attempt does not match its config path');
+  }
+  return attempt;
+}
+
+export async function clearRuntimeHostServiceStartAttempt(
+  clientDataRoot: string,
+  configId: string,
+  expected: {
+    readonly attemptId?: string;
+    readonly configRevision?: `sha256:${string}`;
+  } = {},
+): Promise<void> {
+  const current = await readRuntimeHostServiceStartAttempt(clientDataRoot, configId);
+  if (
+    !current ||
+    (expected.attemptId !== undefined && current.attemptId !== expected.attemptId) ||
+    (expected.configRevision !== undefined &&
+      current.configRevision !== requireRuntimeHostServiceConfigRevision(expected.configRevision))
+  ) {
+    return;
+  }
+  const path = runtimeHostServiceStartAttemptPath(clientDataRoot, current.configId);
+  await unlink(path).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  });
+  await syncDirectory(join(clientDataRoot, CATALOG_DIRECTORY, 'locks'));
 }
 
 export function createManagedRuntimeHostServiceConfig(input: {
@@ -280,7 +380,6 @@ export function requireRuntimeHostServiceConfigRevision(value: unknown): `sha256
 class FileRuntimeHostServiceCatalog implements RuntimeHostServiceCatalog {
   readonly path: string;
   readonly #directory: string;
-  #operation = Promise.resolve();
 
   constructor(directory: string) {
     this.#directory = directory;
@@ -311,15 +410,25 @@ class FileRuntimeHostServiceCatalog implements RuntimeHostServiceCatalog {
     return this.#mutate(config, true);
   }
 
-  save(config: ManagedRuntimeHostServiceConfig): Promise<RuntimeHostServiceCatalogDocument> {
-    return this.#mutate(config, false);
+  save(
+    config: ManagedRuntimeHostServiceConfig,
+    expectedRevision: `sha256:${string}`,
+  ): Promise<RuntimeHostServiceCatalogDocument> {
+    return this.#mutate(config, false, expectedRevision);
   }
 
-  remove(configId: string): Promise<RuntimeHostServiceCatalogDocument> {
+  remove(
+    configId: string,
+    expectedRevision: `sha256:${string}`,
+  ): Promise<RuntimeHostServiceCatalogDocument> {
     const id = requireConfigId(configId);
-    return this.#exclusive(async () => {
+    const expected = requireRuntimeHostServiceConfigRevision(expectedRevision);
+    return this.#mutateLocked(async () => {
       const current = await this.read();
-      if (!current.configs.some((config) => config.id === id)) return current;
+      const previous = current.configs.find((config) => config.id === id);
+      if (!previous || runtimeHostServiceConfigRevision(previous) !== expected) {
+        throw new Error('Runtime Host service config changed before it could be removed');
+      }
       const next = decodeRuntimeHostServiceCatalogDocument({
         ...current,
         configs: current.configs.filter((config) => config.id !== id),
@@ -332,15 +441,26 @@ class FileRuntimeHostServiceCatalog implements RuntimeHostServiceCatalog {
   #mutate(
     value: ManagedRuntimeHostServiceConfig,
     requireNew: boolean,
+    expectedRevision?: `sha256:${string}`,
   ): Promise<RuntimeHostServiceCatalogDocument> {
     const config = decodeManagedRuntimeHostServiceConfig(value);
-    return this.#exclusive(async () => {
+    const expected =
+      expectedRevision === undefined
+        ? undefined
+        : requireRuntimeHostServiceConfigRevision(expectedRevision);
+    return this.#mutateLocked(async () => {
       const current = await this.read();
       const previous = current.configs.find((candidate) => candidate.id === config.id);
       if (requireNew && previous) {
         throw new Error('A new Runtime Host service config must use a new id');
       }
+      if (!requireNew && !previous) {
+        throw new Error('Runtime Host service config changed before it could be saved');
+      }
       if (previous) {
+        if (!requireNew && runtimeHostServiceConfigRevision(previous) !== expected) {
+          throw new Error('Runtime Host service config changed before it could be saved');
+        }
         if (
           previous.expectedRootId !== config.expectedRootId ||
           previous.rootPath !== config.rootPath
@@ -385,13 +505,10 @@ class FileRuntimeHostServiceCatalog implements RuntimeHostServiceCatalog {
     }
   }
 
-  #exclusive<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#operation.then(operation, operation);
-    this.#operation = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+  async #mutateLocked<T>(operation: () => Promise<T>): Promise<T> {
+    await mkdir(this.#directory, { recursive: true, mode: 0o700 });
+    if (process.platform !== 'win32') await chmod(this.#directory, 0o700);
+    return withProcessFileLock(`${this.path}.update.lock`, operation);
   }
 }
 
@@ -441,7 +558,7 @@ function decodeTransport(value: unknown): ManagedRuntimeHostTransport {
       bindHost: requireHost(exact.bindHost, 'Runtime Host listener host'),
       port: requirePort(exact.port, 'Runtime Host listener port'),
       path: requireWebSocketPath(exact.path),
-      publicHost: requireHost(exact.publicHost, 'Runtime Host public host'),
+      publicHost: requirePublicHost(exact.publicHost),
       certificatePath: requireAbsolutePath(exact.certificatePath, 'TLS certificate path'),
       privateKeyPath: requireAbsolutePath(exact.privateKeyPath, 'TLS private key path'),
       allowedOrigins: requireAllowedOrigins(exact.allowedOrigins),
@@ -465,7 +582,7 @@ function decodeTransport(value: unknown): ManagedRuntimeHostTransport {
       bindHost: requireHost(exact.bindHost, 'Runtime Host listener host'),
       port: requirePort(exact.port, 'Runtime Host listener port'),
       path: requireWebSocketPath(exact.path),
-      publicHost: requireHost(exact.publicHost, 'Runtime Host public host'),
+      publicHost: requirePublicHost(exact.publicHost),
       allowedOrigins: requireAllowedOrigins(exact.allowedOrigins),
       acknowledgement: exact.acknowledgement,
     });
@@ -484,9 +601,14 @@ function listenerHostsConflict(left: string, right: string): boolean {
 }
 
 function normalizeHost(host: string): string {
-  return host.startsWith('[') && host.endsWith(']')
-    ? host.slice(1, -1).toLowerCase()
-    : host.toLowerCase();
+  const bare =
+    host.startsWith('[') && host.endsWith(']')
+      ? host.slice(1, -1).toLowerCase()
+      : host.toLowerCase();
+  const family = isIP(bare);
+  if (family === 0) return bare;
+  const hostname = new URL(`http://${family === 6 ? `[${bare}]` : bare}`).hostname;
+  return family === 6 ? hostname.slice(1, -1) : hostname;
 }
 
 function isIpv4Host(host: string): boolean {
@@ -541,8 +663,25 @@ function requireHost(value: unknown, label: string): string {
     throw new Error(`${label} is invalid`);
   }
   const normalized = normalizeHost(host);
-  if (normalized.length === 0) throw new Error(`${label} is invalid`);
-  return normalized;
+  if (normalized.length === 0 || normalized === '*') throw new Error(`${label} is invalid`);
+  let parsed: URL;
+  try {
+    parsed = new URL(`http://${formatUrlHostname(normalized)}`);
+    if (parsed.username !== '' || parsed.password !== '' || parsed.port !== '') {
+      throw new Error(`${label} is invalid`);
+    }
+  } catch (error) {
+    throw new Error(`${label} is invalid`, { cause: error });
+  }
+  return normalizeHost(parsed.hostname);
+}
+
+function requirePublicHost(value: unknown): string {
+  const host = requireHost(value, 'Runtime Host public host');
+  if (host === '0.0.0.0' || host === '::') {
+    throw new Error('Runtime Host public host must be a connectable hostname or IP');
+  }
+  return host;
 }
 
 function requireSshDestination(value: unknown): string {
@@ -584,6 +723,66 @@ function requireAllowedOrigins(value: unknown): readonly string[] {
     throw new Error('Runtime Host Origin allowlist contains duplicates');
   }
   return Object.freeze(origins);
+}
+
+function decodeRuntimeHostServiceStartAttempt(value: unknown): RuntimeHostServiceStartAttempt {
+  const record = requireExactRecord(value, 'Runtime Host service start attempt', [
+    'schemaVersion',
+    'configId',
+    'configRevision',
+    'attemptId',
+    'expiresAt',
+  ]);
+  if (record.schemaVersion !== 1) {
+    throw new Error('Runtime Host service start attempt has an unsupported schema');
+  }
+  const attemptId = requireString(record.attemptId, 'Runtime Host service start attempt id', 36);
+  if (!START_ATTEMPT_ID_PATTERN.test(attemptId)) {
+    throw new Error('Runtime Host service start attempt id is invalid');
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    configId: requireConfigId(record.configId),
+    configRevision: requireRuntimeHostServiceConfigRevision(record.configRevision),
+    attemptId,
+    expiresAt: requireTimestamp(record.expiresAt, 'Runtime Host service start attempt expiry'),
+  });
+}
+
+function runtimeHostServiceStartAttemptPath(clientDataRoot: string, configId: string): string {
+  if (!isAbsolute(clientDataRoot)) throw new Error('Maka client data root must be absolute');
+  return join(
+    clientDataRoot,
+    CATALOG_DIRECTORY,
+    'locks',
+    `${requireConfigId(configId)}.start.json`,
+  );
+}
+
+async function publishPrivateJson(path: string, value: unknown): Promise<void> {
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') await chmod(directory, 0o700);
+  const bytes = Buffer.from(`${JSON.stringify(value)}\n`, 'utf8');
+  if (bytes.byteLength > START_ATTEMPT_MAX_BYTES) {
+    throw new Error('Runtime Host service start attempt exceeds its size limit');
+  }
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    const handle = await open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(bytes);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    if (process.platform !== 'win32') await chmod(temporary, 0o600);
+    await rename(temporary, path);
+    await syncDirectory(directory);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

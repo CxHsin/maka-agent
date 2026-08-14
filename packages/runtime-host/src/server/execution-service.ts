@@ -17,6 +17,7 @@ export interface ExecutionRuntimeHostServiceOptions {
   readonly handshakeTimeoutMs?: number;
   readonly shutdownGraceMs?: number;
   readonly serviceIdentity?: RuntimeHostServiceIdentity;
+  readonly onStartupCommitted?: () => void | Promise<void>;
   readonly websocket?: Omit<
     StartRuntimeHostWebSocketListenerOptions,
     'accessAuthority' | 'accept' | 'isReady'
@@ -65,6 +66,7 @@ export async function startExecutionRuntimeHostService(
       handshakeTimeoutMs: options.handshakeTimeoutMs,
       shutdownGraceMs: options.shutdownGraceMs,
       serviceIdentity: options.serviceIdentity,
+      onStartupCommitted: options.onStartupCommitted,
       composition,
       accessAuthority,
       ...(options.websocket

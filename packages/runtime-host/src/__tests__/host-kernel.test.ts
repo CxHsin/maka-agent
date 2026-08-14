@@ -384,7 +384,7 @@ describe('non-serving Runtime Host kernel', () => {
     });
   });
 
-  test('serves bootstrap operations during recovery and rejects ready-only operations', async () => {
+  test('serves bootstrap operations and accepts service stop during recovery', async () => {
     await withHostPaths(async (paths) => {
       const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
       const owner = await tryAcquireInteractiveRootOwner(capability);
@@ -397,6 +397,7 @@ describe('non-serving Runtime Host kernel', () => {
       const factoryReleased = new Promise<void>((resolve) => {
         releaseFactory = resolve;
       });
+      let startupCommitted = false;
       const unavailable = async () =>
         ({
           ok: false,
@@ -407,7 +408,15 @@ describe('non-serving Runtime Host kernel', () => {
         }) as const;
       const hostTask = RuntimeHostKernel.start({
         owner,
-        idleGraceMs: 10_000,
+        lifecycleMode: 'service',
+        serviceIdentity: {
+          configId: 'recovering-service',
+          configRevision: `sha256:${'a'.repeat(64)}`,
+        },
+        onStartupCommitted: async () => {
+          await Promise.resolve();
+          startupCommitted = true;
+        },
         composition: defineInteractiveRuntimeHostComposition(async () => {
           markFactoryEntered();
           await factoryReleased;
@@ -435,6 +444,7 @@ describe('non-serving Runtime Host kernel', () => {
       let transport: FramedTransport | undefined;
       try {
         await withTimeout(factoryEntered, 1_000, 'Runtime Host did not enter composition');
+        assert.equal(startupCommitted, true);
         const registration = await readHostRegistration(owner.controlDirectory);
         assert.ok(registration);
         assert.equal(registration.state, 'recovering');
@@ -472,10 +482,128 @@ describe('non-serving Runtime Host kernel', () => {
         if (!('kind' in query) && query.operation === 'turn.query' && !query.ok) {
           assert.equal(query.error.code, 'host_not_ready');
         }
+
+        await writeClientFrame(transport, {
+          requestId: 'stop',
+          operation: 'host.service.stop',
+          input: { expectedHostEpoch: registration.hostEpoch },
+        });
+        const stop = decodeHostFrame(await transport.read(1_000));
+        assert.deepEqual(stop, {
+          requestId: 'stop',
+          operation: 'host.service.stop',
+          ok: true,
+          result: { kind: 'accepted', hostEpoch: registration.hostEpoch },
+        });
       } finally {
         releaseFactory();
         transport?.abort();
         host = await hostTask.catch(() => undefined);
+        await host?.close().catch(() => undefined);
+      }
+    });
+  });
+
+  test('aborts startup and releases Root ownership when async startup commit fails', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const owner = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(owner);
+      await assert.rejects(
+        RuntimeHostKernel.start({
+          owner,
+          lifecycleMode: 'service',
+          serviceIdentity: {
+            configId: 'failed-service',
+            configRevision: `sha256:${'a'.repeat(64)}`,
+          },
+          onStartupCommitted: async () => {
+            await Promise.resolve();
+            throw new Error('start attempt commit failed');
+          },
+          composition: KERNEL_COMPOSITION,
+        }),
+        /start attempt commit failed/u,
+      );
+      assert.equal(await readHostRegistration(owner.controlDirectory), undefined);
+      const replacement = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(replacement);
+      await replacement.close();
+    });
+  });
+
+  test('defers shutdown cleanup while an async startup commit is pending', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const owner = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(owner);
+      let markCommitEntered!: () => void;
+      const commitEntered = new Promise<void>((resolve) => {
+        markCommitEntered = resolve;
+      });
+      let releaseCommit = () => {};
+      const commitReleased = new Promise<void>((resolve) => {
+        releaseCommit = resolve;
+      });
+      let compositionCreated = false;
+      const hostTask = RuntimeHostKernel.start({
+        owner,
+        lifecycleMode: 'service',
+        serviceIdentity: {
+          configId: 'stopped-during-commit',
+          configRevision: `sha256:${'a'.repeat(64)}`,
+        },
+        onStartupCommitted: async () => {
+          markCommitEntered();
+          await commitReleased;
+        },
+        composition: {
+          ...KERNEL_COMPOSITION,
+          create: async (context) => {
+            compositionCreated = true;
+            return KERNEL_COMPOSITION.create(context);
+          },
+        },
+      });
+      let host: RuntimeHostKernel | undefined;
+      let transport: FramedTransport | undefined;
+      try {
+        await withTimeout(commitEntered, 1_000, 'Runtime Host did not enter startup commit');
+        const registration = await readHostRegistration(owner.controlDirectory);
+        assert.ok(registration);
+        assert.equal(registration.state, 'recovering');
+        transport = new FramedTransport(await openSocket(registration.endpoint));
+        await writeClientFrame(transport, {
+          kind: 'hello',
+          clientInstanceId: 'startup-commit-stop-test',
+          surface: 'inspect',
+          protocolMin: CURRENT_PROTOCOL.min,
+          protocolMax: CURRENT_PROTOCOL.max,
+          compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
+          compositionId: 'maka.interactive',
+        });
+        const handshake = decodeHostFrame(await transport.read(1_000));
+        assert.ok('kind' in handshake && handshake.kind === 'accepted');
+        await writeClientFrame(transport, {
+          requestId: 'stop',
+          operation: 'host.service.stop',
+          input: { expectedHostEpoch: registration.hostEpoch },
+        });
+        const stop = decodeHostFrame(await transport.read(1_000));
+        assert.ok(!('kind' in stop) && stop.operation === 'host.service.stop' && stop.ok);
+
+        releaseCommit();
+        host = await withTimeout(hostTask, 1_000, 'Runtime Host did not settle startup');
+        await withTimeout(host.closed, 1_000, 'Runtime Host did not finish shutdown');
+        assert.equal(compositionCreated, false);
+        assert.equal(await readHostRegistration(owner.controlDirectory), undefined);
+        const replacement = await tryAcquireInteractiveRootOwner(capability);
+        assert.ok(replacement);
+        await replacement.close();
+      } finally {
+        releaseCommit();
+        transport?.abort();
+        host ??= await hostTask.catch(() => undefined);
         await host?.close().catch(() => undefined);
       }
     });

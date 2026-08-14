@@ -11,10 +11,14 @@ import { resolveStorageRoot } from '@maka/storage/root-authority';
 import {
   createManagedRuntimeHostServiceConfig,
   createRuntimeHostServiceCatalog,
+  publishRuntimeHostServiceStartAttempt,
+  readRuntimeHostServiceStartAttempt,
+  runtimeHostServiceConfigRevision,
   type ManagedRuntimeHostServiceConfig,
 } from '../runtime-host-service-catalog.js';
 import {
   inspectManagedRuntimeHostService,
+  startManagedRuntimeHostService,
   stopManagedRuntimeHostService,
 } from '../runtime-host-service-manager.js';
 import {
@@ -46,6 +50,38 @@ test('a short-lived manager starts two independent Hosts and leaves authority wi
     const catalog = createRuntimeHostServiceCatalog(clientDataRoot);
     await catalog.create(configs[0]!);
     await catalog.create(configs[1]!);
+    const cliEntrypoint = fileURLToPath(new URL('../cli.js', import.meta.url));
+    const expiredAttempt = await publishRuntimeHostServiceStartAttempt(
+      clientDataRoot,
+      configs[0]!.id,
+      runtimeHostServiceConfigRevision(configs[0]!),
+      '2000-01-01T00:00:00.000Z',
+    );
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [
+          cliEntrypoint,
+          'runtime-host',
+          'serve',
+          '--managed-config',
+          configs[0]!.id,
+          '--expected-config-revision',
+          runtimeHostServiceConfigRevision(configs[0]!),
+          '--start-attempt',
+          expiredAttempt.attemptId,
+        ],
+        {
+          env: { ...process.env, MAKA_RUNTIME_HOST_MANAGED_CLIENT_DATA_ROOT: clientDataRoot },
+          timeout: 10_000,
+        },
+      ),
+    );
+    assert.deepEqual(await inspectManagedRuntimeHostService(configs[0]!), { kind: 'stopped' });
+    assert.equal(
+      await readRuntimeHostServiceStartAttempt(clientDataRoot, configs[0]!.id),
+      undefined,
+    );
 
     const fixture = fileURLToPath(
       new URL('./fixtures/start-managed-runtime-hosts.js', import.meta.url),
@@ -64,6 +100,21 @@ test('a short-lived manager starts two independent Hosts and leaves authority wi
     if (states[0]?.kind === 'running' && states[1]?.kind === 'running') {
       assert.notEqual(states[0].pid, states[1].pid);
       assert.notEqual(states[0].hostEpoch, states[1].hostEpoch);
+
+      const killedEpoch = states[0].hostEpoch;
+      const killedPid = states[0].pid;
+      process.kill(killedPid, 'SIGKILL');
+      const stale = await waitForRecoverableService(configs[0]!);
+      assert.equal(stale.kind === 'unreachable' && stale.recoverable, true, JSON.stringify(stale));
+      const restarted = await startManagedRuntimeHostService(configs[0]!, {
+        clientDataRoot,
+        entrypoint: cliEntrypoint,
+      });
+      assert.equal(restarted.kind, 'started');
+      if (restarted.kind === 'started') {
+        assert.notEqual(restarted.state.hostEpoch, killedEpoch);
+        assert.notEqual(restarted.state.pid, killedPid);
+      }
     }
 
     await addManagedRuntimeHostProject(configs[0]!, roots[0]!.canonicalPath);
@@ -89,7 +140,9 @@ test('a short-lived manager starts two independent Hosts and leaves authority wi
     );
     assert.equal((await listManagedRuntimeHostCredentials(configs[0]!))[0]?.status, 'revoked');
   } finally {
-    await Promise.allSettled(configs.map((config) => stopManagedRuntimeHostService(config)));
+    await Promise.allSettled(
+      configs.map((config) => stopManagedRuntimeHostService(config, { clientDataRoot })),
+    );
     await rm(base, { recursive: true, force: true });
   }
 });
@@ -129,4 +182,18 @@ async function availablePort(): Promise<number> {
     server.close((error) => (error ? reject(error) : resolve())),
   );
   return address.port;
+}
+
+async function waitForRecoverableService(
+  config: ManagedRuntimeHostServiceConfig,
+): Promise<Awaited<ReturnType<typeof inspectManagedRuntimeHostService>>> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const state = await inspectManagedRuntimeHostService(config);
+    if (state.kind === 'unreachable' && state.recoverable) return state;
+    if (Date.now() >= deadline) {
+      throw new Error(`Runtime Host did not become recoverable after SIGKILL (${state.kind})`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+  }
 }

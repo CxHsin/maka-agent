@@ -122,6 +122,7 @@ interface RuntimeHostKernelCommonOptions<K extends StorageRootKind> {
   composition: RuntimeHostCompositionSource<K>;
   listenerSetFactory?: RuntimeHostListenerSetFactory;
   accessAuthority?: RuntimeHostAccessAuthority;
+  onStartupCommitted?: () => void | Promise<void>;
 }
 
 export interface RuntimeHostServiceIdentity {
@@ -293,49 +294,64 @@ export class RuntimeHostKernel {
   }
 
   async #start(): Promise<void> {
-    await assertStateRootOwner(this.#options.owner, this.#options.owner.capability.kind);
-    await bindStateRootComposition(this.#options.owner.lease, this.compositionDescriptor.id);
-    this.#listeners = await (this.#options.listenerSetFactory ?? startLocalRuntimeHostListenerSet)({
-      rootId: this.#options.owner.capability.rootId,
-      hostEpoch: this.hostEpoch,
-      accept: (connection) => this.#accept(connection),
-      isReady: () => this.#state === 'ready' && !this.#shutdownRequested,
-    });
-    await this.#publishRegistration();
-    this.#state = 'recovering';
-    await this.#publishRegistration();
     let settleCompositionStartup!: () => void;
     this.#compositionStartup = new Promise((resolve) => {
       settleCompositionStartup = resolve;
     });
-    const compositionStartup = (async () => {
-      try {
-        this.#composition = await this.#options.composition.create({
-          owner: this.#options.owner,
-          hostEpoch: this.hostEpoch,
-          acquireResidency: (label) => this.#acquireResidency(label),
-          retainUntilProcessExit: () => this.#retainUntilProcessExit(),
-          requestDrain: () => this.#requestDrain(),
-          waitForResidencies: () => this.#waitForResidencies(),
-          waitForResidenciesExcept: (excludedLabel) =>
-            this.#waitForResidenciesExcept(excludedLabel),
-        });
-        for (const session of this.#connectionSessions) session.attachGlobalChanges();
-        if (this.#shutdownRequested) this.#beginCompositionDrain();
-        this.#operationHandlers = this.#createOperationHandlers(this.#composition.handlers);
-        await this.#composition.recover();
-      } finally {
+    let compositionStartupBegan = false;
+    try {
+      await assertStateRootOwner(this.#options.owner, this.#options.owner.capability.kind);
+      await bindStateRootComposition(this.#options.owner.lease, this.compositionDescriptor.id);
+      this.#listeners = await (
+        this.#options.listenerSetFactory ?? startLocalRuntimeHostListenerSet
+      )({
+        rootId: this.#options.owner.capability.rootId,
+        hostEpoch: this.hostEpoch,
+        accept: (connection) => this.#accept(connection),
+        isReady: () => this.#state === 'ready' && !this.#shutdownRequested,
+      });
+      await this.#publishRegistration();
+      this.#state = 'recovering';
+      await this.#publishRegistration();
+      await this.#options.onStartupCommitted?.();
+      if (this.#shutdownRequested) {
         settleCompositionStartup();
+        await this.closed;
+        return;
       }
-    })();
-    await Promise.race([compositionStartup, this.closed]);
-    if (this.#shutdownRequested) {
-      this.#commitRequestedShutdownIfQuiescent();
-      return;
+      compositionStartupBegan = true;
+      const compositionStartup = (async () => {
+        try {
+          this.#composition = await this.#options.composition.create({
+            owner: this.#options.owner,
+            hostEpoch: this.hostEpoch,
+            acquireResidency: (label) => this.#acquireResidency(label),
+            retainUntilProcessExit: () => this.#retainUntilProcessExit(),
+            requestDrain: () => this.#requestDrain(),
+            waitForResidencies: () => this.#waitForResidencies(),
+            waitForResidenciesExcept: (excludedLabel) =>
+              this.#waitForResidenciesExcept(excludedLabel),
+          });
+          for (const session of this.#connectionSessions) session.attachGlobalChanges();
+          if (this.#shutdownRequested) this.#beginCompositionDrain();
+          this.#operationHandlers = this.#createOperationHandlers(this.#composition.handlers);
+          await this.#composition.recover();
+        } finally {
+          settleCompositionStartup();
+        }
+      })();
+      await Promise.race([compositionStartup, this.closed]);
+      if (this.#shutdownRequested) {
+        this.#commitRequestedShutdownIfQuiescent();
+        return;
+      }
+      this.#state = 'ready';
+      await this.#publishRegistration();
+      this.#scheduleIdleIfNeeded();
+    } catch (error) {
+      if (!compositionStartupBegan) settleCompositionStartup();
+      throw error;
     }
-    this.#state = 'ready';
-    await this.#publishRegistration();
-    this.#scheduleIdleIfNeeded();
   }
 
   #accept(connection: RuntimeHostListenerConnection): void {

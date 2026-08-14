@@ -90,8 +90,13 @@ export const HOST_BOOTSTRAP_OPERATION_SPECS = {
   }),
   'host.service.stop': defineOperation({
     mode: 'command',
-    availability: 'ready',
-    errors: ['operation_conflict', 'operation_unavailable', 'internal_failure'] as const,
+    availability: 'bootstrap',
+    errors: [
+      'host_draining',
+      'operation_conflict',
+      'operation_unavailable',
+      'internal_failure',
+    ] as const,
     decodeInput: decodeHostServiceStopInput,
     decodeOutput: decodeHostServiceStopResult,
   }),

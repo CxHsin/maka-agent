@@ -10,8 +10,12 @@ import {
 } from '@maka/runtime-host/protocol';
 import { readFile } from 'node:fs/promises';
 import {
+  clearRuntimeHostServiceStartAttempt,
   createRuntimeHostServiceCatalog,
+  readRuntimeHostServiceStartAttempt,
+  requireRuntimeHostServiceConfigRevision,
   runtimeHostServiceConfigRevision,
+  withRuntimeHostServiceConfigOperation,
 } from './runtime-host-service-catalog.js';
 
 interface RuntimeHostServiceCliCommonOptions {
@@ -28,6 +32,8 @@ export type RuntimeHostServiceCliOptions = RuntimeHostServiceCliCommonOptions &
       }
     | {
         readonly managedConfigId: string;
+        readonly expectedConfigRevision: string;
+        readonly startAttemptId: string;
         readonly clientDataRoot: string;
         readonly rootPath?: never;
         readonly websocket?: never;
@@ -48,8 +54,10 @@ export async function runRuntimeHostServiceCli(
   options: RuntimeHostServiceCliOptions,
 ): Promise<number> {
   installRuntimeHostLogCapture();
-  const serviceOptions = await resolveRuntimeHostServiceOptions(options);
-  const host = await startExecutionRuntimeHostService(serviceOptions);
+  const host =
+    options.managedConfigId === undefined
+      ? await startExecutionRuntimeHostService(await resolveRuntimeHostServiceOptions(options))
+      : await startManagedRuntimeHostService(options);
   await runRuntimeHostProcessLifecycle(host, {
     onReady: () => {
       if (options.json) {
@@ -65,6 +73,88 @@ export async function runRuntimeHostServiceCli(
   return 0;
 }
 
+async function startManagedRuntimeHostService(
+  options: Extract<RuntimeHostServiceCliOptions, { managedConfigId: string }>,
+) {
+  const startup = await withRuntimeHostServiceConfigOperation(
+    options.clientDataRoot,
+    options.managedConfigId,
+    async () => {
+      const expectedRevision = requireRuntimeHostServiceConfigRevision(
+        options.expectedConfigRevision,
+      );
+      const attempt = await readRuntimeHostServiceStartAttempt(
+        options.clientDataRoot,
+        options.managedConfigId,
+      );
+      if (
+        !attempt ||
+        attempt.attemptId !== options.startAttemptId ||
+        attempt.configRevision !== expectedRevision
+      ) {
+        throw new Error('Managed Runtime Host start attempt is no longer current');
+      }
+      if (Date.now() >= Date.parse(attempt.expiresAt)) {
+        await clearRuntimeHostServiceStartAttempt(options.clientDataRoot, options.managedConfigId, {
+          attemptId: attempt.attemptId,
+          configRevision: attempt.configRevision,
+        });
+        throw new Error('Managed Runtime Host start attempt expired before startup committed');
+      }
+
+      let markCommitted!: () => void;
+      const committed = new Promise<void>((resolve) => {
+        markCommitted = resolve;
+      });
+      const hostTask = startExecutionRuntimeHostService({
+        ...(await resolveRuntimeHostServiceOptions(options)),
+        onStartupCommitted: async () => {
+          if (Date.now() >= Date.parse(attempt.expiresAt)) {
+            throw new Error('Managed Runtime Host start attempt expired before startup committed');
+          }
+          await clearRuntimeHostServiceStartAttempt(
+            options.clientDataRoot,
+            options.managedConfigId,
+            {
+              attemptId: attempt.attemptId,
+              configRevision: attempt.configRevision,
+            },
+          );
+          markCommitted();
+        },
+      });
+      try {
+        await Promise.race([
+          committed,
+          hostTask.then(() => {
+            throw new Error('Managed Runtime Host became ready without committing startup');
+          }),
+        ]);
+      } catch (error) {
+        try {
+          await clearRuntimeHostServiceStartAttempt(
+            options.clientDataRoot,
+            options.managedConfigId,
+            {
+              attemptId: attempt.attemptId,
+              configRevision: attempt.configRevision,
+            },
+          );
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'Managed Runtime Host startup failed and its attempt could not be cleared',
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      return { hostTask };
+    },
+  );
+  return startup.hostTask;
+}
+
 async function resolveRuntimeHostServiceOptions(
   options: RuntimeHostServiceCliOptions,
 ): Promise<ExecutionRuntimeHostServiceOptions> {
@@ -73,6 +163,12 @@ async function resolveRuntimeHostServiceOptions(
     const config = catalog.configs.find(({ id }) => id === options.managedConfigId);
     if (!config) {
       throw new Error(`Runtime Host service config does not exist: ${options.managedConfigId}`);
+    }
+    if (
+      runtimeHostServiceConfigRevision(config) !==
+      requireRuntimeHostServiceConfigRevision(options.expectedConfigRevision)
+    ) {
+      throw new Error('Runtime Host service config changed before the managed process started');
     }
     const transport = config.transport;
     const websocket = {

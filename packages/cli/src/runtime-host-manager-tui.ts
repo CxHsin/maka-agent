@@ -30,6 +30,9 @@ import {
 } from './runtime-host-service-catalog.js';
 import {
   inspectManagedRuntimeHostService,
+  removeStoppedManagedRuntimeHostServiceConfig,
+  restartManagedRuntimeHostService,
+  saveStoppedManagedRuntimeHostServiceConfig,
   startManagedRuntimeHostService,
   stopManagedRuntimeHostService,
   type ManagedRuntimeHostServiceState,
@@ -258,7 +261,7 @@ class RuntimeHostManagerComponent implements Component {
       () => inspectManagedRuntimeHostService(config),
       (state) => {
         const items: SelectItem[] = [];
-        if (state.kind === 'stopped') {
+        if (state.kind === 'stopped' || (state.kind === 'unreachable' && state.recoverable)) {
           items.push({
             value: 'start',
             label: 'Start',
@@ -324,7 +327,9 @@ class RuntimeHostManagerComponent implements Component {
                 this.#run(
                   'Stopping Runtime Host…',
                   async () => {
-                    const result = await stopManagedRuntimeHostService(config);
+                    const result = await stopManagedRuntimeHostService(config, {
+                      clientDataRoot: this.clientDataRoot,
+                    });
                     if (result.kind !== 'stopped' && result.kind !== 'already_stopped') {
                       throw new Error(`Runtime Host could not be stopped (${result.kind})`);
                     }
@@ -337,19 +342,11 @@ class RuntimeHostManagerComponent implements Component {
                 this.#run(
                   'Restarting Runtime Host…',
                   async () => {
-                    const stopped = await stopManagedRuntimeHostService(config);
-                    if (stopped.kind !== 'stopped' && stopped.kind !== 'already_stopped') {
-                      throw new Error(
-                        `Runtime Host restart could not stop the service (${stopped.kind})`,
-                      );
-                    }
-                    const started = await startManagedRuntimeHostService(config, {
+                    const result = await restartManagedRuntimeHostService(config, {
                       clientDataRoot: this.clientDataRoot,
                     });
-                    if (started.kind !== 'started' && started.kind !== 'already_running') {
-                      throw new Error(
-                        `Runtime Host restart could not start the service (${started.kind})`,
-                      );
+                    if (result.kind !== 'started' && result.kind !== 'already_running') {
+                      throw new Error(`Runtime Host could not be restarted (${result.kind})`);
                     }
                   },
                   () => this.#showService(config),
@@ -576,9 +573,11 @@ class RuntimeHostManagerComponent implements Component {
         const bindHost = bindValue.trim() || '127.0.0.1';
         this.#prompt(
           'Plaintext listener',
-          'Public hostname or IP (default: bind host)',
+          isWildcardHost(bindHost)
+            ? 'Public hostname or IP (required for wildcard binds)'
+            : 'Public hostname or IP (default: bind host)',
           (publicValue) => {
-            const publicHost = publicValue.trim() || bindHost;
+            const publicHost = publicValue.trim() || (isWildcardHost(bindHost) ? '' : bindHost);
             this.#prompt(
               'Plaintext listener',
               'Port (default: 7443)',
@@ -616,15 +615,16 @@ class RuntimeHostManagerComponent implements Component {
       existing ? 'Saving Runtime Host config…' : 'Creating State Root and config…',
       async () => {
         if (existing) {
-          const state = await inspectManagedRuntimeHostService(existing);
-          if (state.kind !== 'stopped') {
-            throw new Error(`Runtime Host config can only be edited while stopped (${state.kind})`);
-          }
           const config = updateManagedRuntimeHostServiceConfig(existing, {
             name: draft.name,
             transport,
           });
-          await this.catalog.save(config);
+          await saveStoppedManagedRuntimeHostServiceConfig(
+            this.catalog,
+            existing,
+            config,
+            this.clientDataRoot,
+          );
           return config;
         }
         const root = await resolveStorageRoot({ path: draft.rootPath, kind: 'interactive' });
@@ -656,13 +656,11 @@ class RuntimeHostManagerComponent implements Component {
         this.#run(
           'Removing config…',
           async () => {
-            const state = await inspectManagedRuntimeHostService(config);
-            if (state.kind !== 'stopped') {
-              throw new Error(
-                `Runtime Host config can only be removed while stopped (${state.kind})`,
-              );
-            }
-            return this.catalog.remove(config.id);
+            return removeStoppedManagedRuntimeHostServiceConfig(
+              this.catalog,
+              config,
+              this.clientDataRoot,
+            );
           },
           () => this.#refreshServices(),
           'Config removed',
@@ -1121,7 +1119,9 @@ function stateLabel(state: ManagedRuntimeHostServiceState): string {
     case 'external':
       return 'external Host — not managed';
     case 'unreachable':
-      return `unreachable (${state.reason})`;
+      return state.recoverable
+        ? 'stale registration — restart available'
+        : `unreachable (${state.reason})`;
   }
 }
 
@@ -1142,6 +1142,11 @@ function splitOrigins(value: string): readonly string[] {
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
+}
+
+function isWildcardHost(host: string): boolean {
+  const normalized = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  return normalized === '0.0.0.0' || normalized === '::';
 }
 
 function errorMessage(error: unknown): string {

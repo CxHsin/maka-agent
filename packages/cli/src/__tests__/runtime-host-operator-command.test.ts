@@ -37,11 +37,35 @@ describe('Runtime Host operator commands', () => {
       kind: 'runtime-host-serve',
       json: true,
     });
-    assert.deepEqual(parseRuntimeHostCommand(['serve', '--managed-config', 'office']), {
-      kind: 'runtime-host-serve',
-      managedConfigId: 'office',
-      json: false,
-    });
+    assert.equal(parseRuntimeHostCommand(['serve', '--managed-config', 'office']).kind, 'error');
+    assert.equal(
+      parseRuntimeHostCommand([
+        'serve',
+        '--managed-config',
+        'office',
+        '--expected-config-revision',
+        `sha256:${'a'.repeat(64)}`,
+      ]).kind,
+      'error',
+    );
+    assert.deepEqual(
+      parseRuntimeHostCommand([
+        'serve',
+        '--managed-config',
+        'office',
+        '--expected-config-revision',
+        `sha256:${'a'.repeat(64)}`,
+        '--start-attempt',
+        '00000000-0000-4000-8000-000000000000',
+      ]),
+      {
+        kind: 'runtime-host-serve',
+        managedConfigId: 'office',
+        expectedConfigRevision: `sha256:${'a'.repeat(64)}`,
+        startAttemptId: '00000000-0000-4000-8000-000000000000',
+        json: false,
+      },
+    );
     assert.equal(
       parseRuntimeHostCommand(['serve', '--managed-config', 'office', '--root', '/srv/maka']).kind,
       'error',

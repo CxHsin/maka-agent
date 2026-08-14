@@ -4,10 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import {
+  clearRuntimeHostServiceStartAttempt,
   createManagedRuntimeHostServiceConfig,
   createRuntimeHostServiceCatalog,
   decodeManagedRuntimeHostServiceConfig,
   findRuntimeHostServiceConfigConflicts,
+  publishRuntimeHostServiceStartAttempt,
+  readRuntimeHostServiceStartAttempt,
   runtimeHostServiceClientTransport,
   runtimeHostServiceConfigRevision,
   updateManagedRuntimeHostServiceConfig,
@@ -34,7 +37,10 @@ describe('Runtime Host service catalog', () => {
       assert.equal(serialized.includes('credential'), false);
 
       await assert.rejects(
-        catalog.save({ ...office, rootPath: '/srv/maka/replaced' }),
+        catalog.save(
+          { ...office, rootPath: '/srv/maka/replaced' },
+          runtimeHostServiceConfigRevision(office),
+        ),
         /cannot change its State Root/u,
       );
       await assert.rejects(
@@ -57,15 +63,87 @@ describe('Runtime Host service catalog', () => {
   test('serializes concurrent catalog mutations', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'maka-runtime-host-service-catalog-race-'));
     try {
-      const catalog = createRuntimeHostServiceCatalog(directory);
+      const firstCatalog = createRuntimeHostServiceCatalog(directory);
+      const secondCatalog = createRuntimeHostServiceCatalog(directory);
       await Promise.all([
-        catalog.create(serviceConfig('one', '/srv/maka/one', '1', 7001)),
-        catalog.create(serviceConfig('two', '/srv/maka/two', '2', 7002)),
+        firstCatalog.create(serviceConfig('one', '/srv/maka/one', '1', 7001)),
+        secondCatalog.create(serviceConfig('two', '/srv/maka/two', '2', 7002)),
       ]);
       assert.deepEqual(
-        (await catalog.read()).configs.map(({ id }) => id),
+        (await firstCatalog.read()).configs.map(({ id }) => id),
         ['one', 'two'],
       );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects stale config updates after another manager commits', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'maka-runtime-host-service-catalog-cas-'));
+    try {
+      const firstCatalog = createRuntimeHostServiceCatalog(directory);
+      const secondCatalog = createRuntimeHostServiceCatalog(directory);
+      const initial = serviceConfig('office', '/srv/maka/office', 'a', 7443);
+      await firstCatalog.create(initial);
+      const expectedRevision = runtimeHostServiceConfigRevision(initial);
+      await firstCatalog.save(
+        updateManagedRuntimeHostServiceConfig(initial, {
+          name: 'Updated elsewhere',
+          now: new Date('2026-01-02T00:00:00.000Z'),
+        }),
+        expectedRevision,
+      );
+
+      await assert.rejects(
+        secondCatalog.save(
+          updateManagedRuntimeHostServiceConfig(initial, {
+            name: 'Stale update',
+            now: new Date('2026-01-03T00:00:00.000Z'),
+          }),
+          expectedRevision,
+        ),
+        /changed before it could be saved/u,
+      );
+      await assert.rejects(
+        secondCatalog.remove(initial.id, expectedRevision),
+        /changed before it could be removed/u,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('keeps start-attempt replacement and cleanup exact', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'maka-runtime-host-service-attempt-'));
+    try {
+      const revision = `sha256:${'a'.repeat(64)}` as const;
+      const first = await publishRuntimeHostServiceStartAttempt(
+        directory,
+        'office',
+        revision,
+        '2026-08-14T08:00:00.000Z',
+      );
+      const second = await publishRuntimeHostServiceStartAttempt(
+        directory,
+        'office',
+        revision,
+        '2026-08-14T08:01:00.000Z',
+      );
+
+      await clearRuntimeHostServiceStartAttempt(directory, 'office', {
+        attemptId: first.attemptId,
+        configRevision: revision,
+      });
+      assert.deepEqual(await readRuntimeHostServiceStartAttempt(directory, 'office'), second);
+      await clearRuntimeHostServiceStartAttempt(directory, 'office', {
+        configRevision: `sha256:${'b'.repeat(64)}`,
+      });
+      assert.deepEqual(await readRuntimeHostServiceStartAttempt(directory, 'office'), second);
+      await clearRuntimeHostServiceStartAttempt(directory, 'office', {
+        attemptId: second.attemptId,
+        configRevision: revision,
+      });
+      assert.equal(await readRuntimeHostServiceStartAttempt(directory, 'office'), undefined);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -75,6 +153,13 @@ describe('Runtime Host service catalog', () => {
     const wildcard = serviceConfig('wildcard', '/srv/maka/one', '1', 7443, '0.0.0.0');
     const loopback = serviceConfig('loopback', '/srv/maka/two', '2', 7443, '127.0.0.1');
     const ipv6 = serviceConfig('ipv6', '/srv/maka/three', '3', 7443, '::1');
+    const expandedIpv6 = serviceConfig(
+      'expanded-ipv6',
+      '/srv/maka/expanded-ipv6',
+      '5',
+      7443,
+      '0:0:0:0:0:0:0:1',
+    );
     const otherPort = serviceConfig('other', '/srv/maka/four', '4', 8443, '0.0.0.0');
 
     assert.deepEqual(findRuntimeHostServiceConfigConflicts([wildcard, loopback]), [
@@ -86,6 +171,14 @@ describe('Runtime Host service catalog', () => {
       },
     ]);
     assert.deepEqual(findRuntimeHostServiceConfigConflicts([wildcard, ipv6, otherPort]), []);
+    assert.deepEqual(findRuntimeHostServiceConfigConflicts([ipv6, expandedIpv6]), [
+      {
+        kind: 'listener',
+        leftConfigId: 'ipv6',
+        rightConfigId: 'expanded-ipv6',
+        port: 7443,
+      },
+    ]);
   });
 
   test('projects client transports and computes revisions only from service behavior', () => {
@@ -153,6 +246,22 @@ describe('Runtime Host service catalog', () => {
     assert.throws(
       () => decodeManagedRuntimeHostServiceConfig({ ...base, credential: 'secret' }),
       /unexpected fields/u,
+    );
+    assert.throws(
+      () =>
+        decodeManagedRuntimeHostServiceConfig({
+          ...base,
+          transport: { ...base.transport, publicHost: '0.0.0.0' },
+        }),
+      /connectable hostname or IP/u,
+    );
+    assert.throws(
+      () =>
+        decodeManagedRuntimeHostServiceConfig({
+          ...base,
+          transport: { ...base.transport, publicHost: 'not:an:ipv6:address' },
+        }),
+      /public host is invalid/u,
     );
     assert.throws(
       () => decodeManagedRuntimeHostServiceConfig({ ...base, name: '\u001b[31mspoofed' }),

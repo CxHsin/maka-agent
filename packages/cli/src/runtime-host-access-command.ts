@@ -4,11 +4,14 @@ import {
 } from '@maka/runtime-host/client';
 import {
   isOperationKey,
-  REMOTE_OWNER_OPERATION_GRANTS,
   RUNTIME_HOST_PROTOCOL_VERSION,
   type AccessCredentialPrincipalKind,
   type OperationKey,
 } from '@maka/runtime-host/protocol';
+import {
+  resolveRuntimeHostAccessPreset,
+  type RuntimeHostAccessPreset,
+} from './runtime-host-access-policy.js';
 
 const PROTOCOL = {
   min: RUNTIME_HOST_PROTOCOL_VERSION,
@@ -25,19 +28,12 @@ export interface RuntimeHostAccessIssueOptions {
   readonly preset?: RuntimeHostAccessPreset;
 }
 
-export type RuntimeHostAccessPreset = 'desktop-client' | 'terminal-client';
-
 export interface ResolvedRuntimeHostAccessIssue {
   readonly principalKind: AccessCredentialPrincipalKind;
   readonly operationGrants: readonly OperationKey[];
   readonly canPublishClientCapabilities: boolean;
   readonly canUseHostPaths: boolean;
 }
-
-const CLIENT_CAPABILITY_PUBLICATION_OPERATIONS = new Set<OperationKey>([
-  'client.capability.replace',
-  'client.capability.unregister',
-]);
 
 export interface RuntimeHostAccessRevokeOptions {
   readonly rootPath: string;
@@ -81,17 +77,7 @@ export function resolveRuntimeHostAccessIssue(
       canUseHostPaths: options.canUseHostPaths,
     };
   }
-  const canPublishClientCapabilities = options.preset === 'desktop-client';
-  const operationGrants = REMOTE_OWNER_OPERATION_GRANTS.filter(
-    (operation) =>
-      canPublishClientCapabilities || !CLIENT_CAPABILITY_PUBLICATION_OPERATIONS.has(operation),
-  );
-  return {
-    principalKind: 'remote_owner',
-    operationGrants,
-    canPublishClientCapabilities,
-    canUseHostPaths: false,
-  };
+  return resolveRuntimeHostAccessPreset(options.preset);
 }
 
 export async function runRuntimeHostAccessRevokeCli(

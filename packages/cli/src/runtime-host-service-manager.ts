@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { dirname, isAbsolute } from 'node:path';
 import {
   connectExistingRuntimeHost,
+  RuntimeHostOperationError,
+  RuntimeHostRequestInterruptedError,
   type ConnectRuntimeHostResult,
   type RuntimeHostConnection,
 } from '@maka/runtime-host/client';
@@ -11,10 +13,20 @@ import {
   type HostLifecycleState,
   type HostRegistration,
 } from '@maka/runtime-host/protocol';
-import { discoverMarkedStorageRoot } from '@maka/storage/root-authority';
 import {
+  discoverMarkedStorageRoot,
+  tryAcquireInteractiveRootOwner,
+  type InteractiveRootOwner,
+} from '@maka/storage/root-authority';
+import {
+  clearRuntimeHostServiceStartAttempt,
+  createRuntimeHostServiceCatalog,
+  publishRuntimeHostServiceStartAttempt,
   runtimeHostServiceConfigRevision,
+  withRuntimeHostServiceConfigOperation,
   type ManagedRuntimeHostServiceConfig,
+  type RuntimeHostServiceCatalog,
+  type RuntimeHostServiceCatalogDocument,
 } from './runtime-host-service-catalog.js';
 
 const SERVICE_TRANSITION_TIMEOUT_MS = 30_000;
@@ -63,6 +75,9 @@ export type ManagedRuntimeHostServiceState =
           : never,
         'not_registered' | 'root_mismatch'
       >;
+      readonly recoverable?: true;
+      readonly hostEpoch?: string;
+      readonly pid?: number;
     };
 
 export type ManagedRuntimeHostServiceStartResult =
@@ -104,7 +119,9 @@ interface RuntimeHostServiceManagerDeps {
   readonly connect: typeof connectExistingRuntimeHost;
   readonly launch: (
     configId: string,
-    clientDataRoot?: string,
+    expectedRevision: `sha256:${string}`,
+    startAttemptId: string,
+    clientDataRoot: string,
   ) => Promise<{
     readonly pid: number;
     readonly exited: Promise<{
@@ -113,6 +130,11 @@ interface RuntimeHostServiceManagerDeps {
     }>;
   }>;
   readonly discoverRoot: typeof discoverMarkedStorageRoot;
+  readonly acquireOwner: typeof tryAcquireInteractiveRootOwner;
+  readonly clearStartAttempt: typeof clearRuntimeHostServiceStartAttempt;
+  readonly publishStartAttempt: typeof publishRuntimeHostServiceStartAttempt;
+  readonly readCatalog: (clientDataRoot: string) => Promise<RuntimeHostServiceCatalogDocument>;
+  readonly runConfigOperation: typeof withRuntimeHostServiceConfigOperation;
   readonly now: () => number;
   readonly delay: (durationMs: number) => Promise<void>;
 }
@@ -122,6 +144,69 @@ export class ManagedRuntimeHostServiceUnavailableError extends Error {
     super(`Managed Runtime Host service is not available (${state.kind})`);
     this.name = 'ManagedRuntimeHostServiceUnavailableError';
   }
+}
+
+export async function saveStoppedManagedRuntimeHostServiceConfig(
+  catalog: RuntimeHostServiceCatalog,
+  current: ManagedRuntimeHostServiceConfig,
+  next: ManagedRuntimeHostServiceConfig,
+  clientDataRoot: string,
+  overrides: Partial<RuntimeHostServiceManagerDeps> = {},
+): Promise<RuntimeHostServiceCatalogDocument> {
+  const deps = managerDeps(overrides);
+  return withRuntimeHostServiceConfigOperation(clientDataRoot, current.id, async () => {
+    const revision = await requireCurrentManagedRuntimeHostServiceConfig(
+      current,
+      clientDataRoot,
+      deps,
+    );
+    await deps.clearStartAttempt(clientDataRoot, current.id, { configRevision: revision });
+    const acquired = await acquireManagedRuntimeHostRootOwner(current, deps);
+    if (acquired.kind === 'refused') {
+      throw new ManagedRuntimeHostServiceUnavailableError(acquired.state);
+    }
+    if (!acquired.owner) {
+      throw new Error(
+        'Runtime Host service config cannot be changed while its State Root is owned',
+      );
+    }
+    try {
+      return await catalog.save(next, runtimeHostServiceConfigRevision(current));
+    } finally {
+      await acquired.owner.close();
+    }
+  });
+}
+
+export async function removeStoppedManagedRuntimeHostServiceConfig(
+  catalog: RuntimeHostServiceCatalog,
+  config: ManagedRuntimeHostServiceConfig,
+  clientDataRoot: string,
+  overrides: Partial<RuntimeHostServiceManagerDeps> = {},
+): Promise<RuntimeHostServiceCatalogDocument> {
+  const deps = managerDeps(overrides);
+  return withRuntimeHostServiceConfigOperation(clientDataRoot, config.id, async () => {
+    const revision = await requireCurrentManagedRuntimeHostServiceConfig(
+      config,
+      clientDataRoot,
+      deps,
+    );
+    await deps.clearStartAttempt(clientDataRoot, config.id, { configRevision: revision });
+    const acquired = await acquireManagedRuntimeHostRootOwner(config, deps);
+    if (acquired.kind === 'refused') {
+      throw new ManagedRuntimeHostServiceUnavailableError(acquired.state);
+    }
+    if (!acquired.owner) {
+      throw new Error(
+        'Runtime Host service config cannot be removed while its State Root is owned',
+      );
+    }
+    try {
+      return await catalog.remove(config.id, runtimeHostServiceConfigRevision(config));
+    } finally {
+      await acquired.owner.close();
+    }
+  });
 }
 
 export async function connectManagedRuntimeHostOwner(
@@ -187,6 +272,17 @@ export async function inspectManagedRuntimeHostService(
     if (connected.reason === 'root_mismatch') {
       return { kind: 'root_drift', expectedRootId: config.expectedRootId };
     }
+    if (connected.reason === 'connect_failed' && connected.registration) {
+      const classified = classifyRegistration(config, connected.registration);
+      if (classified.kind !== 'running') return classified;
+      return {
+        kind: 'unreachable',
+        reason: connected.reason,
+        recoverable: true,
+        hostEpoch: classified.hostEpoch,
+        pid: classified.pid,
+      };
+    }
     return { kind: 'unreachable', reason: connected.reason };
   }
   return { kind: 'unreachable', reason: 'handshake_failed' };
@@ -196,51 +292,211 @@ export async function startManagedRuntimeHostService(
   config: ManagedRuntimeHostServiceConfig,
   input: {
     readonly entrypoint?: string;
-    readonly clientDataRoot?: string;
+    readonly clientDataRoot: string;
     readonly timeoutMs?: number;
-  } = {},
+  },
   overrides: Partial<RuntimeHostServiceManagerDeps> = {},
 ): Promise<ManagedRuntimeHostServiceStartResult> {
   const deps = managerDeps(overrides, input.entrypoint);
+  const deadlineMs = deps.now() + (input.timeoutMs ?? SERVICE_TRANSITION_TIMEOUT_MS);
+  const prepared = await deps.runConfigOperation(input.clientDataRoot, config.id, async () => {
+    await requireCurrentManagedRuntimeHostServiceConfig(config, input.clientDataRoot, deps);
+    return prepareManagedRuntimeHostServiceStart(config, input.clientDataRoot, deadlineMs, deps);
+  });
+  return prepared.kind === 'result'
+    ? prepared.result
+    : waitForManagedRuntimeHostStart(config, input.clientDataRoot, deadlineMs, prepared, deps);
+}
+
+type ManagedRuntimeHostServiceStartPreparation =
+  | { readonly kind: 'result'; readonly result: ManagedRuntimeHostServiceStartResult }
+  | {
+      readonly kind: 'wait';
+      readonly child?: Awaited<ReturnType<RuntimeHostServiceManagerDeps['launch']>>;
+      readonly startAttemptId?: string;
+    };
+
+async function prepareManagedRuntimeHostServiceStart(
+  config: ManagedRuntimeHostServiceConfig,
+  clientDataRoot: string,
+  deadlineMs: number,
+  deps: RuntimeHostServiceManagerDeps,
+): Promise<ManagedRuntimeHostServiceStartPreparation> {
   const initial = await inspectManagedRuntimeHostService(config, deps);
   if (initial.kind === 'running' && initial.lifecycleState === 'ready') {
-    return { kind: 'already_running', state: initial };
+    return { kind: 'result', result: { kind: 'already_running', state: initial } };
   }
-  if (initial.kind !== 'stopped' && initial.kind !== 'running') {
-    return { kind: 'refused', state: initial };
+  const recoverable = initial.kind === 'unreachable' && initial.recoverable === true;
+  if (initial.kind !== 'stopped' && initial.kind !== 'running' && !recoverable) {
+    return { kind: 'result', result: { kind: 'refused', state: initial } };
+  }
+  if (deps.now() >= deadlineMs) {
+    return { kind: 'result', result: { kind: 'startup_failed' } };
   }
 
-  const child =
-    initial.kind === 'stopped' ? await deps.launch(config.id, input.clientDataRoot) : undefined;
-  const deadline = deps.now() + (input.timeoutMs ?? SERVICE_TRANSITION_TIMEOUT_MS);
+  if (initial.kind !== 'stopped' && !recoverable) return { kind: 'wait' };
+  const revision = runtimeHostServiceConfigRevision(config);
+  const attempt = await deps.publishStartAttempt(
+    clientDataRoot,
+    config.id,
+    revision,
+    new Date(deadlineMs).toISOString(),
+  );
+  try {
+    const child = await deps.launch(config.id, revision, attempt.attemptId, clientDataRoot);
+    return { kind: 'wait', child, startAttemptId: attempt.attemptId };
+  } catch (error) {
+    await deps.clearStartAttempt(clientDataRoot, config.id, {
+      attemptId: attempt.attemptId,
+      configRevision: revision,
+    });
+    throw error;
+  }
+}
+
+async function waitForManagedRuntimeHostStart(
+  config: ManagedRuntimeHostServiceConfig,
+  clientDataRoot: string,
+  deadline: number,
+  preparation: Extract<ManagedRuntimeHostServiceStartPreparation, { kind: 'wait' }>,
+  deps: RuntimeHostServiceManagerDeps,
+): Promise<ManagedRuntimeHostServiceStartResult> {
+  const { child, startAttemptId } = preparation;
   while (deps.now() < deadline) {
     const state = await inspectManagedRuntimeHostService(config, deps);
     if (state.kind === 'running' && state.lifecycleState === 'ready') {
-      return child ? { kind: 'started', state } : { kind: 'already_running', state };
+      return child?.pid === state.pid
+        ? { kind: 'started', state }
+        : { kind: 'already_running', state };
     }
     if (state.kind === 'running') {
+      await deps.delay(Math.min(SERVICE_TRANSITION_POLL_MS, deadline - deps.now()));
+      continue;
+    }
+    if (state.kind === 'unreachable' && state.recoverable === true) {
+      if (child) {
+        const exit = await settleWithin(child.exited, 0);
+        if (exit !== undefined) {
+          await cancelManagedRuntimeHostStartAttempt(config, clientDataRoot, startAttemptId, deps);
+          return { kind: 'startup_failed' };
+        }
+      }
       await deps.delay(Math.min(SERVICE_TRANSITION_POLL_MS, deadline - deps.now()));
       continue;
     }
     if (state.kind !== 'stopped') return { kind: 'refused', state };
     if (child) {
       const exit = await settleWithin(child.exited, 0);
-      if (exit !== undefined) return { kind: 'startup_failed' };
+      if (exit !== undefined) {
+        await cancelManagedRuntimeHostStartAttempt(config, clientDataRoot, startAttemptId, deps);
+        return { kind: 'startup_failed' };
+      }
     }
     await deps.delay(Math.min(SERVICE_TRANSITION_POLL_MS, deadline - deps.now()));
   }
+  await cancelManagedRuntimeHostStartAttempt(config, clientDataRoot, startAttemptId, deps);
   return { kind: 'startup_failed' };
+}
+
+async function cancelManagedRuntimeHostStartAttempt(
+  config: ManagedRuntimeHostServiceConfig,
+  clientDataRoot: string,
+  startAttemptId: string | undefined,
+  deps: RuntimeHostServiceManagerDeps,
+): Promise<void> {
+  if (!startAttemptId) return;
+  await deps.runConfigOperation(clientDataRoot, config.id, () =>
+    deps.clearStartAttempt(clientDataRoot, config.id, {
+      attemptId: startAttemptId,
+      configRevision: runtimeHostServiceConfigRevision(config),
+    }),
+  );
 }
 
 export async function stopManagedRuntimeHostService(
   config: ManagedRuntimeHostServiceConfig,
-  input: { readonly timeoutMs?: number } = {},
+  input: { readonly timeoutMs?: number; readonly clientDataRoot: string },
   overrides: Partial<RuntimeHostServiceManagerDeps> = {},
 ): Promise<ManagedRuntimeHostServiceStopResult> {
   const deps = managerDeps(overrides);
+  return deps.runConfigOperation(input.clientDataRoot, config.id, async () => {
+    const revision = await requireCurrentManagedRuntimeHostServiceConfig(
+      config,
+      input.clientDataRoot,
+      deps,
+    );
+    await deps.clearStartAttempt(input.clientDataRoot, config.id, {
+      configRevision: revision,
+    });
+    return stopManagedRuntimeHostServiceLocked(config, input, deps, true);
+  });
+}
+
+export async function restartManagedRuntimeHostService(
+  config: ManagedRuntimeHostServiceConfig,
+  input: {
+    readonly entrypoint?: string;
+    readonly clientDataRoot: string;
+    readonly timeoutMs?: number;
+  },
+  overrides: Partial<RuntimeHostServiceManagerDeps> = {},
+): Promise<ManagedRuntimeHostServiceStartResult | ManagedRuntimeHostServiceStopResult> {
+  const deps = managerDeps(overrides, input.entrypoint);
+  const deadlineMs = deps.now() + (input.timeoutMs ?? SERVICE_TRANSITION_TIMEOUT_MS);
+  const transaction = await deps.runConfigOperation(input.clientDataRoot, config.id, async () => {
+    const revision = await requireCurrentManagedRuntimeHostServiceConfig(
+      config,
+      input.clientDataRoot,
+      deps,
+    );
+    await deps.clearStartAttempt(input.clientDataRoot, config.id, {
+      configRevision: revision,
+    });
+    const stopped = await stopManagedRuntimeHostServiceLocked(config, input, deps, true);
+    if (stopped.kind !== 'stopped' && stopped.kind !== 'already_stopped') {
+      return { kind: 'stop-result' as const, result: stopped };
+    }
+    const prepared = await prepareManagedRuntimeHostServiceStart(
+      config,
+      input.clientDataRoot,
+      deadlineMs,
+      deps,
+    );
+    return { kind: 'start' as const, prepared };
+  });
+  if (transaction.kind === 'stop-result') return transaction.result;
+  return transaction.prepared.kind === 'result'
+    ? transaction.prepared.result
+    : waitForManagedRuntimeHostStart(
+        config,
+        input.clientDataRoot,
+        deadlineMs,
+        transaction.prepared,
+        deps,
+      );
+}
+
+async function stopManagedRuntimeHostServiceLocked(
+  config: ManagedRuntimeHostServiceConfig,
+  input: { readonly timeoutMs?: number },
+  deps: RuntimeHostServiceManagerDeps,
+  requireOwnerProof: boolean,
+): Promise<ManagedRuntimeHostServiceStopResult> {
   const connected = await connectManagedRuntimeHost(config, deps.connect);
   if (connected.kind === 'unavailable' && connected.reason === 'not_registered') {
-    return { kind: 'already_stopped' };
+    if (!requireOwnerProof) return { kind: 'already_stopped' };
+    const proof = await confirmManagedRuntimeHostRootIsUnowned(config, deps);
+    return proof.kind === 'refused'
+      ? { kind: 'refused', state: proof.state }
+      : proof.confirmed
+        ? { kind: 'already_stopped' }
+        : { kind: 'stop_unconfirmed' };
+  }
+  if (connected.kind === 'draining') {
+    const state = classifyRegistration(config, connected.registration);
+    return state.kind === 'running'
+      ? waitForManagedRuntimeHostStop(config, input.timeoutMs, deps, requireOwnerProof)
+      : { kind: 'refused', state };
   }
   if (connected.kind !== 'connected') {
     const state = await inspectManagedRuntimeHostService(config, deps);
@@ -256,15 +512,43 @@ export async function stopManagedRuntimeHostService(
     await connected.connection.close().catch(() => undefined);
     return { kind: 'refused', state };
   }
-  await connected.connection.request('host.service.stop', {
-    expectedHostEpoch: state.hostEpoch,
-  });
-  await connected.connection.close().catch(() => undefined);
+  try {
+    await connected.connection.request('host.service.stop', {
+      expectedHostEpoch: state.hostEpoch,
+    });
+  } catch (error) {
+    if (
+      !(
+        (error instanceof RuntimeHostOperationError && error.code === 'host_draining') ||
+        (error instanceof RuntimeHostRequestInterruptedError && error.dispatch === 'dispatched')
+      )
+    ) {
+      throw error;
+    }
+  } finally {
+    await connected.connection.close().catch(() => undefined);
+  }
 
-  const deadline = deps.now() + (input.timeoutMs ?? SERVICE_TRANSITION_TIMEOUT_MS);
+  return waitForManagedRuntimeHostStop(config, input.timeoutMs, deps, requireOwnerProof);
+}
+
+async function waitForManagedRuntimeHostStop(
+  config: ManagedRuntimeHostServiceConfig,
+  timeoutMs: number | undefined,
+  deps: RuntimeHostServiceManagerDeps,
+  requireOwnerProof: boolean,
+): Promise<ManagedRuntimeHostServiceStopResult> {
+  const deadline = deps.now() + (timeoutMs ?? SERVICE_TRANSITION_TIMEOUT_MS);
   while (deps.now() < deadline) {
     const current = await inspectManagedRuntimeHostService(config, deps);
-    if (current.kind === 'stopped') return { kind: 'stopped' };
+    if (current.kind === 'stopped') {
+      if (!requireOwnerProof) return { kind: 'stopped' };
+      const proof = await confirmManagedRuntimeHostRootIsUnowned(config, deps);
+      if (proof.kind === 'refused') return { kind: 'refused', state: proof.state };
+      if (proof.confirmed) return { kind: 'stopped' };
+      await deps.delay(Math.min(SERVICE_TRANSITION_POLL_MS, deadline - deps.now()));
+      continue;
+    }
     if (current.kind === 'stopping') {
       await deps.delay(Math.min(SERVICE_TRANSITION_POLL_MS, deadline - deps.now()));
       continue;
@@ -312,6 +596,20 @@ function classifyRegistration(
   };
 }
 
+async function requireCurrentManagedRuntimeHostServiceConfig(
+  config: ManagedRuntimeHostServiceConfig,
+  clientDataRoot: string,
+  deps: RuntimeHostServiceManagerDeps,
+): Promise<`sha256:${string}`> {
+  const expectedRevision = runtimeHostServiceConfigRevision(config);
+  const catalog = await deps.readCatalog(clientDataRoot);
+  const current = catalog.configs.find(({ id }) => id === config.id);
+  if (!current || runtimeHostServiceConfigRevision(current) !== expectedRevision) {
+    throw new Error('Runtime Host service config changed before the operation started');
+  }
+  return expectedRevision;
+}
+
 async function connectManagedRuntimeHost(
   config: ManagedRuntimeHostServiceConfig,
   connect: typeof connectExistingRuntimeHost,
@@ -343,16 +641,68 @@ function causedByNodeError(error: unknown, code: string): boolean {
   return false;
 }
 
+type ManagedRuntimeHostRootOwnerAcquisition =
+  | { readonly kind: 'acquired'; readonly owner?: InteractiveRootOwner }
+  | {
+      readonly kind: 'refused';
+      readonly state: Extract<ManagedRuntimeHostServiceState, { kind: 'root_drift' }>;
+    };
+
+async function acquireManagedRuntimeHostRootOwner(
+  config: ManagedRuntimeHostServiceConfig,
+  deps: RuntimeHostServiceManagerDeps,
+): Promise<ManagedRuntimeHostRootOwnerAcquisition> {
+  const root = await deps.discoverRoot({ path: config.rootPath }).catch(() => undefined);
+  if (!root || root.rootId !== config.expectedRootId) {
+    return {
+      kind: 'refused',
+      state: {
+        kind: 'root_drift',
+        expectedRootId: config.expectedRootId,
+        ...(root ? { actualRootId: root.rootId } : {}),
+      },
+    };
+  }
+  const owner = await deps.acquireOwner(root);
+  return { kind: 'acquired', ...(owner ? { owner } : {}) };
+}
+
+async function confirmManagedRuntimeHostRootIsUnowned(
+  config: ManagedRuntimeHostServiceConfig,
+  deps: RuntimeHostServiceManagerDeps,
+): Promise<
+  | { readonly kind: 'confirmed'; readonly confirmed: true }
+  | { readonly kind: 'busy'; readonly confirmed: false }
+  | Extract<ManagedRuntimeHostRootOwnerAcquisition, { kind: 'refused' }>
+> {
+  const acquired = await acquireManagedRuntimeHostRootOwner(config, deps);
+  if (acquired.kind === 'refused') return acquired;
+  if (!acquired.owner) return { kind: 'busy', confirmed: false };
+  await acquired.owner.close();
+  return { kind: 'confirmed', confirmed: true };
+}
+
 function managerDeps(
   overrides: Partial<RuntimeHostServiceManagerDeps>,
   entrypoint = process.argv[1],
 ): RuntimeHostServiceManagerDeps {
   return {
     connect: connectExistingRuntimeHost,
+    acquireOwner: tryAcquireInteractiveRootOwner,
+    clearStartAttempt: clearRuntimeHostServiceStartAttempt,
     discoverRoot: discoverMarkedStorageRoot,
-    launch: (configId, clientDataRoot) =>
-      launchManagedRuntimeHostService(entrypoint, configId, clientDataRoot),
+    launch: (configId, expectedRevision, startAttemptId, clientDataRoot) =>
+      launchManagedRuntimeHostService(
+        entrypoint,
+        configId,
+        expectedRevision,
+        startAttemptId,
+        clientDataRoot,
+      ),
     now: Date.now,
+    publishStartAttempt: publishRuntimeHostServiceStartAttempt,
+    readCatalog: (clientDataRoot) => createRuntimeHostServiceCatalog(clientDataRoot).read(),
+    runConfigOperation: withRuntimeHostServiceConfigOperation,
     delay: (durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs)),
     ...overrides,
   };
@@ -361,7 +711,9 @@ function managerDeps(
 function launchManagedRuntimeHostService(
   entrypoint: string | undefined,
   configId: string,
-  clientDataRoot?: string,
+  expectedRevision: `sha256:${string}`,
+  startAttemptId: string,
+  clientDataRoot: string,
 ): Promise<{
   readonly pid: number;
   readonly exited: Promise<{
@@ -374,7 +726,17 @@ function launchManagedRuntimeHostService(
   delete env.MAKA_RUNTIME_HOST_ACCESS_CREDENTIAL;
   const child = spawn(
     process.execPath,
-    [entrypoint, 'runtime-host', 'serve', '--managed-config', configId],
+    [
+      entrypoint,
+      'runtime-host',
+      'serve',
+      '--managed-config',
+      configId,
+      '--expected-config-revision',
+      expectedRevision,
+      '--start-attempt',
+      startAttemptId,
+    ],
     {
       cwd: dirname(isAbsolute(entrypoint) ? entrypoint : process.execPath),
       detached: true,
@@ -383,7 +745,7 @@ function launchManagedRuntimeHostService(
       env: {
         ...env,
         ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
-        ...(clientDataRoot ? { MAKA_RUNTIME_HOST_MANAGED_CLIENT_DATA_ROOT: clientDataRoot } : {}),
+        MAKA_RUNTIME_HOST_MANAGED_CLIENT_DATA_ROOT: clientDataRoot,
       },
     },
   );

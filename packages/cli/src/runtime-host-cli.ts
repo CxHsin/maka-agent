@@ -6,6 +6,8 @@ export type RuntimeHostCliCommand =
       kind: 'runtime-host-serve';
       rootPath?: string;
       managedConfigId?: string;
+      expectedConfigRevision?: string;
+      startAttemptId?: string;
       json: boolean;
       websocket?: {
         host: string;
@@ -292,6 +294,8 @@ function parseCapabilityProviderCommand(argv: string[]): RuntimeHostCliCommand {
 function parseServeCommand(argv: string[]): RuntimeHostCliCommand {
   let rootPath: string | undefined;
   let managedConfigId: string | undefined;
+  let expectedConfigRevision: string | undefined;
+  let startAttemptId: string | undefined;
   let json = false;
   let websocketHost = '127.0.0.1';
   let websocketConfigured = false;
@@ -323,6 +327,20 @@ function parseServeCommand(argv: string[]): RuntimeHostCliCommand {
       const parsed = optionValue(argv, index, argument);
       if (typeof parsed !== 'string') return parsed;
       managedConfigId = parsed;
+      index += 1;
+      continue;
+    }
+    if (argument === '--expected-config-revision') {
+      const parsed = optionValue(argv, index, argument);
+      if (typeof parsed !== 'string') return parsed;
+      expectedConfigRevision = parsed;
+      index += 1;
+      continue;
+    }
+    if (argument === '--start-attempt') {
+      const parsed = optionValue(argv, index, argument);
+      if (typeof parsed !== 'string') return parsed;
+      startAttemptId = parsed;
       index += 1;
       continue;
     }
@@ -384,10 +402,24 @@ function parseServeCommand(argv: string[]): RuntimeHostCliCommand {
   if (managedConfigId !== undefined && (rootPath !== undefined || websocketConfigured)) {
     return error('--managed-config cannot be combined with --root or WebSocket options');
   }
+  if (expectedConfigRevision !== undefined && managedConfigId === undefined) {
+    return error('--expected-config-revision requires --managed-config');
+  }
+  if (startAttemptId !== undefined && managedConfigId === undefined) {
+    return error('--start-attempt requires --managed-config');
+  }
+  if (
+    managedConfigId !== undefined &&
+    (expectedConfigRevision === undefined || startAttemptId === undefined)
+  ) {
+    return error('--managed-config requires --expected-config-revision and --start-attempt');
+  }
   return {
     kind: 'runtime-host-serve',
     json,
     ...(managedConfigId ? { managedConfigId } : {}),
+    ...(expectedConfigRevision ? { expectedConfigRevision } : {}),
+    ...(startAttemptId ? { startAttemptId } : {}),
     ...(rootPath ? { rootPath } : {}),
     ...(websocketPort === undefined
       ? {}

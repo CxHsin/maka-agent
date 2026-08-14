@@ -276,6 +276,15 @@ const PROFILE_PREPARERS: Record<Profile, (setup: ProfileSetup) => Promise<string
     }
     env.DEEPSEEK_API_KEY = 'maka-eval-local';
     env.DEEPSEEK_BASE_URL = proxyBaseUrl;
+    // The harness kills every descendant of its persistent PTY on shutdown,
+    // which removes a task's own background service before the shared-environment
+    // verifier can reach it. The patched subprocess package honours this flag by
+    // closing the shell without killing the process group, and only for it.
+    env.DSH_PRESERVE_BACKGROUND_PROCESSES = '1';
+    // Package installs run unattended here: an interactive tzdata prompt looks
+    // exactly like a hung command and consumes the whole task deadline.
+    env.DEBIAN_FRONTEND = 'noninteractive';
+    env.TZ = 'Etc/UTC';
   },
 
   zcode: async ({ env, home, proxyBaseUrl }) => {

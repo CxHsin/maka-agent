@@ -111,6 +111,15 @@ benchmark and public-solution contamination surfaces, not a complete defense aga
 invented lookup channel. It classifies what it can read: a `CONNECT` tunnel carrying something other
 than TLS or HTTP reaches no rule and no audit record, which is tracked in issue #2977. Collected Maka runtime files
 and egress audit logs are represented in attempt artifacts with byte counts and SHA-256 digests.
+
+The DeepSeek Harness Eval profile extends its persistent Bash deadline beyond Terminal-Bench's
+longest native subject timeout, so the benchmark remains the authoritative deadline and a local
+five-minute tool timeout cannot interrupt `apt` or `dpkg` before verification. On a successful DSH
+exit, the Eval-patched DSH subprocess closes the persistent shell without terminating its
+background descendants, and the relay preserves that subject process group through the verifier
+boundary because the profile explicitly permits background services. Failed, cancelled, and
+framework-timed-out executions still quiesce the complete process group before verification.
+
 The local image tag remains a machine deployment identity rather than a registry digest; digest
 pinning is tracked in issue #2953.
 

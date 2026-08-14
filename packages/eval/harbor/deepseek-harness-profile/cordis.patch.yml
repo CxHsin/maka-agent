@@ -16,10 +16,11 @@
 #   commit 47f943859bef60e4160492346772ded9b24f765a, MIT license.
 #   Reproduced text: the persistent-bash description and the persona below.
 #
-# The one deliberate deviation is reasoning strength: the upstream composition
-# configures neither `thinking` nor `reasoningEffort`, and the adapter default
-# resolves to reasoning_effort=high on the wire, which would leave this arm
-# reasoning less than every other arm in the cohort.
+# The deliberate deviations are reasoning strength and command lifetime. The
+# upstream composition configures neither `thinking` nor `reasoningEffort`, and
+# the adapter default resolves to reasoning_effort=high on the wire. Its
+# five-minute Bash timeout can also interrupt package installation before the
+# benchmark deadline and leave the task environment unusable for verification.
 
 - insert:
     # --- core services ---
@@ -88,7 +89,7 @@
     - id: terminal-bash
       name: '@deepseek-ai/dsh-terminal-bash'
       config:
-        timeoutMs: 300000
+        timeoutMs: 3900000
 
     - id: fs-local
       name: '@deepseek-ai/dsh-fs-local'
@@ -97,7 +98,7 @@
     - id: persistent-bash
       name: '@deepseek-ai/dsh-tool-bash-persistent'
       config:
-        timeoutMs: 300000
+        timeoutMs: 3900000
         description: |-
           Run commands in a bash shell
           * When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.

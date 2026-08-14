@@ -254,6 +254,9 @@ function relayContext(state: RelayState, signal?: AbortSignal): SubjectExecution
           credentials,
           resultToken,
           captureStdout: input.captureStdout ?? true,
+          ...(input.preserveProcessGroupOnExit === undefined
+            ? {}
+            : { preserveProcessGroupOnExit: input.preserveProcessGroupOnExit }),
         })
       ) {
         throw new Error('relay transport is unavailable');

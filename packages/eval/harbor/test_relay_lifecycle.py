@@ -13,6 +13,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 
 class BaseAgent:
@@ -555,6 +556,125 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(late_write.exists())
             finally:
                 Path(scope_path).unlink(missing_ok=True)
+
+    @unittest.skipUnless(shutil.which("setsid"), "requires GNU setsid")
+    async def test_successful_subject_can_preserve_background_service_for_verifier(self):
+        relay = load_relay()
+        environment = LocalEnvironment()
+        token = f"background-service-{os.getpid()}"
+        scope_path = f"/tmp/maka-eval-{token}.pid"
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "service-ready"
+            request = {
+                "command": sys.executable,
+                "args": [
+                    "-c",
+                    (
+                        "import os,time;"
+                        "child=os.fork();"
+                        f"(os.close(1),os.close(2),time.sleep(0.3),"
+                        f"open({str(marker)!r},'w').write('ready'),os._exit(0))"
+                        " if child==0 else os._exit(0)"
+                    ),
+                ],
+                "credentials": {},
+                "resultToken": "0" * 32,
+                "preserveProcessGroupOnExit": True,
+            }
+            try:
+                command = await relay._prepare_command(environment, request, token, scope_path)
+                execution = asyncio.create_task(
+                    asyncio.to_thread(
+                        subprocess.run,
+                        command,
+                        cwd=directory,
+                        shell=True,
+                        check=False,
+                        timeout=2,
+                    )
+                )
+                completed = await execution
+                self.assertEqual(completed.returncode, 0)
+                await relay._finalize_exited_scope(
+                    environment, directory, scope_path, request, completed.returncode
+                )
+                await asyncio.sleep(0.4)
+                self.assertEqual(marker.read_text(), "ready")
+            finally:
+                Path(scope_path).unlink(missing_ok=True)
+
+    async def test_process_preservation_requires_successful_exit(self):
+        relay = load_relay()
+        environment = LocalEnvironment()
+        with patch.object(relay, "_quiesce_scope", new=AsyncMock()) as quiesce:
+            request = {"preserveProcessGroupOnExit": True}
+            await relay._finalize_exited_scope(environment, "/", "/scope", request, 1)
+            quiesce.assert_awaited_once_with(environment, "/", "/scope")
+
+            quiesce.reset_mock()
+            await relay._finalize_exited_scope(environment, "/", "/scope", request, 0)
+            quiesce.assert_not_awaited()
+
+    def test_deepseek_harness_command_timeout_defers_to_benchmark_deadline(self):
+        profile = (
+            Path(__file__).parent / "deepseek-harness-profile" / "cordis.patch.yml"
+        ).read_text()
+        self.assertNotIn("timeoutMs: 300000", profile)
+        self.assertEqual(profile.count("timeoutMs: 3900000"), 2)
+
+    def test_deepseek_harness_package_installs_are_noninteractive(self):
+        wrapper = (Path(__file__).parent.parent / "src" / "harbor-external-subject.ts").read_text()
+        self.assertIn("env.DEBIAN_FRONTEND = 'noninteractive'", wrapper)
+        self.assertIn("env.TZ = 'Etc/UTC'", wrapper)
+
+    @unittest.skipUnless(shutil.which("node"), "requires Node.js")
+    def test_deepseek_harness_toolchain_patch_preserves_background_descendants(self):
+        patcher = (
+            Path(__file__).parent
+            / "deepseek-harness-toolchain"
+            / "patch-subprocess-local.mjs"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            target = (
+                Path(directory)
+                / "node_modules"
+                / "@deepseek-ai"
+                / "dsh-subprocess-local"
+                / "lib"
+                / "index.js"
+            )
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                """\
+\tterminateForHostExit() {
+\t\tthis.forceStopDescendants();
+\t\tthis.forceStopShell();
+\t\tthis.forceStopDescendants();
+\t}
+\tasync closeOnce() {
+\t\tlet survivors = await this.stopDescendants();
+\t\tif (survivors.length > 0) throw new Error(`terminal cleanup failed; surviving pids: ${survivors.map((member) => member.pid).join(", ")}`);
+\t\tawait this.stopShell();
+\t\tsurvivors = await this.stopDescendants();
+\t\tif (survivors.length > 0) throw new Error(`terminal cleanup failed; surviving pids: ${survivors.map((member) => member.pid).join(", ")}`);
+\t\tthis.dataDisposable.dispose();
+\t\tthis.exitDisposable.dispose();
+\t}
+"""
+            )
+            subprocess.run(
+                [shutil.which("node"), patcher, directory],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            patched = target.read_text()
+            self.assertEqual(
+                patched.count('process.env.DSH_PRESERVE_BACKGROUND_PROCESSES === "1"'),
+                2,
+            )
+            self.assertIn("this.forceStopShell();\n\t\t\treturn;", patched)
+            self.assertIn("await this.stopShell();", patched)
 
 
 if __name__ == "__main__":

@@ -60,7 +60,7 @@ export const TOOLCHAIN_IDENTITIES: Readonly<Record<ExternalProfile, ToolchainIde
   'deepseek-harness': {
     root: '/opt/maka-deepseek-harness-toolchain',
     version: '0.1.0-rc.6',
-    fingerprint: 'sha256:9be54a8608eb963763b2ab556219097a79a3f024cbbe07ec307da2064fd45136',
+    fingerprint: 'sha256:a0882b448718ddfb7b64e33a12369c92b0064baf8388fe08a8ff64fe3dd98896',
   },
 };
 

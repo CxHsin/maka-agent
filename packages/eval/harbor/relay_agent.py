@@ -137,7 +137,9 @@ class RelayAgent(BaseAgent):
             await _persist_subject_outputs(environment, result)
             stdout, diagnostic = _project_result(result, request)
             if diagnostic["category"] != "execution-scope-unavailable":
-                await _quiesce_scope(environment, cwd, scope_path)
+                await _finalize_exited_scope(
+                    environment, cwd, scope_path, request, result.return_code
+                )
             if not await _send(
                 writer,
                 {
@@ -269,6 +271,7 @@ async def _prepare_command(
     capture_stdout = request.get("captureStdout", True)
     if not isinstance(capture_stdout, bool):
         raise RuntimeError("invalid Maka Eval stdout policy")
+    _preserve_process_group_on_exit(request)
     result_token = request.get("resultToken")
     if not isinstance(result_token, str) or re.fullmatch(r"[0-9a-f]{32}", result_token) is None:
         raise RuntimeError("invalid Maka Eval result token")
@@ -367,6 +370,13 @@ def _sole_probe_line(probe: Any, prefix: str) -> str:
     return reported[0].strip()
 
 
+def _preserve_process_group_on_exit(request: dict[str, Any]) -> bool:
+    value = request.get("preserveProcessGroupOnExit", False)
+    if not isinstance(value, bool):
+        raise RuntimeError("invalid Maka Eval process preservation policy")
+    return value
+
+
 async def _persist_subject_outputs(environment: Any, result: Any) -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -463,6 +473,18 @@ async def _settle(environment: Any, cwd: str, scope_path: str, execution: Any) -
             raise RuntimeError("Maka Eval subject did not settle")
     await _quiesce_scope(environment, cwd, scope_path)
     return result
+
+
+async def _finalize_exited_scope(
+    environment: Any,
+    cwd: str,
+    scope_path: str,
+    request: dict[str, Any],
+    exit_code: int,
+) -> None:
+    if exit_code == 0 and _preserve_process_group_on_exit(request):
+        return
+    await _quiesce_scope(environment, cwd, scope_path)
 
 
 async def _settle_or_destroy(

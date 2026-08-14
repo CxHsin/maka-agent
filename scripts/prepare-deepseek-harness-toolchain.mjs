@@ -86,6 +86,7 @@ async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {
     // could disagree on what they actually installed.
     'cp /manifest/package.json /manifest/package-lock.json .',
     'npm ci >/dev/null 2>&1',
+    'node /manifest/patch-subprocess-local.mjs /build',
     // Fail the build here rather than at benchmark time if the native module
     // did not compile.
     'node -e "require(\'node-pty\')"',

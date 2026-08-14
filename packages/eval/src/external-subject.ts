@@ -86,6 +86,7 @@ export function createExternalSubjectAdapter(): SubjectAdapter {
                 },
               }),
           ...(config.result === 'exit-code' ? { captureStdout: false } : {}),
+          ...(profile === 'deepseek-harness' ? { preserveProcessGroupOnExit: true } : {}),
         });
         const decoded = execution.stdout.length === 0 ? undefined : decodeResult(execution.stdout);
         const recovered = await recoverExternalMetering(context.metadata, profile);

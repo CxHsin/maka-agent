@@ -254,9 +254,6 @@ function relayContext(state: RelayState, signal?: AbortSignal): SubjectExecution
           credentials,
           resultToken,
           captureStdout: input.captureStdout ?? true,
-          ...(input.preserveProcessGroupOnExit === undefined
-            ? {}
-            : { preserveProcessGroupOnExit: input.preserveProcessGroupOnExit }),
         })
       ) {
         throw new Error('relay transport is unavailable');
@@ -357,7 +354,10 @@ async function startTrial(
   const environmentConfig = resolveEnvironmentConfig(options);
   const networkPolicyPath = resolveNetworkPolicyPath(options);
   const relayPath = resolve(dirname(fileURLToPath(import.meta.url)), '../harbor');
-  const executionEnvironment = egressExecutionEnvironment(options.egressProxy);
+  const executionEnvironment = {
+    ...UNATTENDED_EXECUTION_ENVIRONMENT,
+    ...egressExecutionEnvironment(options.egressProxy),
+  };
   const environment = preparationEnvironment(
     framework,
     relayPath,
@@ -644,6 +644,15 @@ function mergeExecutionEnvironment(
   }
   return { ...subject, ...required };
 }
+
+// Every subject runs unattended in a fresh container, where a package manager
+// that stops to ask a question is indistinguishable from one that hung. That is
+// a property of the environment, not of any one arm: tasks install packages, and
+// subjects only decide when.
+const UNATTENDED_EXECUTION_ENVIRONMENT: Readonly<Record<string, string>> = {
+  DEBIAN_FRONTEND: 'noninteractive',
+  TZ: 'Etc/UTC',
+};
 
 function egressExecutionEnvironment(
   options: HarnessOptions['egressProxy'],

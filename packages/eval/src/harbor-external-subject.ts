@@ -12,6 +12,12 @@ import {
   type ExternalProfile as Profile,
 } from './toolchain-verification.js';
 import { isInferenceAdmissionEvent } from './provider-admission.js';
+import {
+  deriveMetering,
+  estimateCost,
+  type ProviderMeteringCounts,
+  type ProviderUsage as Usage,
+} from './provider-metering.js';
 import { removeEvalWebTools } from './provider-web-tool-surface.js';
 import { takeRelayResultToken, writeRelayResult } from './relay-result-frame.js';
 
@@ -22,40 +28,11 @@ const resultToken = takeRelayResultToken();
 // lifecycle test pins the two together.
 const DEEPSEEK_HARNESS_PROFILE = 'maka-eval';
 
-// One shape serves both readers. `report()` returns it after settling, and the
-// on-disk checkpoint is the same snapshot taken at an arbitrary moment, so the
-// two can never disagree about what a field means. `inFlightRequests` is the
-// only field that distinguishes them: it is zero by construction in a settled
-// report and may be positive in a checkpoint written mid-request.
-interface MeteringReport {
-  readonly usage: Usage | null;
-  readonly costUsd: number | null;
-  readonly requests: number;
-  readonly settledRequests: number;
-  readonly inFlightRequests: number;
-  readonly admittedRequests: number;
-  readonly usageRequests: number;
-  readonly missingUsageRequests: number;
-  readonly usageComplete: boolean;
-  readonly removedWebTools: number;
-  readonly models: readonly string[];
-  readonly toolNames: readonly string[];
-}
-
 const PROVIDER_USAGE_CHECKPOINT_SCHEMA = 'maka.external_provider_usage.v1';
 let atomicWriteSequence = 0;
 
 type SubjectStatus = 'completed' | 'failed' | 'infra_failed' | 'indeterminate';
 const CLASSIFIABLE_RECORD_LIMIT_BYTES = 16 * 1024 * 1024;
-
-interface Usage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  reasoningTokens: number;
-  totalTokens: number;
-}
 
 interface ProfileSetup {
   readonly env: NodeJS.ProcessEnv;
@@ -281,10 +258,6 @@ const PROFILE_PREPARERS: Record<Profile, (setup: ProfileSetup) => Promise<string
     // verifier can reach it. The patched subprocess package honours this flag by
     // closing the shell without killing the process group, and only for it.
     env.DSH_PRESERVE_BACKGROUND_PROCESSES = '1';
-    // Package installs run unattended here: an interactive tzdata prompt looks
-    // exactly like a hung command and consumes the whole task deadline.
-    env.DEBIAN_FRONTEND = 'noninteractive';
-    env.TZ = 'Etc/UTC';
   },
 
   zcode: async ({ env, home, proxyBaseUrl }) => {
@@ -399,8 +372,9 @@ try {
     child = undefined;
     await writeState('child_exited', { exitCode: result.exitCode });
     const metering = await proxy.report();
+    const derived = deriveMetering(metering);
     usage = metering.usage;
-    costUsd = usage && metering.usageComplete ? estimateCost(usage) : null;
+    costUsd = derived.costUsd;
     const classified = classifyExecution(
       profile,
       result.exitCode,
@@ -426,7 +400,7 @@ try {
         requests: metering.requests,
         admittedRequests: metering.admittedRequests,
         usageRequests: metering.usageRequests,
-        usageComplete: metering.usageComplete,
+        usageComplete: derived.usageComplete,
         removedWebTools: metering.removedWebTools,
         models: metering.models,
         toolNames: metering.toolNames,
@@ -448,6 +422,13 @@ try {
   process.removeListener('SIGINT', interrupt);
   removeCredential();
 }
+
+// The relay cannot read the result frame, so this process's exit code is the
+// only form in which the semantic status reaches it. Projecting the status here
+// is what lets the relay decide scope teardown from the fact itself rather than
+// from a flag set before the subject ran: only a completed subject is entitled
+// to leave its background services standing for the verifier.
+process.exitCode = status === 'completed' ? 0 : 1;
 
 writeRelayResult(resultToken, {
   schemaVersion: 'maka.external_subject_result.v2',
@@ -686,39 +667,28 @@ async function startMeteringProxy(
   // Metering is only readable as one settled snapshot: a request still in
   // flight when the child exits would otherwise be missing from the counts that
   // decide admission, usage, and cost.
-  report(): Promise<MeteringReport>;
+  report(): Promise<ProviderMeteringCounts>;
   close(): Promise<void>;
 }> {
   const total = zeroUsage();
   let measured = false;
   let requests = 0;
-  let settledRequests = 0;
   let inFlightRequests = 0;
   let admittedRequests = 0;
   let usageRequests = 0;
   let removedWebTools = 0;
   const requestModels = new Set<string>();
   const observedToolNames = new Set<string>();
-  const snapshot = (): MeteringReport => {
-    const usage = measured
-      ? { ...total, totalTokens: total.inputTokens + total.outputTokens }
-      : null;
-    return {
-      usage,
-      costUsd: usage ? estimateCost(usage) : null,
-      requests,
-      settledRequests,
-      inFlightRequests,
-      admittedRequests,
-      usageRequests,
-      missingUsageRequests: admittedRequests - usageRequests,
-      usageComplete:
-        inFlightRequests === 0 && admittedRequests > 0 && usageRequests === admittedRequests,
-      removedWebTools,
-      models: [...requestModels].sort(),
-      toolNames: [...observedToolNames].sort(),
-    };
-  };
+  const snapshot = (): ProviderMeteringCounts => ({
+    usage: measured ? { ...total, totalTokens: total.inputTokens + total.outputTokens } : null,
+    requests,
+    inFlightRequests,
+    admittedRequests,
+    usageRequests,
+    removedWebTools,
+    models: [...requestModels].sort(),
+    toolNames: [...observedToolNames].sort(),
+  });
   // The wrapper's own result frame is lost when the process is killed rather
   // than asked to stop, and a run that is cut off is exactly the run with the
   // most tokens spent. The checkpoint is therefore written at the start and the
@@ -785,7 +755,21 @@ async function startMeteringProxy(
             response.setHeader(name, value);
         });
         const parser = usageParser(anthropic);
+        let counted = false;
+        const admit = async () => {
+          if (counted || !upstream.ok || !parser.admitted()) return;
+          counted = true;
+          admittedRequests += 1;
+          await persistCheckpoint();
+        };
         try {
+          // Admission is a fact about the provider, not about this request
+          // finishing: once the stream carries the event, the model work has
+          // been done and billed whatever happens to this process next. It is
+          // therefore recorded and persisted the moment it is observed, so a
+          // checkpoint written mid-stream already knows. `admitted` is
+          // monotonic and `counted` makes the increment idempotent, so this
+          // costs one write per request rather than one per chunk.
           if (upstream.body) {
             const reader = upstream.body.getReader();
             for (;;) {
@@ -793,22 +777,20 @@ async function startMeteringProxy(
               if (next.done) break;
               response.write(Buffer.from(next.value));
               parser.push(Buffer.from(next.value).toString('utf8'));
+              await admit();
             }
           }
           response.end();
         } finally {
           const parsed = parser.finish();
-          if (upstream.ok && parsed.admitted) {
-            admittedRequests += 1;
-            if (parsed.usage) {
-              usageRequests += 1;
-              measured = true;
-              addUsage(total, parsed.usage);
-            }
+          await admit();
+          if (counted && parsed.usage) {
+            usageRequests += 1;
+            measured = true;
+            addUsage(total, parsed.usage);
           }
         }
       } finally {
-        settledRequests += 1;
         inFlightRequests -= 1;
         await persistCheckpoint();
       }
@@ -853,6 +835,9 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
 
 function usageParser(anthropic: boolean): {
   push(text: string): void;
+  // Monotonic, and readable before the stream ends: the caller records
+  // admission when the provider states it, not when the request settles.
+  admitted(): boolean;
   finish(): { usage: Usage | null; admitted: boolean };
 } {
   let buffered = '';
@@ -878,6 +863,9 @@ function usageParser(anthropic: boolean): {
         buffered = buffered.slice(newline + 1);
         newline = buffered.indexOf('\n');
       }
+    },
+    admitted() {
+      return admitted;
     },
     finish() {
       if (buffered.trim()) consume(buffered);
@@ -944,13 +932,6 @@ function addUsage(target: Usage, value: Usage): void {
   target.cacheWriteTokens += value.cacheWriteTokens;
   target.reasoningTokens += value.reasoningTokens;
   target.totalTokens = target.inputTokens + target.outputTokens;
-}
-
-function estimateCost(value: Usage): number {
-  const uncached = Math.max(0, value.inputTokens - value.cacheReadTokens - value.cacheWriteTokens);
-  return (
-    (uncached * 0.145 + value.cacheReadTokens * 0.0029 + value.outputTokens * 0.29) / 1_000_000
-  );
 }
 
 function zeroUsage(): Usage {

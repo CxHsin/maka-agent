@@ -710,9 +710,15 @@ test('eight-arm spec and wrappers freeze the working provider contracts', async 
       ['pi', 'https://api.deepseek.com', root, '/usr/bin/true'],
       ['deepseek-harness', 'https://api.deepseek.com', root, '/usr/bin/true'],
     ]) {
-      const { stdout } = await execFileAsync(process.execPath, [wrapper.pathname, ...args], {
-        env,
-      });
+      // These subjects run `/usr/bin/true` and never reach the provider, so
+      // each one is an infrastructure failure and exits nonzero: the exit code
+      // now carries the semantic status for the relay's benefit.
+      const stdout = await execFileAsync(process.execPath, [wrapper.pathname, ...args], { env })
+        .then((settled) => settled.stdout)
+        .catch((error: { stdout?: string }) => {
+          assert.equal(typeof error.stdout, 'string');
+          return error.stdout as string;
+        });
       assert.equal(
         decodeResultFrame(stdout, '0123456789abcdef0123456789abcdef').schemaVersion,
         'maka.external_subject_result.v2',
@@ -992,11 +998,6 @@ test('the DeepSeek Harness arm pins its own minimal composition', async () => {
     ),
   ) as { dsh: { profile: { bundles: string[] } } };
   assert.deepEqual(profile.dsh.profile.bundles, []);
-  const composition = await readFile(
-    new URL('../../harbor/deepseek-harness-profile/cordis.patch.yml', import.meta.url),
-    'utf8',
-  );
-  assert.equal(/^\s*disabled:/mu.test(composition), false);
 });
 
 test('Maka Eval policy enables privacy independently of the tool profile', () => {

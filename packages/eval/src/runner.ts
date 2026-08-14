@@ -33,7 +33,6 @@ export interface SubjectExecutionContext {
     readonly environment?: Readonly<Record<string, string>>;
     readonly credentialEnvironment: Readonly<Record<string, string>>;
     readonly captureStdout?: boolean;
-    readonly preserveProcessGroupOnExit?: boolean;
   }) => Promise<{
     readonly termination: 'exited' | 'framework_timeout';
     readonly exitCode: number;

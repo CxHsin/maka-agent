@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { JsonObject } from './experiment.js';
 import type { NormalizedUsage } from './result.js';
 import type { SubjectAdapter } from './runner.js';
+import { deriveMetering } from './provider-metering.js';
 import {
   TOOLCHAIN_IDENTITIES,
   TOOLCHAIN_IDENTITY_ENV,
@@ -86,7 +87,6 @@ export function createExternalSubjectAdapter(): SubjectAdapter {
                 },
               }),
           ...(config.result === 'exit-code' ? { captureStdout: false } : {}),
-          ...(profile === 'deepseek-harness' ? { preserveProcessGroupOnExit: true } : {}),
         });
         const decoded = execution.stdout.length === 0 ? undefined : decodeResult(execution.stdout);
         const recovered = await recoverExternalMetering(context.metadata, profile);
@@ -153,19 +153,11 @@ export function createExternalSubjectAdapter(): SubjectAdapter {
             ],
           };
         }
-        if (execution.exitCode !== 0) {
-          return {
-            usage: recovered?.usage ?? null,
-            costUsd: recovered?.costUsd ?? null,
-            durationMs: Date.now() - startedAt,
-            status: context.signal?.aborted ? ('indeterminate' as const) : ('failed' as const),
-            failureReason: `external subject exited ${execution.exitCode}`,
-            artifacts: [
-              ...recoveryArtifacts,
-              { kind: 'external_process', exitCode: execution.exitCode },
-            ],
-          };
-        }
+        // The wrapper's exit code is a projection of the status in its result
+        // frame, carried for the relay's benefit because the relay cannot read
+        // the frame. Where the frame is readable it is the authority, so a
+        // nonzero exit alongside a valid frame is not a second opinion. Only
+        // when no frame arrived does the exit code decide anything.
         if (!decoded) {
           return {
             usage: recovered?.usage ?? null,
@@ -253,20 +245,20 @@ export async function recoverExternalMetering(
     return undefined;
   }
   try {
+    // The checkpoint carries only what the proxy observed. Completeness, cost
+    // and the missing-usage count are worked out here through the same function
+    // the wrapper uses, so there is no second definition of them to disagree
+    // with — and nothing to validate a stored copy against.
     const checkpoint = exact(
       value,
       [
         'schemaVersion',
         'profile',
         'usage',
-        'costUsd',
         'requests',
-        'settledRequests',
         'inFlightRequests',
         'admittedRequests',
         'usageRequests',
-        'missingUsageRequests',
-        'usageComplete',
         'removedWebTools',
         'models',
         'toolNames',
@@ -275,76 +267,54 @@ export async function recoverExternalMetering(
     );
     if (
       checkpoint.schemaVersion !== 'maka.external_provider_usage.v1' ||
-      checkpoint.profile !== profile ||
-      typeof checkpoint.usageComplete !== 'boolean'
+      checkpoint.profile !== profile
     ) {
       return undefined;
     }
     const usage = checkpoint.usage === null ? null : decodeUsage(checkpoint.usage);
-    const costUsd =
-      checkpoint.costUsd === null
-        ? null
-        : nonnegative(checkpoint.costUsd, 'external metering cost');
-    if ((usage === null) !== (costUsd === null)) return undefined;
-    const requests = count(checkpoint.requests, 'external metering requests');
-    const settledRequests = count(checkpoint.settledRequests, 'external metering settled requests');
-    const inFlightRequests = count(
-      checkpoint.inFlightRequests,
-      'external metering in-flight requests',
-    );
-    const admittedRequests = count(
-      checkpoint.admittedRequests,
-      'external metering admitted requests',
-    );
-    const usageRequests = count(checkpoint.usageRequests, 'external metering usage requests');
-    const missingUsageRequests = count(
-      checkpoint.missingUsageRequests,
-      'external metering missing usage requests',
-    );
-    const removedWebTools = count(
-      checkpoint.removedWebTools,
-      'external metering removed web tools',
-    );
-    const models = stringList(checkpoint.models, 'external metering models');
-    const toolNames = stringList(checkpoint.toolNames, 'external metering tool names');
+    const counts = {
+      usage,
+      requests: count(checkpoint.requests, 'external metering requests'),
+      inFlightRequests: count(checkpoint.inFlightRequests, 'external metering in-flight requests'),
+      admittedRequests: count(checkpoint.admittedRequests, 'external metering admitted requests'),
+      usageRequests: count(checkpoint.usageRequests, 'external metering usage requests'),
+      removedWebTools: count(checkpoint.removedWebTools, 'external metering removed web tools'),
+      models: stringList(checkpoint.models, 'external metering models'),
+      toolNames: stringList(checkpoint.toolNames, 'external metering tool names'),
+    };
+    // A request may be admitted while still in flight, so admission is bounded
+    // by the requests made rather than by the requests settled.
     if (
-      settledRequests + inFlightRequests !== requests ||
-      admittedRequests > settledRequests ||
-      usageRequests > admittedRequests ||
-      missingUsageRequests !== admittedRequests - usageRequests ||
-      (usageRequests > 0 && usage === null)
+      counts.inFlightRequests > counts.requests ||
+      counts.admittedRequests > counts.requests ||
+      counts.usageRequests > counts.admittedRequests ||
+      (counts.usageRequests > 0 && usage === null)
     ) {
       return undefined;
     }
-    const complete = checkpoint.usageComplete;
-    if (
-      complete !==
-      (inFlightRequests === 0 && admittedRequests > 0 && usageRequests === admittedRequests)
-    ) {
-      return undefined;
-    }
+    const derived = deriveMetering(counts);
     return {
       usage,
-      costUsd,
-      admittedRequests,
+      costUsd: derived.costUsd,
+      admittedRequests: counts.admittedRequests,
       artifact: {
         kind: 'provider-metering-recovery',
         profile,
         path: `agent/${profile}.provider-usage.json`,
         bytes: bytes.byteLength,
         sha256: createHash('sha256').update(bytes).digest('hex'),
-        requests,
-        settledRequests,
-        inFlightRequests,
-        admittedRequests,
-        usageRequests,
-        missingUsageRequests,
-        usageComplete: complete,
-        tokenBasis: complete ? 'complete' : 'lower-bound',
-        costBasis: complete ? 'complete' : 'lower-bound',
-        removedWebTools,
-        models,
-        toolNames,
+        requests: counts.requests,
+        settledRequests: derived.settledRequests,
+        inFlightRequests: counts.inFlightRequests,
+        admittedRequests: counts.admittedRequests,
+        usageRequests: counts.usageRequests,
+        missingUsageRequests: derived.missingUsageRequests,
+        usageComplete: derived.usageComplete,
+        tokenBasis: derived.tokenBasis,
+        costBasis: derived.tokenBasis,
+        removedWebTools: counts.removedWebTools,
+        models: counts.models,
+        toolNames: counts.toolNames,
       },
     };
   } catch {

@@ -74,16 +74,21 @@ export function isExternalProfile(value: string | undefined): value is ExternalP
 export async function verifyToolchainDirectory(
   profile: ExternalProfile,
   root: string,
+  // What the tree has to be. The profile only names it; the identity itself is
+  // the thing being checked, and a caller that has one already need not go
+  // through the table to say so.
+  expected: ToolchainIdentity = TOOLCHAIN_IDENTITIES[profile],
 ): Promise<ToolchainIdentity> {
-  const expected = TOOLCHAIN_IDENTITIES[profile];
   const resolvedRoot = resolve(root);
-  const manifest = JSON.parse(await readFile(join(resolvedRoot, 'manifest.json'), 'utf8')) as {
-    fingerprint?: unknown;
-  };
-  if (manifest.fingerprint !== expected.fingerprint) {
+  // The pinned fingerprint is the digest of the checksum manifest, so it is
+  // computed here from the manifest on disk rather than read out of the tree.
+  // Taking the tree's own `manifest.json` value would only compare the pin
+  // against whatever the directory claims to be, which any directory can claim.
+  const checksums = await readFile(join(resolvedRoot, 'checksums.sha256'), 'utf8');
+  const fingerprint = `sha256:${createHash('sha256').update(checksums).digest('hex')}`;
+  if (fingerprint !== expected.fingerprint) {
     throw new Error(`${profile} toolchain fingerprint mismatch`);
   }
-  const checksums = await readFile(join(resolvedRoot, 'checksums.sha256'), 'utf8');
   for (const line of checksums.split('\n')) {
     if (!line.trim()) continue;
     const match = /^([a-f0-9]{64})\s+(.+)$/u.exec(line);

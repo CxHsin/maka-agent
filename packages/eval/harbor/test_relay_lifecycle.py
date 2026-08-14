@@ -603,29 +603,16 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 Path(scope_path).unlink(missing_ok=True)
 
-    async def test_process_preservation_requires_successful_exit(self):
+    async def test_only_a_successful_subject_keeps_its_process_group(self):
         relay = load_relay()
         environment = LocalEnvironment()
         with patch.object(relay, "_quiesce_scope", new=AsyncMock()) as quiesce:
-            request = {"preserveProcessGroupOnExit": True}
-            await relay._finalize_exited_scope(environment, "/", "/scope", request, 1)
+            await relay._finalize_exited_scope(environment, "/", "/scope", 1)
             quiesce.assert_awaited_once_with(environment, "/", "/scope")
 
             quiesce.reset_mock()
-            await relay._finalize_exited_scope(environment, "/", "/scope", request, 0)
+            await relay._finalize_exited_scope(environment, "/", "/scope", 0)
             quiesce.assert_not_awaited()
-
-    def test_deepseek_harness_command_timeout_defers_to_benchmark_deadline(self):
-        profile = (
-            Path(__file__).parent / "deepseek-harness-profile" / "cordis.patch.yml"
-        ).read_text()
-        self.assertNotIn("timeoutMs: 300000", profile)
-        self.assertEqual(profile.count("timeoutMs: 3900000"), 2)
-
-    def test_deepseek_harness_package_installs_are_noninteractive(self):
-        wrapper = (Path(__file__).parent.parent / "src" / "harbor-external-subject.ts").read_text()
-        self.assertIn("env.DEBIAN_FRONTEND = 'noninteractive'", wrapper)
-        self.assertIn("env.TZ = 'Etc/UTC'", wrapper)
 
     @unittest.skipUnless(shutil.which("node"), "requires Node.js")
     def test_deepseek_harness_toolchain_patch_preserves_background_descendants(self):
@@ -675,6 +662,19 @@ class RelayLifecycleTest(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIn("this.forceStopShell();\n\t\t\treturn;", patched)
             self.assertIn("await this.stopShell();", patched)
+
+            # The value of this patcher is that an upstream release it no longer
+            # understands stops the build rather than producing a toolchain that
+            # silently kills the task's services again. Running it over its own
+            # output is the cheapest form of drift: the text it anchors on is
+            # gone.
+            drifted = subprocess.run(
+                [shutil.which("node"), patcher, directory],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(drifted.returncode, 0)
+            self.assertNotEqual(target.read_text(), "")
 
 
 if __name__ == "__main__":

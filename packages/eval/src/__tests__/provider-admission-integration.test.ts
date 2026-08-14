@@ -11,7 +11,31 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 const RESULT_TOKEN = '0123456789abcdef0123456789abcdef';
 
-test('provider metering checkpoint survives an abrupt wrapper exit', async () => {
+// The wrapper's exit code projects its semantic status for the relay, which
+// cannot read the result frame. Anything other than a completed subject exits
+// nonzero, so running one is not an error to the caller — the frame is on
+// stdout either way, and the exit code is a second reading of the same fact.
+async function runWrapper(
+  args: readonly string[],
+  env: Record<string, string>,
+): Promise<{ stdout: string; exitCode: number }> {
+  try {
+    const { stdout } = await execFileAsync(process.execPath, [...args], {
+      env: { ...process.env, ...env },
+    });
+    return { stdout, exitCode: 0 };
+  } catch (error) {
+    const failure = error as { stdout?: string; code?: number };
+    if (typeof failure.stdout !== 'string' || typeof failure.code !== 'number') throw error;
+    return { stdout: failure.stdout, exitCode: failure.code };
+  }
+}
+
+// The provider states admission mid-stream and this connection never ends, so
+// the request is still in flight when the wrapper is killed. The model work has
+// been done and billed regardless, and the checkpoint has to say so: it is the
+// difference between an attempt the framework retries and one it records.
+test('provider metering checkpoint records admission before the request settles', async () => {
   const server = createServer((_request, response) => {
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     response.write('data: {"type":"response.created"}\n\n');
@@ -51,12 +75,19 @@ test('provider metering checkpoint survives an abrupt wrapper exit', async () =>
   try {
     const checkpointPath = join(root, 'logs/agent/opencode.provider-usage.json');
     const checkpoint = await waitForCheckpoint(checkpointPath, (value) => {
-      return value.requests === 1 && value.inFlightRequests === 1;
+      return value.admittedRequests === 1;
     });
     assert.equal(checkpoint.schemaVersion, 'maka.external_provider_usage.v1');
     assert.equal(checkpoint.profile, 'opencode');
+    assert.equal(checkpoint.requests, 1);
+    // Admitted while unsettled: the state the old counter could not express.
+    assert.equal(checkpoint.inFlightRequests, 1);
+    // No usage event arrived, so there is nothing to report as spent yet.
     assert.equal(checkpoint.usage, null);
-    assert.equal(checkpoint.usageComplete, false);
+    // Nothing derivable is stored — the host works those out from the counts.
+    assert.equal('usageComplete' in checkpoint, false);
+    assert.equal('costUsd' in checkpoint, false);
+    assert.equal('settledRequests' in checkpoint, false);
   } finally {
     wrapperProcess.kill('SIGKILL');
     await once(wrapperProcess, 'exit').catch(() => undefined);
@@ -106,8 +137,7 @@ test('provider failures remain infrastructure failures until inference admission
     );
     try {
       const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
-      const { stdout } = await execFileAsync(
-        process.execPath,
+      const { stdout, exitCode } = await runWrapper(
         [
           wrapper.pathname,
           'opencode',
@@ -117,13 +147,13 @@ test('provider failures remain infrastructure failures until inference admission
           child,
         ],
         {
-          env: {
-            ...process.env,
-            OPENAI_API_KEY: 'credential-sentinel-must-not-persist',
-            MAKA_EVAL_RESULT_TOKEN: RESULT_TOKEN,
-          },
+          OPENAI_API_KEY: 'credential-sentinel-must-not-persist',
+          MAKA_EVAL_RESULT_TOKEN: RESULT_TOKEN,
         },
       );
+      // Neither of these subjects completed, and the relay has to be able to
+      // see that without reading the frame.
+      assert.equal(exitCode, 1);
       const result = decodeResultFrame(stdout) as {
         status: string;
         costUsd: number | null;
@@ -148,15 +178,9 @@ test('provider failures remain infrastructure failures until inference admission
         0o644,
       );
       assert.equal(checkpoint.requests, 1);
-      assert.equal(checkpoint.settledRequests, 1);
       assert.equal(checkpoint.inFlightRequests, 0);
       assert.equal(checkpoint.admittedRequests, admittedRequests);
       assert.equal(checkpoint.usageRequests, expectedCacheWrite === null ? 0 : 1);
-      assert.equal(
-        checkpoint.missingUsageRequests,
-        expectedCacheWrite === null ? admittedRequests : 0,
-      );
-      assert.equal(checkpoint.usageComplete, usageComplete);
       assert.doesNotMatch(
         JSON.stringify(result),
         /(?:credential|stdout|stderr)-sentinel-must-not-persist/u,
@@ -240,16 +264,9 @@ async function executePiWithTerminalRecord(contentBytes: number): Promise<{
   );
   try {
     const wrapper = new URL('../harbor-external-subject.js', import.meta.url);
-    const { stdout } = await execFileAsync(
-      process.execPath,
+    const { stdout } = await runWrapper(
       [wrapper.pathname, 'pi', `http://127.0.0.1:${address.port}`, root, process.execPath, child],
-      {
-        env: {
-          ...process.env,
-          OPENAI_API_KEY: 'upstream-test-key',
-          MAKA_EVAL_RESULT_TOKEN: RESULT_TOKEN,
-        },
-      },
+      { OPENAI_API_KEY: 'upstream-test-key', MAKA_EVAL_RESULT_TOKEN: RESULT_TOKEN },
     );
     return decodeResultFrame(stdout) as Awaited<ReturnType<typeof executePiWithTerminalRecord>>;
   } finally {

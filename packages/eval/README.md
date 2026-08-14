@@ -28,7 +28,7 @@ The checked-in Terminal-Bench 2.1 four-arm cohort is `experiments/terminal-bench
 
 The single-arm DeepSeek Harness cohort is `experiments/terminal-bench-2.1-deepseek-v4-flash-deepseek-harness.json`. The harness ships no benchmark runner: its `BENCHMARK.md` names the checked-in `examples/jsonrpc-agent` minimal composition and asks for one workspace and session id per task. `harbor/deepseek-harness-profile/` is that composition, carried as a complete harness profile whose manifest declares no bundles. Because the tree is composed over an empty entry list, every entry the model can observe is named in one file, an upstream bundle gaining a plugin cannot widen this arm's tool surface, and a missing service is a boot failure rather than a silent downgrade. The composition was validated against upstream request-for-request: identical tool names, byte-identical tool schemas, byte-identical system prompt, identical message sequence. The one deviation, recorded in the file, is that reasoning is pinned to max because the adapter default resolves to `reasoning_effort=high` on the wire.
 
-Build that arm's toolchain with `node scripts/prepare-deepseek-harness-toolchain.mjs --out <dir> --write`. It runs inside a pinned `linux/amd64` container because the composition depends on `node-pty`, which publishes no Linux prebuild, and it copies that container's Node into the toolchain so the executed path resolves inside the mounted root. Dependencies are installed with `npm ci` from the reviewed lockfile in `harbor/deepseek-harness-toolchain/`, so a harness version does not silently mean two different trees. The recorded fingerprint is the digest of `checksums.sha256`, which covers every regular file, so the constant in `src/toolchain-verification.ts` pins the manifest and the manifest pins the tree. Native modules are compiled during the build and need not come out byte-identical on another machine, so a rebuild can still produce a new fingerprint; `--write` re-pins it and verification fails closed until the two agree. `--out` is rebuilt from scratch and refuses any directory that is neither empty nor a previous build.
+Build that arm's toolchain with `node scripts/prepare-deepseek-harness-toolchain.mjs --out <dir> --write`. It runs inside a pinned `linux/amd64` container because the composition depends on `node-pty`, which publishes no Linux prebuild, and it copies that container's Node into the toolchain so the executed path resolves inside the mounted root. Dependencies are installed with `npm ci` from the reviewed lockfile in `harbor/deepseek-harness-toolchain/`, so a harness version does not silently mean two different trees. The recorded fingerprint is the digest of `checksums.sha256`, which covers every regular file, and verification recomputes that digest from the manifest on disk rather than reading the value the tree reports for itself. The constant in `src/toolchain-verification.ts` therefore pins the manifest and the manifest pins the tree. Native modules are compiled during the build and need not come out byte-identical on another machine, so a rebuild can still produce a new fingerprint; `--write` re-pins it and verification fails closed until the two agree. `--out` is rebuilt from scratch and refuses any directory that is neither empty nor a previous build.
 
 `experiments/terminal-bench-2.1-deepseek-v4-flash-maka-vs-deepseek-harness.json` runs Maka and the harness arm in one task group, so each task starts one container of each at the same moment rather than comparing two runs on two occasions. Two properties of that spec do not follow from the framework and belong to whoever reads its results.
 
@@ -39,12 +39,24 @@ Both arms meet the same policy: `egressProxy` is executor configuration, subject
 Single-arm results are not drawn from the same run as the multi-arm cohort. Task groups hold every subject for one task, so each arm adds a container: the eight-arm cohort reaches 128 concurrent trials at its declared limit, and this spec raises its own limit so its 89 cells run under comparable machine load. They remain separate runs on separate occasions, which no setting can change.
 
 External provider metering does not depend on the subject exiting cleanly. The wrapper's proxy writes
-`agent/<profile>.provider-usage.json` at the start and the settlement of every request, renaming it into
-place so a reader sees one whole snapshot or the previous one. When the result frame is missing — the
-wrapper was killed rather than asked to stop — the executor recovers usage and cost from that file and
-records whether the figure is complete or a lower bound, along with the in-flight and missing-usage
-request counts that make it one. A run that was cut off after admitted model work is therefore scored
-and attributed rather than discarded.
+`agent/<profile>.provider-usage.json` at the start of every request, at its settlement, and at the
+moment the provider states admission, renaming it into place so a reader sees one whole snapshot or
+the previous one. Admission is recorded when it is observed rather than when the request finishes,
+because the model work has been done and billed whether or not this process survives to see the
+stream end. When the result frame is missing — the wrapper was killed rather than asked to stop —
+the executor recovers usage from that file. A run that was cut off after admitted model work is
+therefore scored as a failed subject rather than retried as infrastructure.
+
+The checkpoint carries only what the proxy observed: usage and the request, in-flight, admitted, and
+usage-request counts. Whether the figure is complete, how many admitted requests are missing usage,
+and what the run cost are worked out from those counts by one function both sides call, so the two
+processes cannot hold two versions of a value neither of them owns. Cost is reported only for a
+complete figure; a partial token count is kept as a lower bound, because a cost derived from it would
+enter the result kernel indistinguishable from a settled one.
+
+The wrapper's process exit code projects its semantic status: zero only when the subject completed.
+The relay cannot read the result frame, so this is the form in which the status reaches it, and the
+executor prefers the frame wherever the frame is readable.
 
 A subject that exhausts the framework timeout is reported as `subject_failed` with its verifier reward intact. The reward is the outcome; the status records that the run was cut off rather than finishing on its own. Only a missing reward is an infrastructure failure.
 
@@ -112,13 +124,20 @@ invented lookup channel. It classifies what it can read: a `CONNECT` tunnel carr
 than TLS or HTTP reaches no rule and no audit record, which is tracked in issue #2977. Collected Maka runtime files
 and egress audit logs are represented in attempt artifacts with byte counts and SHA-256 digests.
 
-The DeepSeek Harness Eval profile extends its persistent Bash deadline beyond Terminal-Bench's
+A task may start a service its verifier is meant to reach, so the relay leaves the subject's process
+group standing when the subject reports success, and quiesces it otherwise — on failure, cancellation
+and framework timeout alike. That rule is the same for every subject: it follows from the reported
+status, and is not a property one arm can be granted and another not. The DeepSeek Harness needs one
+extra thing to reach it, because it owns a persistent PTY tree and kills every descendant on
+shutdown: the Eval-patched DSH subprocess skips that kill under `DSH_PRESERVE_BACKGROUND_PROCESSES`,
+which brings the arm level with the others rather than ahead of them.
+
+The DeepSeek Harness Eval profile also extends its persistent Bash deadline beyond Terminal-Bench's
 longest native subject timeout, so the benchmark remains the authoritative deadline and a local
-five-minute tool timeout cannot interrupt `apt` or `dpkg` before verification. On a successful DSH
-exit, the Eval-patched DSH subprocess closes the persistent shell without terminating its
-background descendants, and the relay preserves that subject process group through the verifier
-boundary because the profile explicitly permits background services. Failed, cancelled, and
-framework-timed-out executions still quiesce the complete process group before verification.
+five-minute tool timeout cannot interrupt `apt` or `dpkg` before verification. Every subject runs
+with `DEBIAN_FRONTEND=noninteractive` and `TZ=Etc/UTC` in its execution environment, because an
+interactive package prompt in an unattended container is indistinguishable from a hung command, and
+that is a property of the container rather than of any one arm.
 
 The local image tag remains a machine deployment identity rather than a registry digest; digest
 pinning is tracked in issue #2953.

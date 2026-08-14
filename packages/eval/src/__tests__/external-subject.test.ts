@@ -1,21 +1,17 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { createExternalSubjectAdapter, recoverExternalMetering } from '../external-subject.js';
 import type { ExperimentCell, ExperimentSpec } from '../experiment.js';
 import type { CellAttempt } from '../result.js';
-import { TOOLCHAIN_IDENTITIES, TOOLCHAIN_IDENTITY_ENV } from '../toolchain-verification.js';
+import { TOOLCHAIN_IDENTITIES, verifyToolchainDirectory } from '../toolchain-verification.js';
 
 test('recovers lower-bound metering when external settlement is interrupted', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-metering-recovery-'));
   const trialPath = join(root, 'trial');
-  const toolchainRoot = join(root, 'toolchain');
-  const executable = join(toolchainRoot, 'bin/codex');
-  const sourceEnv = 'MAKA_TEST_CODEX_RECOVERY_TOOLCHAIN';
-  const previous = process.env[sourceEnv];
   const usage = {
     inputTokens: 100,
     outputTokens: 20,
@@ -24,123 +20,83 @@ test('recovers lower-bound metering when external settlement is interrupted', as
     reasoningTokens: 10,
     totalTokens: 120,
   };
-  process.env[sourceEnv] = toolchainRoot;
   try {
-    await mkdir(join(toolchainRoot, 'bin'), { recursive: true });
-    await writeFile(executable, 'codex');
-    const digest = createHash('sha256').update('codex').digest('hex');
-    await writeFile(join(toolchainRoot, 'checksums.sha256'), `${digest}  bin/codex\n`);
-    await writeFile(
-      join(toolchainRoot, 'manifest.json'),
-      `${JSON.stringify({ fingerprint: TOOLCHAIN_IDENTITIES.codex.fingerprint })}\n`,
-    );
     await mkdir(join(trialPath, 'agent'), { recursive: true });
     await writeFile(
       join(trialPath, 'agent/codex.provider-usage.json'),
+      // Two requests admitted, one of them still in flight, and usage seen for
+      // only one of them: a killed wrapper's usage is a lower bound, and the
+      // counts are what establish that. Nothing derivable is stored.
       `${JSON.stringify({
         schemaVersion: 'maka.external_provider_usage.v1',
         profile: 'codex',
         usage,
-        costUsd: 0.01,
         requests: 3,
-        settledRequests: 2,
         inFlightRequests: 1,
         admittedRequests: 2,
         usageRequests: 1,
-        missingUsageRequests: 1,
-        usageComplete: false,
         removedWebTools: 0,
         models: ['deepseek-v4-flash'],
         toolNames: ['shell'],
       })}\n`,
     );
-    const cell = {
-      ...externalCell({
-        command: '/opt/maka-node-toolchain/bin/node',
-        args: [
-          '/opt/maka-agent/packages/eval/dist/harbor-external-subject.js',
-          'codex',
-          'https://api.deepseek.com',
-          '/',
-          '/opt/maka-codex-toolchain/bin/codex',
-        ],
-      }),
-      executor: {
-        kind: 'harbor',
-        config: {
-          mounts: [
-            {
-              sourceEnv,
-              target: TOOLCHAIN_IDENTITIES.codex.root,
-              readOnly: true,
-            },
-          ],
-        },
-      },
-    } satisfies ExperimentCell;
-    const adapter = createExternalSubjectAdapter();
-    await adapter.prepare?.({ spec: {} as ExperimentSpec, cells: [cell] });
-
     const recovered = await recoverExternalMetering({ trialPath }, 'codex');
+
+    // Admitted model work survives the wrapper, which is what lets the caller
+    // record a failed subject instead of retrying the cell.
+    assert.equal(recovered?.admittedRequests, 2);
     assert.deepEqual(recovered?.usage, usage);
-    assert.equal(recovered?.costUsd, 0.01);
+    // A lower-bound token count is worth keeping; a cost derived from it would
+    // enter the result kernel indistinguishable from a settled figure.
+    assert.equal(recovered?.costUsd, null);
     assert.equal(recovered?.artifact.usageComplete, false);
     assert.equal(recovered?.artifact.tokenBasis, 'lower-bound');
-    assert.equal(recovered?.artifact.costBasis, 'lower-bound');
-
-    for (const execute of [
-      async () => ({
-        termination: 'framework_timeout' as const,
-        exitCode: 124,
-        stdout: '',
-        diagnostic: {
-          category: 'result-frame-missing' as const,
-          bytes: 0,
-          sha256: '0'.repeat(64),
-        },
-      }),
-      async () => ({
-        termination: 'exited' as const,
-        exitCode: 1,
-        stdout: '',
-        diagnostic: {
-          category: 'result-frame-missing' as const,
-          bytes: 0,
-          sha256: '0'.repeat(64),
-        },
-      }),
-      async () => {
-        throw new Error('relay interrupted');
-      },
-    ]) {
-      const result = await adapter.execute({
-        cell,
-        context: {
-          cwd: '/workspace',
-          taskInput: 'solve',
-          metadata: { trialPath },
-          execute,
-        },
-      });
-      assert.equal(result.status, 'failed');
-      assert.deepEqual(result.usage, usage);
-      assert.equal(result.costUsd, 0.01);
-      assert.deepEqual(
-        result.artifacts.find(({ kind }) => kind === 'toolchain'),
-        {
-          kind: 'toolchain',
-          profile: 'codex',
-          ...TOOLCHAIN_IDENTITIES.codex,
-        },
-      );
-      assert.equal(
-        result.artifacts.find(({ kind }) => kind === 'provider-metering-recovery')?.usageComplete,
-        false,
-      );
-    }
+    // Derived here rather than read back from the file.
+    assert.equal(recovered?.artifact.settledRequests, 2);
+    assert.equal(recovered?.artifact.missingUsageRequests, 1);
   } finally {
-    if (previous === undefined) delete process.env[sourceEnv];
-    else process.env[sourceEnv] = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('refuses a metering checkpoint whose counts cannot describe one run', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-metering-invalid-'));
+  const trialPath = join(root, 'trial');
+  try {
+    await mkdir(join(trialPath, 'agent'), { recursive: true });
+    const write = (checkpoint: Record<string, unknown>) =>
+      writeFile(
+        join(trialPath, 'agent/codex.provider-usage.json'),
+        `${JSON.stringify({
+          schemaVersion: 'maka.external_provider_usage.v1',
+          profile: 'codex',
+          usage: null,
+          requests: 1,
+          inFlightRequests: 0,
+          admittedRequests: 0,
+          usageRequests: 0,
+          removedWebTools: 0,
+          models: [],
+          toolNames: [],
+          ...checkpoint,
+        })}\n`,
+      );
+
+    await write({ admittedRequests: 2 });
+    assert.equal(await recoverExternalMetering({ trialPath }, 'codex'), undefined);
+
+    await write({ usageRequests: 1, admittedRequests: 0 });
+    assert.equal(await recoverExternalMetering({ trialPath }, 'codex'), undefined);
+
+    // Usage counted but no usage recorded.
+    await write({ admittedRequests: 1, usageRequests: 1 });
+    assert.equal(await recoverExternalMetering({ trialPath }, 'codex'), undefined);
+
+    // A request admitted while still in flight is the state the checkpoint
+    // exists to capture, so it has to survive validation.
+    await write({ requests: 1, inFlightRequests: 1, admittedRequests: 1 });
+    assert.equal((await recoverExternalMetering({ trialPath }, 'codex'))?.admittedRequests, 1);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -264,7 +220,47 @@ test('rejects overlap with identity credential targets', () => {
   );
 });
 
-test('verifies a mounted toolchain once before cell execution', async () => {
+// The pinned fingerprint is the digest of the checksum manifest. A tree that
+// merely carries an internally consistent manifest is not the pinned toolchain,
+// and a directory saying so in its own manifest.json proves nothing — which is
+// exactly what an earlier version of this check accepted.
+test('the pinned fingerprint is the digest of the checksum manifest', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-eval-toolchain-identity-'));
+  try {
+    await mkdir(join(root, 'bin'), { recursive: true });
+    await writeFile(join(root, 'bin/codex'), 'codex');
+    const digest = createHash('sha256').update('codex').digest('hex');
+    const checksums = `${digest}  bin/codex\n`;
+    await writeFile(join(root, 'checksums.sha256'), checksums);
+    const identity = {
+      root: '/opt/maka-codex-toolchain',
+      version: '1',
+      fingerprint: `sha256:${createHash('sha256').update(checksums).digest('hex')}`,
+    };
+
+    assert.deepEqual(await verifyToolchainDirectory('codex', root, identity), identity);
+
+    // The tree is intact and self-consistent; only the identity differs.
+    await assert.rejects(
+      verifyToolchainDirectory('codex', root, { ...identity, fingerprint: 'sha256:other' }),
+      /codex toolchain fingerprint mismatch/u,
+    );
+
+    // A file changed together with its own checksum line keeps the manifest
+    // self-consistent and still changes the tree's identity.
+    await writeFile(join(root, 'bin/codex'), 'tampered');
+    const tampered = createHash('sha256').update('tampered').digest('hex');
+    await writeFile(join(root, 'checksums.sha256'), `${tampered}  bin/codex\n`);
+    await assert.rejects(
+      verifyToolchainDirectory('codex', root, identity),
+      /codex toolchain fingerprint mismatch/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('refuses a mounted toolchain that is not the pinned tree', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-eval-toolchain-'));
   const executable = join(root, 'bin/codex');
   const sourceEnv = 'MAKA_TEST_CODEX_TOOLCHAIN';
@@ -275,6 +271,7 @@ test('verifies a mounted toolchain once before cell execution', async () => {
     await writeFile(executable, 'codex');
     const digest = createHash('sha256').update('codex').digest('hex');
     await writeFile(join(root, 'checksums.sha256'), `${digest}  bin/codex\n`);
+    // Declaring the pinned identity is what the tree cannot do for itself.
     await writeFile(
       join(root, 'manifest.json'),
       `${JSON.stringify({ fingerprint: TOOLCHAIN_IDENTITIES.codex.fingerprint })}\n`,
@@ -304,42 +301,20 @@ test('verifies a mounted toolchain once before cell execution', async () => {
       },
     } satisfies ExperimentCell;
     const adapter = createExternalSubjectAdapter();
-    await adapter.prepare?.({ spec: {} as ExperimentSpec, cells: [cell] });
-    const attempt = toolchainAttempt(cell.id, TOOLCHAIN_IDENTITIES.codex.fingerprint);
-    assert.equal(adapter.canReuse?.({ cell, attempt }), true);
+    await assert.rejects(
+      adapter.prepare?.({ spec: {} as ExperimentSpec, cells: [cell] }) ?? Promise.resolve(),
+      /codex toolchain fingerprint mismatch/u,
+    );
+
+    // Nothing was admitted, so no attempt against this cell is reusable — not
+    // even one carrying the pinned fingerprint it failed to prove.
     assert.equal(
-      adapter.canReuse?.({ cell, attempt: toolchainAttempt(cell.id, 'sha256:stale') }),
+      adapter.canReuse?.({
+        cell,
+        attempt: toolchainAttempt(cell.id, TOOLCHAIN_IDENTITIES.codex.fingerprint),
+      }),
       false,
     );
-    await unlink(join(root, 'checksums.sha256'));
-    let environment: Readonly<Record<string, string>> | undefined;
-
-    await adapter.execute({
-      cell,
-      context: {
-        cwd: '/app',
-        taskInput: 'solve',
-        metadata: {},
-        execute: async (input) => {
-          environment = input.environment;
-          return {
-            termination: 'exited',
-            exitCode: 0,
-            stdout: JSON.stringify({
-              schemaVersion: 'maka.external_subject_result.v1',
-              usage: null,
-              costUsd: null,
-              artifacts: [],
-            }),
-            stderr: '',
-          };
-        },
-      },
-    });
-
-    assert.deepEqual(JSON.parse(environment?.[TOOLCHAIN_IDENTITY_ENV] ?? ''), {
-      ...TOOLCHAIN_IDENTITIES.codex,
-    });
   } finally {
     if (previous === undefined) delete process.env[sourceEnv];
     else process.env[sourceEnv] = previous;

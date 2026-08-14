@@ -137,9 +137,7 @@ class RelayAgent(BaseAgent):
             await _persist_subject_outputs(environment, result)
             stdout, diagnostic = _project_result(result, request)
             if diagnostic["category"] != "execution-scope-unavailable":
-                await _finalize_exited_scope(
-                    environment, cwd, scope_path, request, result.return_code
-                )
+                await _finalize_exited_scope(environment, cwd, scope_path, result.return_code)
             if not await _send(
                 writer,
                 {
@@ -271,7 +269,6 @@ async def _prepare_command(
     capture_stdout = request.get("captureStdout", True)
     if not isinstance(capture_stdout, bool):
         raise RuntimeError("invalid Maka Eval stdout policy")
-    _preserve_process_group_on_exit(request)
     result_token = request.get("resultToken")
     if not isinstance(result_token, str) or re.fullmatch(r"[0-9a-f]{32}", result_token) is None:
         raise RuntimeError("invalid Maka Eval result token")
@@ -368,13 +365,6 @@ def _sole_probe_line(probe: Any, prefix: str) -> str:
     if len(reported) != 1:
         raise RuntimeError("Maka Eval could not read the subject isolation evidence")
     return reported[0].strip()
-
-
-def _preserve_process_group_on_exit(request: dict[str, Any]) -> bool:
-    value = request.get("preserveProcessGroupOnExit", False)
-    if not isinstance(value, bool):
-        raise RuntimeError("invalid Maka Eval process preservation policy")
-    return value
 
 
 async def _persist_subject_outputs(environment: Any, result: Any) -> None:
@@ -479,10 +469,17 @@ async def _finalize_exited_scope(
     environment: Any,
     cwd: str,
     scope_path: str,
-    request: dict[str, Any],
     exit_code: int,
 ) -> None:
-    if exit_code == 0 and _preserve_process_group_on_exit(request):
+    """Tear the subject's process group down unless the subject succeeded.
+
+    A task may start a service the shared-environment verifier is meant to
+    reach, and killing the scope would remove it before verification. Only a
+    subject that reported success is entitled to leave anything running: the
+    exit code carries that status, so the rule is the same for every subject
+    rather than a property one arm can be granted and another not.
+    """
+    if exit_code == 0:
         return
     await _quiesce_scope(environment, cwd, scope_path)
 

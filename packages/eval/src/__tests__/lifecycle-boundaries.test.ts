@@ -441,20 +441,48 @@ test('Maka framework termination is authoritative before stdout decoding', async
     assert.equal(result.costUsd, null);
   }
 
+  // A subject-reported cost that is not Eval's -- the runtime prices this model
+  // from its own table, and did so on every recorded run.
+  const reported = 999;
   const retained = await executeMaka('framework_timeout', (executionId) =>
     JSON.stringify({
       executionId,
       kind: 'settled',
       status: 'cancelled',
       usage: usage(),
-      costUsd: null,
+      costUsd: reported,
     }),
   );
   assert.equal(retained.status, 'failed');
   assert.deepEqual(retained.usage, usage());
-  // The Maka arm bills from the same table as the external arms, so the two
-  // sides of the head-to-head cannot price the same tokens differently.
+  // Eval prices what Eval compares, so the arms cannot bill the same tokens
+  // from two tables. The reported figure survives as evidence, which is what
+  // makes a drift between the two visible rather than silent.
   assert.equal(retained.costUsd, deepSeekCostUsd(usage()));
+  assert.notEqual(retained.costUsd, reported);
+  assert.deepEqual(
+    retained.artifacts.find((artifact) => artifact.kind === 'subject-reported-cost'),
+    { kind: 'subject-reported-cost', costUsd: reported },
+  );
+
+  // The same rule on the ordinary settled path, which is where every recorded
+  // run went: the runtime prices this model itself, so without this the Maka
+  // arm bills from the runtime's table and every other arm from Eval's.
+  const completed = await executeMaka('exited', (executionId) =>
+    JSON.stringify({
+      executionId,
+      kind: 'settled',
+      status: 'completed',
+      usage: usage(),
+      costUsd: reported,
+    }),
+  );
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.costUsd, deepSeekCostUsd(usage()));
+  assert.deepEqual(
+    completed.artifacts.find((artifact) => artifact.kind === 'subject-reported-cost'),
+    { kind: 'subject-reported-cost', costUsd: reported },
+  );
 
   const external = await createExternalSubjectAdapter().execute({
     cell: cell('external', { command: '/opt/competitor', args: [], result: 'exit-code' }),

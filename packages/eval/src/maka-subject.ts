@@ -10,6 +10,7 @@ import {
   MAKA_SUBJECT_STDERR_PATH,
   MAKA_SUBJECT_STDOUT_PATH,
 } from './maka-artifacts.js';
+import { deepSeekCostUsd } from './provider-metering.js';
 import type { NormalizedUsage } from './result.js';
 import type { SubjectAdapter, SubjectExecutionContext } from './runner.js';
 
@@ -302,8 +303,5 @@ function positive(value: unknown, where: string): number {
 
 function estimateDeepSeekCost(usage: NormalizedUsage, model: string): number | null {
   if (model !== 'deepseek-v4-flash') return null;
-  const uncached = Math.max(0, usage.inputTokens - usage.cacheReadTokens - usage.cacheWriteTokens);
-  return (
-    (uncached * 0.145 + usage.cacheReadTokens * 0.0029 + usage.outputTokens * 0.29) / 1_000_000
-  );
+  return deepSeekCostUsd(usage);
 }

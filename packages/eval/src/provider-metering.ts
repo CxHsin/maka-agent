@@ -54,14 +54,31 @@ export function deriveMetering(counts: ProviderMeteringCounts): DerivedMetering 
     settledRequests: counts.requests - counts.inFlightRequests,
     missingUsageRequests: counts.admittedRequests - counts.usageRequests,
     usageComplete,
-    costUsd: counts.usage && usageComplete ? estimateCost(counts.usage) : null,
+    costUsd: counts.usage && usageComplete ? deepSeekCostUsd(counts.usage) : null,
     tokenBasis: usageComplete ? 'complete' : 'lower-bound',
   };
 }
 
-function estimateCost(value: ProviderUsage): number {
-  const uncached = Math.max(0, value.inputTokens - value.cacheReadTokens - value.cacheWriteTokens);
+// Published DeepSeek V4 Flash prices, in USD per million tokens. The agent
+// frameworks are handed this table so their own accounting agrees with Eval's,
+// and Eval bills from it rather than from a second transcription of it.
+export const DEEPSEEK_V4_FLASH_COST = {
+  input: 0.145,
+  output: 0.29,
+  cacheRead: 0.0029,
+  cacheWrite: 0.145,
+} as const;
+
+// `inputTokens` is normalized to include both cached kinds, so each kind is
+// subtracted out and charged at its own rate. Leaving cache writes subtracted
+// but unpriced billed them at zero.
+export function deepSeekCostUsd(usage: ProviderUsage): number {
+  const uncached = Math.max(0, usage.inputTokens - usage.cacheReadTokens - usage.cacheWriteTokens);
   return (
-    (uncached * 0.145 + value.cacheReadTokens * 0.0029 + value.outputTokens * 0.29) / 1_000_000
+    (uncached * DEEPSEEK_V4_FLASH_COST.input +
+      usage.cacheReadTokens * DEEPSEEK_V4_FLASH_COST.cacheRead +
+      usage.cacheWriteTokens * DEEPSEEK_V4_FLASH_COST.cacheWrite +
+      usage.outputTokens * DEEPSEEK_V4_FLASH_COST.output) /
+    1_000_000
   );
 }

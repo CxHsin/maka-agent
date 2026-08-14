@@ -13,6 +13,7 @@ import {
 } from './toolchain-verification.js';
 import { isInferenceAdmissionEvent } from './provider-admission.js';
 import {
+  DEEPSEEK_V4_FLASH_COST,
   deriveMetering,
   type ProviderMeteringCounts,
   type ProviderUsage as Usage,
@@ -215,12 +216,7 @@ const PROFILE_PREPARERS: Record<Profile, (setup: ProfileSetup) => Promise<string
                 input: ['text'],
                 contextWindow: 1_048_576,
                 maxTokens: 131_072,
-                cost: {
-                  input: 0.145,
-                  output: 0.29,
-                  cacheRead: 0.0029,
-                  cacheWrite: 0.145,
-                },
+                cost: { ...DEEPSEEK_V4_FLASH_COST },
               },
             ],
           },

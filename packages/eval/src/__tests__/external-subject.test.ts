@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { createExternalSubjectAdapter, recoverExternalMetering } from '../external-subject.js';
 import type { ExperimentCell, ExperimentSpec } from '../experiment.js';
+import { DEEPSEEK_V4_FLASH_COST, deepSeekCostUsd } from '../provider-metering.js';
 import type { CellAttempt } from '../result.js';
 import {
   TOOLCHAIN_IDENTITIES,
@@ -116,6 +117,23 @@ test('a checkpoint the proxy never settled is a lower bound however complete it 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('every token kind is billed at the rate the model config declares', () => {
+  const cost = DEEPSEEK_V4_FLASH_COST;
+  // One million of each kind, so the sum is the table read back. A kind that is
+  // subtracted from the input total and then never charged reads as zero here.
+  assert.equal(
+    deepSeekCostUsd({
+      inputTokens: 3_000_000,
+      outputTokens: 1_000_000,
+      cacheReadTokens: 1_000_000,
+      cacheWriteTokens: 1_000_000,
+      reasoningTokens: 0,
+      totalTokens: 4_000_000,
+    }),
+    cost.input + cost.cacheRead + cost.cacheWrite + cost.output,
+  );
 });
 
 test('refuses a metering checkpoint whose counts cannot describe one run', async () => {

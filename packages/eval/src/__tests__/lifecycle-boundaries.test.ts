@@ -21,6 +21,7 @@ import { createExternalSubjectAdapter } from '../external-subject.js';
 import { createHarborExecutor, createPierExecutor } from '../harness-executor.js';
 import { makaEvalRuntimePolicyDocument } from '../maka-runtime-policy.js';
 import { createMakaSubjectAdapter } from '../maka-subject.js';
+import { deepSeekCostUsd } from '../provider-metering.js';
 import {
   runExperiment,
   type ExperimentExecutor,
@@ -451,7 +452,9 @@ test('Maka framework termination is authoritative before stdout decoding', async
   );
   assert.equal(retained.status, 'failed');
   assert.deepEqual(retained.usage, usage());
-  assert.ok(Math.abs((retained.costUsd ?? 0) - 0.0000029087) < 1e-15);
+  // The Maka arm bills from the same table as the external arms, so the two
+  // sides of the head-to-head cannot price the same tokens differently.
+  assert.equal(retained.costUsd, deepSeekCostUsd(usage()));
 
   const external = await createExternalSubjectAdapter().execute({
     cell: cell('external', { command: '/opt/competitor', args: [], result: 'exit-code' }),

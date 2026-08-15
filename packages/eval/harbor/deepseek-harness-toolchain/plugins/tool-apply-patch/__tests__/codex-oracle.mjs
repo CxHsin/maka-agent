@@ -440,6 +440,20 @@ export const cases = [
     files: { 'a.txt': 'class A:   \n    x\nclass A:\n    x\n' },
     patch: P('*** Update File: a.txt', '@@ class A:', '-    x', '+    y'),
   },
+  // The order of the four matching passes, one pair at a time. Two cases
+  // already pin the exact pass ahead of the looser ones; these pin the loose
+  // ones against each other, where removing a pass does not fail the match but
+  // silently moves it to a different line.
+  {
+    name: 'a trailing-whitespace match beats a leading-whitespace match earlier',
+    files: { 'a.txt': '  foo\nfoo   \n' },
+    patch: P('*** Update File: a.txt', '@@', '-foo', '+bar'),
+  },
+  {
+    name: 'a whitespace match beats a punctuation-folded match earlier',
+    files: { 'a.txt': '—foo\n -foo \n' },
+    patch: P('*** Update File: a.txt', '@@', '--foo', '+bar'),
+  },
   // The boundary of the envelope itself. `parse_patch` runs in lenient mode for
   // every model and every call site (`PARSE_IN_STRICT_MODE = false`), so a model
   // that sends the heredoc it was shown rather than the patch inside it is

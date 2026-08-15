@@ -20,11 +20,15 @@
 // Rust: codex-fixtures.json records what `codex` itself did to a tree for each
 // case in codex-oracle.mjs, and codex-fixtures.test.mjs replays them.
 //
-// Only the `NormalizeToLf` update mode is ported. It is the `#[default]` for
-// `ApplyPatchFileUpdateMode`, and the alternative is selected by an environment
-// variable the model cannot set. `PreserveLineEndings` is the reason the
-// upstream functions carry `context_line_indices`; nothing here needs it, so
-// chunks do not record it.
+// Only the `NormalizeToLf` update mode is ported, which is what a shipped Codex
+// uses. It is the `#[default]` for `ApplyPatchFileUpdateMode`; the function tool
+// selects `PreserveLineEndings` from `Feature::ApplyPatchPreserveLineEndings`,
+// which the feature registry declares `Stage::UnderDevelopment,
+// default_enabled: false`, and the standalone binary selects it from an
+// environment variable. That mode is the reason the upstream functions carry
+// `context_line_indices`; nothing here needs it, so chunks do not record it.
+// Upstream's two line-ending scenarios are run under it and are named as
+// divergences in __tests__/upstream-scenarios.test.mjs.
 
 /**
  * Find `pattern` within `lines` at or after `start`, in four passes of
@@ -86,6 +90,12 @@ function normalise(text) {
   return out;
 }
 
+// The one failure a model can act on: the lines it named are not in the file.
+// Distinguished from every other throw so the caller can translate it into the
+// harness's vocabulary without also relabelling a bug in this file as the
+// model's mistake.
+export class ContextNotFound extends Error {}
+
 /**
  * The new contents of one file after its chunks are applied.
  *
@@ -93,7 +103,8 @@ function normalise(text) {
  * @param {Array<{changeContext?: string, oldLines: string[], newLines: string[], isEndOfFile: boolean}>} chunks
  * @param {string} path - named only so a failure says which file it was.
  * @returns {string}
- * @throws {Error} when a chunk's context cannot be located.
+ * @throws {ContextNotFound} when a chunk's context cannot be located. Every other
+ *   throw from here is a defect in this file and is not translated by the caller.
  */
 export function deriveNewContents(original, chunks, path) {
   const originalLines = original.split('\n');
@@ -117,7 +128,7 @@ function computeReplacements(originalLines, path, chunks) {
     if (chunk.changeContext !== undefined) {
       const found = seekSequence(originalLines, [chunk.changeContext], lineIndex, false);
       if (found === undefined) {
-        throw new Error(`Failed to find context '${chunk.changeContext}' in ${path}`);
+        throw new ContextNotFound(`Failed to find context '${chunk.changeContext}' in ${path}`);
       }
       lineIndex = found + 1;
     }
@@ -150,7 +161,9 @@ function computeReplacements(originalLines, path, chunks) {
     }
 
     if (found === undefined) {
-      throw new Error(`Failed to find expected lines in ${path}:\n${chunk.oldLines.join('\n')}`);
+      throw new ContextNotFound(
+        `Failed to find expected lines in ${path}:\n${chunk.oldLines.join('\n')}`,
+      );
     }
     replacements.push([found, pattern.length, replacement]);
     lineIndex = found + pattern.length;

@@ -40,7 +40,7 @@ import z from '@deepseek-ai/schemastery';
 import { FsError } from '@deepseek-ai/dsh-fs';
 import { sandboxDenialMarker } from '@deepseek-ai/dsh-sandbox';
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { deriveNewContents } from './codex-apply.mjs';
+import { ContextNotFound, deriveNewContents } from './codex-apply.mjs';
 import { parsePatch } from './parse-patch.mjs';
 
 // The model-facing text of this contract, and the whole of it.
@@ -329,6 +329,7 @@ function deriveOrThrow(before, operation) {
   try {
     return deriveNewContents(before, operation.chunks, operation.path);
   } catch (error) {
+    if (!(error instanceof ContextNotFound)) throw error;
     throw new FsError(error.message, 'FS_EDIT_NOT_FOUND', { cause: error });
   }
 }

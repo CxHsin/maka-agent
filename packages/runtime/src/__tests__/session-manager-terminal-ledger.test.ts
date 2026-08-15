@@ -2538,10 +2538,6 @@ class TinySessionStore implements SessionStore {
     return clone(next);
   }
 
-  async markSessionReadThrough(sessionId: string, _readThroughTs: number): Promise<SessionHeader> {
-    return this.readHeader(sessionId);
-  }
-
   async archive(sessionId: string): Promise<void> {
     await this.updateHeader(sessionId, { isArchived: true, status: 'archived' });
   }

@@ -17060,7 +17060,6 @@ class MemorySessionStore implements SessionStore {
   readonly failNextReadMessagesFor = new Map<string, number>();
   readonly failListTurnsFor = new Set<string>();
   readonly failUpdateHeaderFor = new Set<string>();
-  readonly interleaveBeforeMarkSessionReadWriteFor = new Map<string, () => Promise<void> | void>();
   failNextAppendMessage: ((message: StoredMessage) => boolean) | undefined;
   failAfterNextAppendMessage: ((message: StoredMessage) => boolean) | undefined;
   disposeCount = 0;
@@ -17277,7 +17276,6 @@ class MemorySessionStore implements SessionStore {
       error.code = 'ENOENT';
       throw error;
     }
-    await this.runMarkSessionReadInterleave(sessionId);
     return header;
   }
 
@@ -17321,26 +17319,6 @@ class MemorySessionStore implements SessionStore {
     const next = { ...current, ...patch };
     this.headers.set(sessionId, next);
     return next;
-  }
-
-  async markSessionReadThrough(sessionId: string, readThroughTs: number): Promise<SessionHeader> {
-    await this.runMarkSessionReadInterleave(sessionId);
-    if (this.failUpdateHeaderFor.has(sessionId))
-      throw new Error(`Cannot update header for ${sessionId}`);
-    const current = await this.readHeader(sessionId);
-    if (!current.hasUnread) return current;
-    if (current.lastMessageAt !== undefined && current.lastMessageAt > readThroughTs)
-      return current;
-    const next = { ...current, hasUnread: false };
-    this.headers.set(sessionId, next);
-    return next;
-  }
-
-  private async runMarkSessionReadInterleave(sessionId: string): Promise<void> {
-    const hook = this.interleaveBeforeMarkSessionReadWriteFor.get(sessionId);
-    if (!hook) return;
-    this.interleaveBeforeMarkSessionReadWriteFor.delete(sessionId);
-    await hook();
   }
 
   async archive(sessionId: string): Promise<void> {

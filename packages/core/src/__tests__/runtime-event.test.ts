@@ -1,6 +1,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { expect } from '../test-helpers.js';
+import { expect } from './test-helpers.js';
 import {
   decodeMessageContent,
   messageContentsEqual,

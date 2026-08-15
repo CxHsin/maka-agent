@@ -161,13 +161,24 @@
     - id: fs-tools
       name: '@deepseek-ai/dsh-tool-fs'
       config:
-        # Matched to the baseline editor's `maxOutputChars`, because how much of
-        # a file one call can return is not part of the edit contract. Left at
-        # the shipped default this arm reads 51200 bytes to the baseline's
-        # 16000 characters — a 3.2x window on the same task, which would show up
-        # as a contract effect on any benchmark task with a large file in it.
-        # The remaining read-side asymmetry, that the patch arm has no read tool
-        # at all, is contract-inherent and stays.
+        # Matched to the baseline editor's `maxOutputChars`. Left at the shipped
+        # default this arm reads 51200 bytes to the baseline's 16000 characters
+        # — a 3.2x window on the same task, which would show up as a contract
+        # effect on any benchmark task with a large file in it.
+        #
+        # What is held equal is what one read costs the context window, not how
+        # much file it buys. `str_replace_editor` spends eight characters a line
+        # on line numbers and a header on top; this tool emits neither, so on
+        # this repository's own sources it returns 10% more lines for the same
+        # budget, 22% on the longest files. That difference is the contract:
+        # numbering is how the baseline presents a file and the model pays for
+        # it in tokens either way. Equalising delivered content instead would
+        # mean picking a budget from an assumed average line length.
+        #
+        # The unit does differ — UTF-16 code units against UTF-8 bytes — so the
+        # two coincide on ASCII and this arm's window narrows on text that is
+        # not. The remaining read-side asymmetry, that the patch arm has no read
+        # tool at all, is contract-inherent and stays.
         readMaxBytes: 16000
 
     - id: sessions

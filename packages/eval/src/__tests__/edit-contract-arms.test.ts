@@ -15,6 +15,16 @@ import { DEEPSEEK_HARNESS_ARMS, TOOLCHAIN_IDENTITIES } from '../toolchain-verifi
 //
 // The arm-to-directory table is imported rather than restated, so a test that
 // passes is a statement about the compositions the subject actually copies.
+//
+// Two things this file does not cover, named so they are not mistaken for
+// covered. The patch arm's own tool — its name, its parameter and its
+// description — is asserted in
+// harbor/deepseek-harness-toolchain/plugins/tool-apply-patch/__tests__, because
+// that surface is JavaScript rather than a composition row. And the preparer
+// that copies these profiles is an entrypoint module with side effects at
+// import, so it is not imported here; the three arms share one function and
+// differ only in the directory passed to it, and a failure of that sharing
+// stops the harness from booting rather than biasing a score.
 
 const ARMS = DEEPSEEK_HARNESS_ARMS;
 
@@ -85,7 +95,13 @@ function entries(source: string): Entry[] {
   // effort, invisible to every assertion in this file. All three arms compose
   // by insertion alone; a step that is not an insertion is a change to how they
   // compose, and it has to be read here before it can be tolerated.
-  const foreign = document.find((step) => step.insert === undefined);
+  // Every step must be an insertion and nothing else. Testing only for a
+  // missing `insert` let `{insert: [...], remove: [...]}` through with the
+  // removal unread, which is the same blindness in a shape that still looks
+  // like the case this guard was written for.
+  const foreign = document.find(
+    (step) => step.insert === undefined || Object.keys(step).join() !== 'insert',
+  );
   assert.equal(
     foreign,
     undefined,
@@ -104,8 +120,15 @@ test('the three arms share every profile file that is not the composition', asyn
   // catch.
   const [baseline, ...others] = await Promise.all(
     Object.values(ARMS).map(async (directory) => {
-      const names = (await readdir(profileFile(directory, '.'), { withFileTypes: true }))
-        .filter((entry) => entry.isFile() && entry.name !== 'cordis.patch.yml')
+      const listing = await readdir(profileFile(directory, '.'), { withFileTypes: true });
+      // Filtering non-files out would drop a directory added to one profile —
+      // vendored plugin sources, a second composition fragment — from the
+      // comparison without saying so. There are none today, and a profile that
+      // grows one has to come back here and decide how to compare it.
+      const directories = listing.filter((entry) => !entry.isFile()).map((entry) => entry.name);
+      assert.deepEqual(directories, [], `${directory} holds directories this test cannot compare`);
+      const names = listing
+        .filter((entry) => entry.name !== 'cordis.patch.yml')
         .map((entry) => entry.name)
         .sort();
       const files = await Promise.all(names.map((file) => read(directory, file)));

@@ -1,15 +1,19 @@
 Third-party material used by the DeepSeek Harness Eval plugins.
 
-Nothing here is carried verbatim as a file. Each item below is reproduced inside
-a source file of this repository, and where it was modified the modification is
-described at the top of that file as well, so the description travels with the
-code.
+Two items are carried verbatim as files and are marked as such below. Everything
+else is reproduced inside a source file of this repository, and where it was
+modified the modification is described at the top of that file as well, so the
+description travels with the code.
 
 --------------------------------------------------------------------------------
-tool-apply-patch/index.mjs           — the model-facing tool description
-tool-apply-patch/parse-patch.mjs     — the envelope and hunk parser
-tool-apply-patch/codex-apply.mjs     — locating and applying a file's hunks
-tool-apply-patch/codex-fixtures.json — recorded output of the `codex` binary
+tool-apply-patch/upstream-apply-patch-instructions.md
+                                       — verbatim copy: the model-facing text
+tool-apply-patch/__tests__/upstream/   — verbatim copy: the scenario suite
+tool-apply-patch/index.mjs             — verifying, applying and reporting
+tool-apply-patch/parse-patch.mjs       — the envelope and hunk parser
+tool-apply-patch/codex-apply.mjs       — locating and applying a file's hunks
+tool-apply-patch/__tests__/codex-fixtures.json
+                                       — recorded output of the `codex` binary
 
   OpenAI Codex
   Copyright 2025 OpenAI
@@ -27,12 +31,18 @@ tool-apply-patch/codex-fixtures.json — recorded output of the `codex` binary
   License for the specific language governing permissions and limitations under
   the License.
 
-  The model-facing description in index.mjs reproduces
+  upstream-apply-patch-instructions.md is a verbatim copy of lines 277-351 of
 
-      codex-rs/apply-patch/apply_patch_tool_instructions.md
-        at commit 88c7a4ff074df9e2161c947ca6d91bf824b9d6e6
+      codex-rs/core/prompt_with_apply_patch_instructions.md
+        at commit a7edf37cb46b5fc4d50bd03df8e5999a86f602eb
 
-  with four modifications and no others:
+  which is that file's whole `## apply_patch` section. It is reproduced without
+  modification, typographic punctuation included, and a test pins its digest.
+
+  index.mjs builds the model-facing description from that file by applying three
+  substitutions to it, and no others. The list lives in `DESCRIPTION_ADAPTATIONS`
+  and a test asserts that each applies exactly once and that the built text
+  differs from the copy only where they say:
 
     1. The `## apply_patch` heading and the blank line after it are dropped.
     2. "Use the `apply_patch` shell command to edit files" reads "tool" instead
@@ -41,36 +51,66 @@ tool-apply-patch/codex-fixtures.json — recorded output of the `codex` binary
     3. The trailing `You can invoke apply_patch like:` sentence and the
        `shell {"command":["apply_patch", ...]}` example are dropped, for the
        same reason.
-    4. Non-ASCII punctuation is flattened: U+2011 non-breaking hyphens to `-`,
-       U+201C/U+201D to `"`, U+2019 to `'`. Three lines are affected.
 
-  The text is otherwise byte-identical, and every operation the grammar defines
-  is implemented, so nothing in it describes something the tool refuses.
+  A previous revision of this notice named
+  codex-rs/apply-patch/apply_patch_tool_instructions.md at commit
+  88c7a4ff074df9e2161c947ca6d91bf824b9d6e6, and listed a fourth modification
+  flattening non-ASCII punctuation. That file no longer exists at the ported
+  commit, and the fourth modification was an artefact of retyping the text
+  rather than copying it.
 
-  parse-patch.mjs and codex-apply.mjs are ports — the same algorithms in
-  JavaScript, not a translation of any one function line by line — of
+  This is not the description upstream registers. At the ported commit
+  `create_apply_patch_freeform_tool` registers a 105-character description plus
+  codex-rs/core/src/tools/handlers/apply_patch.lark as a grammar the decoder is
+  constrained to; the harness this plugin mounts into registers JSON function
+  tools and has no grammar seam, so the arm uses upstream's own text for a model
+  reached without a grammar. Every operation the grammar defines is implemented,
+  so nothing in the text describes something the tool refuses.
+
+  parse-patch.mjs and codex-apply.mjs are ports of the functions below: the same
+  algorithms in JavaScript, following their structure and their branch order
+  closely enough that each ported function is recognisably the Rust one, though
+  no line is a mechanical translation of a Rust line. index.mjs reproduces the
+  order in which the function tool verifies and then applies an envelope, and
+  the wording of the outcomes it reports.
 
       codex-rs/apply-patch/src/streaming_parser.rs   (`process_line`)
-      codex-rs/apply-patch/src/parser.rs             (markers, `push_context_line`)
+      codex-rs/apply-patch/src/parser.rs             (markers, `push_context_line`,
+                                                      `check_patch_boundaries_lenient`)
       codex-rs/apply-patch/src/seek_sequence.rs      (`seek_sequence`)
       codex-rs/apply-patch/src/file_update.rs        (`derive_new_contents_from_chunks`,
                                                       `compute_replacements`,
                                                       `apply_replacements`)
+      codex-rs/apply-patch/src/invocation.rs         (`try_verify_apply_patch_args`)
+      codex-rs/apply-patch/src/lib.rs                (`print_summary`, apply order)
+      codex-rs/core/src/tools/runtimes/apply_patch.rs (re-applying the raw patch)
         all at commit a7edf37cb46b5fc4d50bd03df8e5999a86f602eb
 
   Only the `NormalizeToLf` update mode is ported. It is the `#[default]` for
-  `ApplyPatchFileUpdateMode`; `PreserveLineEndings` is selected by an
-  environment variable the model cannot set, and it is the only reason upstream
-  carries `context_line_indices`, so the ported chunks do not record it.
+  `ApplyPatchFileUpdateMode`, and it is what a shipped Codex uses: the function
+  tool selects `PreserveLineEndings` from `Feature::ApplyPatchPreserveLineEndings`
+  (handlers/apply_patch.rs:60-70), which the feature registry declares
+  `Stage::UnderDevelopment, default_enabled: false` (features/src/lib.rs:1005);
+  the standalone binary selects it from an environment variable. That mode is
+  the only reason upstream carries `context_line_indices`, so the ported chunks
+  do not record it.
 
   parse-patch.mjs also transcribes six productions of
 
       codex-rs/core/src/tools/handlers/apply_patch.lark
-        at commit 88c7a4ff074df9e2161c947ca6d91bf824b9d6e6
+        at commit a7edf37cb46b5fc4d50bd03df8e5999a86f602eb
 
   as a comment, for the reader; that is a transcription, not a copy of the file.
 
-  codex-fixtures.json is generated output, not source: codex-oracle.mjs runs the
+  __tests__/upstream/ is a verbatim copy of
+  codex-rs/apply-patch/tests/fixtures/scenarios at commit
+  a7edf37cb46b5fc4d50bd03df8e5999a86f602eb — 25 scenario directories, their
+  README and their .gitattributes, unmodified. Upstream publishes them as a
+  conformance suite "meant to be easily portable to other languages or
+  platforms"; upstream-scenarios.test.mjs is that port. It is test material and
+  the toolchain build excludes it, as it excludes every `__tests__` directory.
+
+  __tests__/codex-fixtures.json is generated output, not source: codex-oracle.mjs runs the
   released `codex` binary over a temporary tree for each case and records what
   it printed and what the tree became. Where a case was refused, the recorded
   text is the binary's own diagnostic. Regenerating it requires a `codex` on

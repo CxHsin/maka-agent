@@ -440,6 +440,33 @@ export const cases = [
     files: { 'a.txt': 'class A:   \n    x\nclass A:\n    x\n' },
     patch: P('*** Update File: a.txt', '@@ class A:', '-    x', '+    y'),
   },
+  // The boundary of the envelope itself. `parse_patch` runs in lenient mode for
+  // every model and every call site (`PARSE_IN_STRICT_MODE = false`), so a model
+  // that sends the heredoc it was shown rather than the patch inside it is
+  // unwrapped; and Rust's `str::trim` is not JavaScript's, which is only
+  // observable at the two code points they disagree about.
+  {
+    name: 'heredoc-wrapped envelope, quoted',
+    files: { 'a.txt': 'old\n' },
+    patch: `<<'EOF'\n${P('*** Update File: a.txt', '@@', '-old', '+new').trimEnd()}\nEOF`,
+  },
+  {
+    name: 'heredoc-wrapped envelope, unquoted',
+    files: { 'a.txt': 'old\n' },
+    patch: `<<EOF\n${P('*** Update File: a.txt', '@@', '-old', '+new').trimEnd()}\nEOF`,
+  },
+  {
+    name: 'heredoc markers around something that is not an envelope',
+    files: { 'a.txt': 'old\n' },
+    patch: "<<'EOF'\nnot a patch\nstill not\nEOF",
+  },
+  {
+    name: 'byte-order mark before the opening marker',
+    files: { 'a.txt': 'old\n' },
+    // JavaScript's `trim` cuts U+FEFF and Rust's does not, so the naive port
+    // accepted this patch and Codex refuses it.
+    patch: `﻿${P('*** Update File: a.txt', '@@', '-old', '+new')}`,
+  },
 ];
 
 const run = promisify(execFile);

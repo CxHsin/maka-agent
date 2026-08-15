@@ -47,8 +47,22 @@ const SECTION_HEADERS = [ADD_FILE, DELETE_FILE, UPDATE_FILE];
 // compares `line.trim_end()`, so a context line that happens to read
 // `    *** Update File: x` stays content instead of silently ending the
 // section.
-const marker = (line) => line?.trim();
-const bodyMarker = (line) => line?.trimEnd();
+const marker = (line) => (line === undefined ? undefined : rustTrim(line));
+const bodyMarker = (line) => (line === undefined ? undefined : line.replace(RUST_TRAILING, ''));
+
+// Rust's `str::trim` cuts the Unicode `White_Space` property; JavaScript's cuts
+// `WhiteSpace` plus `LineTerminator`. The two agree on everything a patch is
+// likely to contain and differ on exactly two code points: U+FEFF, which JS
+// strips and Rust does not, and U+0085, which Rust strips and JS does not. The
+// first is the one that can happen — a byte-order mark carried into a JSON
+// string argument would make a patch parse here and be refused by Codex — so
+// the charset is spelled out rather than delegated.
+const RUST_SPACE =
+  '\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000';
+const RUST_LEADING = new RegExp(`^[${RUST_SPACE}]+`, 'u');
+const RUST_TRAILING = new RegExp(`[${RUST_SPACE}]+$`, 'u');
+
+const rustTrim = (text) => text.replace(RUST_LEADING, '').replace(RUST_TRAILING, '');
 
 /**
  * Split a V4A patch envelope into its file operations.
@@ -63,7 +77,7 @@ const bodyMarker = (line) => line?.trimEnd();
  *   offending line, because the model's next attempt is what has to be fixed.
  */
 export function parsePatch(text) {
-  const lines = normalize(text);
+  const lines = stripHeredoc(normalize(text));
   let index = 0;
 
   if (marker(lines[index]) !== BEGIN_PATCH) {
@@ -257,14 +271,42 @@ function endsSection(lines, index, boundary) {
   return index === lines.length - 1 && marker(lines[index]) === END_PATCH;
 }
 
+// A patch wrapped in a heredoc is unwrapped rather than refused.
+//
+// `parse_patch` picks its mode from `PARSE_IN_STRICT_MODE`, which is `false`
+// (`parser.rs:53`) — upstream gave up on gating this by model, so every call
+// site parses leniently, the function tool included. `ParseMode::Lenient`
+// exists because a model asked for a shell invocation may send the heredoc
+// itself as the argument, and `check_patch_boundaries_lenient`
+// (`parser.rs:229-254`) drops the first and last line when the first is exactly
+// one of these three and the last ends in `EOF`, provided there are at least
+// four lines and what is left is a well-formed envelope.
+//
+// Only when the text does not already parse as an envelope: upstream tries the
+// strict boundaries first and returns them untouched if they hold, so a patch
+// whose own first line happens to read `<<EOF` is never stripped.
+const HEREDOC_OPENERS = ['<<EOF', "<<'EOF'", '<<"EOF"'];
+
+function stripHeredoc(lines) {
+  if (isEnvelope(lines)) return lines;
+  if (lines.length < 4) return lines;
+  if (!HEREDOC_OPENERS.includes(lines[0]) || !lines.at(-1).endsWith('EOF')) return lines;
+  const inner = lines.slice(1, -1);
+  // Not an envelope either: hand back the original so the failure names the
+  // line the model wrote rather than one this function invented.
+  return isEnvelope(inner) ? inner : lines;
+}
+
+const isEnvelope = (lines) =>
+  lines.length > 0 && marker(lines[0]) === BEGIN_PATCH && marker(lines.at(-1)) === END_PATCH;
+
 // A model that emits CRLF, or wraps the envelope in blank lines, wrote a
 // well-formed patch; neither is worth a refusal it cannot act on. Codex trims
 // the whole patch before parsing (`parser.rs`), which is what makes a leading
 // newline — the most common way a model formats a long string argument — parse
 // rather than fail on the first line.
 function normalize(text) {
-  return text
-    .trim()
+  return rustTrim(text)
     .split('\n')
     .map((line) => line.replace(/\r$/u, ''));
 }

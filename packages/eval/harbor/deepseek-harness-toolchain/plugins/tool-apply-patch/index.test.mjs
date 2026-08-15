@@ -10,7 +10,7 @@
 // temporary directory, and every assertion reads that directory back.
 
 import { strict as assert } from 'node:assert';
-import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -31,7 +31,13 @@ async function harness({ files = {}, sandboxMode = undefined } = {}) {
     await writeFile(absolute, content);
   }
 
-  const target = (path) => ({ targetKey: path, displayPath: path });
+  // `dsh-fs-local` splits these two: `displayPath` is the lexical
+  // `resolve(cwd, path)`, `targetKey` is derived from its realpath. Collapsing
+  // them here would hide what a symlink does.
+  const target = async (path) => ({
+    displayPath: path,
+    targetKey: await realpath(path).catch(() => path),
+  });
   const version = async (path) => {
     const info = await stat(path).catch(() => undefined);
     return info === undefined ? undefined : `${info.size}:${info.mtimeMs}`;
@@ -45,6 +51,7 @@ async function harness({ files = {}, sandboxMode = undefined } = {}) {
         assert.equal(options.cwd, root, 'the session cwd must reach the provider');
         return target(isAbsolute(path) ? path : resolve(options.cwd, path));
       },
+      lstat: async ({ targetKey }) => stat(targetKey).catch(() => undefined),
       stat: async ({ targetKey }) => {
         const info = await stat(targetKey).catch(() => undefined);
         if (info === undefined) return undefined;
@@ -64,7 +71,7 @@ async function harness({ files = {}, sandboxMode = undefined } = {}) {
     },
     get: () => (sandboxMode === undefined ? undefined : { resolve: () => ({ mode: sandboxMode }) }),
     emit: (event, subject, observation) =>
-      events.push([event, rel(subject.targetKey), observation.kind]),
+      events.push([event, rel(subject.displayPath), observation.kind]),
     waterfall: async (_event, _target, _exec, fallback) => fallback(),
     tools: { register: (tool) => registered.push(tool) },
   };
@@ -88,9 +95,12 @@ describe('apply_patch', () => {
   beforeEach(() => harness({ files: { 'app.py': 'def greet():\n    print("Hi")\n' } }));
   afterEach(() => rm(root, { recursive: true, force: true }));
 
-  it('creates a file', async () => {
+  it('creates a file, newline-terminated as Codex writes it', async () => {
+    // `contents.push_str(line); contents.push('\n')` per added line, so the last
+    // one is terminated too. A file that ends without a newline is a diff
+    // artifact the benchmark would charge to the edit contract.
     const result = await run(patch('*** Add File: notes.txt', '+first', '+second'));
-    assert.equal(await read('notes.txt'), 'first\nsecond');
+    assert.equal(await read('notes.txt'), 'first\nsecond\n');
     assert.match(result, /A notes\.txt/u);
   });
 
@@ -98,7 +108,16 @@ describe('apply_patch', () => {
     // Codex creates a missing parent rather than refusing, and a model writing
     // a module into a package it is also creating depends on it.
     await run(patch('*** Add File: pkg/sub/mod.py', '+x = 1'));
-    assert.equal(await read('pkg/sub/mod.py'), 'x = 1');
+    assert.equal(await read('pkg/sub/mod.py'), 'x = 1\n');
+  });
+
+  it('overwrites an existing file on Add File, as Codex does', async () => {
+    // Codex reads the old contents to report what it replaced and then writes
+    // unconditionally; it has no already-exists refusal. Refusing was this
+    // tool's own invention and cost the arm every from-scratch rewrite.
+    const result = await run(patch('*** Add File: app.py', '+clobbered'));
+    assert.equal(await read('app.py'), 'clobbered\n');
+    assert.equal(result, 'Applied patch:\nA app.py');
   });
 
   it('updates a file by context', async () => {
@@ -119,13 +138,26 @@ describe('apply_patch', () => {
     assert.equal(result, 'Applied patch:\nD app.py');
   });
 
-  it('renames a file without touching its content', async () => {
-    // `*** Move to:` with no hunks is a bare rename; the grammar allows it, and
-    // the content must survive untouched.
-    const result = await run(patch('*** Update File: app.py', '*** Move to: greeter.py'));
-    assert.equal(await exists('app.py'), false);
-    assert.equal(await read('greeter.py'), 'def greet():\n    print("Hi")\n');
-    assert.equal(result, 'Applied patch:\nR app.py -> greeter.py');
+  it('deletes a symlink and not what it points at', async () => {
+    // The provider's target key is realpath-derived, so removing it would have
+    // deleted the pointee and left the link dangling. Codex unlinks the path the
+    // patch named.
+    await writeFile(join(root, 'real.py'), 'kept\n');
+    await symlink(join(root, 'real.py'), join(root, 'link.py'));
+    await run(patch('*** Delete File: link.py'));
+    assert.equal(await exists('link.py'), false, 'the link itself is gone');
+    assert.equal(await read('real.py'), 'kept\n', 'the file it pointed at survives');
+  });
+
+  it('refuses a bare rename, as Codex does', async () => {
+    // `ensure_update_hunk_is_not_empty` rejects an update with no chunks before
+    // it ever looks at `move_path`, so `*** Move to:` on its own is not a patch
+    // upstream either. The model renames with the shell, which all three arms
+    // have on equal terms.
+    await assert.rejects(run(patch('*** Update File: app.py', '*** Move to: greeter.py')), {
+      name: 'SyntaxError',
+    });
+    assert.equal(await exists('app.py'), true);
   });
 
   it('renames and patches in one operation', async () => {
@@ -146,8 +178,16 @@ describe('apply_patch', () => {
     // Codex records what was overwritten and proceeds rather than refusing, so
     // this arm behaves the same way.
     await writeFile(join(root, 'taken.py'), 'old\n');
-    await run(patch('*** Update File: app.py', '*** Move to: taken.py'));
-    assert.equal(await read('taken.py'), 'def greet():\n    print("Hi")\n');
+    await run(
+      patch(
+        '*** Update File: app.py',
+        '*** Move to: taken.py',
+        '@@ def greet():',
+        '-    print("Hi")',
+        '+    print("Hello")',
+      ),
+    );
+    assert.equal(await read('taken.py'), 'def greet():\n    print("Hello")\n');
     assert.equal(await exists('app.py'), false);
     // The source file's version cannot guard a different file, so the
     // destination write is unconditional.
@@ -167,38 +207,64 @@ describe('apply_patch', () => {
         '*** Delete File: stale.txt',
       ),
     );
-    assert.equal(await read('a.txt'), 'alpha');
+    assert.equal(await read('a.txt'), 'alpha\n');
     assert.equal(await read('app.py'), 'def greet():\n    print("Hello")\n');
     assert.equal(await exists('stale.txt'), false);
     assert.equal(result, 'Applied patch:\nA a.txt\nM app.py\nD stale.txt');
   });
 
-  it('changes nothing when a later hunk does not match', async () => {
-    // Planning resolves and applies every hunk before the first write, so the
-    // usual failure — context the model guessed at — costs nothing.
+  it('composes two sections that name the same file', async () => {
+    // Each operation reads what the previous one wrote, as Codex does. Planning
+    // the envelope against one snapshot instead made this fail: the second
+    // update was computed against content the first had already replaced.
+    await run(
+      patch(
+        '*** Update File: app.py',
+        '@@',
+        '-    print("Hi")',
+        '+    print("Hello")',
+        '*** Update File: app.py',
+        '@@',
+        '-    print("Hello")',
+        '+    print("Hey")',
+      ),
+    );
+    assert.equal(await read('app.py'), 'def greet():\n    print("Hey")\n');
+  });
+
+  it('lets a later section recreate a file an earlier one deleted', async () => {
+    const result = await run(patch('*** Delete File: app.py', '*** Add File: app.py', '+fresh'));
+    assert.equal(await read('app.py'), 'fresh\n');
+    assert.equal(result, 'Applied patch:\nD app.py\nA app.py');
+  });
+
+  it('keeps the operations that ran before a hunk failed', async () => {
+    // Codex writes as it goes, so a later failure does not roll back an earlier
+    // operation. The tool does not claim otherwise, and the arm has to fail the
+    // way the reference fails.
     await assert.rejects(
       run(
         patch(
           '*** Add File: created.txt',
           '+alpha',
-          '*** Delete File: app.py',
           '*** Update File: app.py',
           '@@',
           '-    print("nothing like this")',
           '+    print("Hello")',
         ),
       ),
-      /Invalid Context/u,
+      /app\.py: Invalid Context/u,
     );
-    assert.equal(await exists('created.txt'), false, 'the earlier add must not have landed');
-    assert.equal(await exists('app.py'), true, 'the earlier delete must not have landed');
+    assert.equal(await read('created.txt'), 'alpha\n', 'the earlier add did land');
   });
 
-  it('refuses to add over an existing file', async () => {
-    await assert.rejects(run(patch('*** Add File: app.py', '+clobbered')), {
-      code: 'FS_ALREADY_EXISTS',
+  it('names the file whose hunk failed', async () => {
+    // `Invalid Context 0` alone leaves the model guessing which of several
+    // sections to rewrite.
+    await assert.rejects(run(patch('*** Update File: app.py', '@@', '-nope', '+x')), {
+      code: 'FS_IO_ERROR',
+      message: /^app\.py: /u,
     });
-    assert.equal(await read('app.py'), 'def greet():\n    print("Hi")\n');
   });
 
   it('refuses to update a file that does not exist', async () => {
@@ -212,9 +278,18 @@ describe('apply_patch', () => {
   });
 
   it('refuses to move a file onto itself', async () => {
-    await assert.rejects(run(patch('*** Update File: app.py', '*** Move to: app.py')), {
-      code: 'FS_INVALID_TARGET',
-    });
+    await assert.rejects(
+      run(
+        patch(
+          '*** Update File: app.py',
+          '*** Move to: app.py',
+          '@@',
+          '-    print("Hi")',
+          '+    print("Hello")',
+        ),
+      ),
+      { code: 'FS_IO_ERROR' },
+    );
     assert.equal(await exists('app.py'), true);
   });
 
@@ -246,7 +321,15 @@ describe('apply_patch', () => {
   });
 
   it('records both ends of a rename', async () => {
-    await run(patch('*** Update File: app.py', '*** Move to: moved.py'));
+    await run(
+      patch(
+        '*** Update File: app.py',
+        '*** Move to: moved.py',
+        '@@',
+        '-    print("Hi")',
+        '+    print("Hello")',
+      ),
+    );
     assert.deepEqual(events, [
       ['fs/observed', 'app.py', 'present'],
       ['fs/observed', 'moved.py', 'absent'],
@@ -263,7 +346,7 @@ describe('apply_patch under a confining provider', () => {
   // Delete and rename are the two operations `ctx.fs` cannot express, so they
   // reach the filesystem through `processPath`. Under a provider that confines,
   // that path is the way out of the sandbox — so they refuse instead, before
-  // anything is planned.
+  // anything is written.
   it('refuses to delete', async () => {
     await assert.rejects(run(patch('*** Delete File: app.py')), /Delete File.*unavailable/su);
     assert.equal(await exists('app.py'), true);
@@ -271,7 +354,7 @@ describe('apply_patch under a confining provider', () => {
 
   it('refuses to rename', async () => {
     await assert.rejects(
-      run(patch('*** Update File: app.py', '*** Move to: b.py')),
+      run(patch('*** Update File: app.py', '*** Move to: b.py', '@@', '-x = 1', '+x = 2')),
       /Move to.*unavailable/su,
     );
     assert.equal(await exists('app.py'), true);
@@ -280,5 +363,14 @@ describe('apply_patch under a confining provider', () => {
   it('still edits in place', async () => {
     await run(patch('*** Update File: app.py', '@@', '-x = 1', '+x = 2'));
     assert.equal(await read('app.py'), 'x = 2\n');
+  });
+
+  it('creates no directory of its own', async () => {
+    // `mkdir` on a `processPath` is the same way out of the sandbox that delete
+    // and rename refuse for, and it used to run on every write: a create the
+    // provider then denied still left its parent directory behind. A provider
+    // that confines owns the question of whether the directory may exist.
+    await assert.rejects(run(patch('*** Add File: sub/dir/x.txt', '+x')));
+    assert.equal(await exists('sub'), false);
   });
 });

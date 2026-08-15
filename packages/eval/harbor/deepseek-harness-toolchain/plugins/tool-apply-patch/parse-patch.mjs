@@ -38,6 +38,17 @@ const MOVE_TO = '*** Move to: ';
 // would cut the body off before the applier ever saw the anchor it names.
 const SECTION_HEADERS = [ADD_FILE, DELETE_FILE, UPDATE_FILE];
 
+// How much whitespace a marker line may carry. Codex distinguishes the two,
+// and the distinction is load-bearing rather than incidental: at the top level
+// and inside an `*** Add File:` body it compares `line.trim()`
+// (streaming_parser.rs:161, :186), so an indented envelope still parses; inside
+// an `*** Update File:` body it compares `line.trim_end()` (:216), so a context
+// line that happens to read `    *** Update File: x` stays content instead of
+// silently ending the section. Matching both is what lets this arm accept the
+// patches the reference accepts without inventing a new way to be wrong.
+const marker = (line) => line?.trim();
+const bodyMarker = (line) => line?.trimEnd();
+
 /**
  * Split a V4A patch envelope into its file operations.
  *
@@ -50,7 +61,7 @@ export function parsePatch(text) {
   const lines = normalize(text);
   let index = 0;
 
-  if (lines[index] !== BEGIN_PATCH) {
+  if (marker(lines[index]) !== BEGIN_PATCH) {
     throw new SyntaxError(
       `patch must start with \`${BEGIN_PATCH}\`, got: ${describe(lines[index])}`,
     );
@@ -58,8 +69,8 @@ export function parsePatch(text) {
   index += 1;
 
   const operations = [];
-  while (index < lines.length && lines[index] !== END_PATCH) {
-    const line = lines[index];
+  while (index < lines.length && marker(lines[index]) !== END_PATCH) {
+    const line = marker(lines[index]);
     const header = SECTION_HEADERS.find((candidate) => line.startsWith(candidate));
     if (header === undefined) {
       throw new SyntaxError(
@@ -78,42 +89,59 @@ export function parsePatch(text) {
     // grammar puts `change_move?` before the hunks, so a `*** Move to:` further
     // down is a line inside a hunk body and not a rename at all.
     let movePath;
-    if (header === UPDATE_FILE && lines[index]?.startsWith(MOVE_TO)) {
-      movePath = filename(lines[index].slice(MOVE_TO.length), MOVE_TO);
+    if (header === UPDATE_FILE && bodyMarker(lines[index])?.startsWith(MOVE_TO)) {
+      movePath = filename(bodyMarker(lines[index]).slice(MOVE_TO.length), MOVE_TO);
       index += 1;
     }
 
+    const inBody = header === ADD_FILE ? marker : bodyMarker;
     const start = index;
-    while (index < lines.length && !isBoundary(lines[index])) index += 1;
-    const diff = lines.slice(start, index).join('\n');
+    while (index < lines.length && !isBoundary(inBody(lines[index]))) index += 1;
+    const body = lines.slice(start, index);
 
     if (header === ADD_FILE) {
       // `add_line+` — a create with no body would write nothing while reporting
       // that it created the file.
-      if (diff.length === 0) {
+      if (body.length === 0) {
         throw new SyntaxError(`\`${ADD_FILE.trim()} ${path}\` has no content lines`);
       }
-      operations.push({ type: 'create_file', path, diff });
+      // Codex terminates every added line, `contents.push_str(line);
+      // contents.push('\n')` (streaming_parser.rs:204-207), so a created file
+      // always ends in a newline. The vendored applier joins its `+` lines
+      // instead and would leave the last one unterminated, so it is handed one
+      // more empty added line to terminate. Getting this wrong is invisible
+      // until a grader diffs the file or a linter reports W292 — and it would
+      // be charged to the edit contract rather than to this parser.
+      operations.push({ type: 'create_file', path, diff: [...body, '+'].join('\n') });
       continue;
     }
 
-    // `change?` is optional in the grammar, but only a rename gives an empty
-    // update anything to do.
-    if (diff.length === 0 && movePath === undefined) {
-      throw new SyntaxError(
-        `\`${UPDATE_FILE.trim()} ${path}\` has no hunks and no \`${MOVE_TO.trim()}\``,
-      );
+    // Codex rejects an update whose chunk list is empty whatever else the
+    // section carries, `ensure_update_hunk_is_not_empty` (streaming_parser.rs:55-64),
+    // and it checks before it looks at `move_path`. So a bare rename is not a
+    // patch here either: the model renames with the shell, which all three arms
+    // have on equal terms.
+    if (body.length === 0) {
+      throw new SyntaxError(`\`${UPDATE_FILE.trim()} ${path}\` has no hunks`);
     }
     operations.push({
       type: 'update_file',
       path,
       ...(movePath === undefined ? {} : { movePath }),
-      ...(diff.length === 0 ? {} : { diff }),
+      diff: body.join('\n'),
     });
   }
 
-  if (lines[index] !== END_PATCH) {
+  if (marker(lines[index]) !== END_PATCH) {
     throw new SyntaxError(`patch must end with \`${END_PATCH}\``);
+  }
+  // Codex requires the trimmed patch to end there, `parser.rs:255-270`. Letting
+  // a second envelope or a trailing sentence through would report success over
+  // operations that were parsed away and never applied.
+  if (index !== lines.length - 1) {
+    throw new SyntaxError(
+      `\`${END_PATCH}\` must be the last line, got: ${describe(lines[index + 1])}`,
+    );
   }
   // `hunk+`: an empty envelope parses cleanly and would report success over an
   // edit that never happened.
@@ -125,6 +153,11 @@ function isBoundary(line) {
   return line === END_PATCH || SECTION_HEADERS.some((header) => line.startsWith(header));
 }
 
+// The `*** Move to:` line is read with `bodyMarker` above rather than `marker`
+// for the same reason Codex reads it off `update_line` (streaming_parser.rs:227):
+// it is already inside the update body, where a leading space belongs to the
+// content.
+
 // `filename: /(.+)/` — non-empty, and the rest of the line verbatim, so a path
 // containing spaces needs no quoting. Whether the path is allowed is not
 // decided here: the mounted sandbox policy owns that, and a second opinion in
@@ -135,12 +168,16 @@ function filename(rest, header) {
   return path;
 }
 
-// A model that emits CRLF, or a trailing newline after `*** End Patch`, wrote a
-// well-formed patch; neither is worth a refusal the model cannot act on.
+// A model that emits CRLF, or wraps the envelope in blank lines, wrote a
+// well-formed patch; neither is worth a refusal the model cannot act on. Codex
+// trims the whole patch before parsing it (`parser.rs:194`), which is what makes
+// a leading newline — the most common way a model formats a long string
+// argument — parse rather than fail on the first line.
 function normalize(text) {
-  const lines = text.split('\n').map((line) => line.replace(/\r$/u, ''));
-  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-  return lines;
+  return text
+    .trim()
+    .split('\n')
+    .map((line) => line.replace(/\r$/u, ''));
 }
 
 function describe(line) {

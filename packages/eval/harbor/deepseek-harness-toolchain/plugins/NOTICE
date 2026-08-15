@@ -37,10 +37,12 @@ tool-apply-patch/vendor/apply-diff.test.mjs
   SOFTWARE.
 
 --------------------------------------------------------------------------------
-tool-apply-patch/index.mjs      — the model-facing tool description
+tool-apply-patch/index.mjs       — the model-facing tool description
 tool-apply-patch/parse-patch.mjs — the transcribed patch grammar
+tool-apply-patch/parse-patch.test.mjs — the worked example from the instructions
 
   OpenAI Codex
+  Copyright 2025 OpenAI
   https://github.com/openai/codex
   Files:  codex-rs/apply-patch/apply_patch_tool_instructions.md
             at commit 88c7a4ff074df9e2161c947ca6d91bf824b9d6e6
@@ -59,18 +61,68 @@ tool-apply-patch/parse-patch.mjs — the transcribed patch grammar
   License for the specific language governing permissions and limitations under
   the License.
 
-  Modifications: the tool description in index.mjs drops the `*** Delete File:`
-  and `*** Move to:` operations, their grammar productions, and the trailing
-  shell-invocation example; the grammar comment in parse-patch.mjs is a
-  transcription of the lark definition, not a copy of the file.
+  Modifications to apply_patch_tool_instructions.md, as reproduced in the
+  DESCRIPTION constant in index.mjs, in full:
+
+    1. The `## apply_patch` heading and the blank line after it are dropped.
+    2. "Use the `apply_patch` shell command to edit files" reads "tool" instead
+       of "shell command", because here it is a function tool taking one string
+       argument.
+    3. The trailing `You can invoke apply_patch like:` sentence and the
+       `shell {"command":["apply_patch", ...]}` example are dropped, for the
+       same reason.
+    4. Non-ASCII punctuation is flattened: U+2011 non-breaking hyphens to `-`,
+       U+201C/U+201D to `"`, U+2019 to `'`. Three lines are affected.
+
+  The text is otherwise byte-identical, and every operation the grammar defines
+  is implemented. An earlier version of this file claimed the description also
+  dropped `*** Delete File:` and `*** Move to:` and their grammar productions.
+  That was true when it was written and stopped being true when those two
+  operations were implemented; the notice was not updated with the code. It is
+  recorded here because a modification notice that under-reports what was
+  reproduced is the kind that matters.
+
+  The grammar comment in parse-patch.mjs is a transcription of six productions
+  from the lark definition, not a copy of the file.
 
 --------------------------------------------------------------------------------
 tool-apply-patch/index.mjs — the MutationPolicy class
 
   DeepSeek Harness
+  Copyright (c) 2026 DeepSeek
   https://github.com/deepseek-ai/deepseek-harness
   File:   packages/fs/tool-str-replace-editor/src/index.ts
+            at commit 47f943859bef60e4160492346772ded9b24f765a
 
-  MIT License. The sandbox-policy resolution and denial mapping follow that
-  file's MutationPolicy so both tools reach the filesystem the same way; the
+  MIT License
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+  The sandbox-policy resolution and denial mapping follow that file's
+  MutationPolicy so both tools reach the filesystem the same way; the
   surrounding tool is this repository's own.
+
+--------------------------------------------------------------------------------
+tool-apply-patch/parse-patch.mjs — the operation shape
+
+  The `create_file` / `update_file` / `delete_file` operation shape follows the
+  OpenAI Agents SDK's ApplyPatchOperation, packages/agents-core/src/types/protocol.ts
+  in the repository and under the licence reproduced at the top of this file,
+  because the vendored applier is that SDK's and its own callers pass it exactly
+  these three shapes.

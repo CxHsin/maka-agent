@@ -24,7 +24,9 @@ describe('parsePatch', () => {
         ),
       ),
       [
-        { type: 'create_file', path: 'hello.txt', diff: '+Hello world' },
+        // The extra `+` is the empty added line that terminates the file, the
+        // newline Codex's parser appends after every added line.
+        { type: 'create_file', path: 'hello.txt', diff: '+Hello world\n+' },
         {
           type: 'update_file',
           path: 'src/app.py',
@@ -34,6 +36,11 @@ describe('parsePatch', () => {
         { type: 'delete_file', path: 'obsolete.txt' },
       ],
     );
+  });
+
+  it('terminates a created file with a newline', () => {
+    const [operation] = parsePatch(patch('*** Add File: a.txt', '+one', '+two'));
+    assert.equal(applyDiff('', operation.diff, 'create'), 'one\ntwo\n');
   });
 
   it('keeps operation order', () => {
@@ -46,10 +53,37 @@ describe('parsePatch', () => {
     );
   });
 
-  it('accepts an update that only renames', () => {
-    assert.deepEqual(parsePatch(patch('*** Update File: old.txt', '*** Move to: new.txt')), [
-      { type: 'update_file', path: 'old.txt', movePath: 'new.txt' },
-    ]);
+  it('refuses an update that only renames', () => {
+    // `ensure_update_hunk_is_not_empty` rejects an empty chunk list before it
+    // reads `move_path`, so upstream a bare rename is not a patch either.
+    assert.throws(() => parsePatch(patch('*** Update File: old.txt', '*** Move to: new.txt')), {
+      name: 'SyntaxError',
+      message: /has no hunks/u,
+    });
+  });
+
+  it('accepts the whitespace Codex accepts', () => {
+    // `patch.trim()` before parsing and `line.trim()` per marker line. A model
+    // that indents the envelope or opens with a newline wrote a valid patch, and
+    // refusing it would cost this arm turns the reference never spends.
+    for (const input of [
+      '\n*** Begin Patch\n*** Delete File: a\n*** End Patch',
+      '*** Begin Patch \n*** Delete File: a\n*** End Patch',
+      '*** Begin Patch\n*** Delete File: a\n *** End Patch',
+      '  *** Begin Patch\n  *** Delete File: a\n  *** End Patch',
+    ]) {
+      assert.deepEqual(parsePatch(input), [{ type: 'delete_file', path: 'a' }]);
+    }
+  });
+
+  it('keeps a leading-space marker inside an update body as content', () => {
+    // Inside an update Codex compares `line.trim_end()`, not `line.trim()`, so
+    // an indented line that reads like a header is content. Trimming both ends
+    // here would end the section early and silently drop the rest.
+    const [operation] = parsePatch(
+      patch('*** Update File: a.txt', '@@', '-x', '+    *** Update File: elsewhere'),
+    );
+    assert.equal(operation.diff, '@@\n-x\n+    *** Update File: elsewhere');
   });
 
   it('keeps `*** End of File` inside the section body', () => {
@@ -90,7 +124,7 @@ describe('parsePatch', () => {
     // Whether every line starts with `+` is the applier's rule, checked in its
     // create mode. Enforcing it here too would put the same rule in two places.
     const [operation] = parsePatch(patch('*** Add File: a.txt', 'no plus prefix'));
-    assert.equal(operation.diff, 'no plus prefix');
+    assert.equal(operation.diff, 'no plus prefix\n+');
     assert.throws(() => applyDiff('', operation.diff, 'create'), /Invalid Add File Line/u);
   });
 
@@ -99,11 +133,18 @@ describe('parsePatch', () => {
     ['a missing terminator', '*** Begin Patch\n*** Delete File: a', /must end with/u],
     ['an empty envelope', '*** Begin Patch\n*** End Patch', /no file operations/u],
     ['an unknown header', patch('*** Rename File: a'), /expected a file header/u],
-    ['a header with no path', patch('*** Delete File: '), /needs a path/u],
-    ['a rename with no path', patch('*** Update File: a', '*** Move to:  '), /needs a path/u],
+    // Codex's marker carries its trailing space, so a header with nothing after
+    // the colon fails `strip_prefix` and is reported as not a header at all.
+    ['a header with no path', patch('*** Delete File: '), /expected a file header/u],
     ['a body line outside any section', patch('+orphan'), /expected a file header/u],
     ['an empty Add File', patch('*** Add File: a.txt'), /no content lines/u],
-    ['an empty Update File', patch('*** Update File: a.txt'), /no hunks and no/u],
+    ['an empty Update File', patch('*** Update File: a.txt'), /has no hunks/u],
+    ['a trailing sentence', `${patch('*** Delete File: a')}\nand also`, /must be the last line/u],
+    [
+      'a second envelope',
+      `${patch('*** Delete File: a')}\n${patch('*** Delete File: b')}`,
+      /must be the last line/u,
+    ],
   ]) {
     it(`refuses ${name}`, () => {
       assert.throws(() => parsePatch(input), { name: 'SyntaxError', message });

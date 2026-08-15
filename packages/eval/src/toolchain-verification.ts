@@ -31,7 +31,7 @@ export const TOOLCHAIN_IDENTITY_ENV = 'MAKA_EVAL_VERIFIED_TOOLCHAIN';
 const DEEPSEEK_HARNESS_TOOLCHAIN: ToolchainIdentity = {
   root: '/opt/maka-deepseek-harness-toolchain',
   version: '0.1.0-rc.6',
-  fingerprint: 'sha256:408ecc932b18d278dda12d85527e79f0eedb9aced32ce99df9f78d39f4962ac3',
+  fingerprint: 'sha256:435da4989d384cd5abda9bd70a94b04b180b5e0ca1c9231022ad53b987391e19',
 };
 
 export const TOOLCHAIN_IDENTITIES: Readonly<Record<ExternalProfile, ToolchainIdentity>> = {

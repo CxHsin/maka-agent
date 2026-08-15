@@ -12,6 +12,11 @@
 //
 //   node codex-oracle.mjs --write
 //
+// The cases below are the ones someone thought to write down. codex-fuzz.mjs
+// searches for the rest against the same binary; anything it turns up belongs
+// here as a named case, so the fixtures keep catching it without a `codex` on
+// PATH.
+//
 // It runs the binary under argv[0] `apply_patch`, which is how Codex's
 // multitool dispatches to the standalone applier. That applier composes an
 // envelope's operations sequentially where the function tool the model actually

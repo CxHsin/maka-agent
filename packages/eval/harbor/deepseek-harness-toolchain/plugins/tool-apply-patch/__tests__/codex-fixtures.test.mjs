@@ -80,10 +80,16 @@ describe(`codex ${fixtures.codex} fixtures`, () => {
       cases.length,
       'case names must be unique, since the divergence list is keyed by them',
     );
-    for (const name of DIVERGENCES.keys()) {
-      assert.ok(
-        cases.some((entry) => entry.name === name),
-        `divergence "${name}" names no case`,
+    for (const [name, divergence] of DIVERGENCES) {
+      const fixture = fixtures.cases.find((entry) => entry.name === name);
+      assert.ok(fixture !== undefined, `divergence "${name}" names no case`);
+      // An excuse that no longer excuses anything is worse than no excuse: it
+      // reads as "we checked this and accepted it" while the tool has since been
+      // brought into line, and it would go on suppressing a real regression.
+      assert.notDeepEqual(
+        fixture.tree,
+        divergence.tree,
+        `divergence "${name}" now agrees with the reference binary — delete the entry`,
       );
     }
   });

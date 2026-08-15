@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, rmSync, statSync } from 'node:fs';
-import { chmod, copyFile, mkdir, rename, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -29,6 +29,9 @@ const resultToken = takeRelayResultToken();
 // for profile selection, so the spec repeats this name in `--profile`; the
 // lifecycle test pins the two together.
 const DEEPSEEK_HARNESS_PROFILE = 'maka-eval';
+// The absolute path an Eval-authored plugin row resolves through, named here
+// because the preparer decides whether to export it by looking for it.
+const DSH_PLUGINS_VAR = 'MAKA_EVAL_DSH_PLUGINS';
 
 function isDeepSeekHarness(profile: Profile): boolean {
   return Object.hasOwn(DEEPSEEK_HARNESS_ARMS, profile);
@@ -72,10 +75,19 @@ function deepSeekHarnessArm(profileDirectory: string): (setup: ProfileSetup) => 
     // names an absolute path, and this is the one place that path is built.
     // All three arms run the same toolchain, so its root is read from the arm
     // whose identity the other two alias.
-    env.MAKA_EVAL_DSH_PLUGINS = rooted(
-      root,
-      `${TOOLCHAIN_IDENTITIES['deepseek-harness'].root}/lib/dsh/plugins`,
-    );
+    //
+    // Set only for a composition that reads it, which today is the patch arm
+    // alone. Exporting it into the two control arms as well left them carrying
+    // an environment difference for a mechanism they do not use, which is one
+    // more thing a reviewer has to rule out. Deciding it from the copied file
+    // rather than from a second list keeps the two from drifting apart.
+    const composition = await readFile(join(profile, 'cordis.patch.yml'), 'utf8');
+    if (composition.includes(DSH_PLUGINS_VAR)) {
+      env[DSH_PLUGINS_VAR] = rooted(
+        root,
+        `${TOOLCHAIN_IDENTITIES['deepseek-harness'].root}/lib/dsh/plugins`,
+      );
+    }
     env.DEEPSEEK_API_KEY = 'maka-eval-local';
     env.DEEPSEEK_BASE_URL = proxyBaseUrl;
     // The harness kills every descendant of its persistent PTY on shutdown,

@@ -15,9 +15,11 @@
 # Derived from the harness's own examples/jsonrpc-agent/minimal.cordis.yml —
 # the composition BENCHMARK.md names for benchmark runs — with the SDK JSON-RPC
 # entry replaced by the CLI's one-shot startup pair, and `agent-spine-demo`
-# replaced by the equivalent core services the CLI uses. Verified against that
-# composition request-for-request: identical tool names, byte-identical tool
-# schemas, byte-identical system prompt, identical message sequence.
+# replaced by the equivalent core services the CLI uses. Compared against that
+# composition during development — tool names, tool schemas, system prompt and
+# message sequence on the first outbound request — and found identical. That was
+# a one-time manual check and not a standing one: nothing in this repository
+# reproduces it, so an upstream release can diverge from it silently.
 #
 # Source: https://github.com/deepseek-ai/deepseek-harness
 #   commit 47f943859bef60e4160492346772ded9b24f765a, MIT license.
@@ -161,21 +163,32 @@
     - id: fs-tools
       name: '@deepseek-ai/dsh-tool-fs'
       config:
-        # Matched to the baseline editor's `maxOutputChars`. Left at the shipped
-        # default this arm reads 51200 bytes to the baseline's 16000 characters
-        # — a 3.2x window on the same task, which would show up as a contract
-        # effect on any benchmark task with a large file in it.
+        # Set to the baseline editor's shipped `maxOutputChars`. Left at its own
+        # shipped default of 50*1024 this arm would read 51200 bytes to the
+        # baseline's 16000 characters — a 3.2x window on the same task, which
+        # would show up as a contract effect on any task with a large file in it.
         #
-        # What is held equal is what one read costs the context window, not how
-        # much file it buys. `str_replace_editor` spends eight characters a line
-        # on line numbers and a header on top; this tool emits neither, so on
-        # this repository's own sources it returns 10% more lines for the same
-        # budget, 22% on the longest files. That difference is the contract:
-        # numbering is how the baseline presents a file and the model pays for
-        # it in tokens either way. Equalising delivered content instead would
-        # mean picking a budget from an assumed average line length.
+        # What this equalises is the budget's number. It does not equalise
+        # delivered content or context cost, because the two budgets do not
+        # measure the same thing, and the difference is not the one an earlier
+        # version of this comment claimed. Both tools number their lines. The
+        # baseline's `maybeTruncate` cuts the fully rendered string — prompt
+        # line, six-column right-aligned number and two spaces per line, then
+        # content (`str-replace-editor/lib/index.js:85-103`). This tool charges
+        # `readMaxBytes` against raw line bytes plus one separator each
+        # (`tool-fs/lib/index.js:31-48`) and adds the `NNN: ` gutter, the
+        # `<path>/<type>/<content>` envelope and the footer afterwards, outside
+        # the budget (`:101-112`).
         #
-        # The unit does differ — UTF-16 code units against UTF-8 bytes — so the
+        # Measured over this repository's 1480 TS/JS/Python sources at 16000,
+        # this arm delivers 1.105x the lines and emits 1.027x the characters;
+        # the most affected single file is 1.34x lines and 1.19x characters. The
+        # residual runs in this arm's favour and is recorded rather than argued
+        # away. Equalising delivered content instead would mean choosing a budget
+        # from an assumed average line length, which is a larger free parameter
+        # than the few percent above.
+        #
+        # The unit differs too — UTF-16 code units against UTF-8 bytes — so the
         # two coincide on ASCII and this arm's window narrows on text that is
         # not. The remaining read-side asymmetry, that the patch arm has no read
         # tool at all, is contract-inherent and stays.

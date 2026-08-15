@@ -22,9 +22,11 @@
 # Derived from the harness's own examples/jsonrpc-agent/minimal.cordis.yml —
 # the composition BENCHMARK.md names for benchmark runs — with the SDK JSON-RPC
 # entry replaced by the CLI's one-shot startup pair, and `agent-spine-demo`
-# replaced by the equivalent core services the CLI uses. Verified against that
-# composition request-for-request: identical tool names, byte-identical tool
-# schemas, byte-identical system prompt, identical message sequence.
+# replaced by the equivalent core services the CLI uses. Compared against that
+# composition during development — tool names, tool schemas, system prompt and
+# message sequence on the first outbound request — and found identical. That was
+# a one-time manual check and not a standing one: nothing in this repository
+# reproduces it, so an upstream release can diverge from it silently.
 #
 # Source: https://github.com/deepseek-ai/deepseek-harness
 #   commit 47f943859bef60e4160492346772ded9b24f765a, MIT license.

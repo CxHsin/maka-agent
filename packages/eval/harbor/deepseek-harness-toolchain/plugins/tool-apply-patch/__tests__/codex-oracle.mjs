@@ -440,6 +440,17 @@ export const cases = [
     files: { 'a.txt': 'class A:   \n    x\nclass A:\n    x\n' },
     patch: P('*** Update File: a.txt', '@@ class A:', '-    x', '+    y'),
   },
+  {
+    // Found by codex-fuzz.mjs. The context-free insertion is placed at the end
+    // of the file without consulting the search position, and the second chunk
+    // then replaces a range that contains that position — so the replacement
+    // swallows the inserted line and the file ends up empty. Applying the two
+    // as disjoint edits, which is what rebuilding the file forward does, keeps
+    // the insertion and produces a file the reference never produces.
+    name: 'an insertion inside a range a later chunk replaces',
+    files: { 'a.txt': 'x\ntrailing   \n\n' },
+    patch: P('*** Update File: a.txt', '@@', '+\ttabbed', '@@', '-x', '-trailing   ', ' ', '-'),
+  },
   // The order of the four matching passes, one pair at a time. Two cases
   // already pin the exact pass ahead of the looser ones; these pin the loose
   // ones against each other, where removing a pass does not fail the match but

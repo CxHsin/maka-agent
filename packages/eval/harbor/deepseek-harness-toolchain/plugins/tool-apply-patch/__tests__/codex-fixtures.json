@@ -831,6 +831,18 @@
       }
     },
     {
+      "name": "an insertion inside a range a later chunk replaces",
+      "files": {
+        "a.txt": "x\ntrailing   \n\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n+\ttabbed\n@@\n-x\n-trailing   \n \n-\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": ""
+      }
+    },
+    {
       "name": "a trailing-whitespace match beats a leading-whitespace match earlier",
       "files": {
         "a.txt": "  foo\nfoo   \n"

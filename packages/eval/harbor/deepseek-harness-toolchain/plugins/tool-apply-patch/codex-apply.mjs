@@ -173,19 +173,27 @@ function computeReplacements(originalLines, path, chunks) {
   return replacements;
 }
 
-// Built forward in one pass over the already-sorted, non-overlapping
-// replacements. Splicing each one into a copy instead spreads the replacement
-// segment into the argument list, and a hunk adding more lines than the engine's
-// argument limit — a model rewriting a large generated file — threw a
-// `RangeError` rather than applying.
+// Spread into `splice`, a segment longer than the engine's argument limit — a
+// model rewriting a large generated file — throws a `RangeError` instead of
+// applying, so it goes in in bounded batches.
+const SPLICE_BATCH = 8192;
+
 function applyReplacements(lines, replacements) {
-  const out = [];
-  let cursor = 0;
-  for (const [start, oldLength, segment] of replacements) {
-    for (let i = cursor; i < start; i += 1) out.push(lines[i]);
-    for (const line of segment) out.push(line);
-    cursor = start + oldLength;
+  const out = [...lines];
+  // Descending, so an earlier replacement does not shift a later one's index.
+  //
+  // Splicing in place rather than rebuilding forward is not an implementation
+  // detail. `computeReplacements` places a context-free insertion at the end of
+  // the file without consulting the search position, so it can land inside a
+  // range a later chunk replaces — and then the descending order is what makes
+  // the replacement swallow it. A forward rebuild treats the two as disjoint
+  // and keeps the insertion; a differential fuzz round against the reference
+  // binary is what caught the difference.
+  for (const [start, oldLength, segment] of [...replacements].reverse()) {
+    out.splice(start, oldLength);
+    for (let i = 0; i < segment.length; i += SPLICE_BATCH) {
+      out.splice(start + i, 0, ...segment.slice(i, i + SPLICE_BATCH));
+    }
   }
-  for (let i = cursor; i < lines.length; i += 1) out.push(lines[i]);
   return out;
 }

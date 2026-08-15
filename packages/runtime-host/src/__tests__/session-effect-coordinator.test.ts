@@ -55,7 +55,7 @@ test('Session recap publishes one protected result and exact retries never repea
       },
       {
         readSessionHeader: async () =>
-          ({ isArchived: true, status: 'archived' }) as unknown as SessionHeader,
+          ({ isArchived: true, status: 'active' }) as unknown as SessionHeader,
       },
     );
     assert.deepEqual(
@@ -122,7 +122,7 @@ test('Session effect leaves Turn admission free and drain aborts accepted recap 
         },
         {
           readSessionHeader: async () =>
-            ({ isArchived: true, status: 'archived' }) as unknown as SessionHeader,
+            ({ isArchived: true, status: 'active' }) as unknown as SessionHeader,
         },
       );
       assert.deepEqual(

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-export const SQLITE_SESSION_METADATA_SCHEMA_VERSION = 24;
+export const SQLITE_SESSION_METADATA_SCHEMA_VERSION = 25;
 export const SQLITE_SESSION_MESSAGE_CHUNK_BYTES = 64 * 1024;
 export const SQLITE_SESSION_MESSAGE_CHUNK_MARKER = '{"$maka":"session-message-chunks-v1"}';
 
@@ -895,6 +895,35 @@ const MIGRATIONS: ReadonlyMap<number, string> = new Map([
 
     CREATE INDEX agent_graph_epochs_current
       ON agent_graph_epochs(root_session_id, epoch DESC);
+  `,
+  ],
+  [
+    25,
+    `
+    DROP INDEX session_metadata_by_status;
+
+    UPDATE session_metadata
+    SET
+      payload_json = CASE
+        WHEN json_extract(payload_json, '$.status') = 'archived'
+          THEN json_remove(
+            json_set(payload_json, '$.status', 'active'),
+            '$.archivedAt',
+            '$.blockedReason'
+          )
+        ELSE json_remove(payload_json, '$.archivedAt')
+      END,
+      metadata_version = metadata_version + 1,
+      committed_at = MAX(
+        committed_at,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000
+      )
+    WHERE
+      json_extract(payload_json, '$.status') = 'archived'
+      OR json_type(payload_json, '$.archivedAt') IS NOT NULL;
+
+    ALTER TABLE session_metadata DROP COLUMN status;
+    ALTER TABLE session_metadata DROP COLUMN status_updated_at;
   `,
   ],
 ]);

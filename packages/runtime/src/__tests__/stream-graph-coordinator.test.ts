@@ -814,7 +814,7 @@ describe('host-managed agent graph coordinator', () => {
         readHeader: async (sessionId: string) =>
           ({
             id: sessionId,
-            status: 'archived',
+            status: 'active',
             isArchived: true,
           }) as never,
       },

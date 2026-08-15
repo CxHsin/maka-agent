@@ -431,7 +431,7 @@ export class RootTurnCoordinator implements HostedExecutionAuthority {
       const header = await this.stores.sessionStore.readHeaderSnapshot(sessionId);
       if (header.conversationCopy?.state === 'preparing') return null;
       return {
-        isArchived: header.isArchived || header.status === 'archived',
+        isArchived: header.isArchived,
         unavailableReason: runtimeHostExternalTurnUnavailableReason(header),
       };
     } catch (error) {
@@ -704,7 +704,7 @@ export class RootTurnCoordinator implements HostedExecutionAuthority {
           }
           throw error;
         }
-        if (header.status === 'archived' || header.isArchived) {
+        if (header.isArchived) {
           throw new RuntimeHostedRootUnavailableError(
             input.sessionId,
             'Cannot start a hosted root execution in an archived Session',
@@ -1282,7 +1282,7 @@ export class RootTurnCoordinator implements HostedExecutionAuthority {
           }
           throw error;
         }
-        if (header.status === 'archived' || header.isArchived) {
+        if (header.isArchived) {
           return completedStart(sessionArchived(request.archivedMessage));
         }
         const unavailableReason = runtimeHostExternalTurnUnavailableReason(header);
@@ -1414,7 +1414,7 @@ export class RootTurnCoordinator implements HostedExecutionAuthority {
         if (isSessionNotFoundError(error)) return notFound('Session does not exist');
         throw error;
       }
-      if (header.status === 'archived' || header.isArchived) {
+      if (header.isArchived) {
         return sessionArchived('Cannot continue an archived Session');
       }
       const unavailableReason = runtimeHostSafeBoundaryContinuationUnavailableReason(header);
@@ -1593,7 +1593,7 @@ export class RootTurnCoordinator implements HostedExecutionAuthority {
             }
             throw error;
           }
-          if (header.status === 'archived' || header.isArchived) {
+          if (header.isArchived) {
             return {
               kind: 'complete',
               outcome: sessionArchived('Cannot continue an archived Session'),

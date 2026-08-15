@@ -666,7 +666,7 @@ export class HostScheduledTaskCoordinator implements ScheduledTaskToolAuthority 
       throw new Error('Session lifecycle is changing');
     }
     const header = await this.#sessions.readHeaderSnapshot(sessionId);
-    if (header.isArchived || header.status === 'archived') {
+    if (header.isArchived) {
       throw new Error('Archived Sessions cannot own session-bound ScheduledTasks');
     }
     return header;

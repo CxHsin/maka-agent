@@ -888,23 +888,11 @@ class SqliteSessionStore implements SessionAuthorityStore {
   }
 
   async archive(sessionId: string): Promise<void> {
-    const now = Date.now();
-    await this.updateHeader(sessionId, {
-      isArchived: true,
-      archivedAt: now,
-      status: 'archived',
-      statusUpdatedAt: now,
-    });
+    await this.updateHeader(sessionId, { isArchived: true });
   }
 
   async unarchive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, {
-      isArchived: false,
-      archivedAt: undefined,
-      status: 'active',
-      blockedReason: undefined,
-      statusUpdatedAt: Date.now(),
-    });
+    await this.updateHeader(sessionId, { isArchived: false });
   }
 
   async setFlagged(sessionId: string, isFlagged: boolean): Promise<void> {
@@ -1045,7 +1033,6 @@ export function normalizeSessionHeader(
     Array.isArray(header.labels) &&
     header.labels.every((label) => typeof label === 'string') &&
     typeof header.isArchived === 'boolean' &&
-    (header.archivedAt === undefined || isFiniteNumber(header.archivedAt)) &&
     isSessionStatus(header.status) &&
     (header.blockedReason === undefined || isSessionBlockedReason(header.blockedReason)) &&
     (header.statusUpdatedAt === undefined || isFiniteNumber(header.statusUpdatedAt)) &&

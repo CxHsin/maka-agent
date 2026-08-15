@@ -473,7 +473,7 @@ export class AgentGraphCoordinator {
     const recovered: string[] = [];
     for (const header of await this.#input.sessionStore.listForRecovery()) {
       if (this.#input.rootSessionId && header.id !== this.#input.rootSessionId) continue;
-      if (header.subagentParent || header.isArchived || header.status === 'archived') continue;
+      if (header.subagentParent || header.isArchived) continue;
       const graphId = await this.currentGraphId(header.id);
       const updates = await this.#input.controlStore.listAgentGraphScheduleUpdates(graphId);
       if (updates.length === 0) continue;
@@ -1144,7 +1144,7 @@ export class AgentGraphCoordinator {
 
   async #assertRootSupervisor(rootSessionId: string): Promise<SessionHeader> {
     const header = await this.#assertRootGraphReader(rootSessionId);
-    if (header.isArchived || header.status === 'archived') {
+    if (header.isArchived) {
       throw new AgentGraphClientOperationError(
         'session_archived',
         'Archived Sessions cannot supervise an agent graph',

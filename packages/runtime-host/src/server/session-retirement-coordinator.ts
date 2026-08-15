@@ -206,12 +206,7 @@ export class HostSessionRetirementCoordinator {
       return await this.#withStableFamily(input.sessionId, async (family) => {
         const target = requireFamilyRecord(family, input.sessionId);
         const archived = input.state === 'archived';
-        if (
-          [...family.records.values()].every(
-            ({ header }) =>
-              header.isArchived === archived && (header.status === 'archived') === archived,
-          )
-        ) {
+        if ([...family.records.values()].every(({ header }) => header.isArchived === archived)) {
           return lifecycleSuccess(
             projectSessionCatalogRecord(await this.#stores.readCatalogRecord(input.sessionId)),
           );

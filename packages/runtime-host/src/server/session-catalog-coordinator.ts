@@ -437,7 +437,7 @@ export class HostSessionCatalogCoordinator {
         if (current.revision !== input.expectedRevision) {
           return configurationSuccess(revisionConflict(input.expectedRevision, current.revision));
         }
-        if (current.header.isArchived || current.header.status === 'archived') {
+        if (current.header.isArchived) {
           return configurationFailure(
             'operation_conflict',
             'Archived Session configuration cannot be changed',

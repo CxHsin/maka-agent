@@ -29,10 +29,6 @@ import type { SubagentWorkspaceBinding } from './subagent-workspace.js';
 export { DEEP_RESEARCH_SESSION_LABEL, isDeepResearchSession } from './explore-agent.js';
 
 /**
- * `archived` is still here and still written by `SessionStore.archive()`
- * alongside `isArchived`; consolidating those two onto one authority is its own
- * change (#2984, PR 3) because it rewrites stored rows.
- *
  * `review` and `done` have no writer in current source, but they stay: this
  * list is read back out of storage, and narrowing it is a data migration, not a
  * cleanup. `resolveLegacyStatus` in the JSONL importer (removed in #2656) let
@@ -49,7 +45,6 @@ export const SESSION_STATUSES = [
   'blocked',
   'review',
   'done',
-  'archived',
   'aborted',
 ] as const;
 
@@ -215,7 +210,6 @@ export interface SessionHeader {
   labels: string[];
 
   isArchived: boolean;
-  archivedAt?: number;
   status: SessionStatus;
   blockedReason?: SessionBlockedReason;
   statusUpdatedAt?: number;

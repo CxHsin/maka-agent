@@ -3337,22 +3337,7 @@ export class SqliteSessionMetadataStore {
   ): Promise<SessionMetadataRecord[]> {
     this.assertOpen();
     const identities = uniqueVersionedSessionIdentities(sessions);
-    const now = this.now();
-    const patch: Partial<SessionHeader> =
-      state === 'archived'
-        ? {
-            isArchived: true,
-            archivedAt: now,
-            status: 'archived',
-            statusUpdatedAt: now,
-          }
-        : {
-            isArchived: false,
-            archivedAt: undefined,
-            status: 'active',
-            blockedReason: undefined,
-            statusUpdatedAt: now,
-          };
+    const patch: Partial<SessionHeader> = { isArchived: state === 'archived' };
     return this.transaction(() => {
       const records = identities.map(({ sessionId, expectedVersion }) =>
         this.updateHeaderSync(sessionId, patch, {
@@ -3490,8 +3475,6 @@ export class SqliteSessionMetadataStore {
           name,
           is_flagged,
           is_archived,
-          status,
-          status_updated_at,
           parent_session_id,
           subagent_parent_session_id,
           subagent_parent_run_id,
@@ -3509,7 +3492,7 @@ export class SqliteSessionMetadataStore {
           model,
           metadata_version,
           committed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       )
       .run(
@@ -3521,8 +3504,6 @@ export class SqliteSessionMetadataStore {
         header.name,
         booleanInteger(header.isFlagged),
         booleanInteger(header.isArchived),
-        header.status,
-        header.statusUpdatedAt ?? null,
         header.parentSessionId ?? null,
         header.subagentParent?.parentSessionId ?? null,
         header.subagentParent?.spawnedBy.parentRunId ?? null,
@@ -3749,8 +3730,6 @@ export class SqliteSessionMetadataStore {
           name = ?,
           is_flagged = ?,
           is_archived = ?,
-          status = ?,
-          status_updated_at = ?,
           parent_session_id = ?,
           subagent_parent_session_id = ?,
           revision_root_session_id = ?,
@@ -3772,8 +3751,6 @@ export class SqliteSessionMetadataStore {
         next.name,
         booleanInteger(next.isFlagged),
         booleanInteger(next.isArchived),
-        next.status,
-        next.statusUpdatedAt ?? null,
         next.parentSessionId ?? null,
         next.subagentParent?.parentSessionId ?? null,
         next.revisionRootSessionId ?? null,

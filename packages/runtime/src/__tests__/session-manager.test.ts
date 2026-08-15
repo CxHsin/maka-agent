@@ -17344,20 +17344,11 @@ class MemorySessionStore implements SessionStore {
   }
 
   async archive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, {
-      isArchived: true,
-      status: 'archived',
-      statusUpdatedAt: 1,
-    });
+    await this.updateHeader(sessionId, { isArchived: true });
   }
 
   async unarchive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, {
-      isArchived: false,
-      status: 'active',
-      blockedReason: undefined,
-      statusUpdatedAt: 1,
-    });
+    await this.updateHeader(sessionId, { isArchived: false });
   }
 
   async setFlagged(sessionId: string, isFlagged: boolean): Promise<void> {

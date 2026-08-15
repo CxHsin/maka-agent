@@ -174,7 +174,6 @@ test('drives the renderer Session catalog facade through real UDS framing', asyn
               ...projected,
               revision: projected.revision + 1,
               isArchived: archived,
-              status: archived ? 'archived' : 'active',
             });
             return { ok: true, result: projected };
           },

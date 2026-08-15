@@ -1143,7 +1143,7 @@ export class SessionManager {
             current.revision,
           );
         }
-        if (current.header.isArchived || current.header.status === 'archived') {
+        if (current.header.isArchived) {
           throw new SessionConfigurationTransitionError(
             'operation_conflict',
             'Archived Session configuration cannot be changed',
@@ -1218,7 +1218,7 @@ export class SessionManager {
           current.revision,
         );
       }
-      if (current.header.isArchived || current.header.status === 'archived') {
+      if (current.header.isArchived) {
         throw new SessionConfigurationTransitionError(
           'operation_conflict',
           'Archived Session workspace cannot be relocated',
@@ -1410,7 +1410,7 @@ export class SessionManager {
 
   private async recoverInterruptedSessionsWithPolicy(policy: RecoveryPolicy): Promise<string[]> {
     const interrupted = (await listSessionsForRecovery(this.deps.store, policy)).filter(
-      (session) => session.status !== 'archived',
+      (session) => !session.isArchived,
     );
     const recovered = new Set<string>();
     for (const session of interrupted) {
@@ -2897,7 +2897,7 @@ export class SessionManager {
     if (messages.some((message) => 'turnId' in message && message.turnId === claim.targetTurnId)) {
       throw new Error(`Claimed graph turn ${claim.targetTurnId} already has durable messages`);
     }
-    if (child.isArchived || child.status === 'archived' || child.status === 'aborted') {
+    if (child.isArchived || child.status === 'aborted') {
       throw new Error('Claimed graph execution target child session is terminated');
     }
     if (input.abortSignal?.aborted) {

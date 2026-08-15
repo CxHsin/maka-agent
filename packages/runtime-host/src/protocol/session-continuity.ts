@@ -58,7 +58,6 @@ export interface SessionContinuityIdentity {
   createdAt: number;
   lastUsedAt: number;
   isArchived: boolean;
-  archivedAt?: number;
 }
 
 export interface SessionContinuitySnapshot {
@@ -867,7 +866,6 @@ function decodeSessionContinuityIdentity(value: unknown): SessionContinuityIdent
     'createdAt',
     'lastUsedAt',
     'isArchived',
-    'archivedAt',
   ]);
   assertRequiredKeys(record, 'Session continuity identity', [
     'sessionId',
@@ -887,9 +885,6 @@ function decodeSessionContinuityIdentity(value: unknown): SessionContinuityIdent
     createdAt: requireCount(record.createdAt, 'createdAt'),
     lastUsedAt: requireCount(record.lastUsedAt, 'lastUsedAt'),
     isArchived: record.isArchived,
-    ...(record.archivedAt === undefined
-      ? {}
-      : { archivedAt: requireCount(record.archivedAt, 'archivedAt') }),
   };
 }
 

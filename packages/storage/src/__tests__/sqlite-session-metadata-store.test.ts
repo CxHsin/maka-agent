@@ -133,6 +133,115 @@ describe('SqliteSessionMetadataStore', () => {
     }
   });
 
+  test('migrates archived Session metadata onto isArchived alone', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'maka-session-archive-authority-'));
+    const path = join(root, 'state.sqlite');
+    try {
+      const setup = createSqliteSessionMetadataStore(path, { now: () => 100 });
+      const header = fullHeader();
+      await setup.create(header);
+      setup.close();
+
+      const legacy = new DatabaseSync(path);
+      try {
+        legacy.exec(`
+          ALTER TABLE session_metadata ADD COLUMN status TEXT;
+          ALTER TABLE session_metadata ADD COLUMN status_updated_at INTEGER;
+          CREATE INDEX session_metadata_by_status
+            ON session_metadata(status, status_updated_at DESC, session_id);
+          UPDATE session_metadata_schema SET version = 24 WHERE scope = 'session_metadata';
+        `);
+        legacy
+          .prepare(`
+            UPDATE session_metadata
+            SET
+              payload_json = ?,
+              is_archived = 1,
+              status = 'archived',
+              status_updated_at = 50
+            WHERE session_id = ?
+          `)
+          .run(
+            JSON.stringify({
+              ...header,
+              isArchived: true,
+              archivedAt: 50,
+              status: 'archived',
+              blockedReason: 'tool_failed',
+              statusUpdatedAt: 50,
+            }),
+            header.id,
+          );
+      } finally {
+        legacy.close();
+      }
+
+      const migrated = createSqliteSessionMetadataStore(path, { now: () => 200 });
+      try {
+        const record = await migrated.read(header.id);
+        assert.equal(record.header.isArchived, true);
+        assert.equal(record.header.status, 'active');
+        assert.equal(record.header.blockedReason, undefined);
+        assert.equal('archivedAt' in record.header, false);
+        assert.equal(record.metadataVersion, 2);
+      } finally {
+        migrated.close();
+      }
+
+      const schema = new DatabaseSync(path);
+      try {
+        const columns = schema
+          .prepare('PRAGMA table_info(session_metadata)')
+          .all() as unknown as Array<{ readonly name: string }>;
+        assert.equal(
+          columns.some(({ name }) => name === 'status'),
+          false,
+        );
+        assert.equal(
+          columns.some(({ name }) => name === 'status_updated_at'),
+          false,
+        );
+        assert.equal(
+          schema
+            .prepare(
+              "SELECT 1 AS found FROM sqlite_schema WHERE type = 'index' AND name = 'session_metadata_by_status'",
+            )
+            .get(),
+          undefined,
+        );
+      } finally {
+        schema.close();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('archives a Session without overwriting its execution status', async () => {
+    const store = createSqliteSessionMetadataStore(':memory:', { now: () => 100 });
+    try {
+      const header = fullHeader({
+        status: 'blocked',
+        blockedReason: 'tool_failed',
+        statusUpdatedAt: 20,
+      });
+      await store.create(header);
+
+      const [archived] = await store.setLifecycleVersioned(
+        [{ sessionId: header.id, expectedVersion: 1 }],
+        'archived',
+      );
+
+      assert.equal(archived?.header.isArchived, true);
+      assert.equal(archived?.header.status, 'blocked');
+      assert.equal(archived?.header.blockedReason, 'tool_failed');
+      assert.equal(archived?.header.statusUpdatedAt, 20);
+      assert.equal('archivedAt' in (archived?.header ?? {}), false);
+    } finally {
+      store.close();
+    }
+  });
+
   test('atomically retires a revision family with CAS and tombstone retries', async () => {
     const store = createSqliteSessionMetadataStore(':memory:', { now: () => 100 });
     const root = fullHeader({
@@ -145,7 +254,6 @@ describe('SqliteSessionMetadataStore', () => {
       revisionIndex: undefined,
       revisionState: undefined,
       isArchived: false,
-      archivedAt: undefined,
       status: 'active',
       blockedReason: undefined,
     });
@@ -159,7 +267,6 @@ describe('SqliteSessionMetadataStore', () => {
       revisionIndex: 2,
       revisionState: 'committed',
       isArchived: false,
-      archivedAt: undefined,
       status: 'active',
       blockedReason: undefined,
     });
@@ -194,11 +301,12 @@ describe('SqliteSessionMetadataStore', () => {
         archived.map((record) => ({
           id: record.header.id,
           revision: record.metadataVersion,
+          isArchived: record.header.isArchived,
           status: record.header.status,
         })),
         [
-          { id: revision.id, revision: 2, status: 'archived' },
-          { id: root.id, revision: 2, status: 'archived' },
+          { id: revision.id, revision: 2, isArchived: true, status: 'active' },
+          { id: root.id, revision: 2, isArchived: true, status: 'active' },
         ],
       );
 
@@ -995,8 +1103,7 @@ describe('SqliteSessionMetadataStore', () => {
           id: 'archived',
           name: 'Archived',
           isArchived: true,
-          archivedAt: 50,
-          status: 'archived',
+          status: 'active',
           blockedReason: undefined,
           lastMessageAt: 50,
           labels: ['shared'],

@@ -132,7 +132,9 @@ describe('Host Session retirement coordinator', () => {
       );
       assert.equal(archived.ok, true);
       for (const childSessionId of childSessionIds) {
-        assert.equal((await harness.store.readHeaderSnapshot(childSessionId)).status, 'archived');
+        const header = await harness.store.readHeaderSnapshot(childSessionId);
+        assert.equal(header.isArchived, true);
+        assert.equal(header.status, 'active');
       }
 
       const restored = await harness.coordinator.handlers['session.lifecycle.set'](
@@ -141,7 +143,9 @@ describe('Host Session retirement coordinator', () => {
       );
       assert.equal(restored.ok, true);
       for (const childSessionId of childSessionIds) {
-        assert.equal((await harness.store.readHeaderSnapshot(childSessionId)).status, 'active');
+        const header = await harness.store.readHeaderSnapshot(childSessionId);
+        assert.equal(header.isArchived, false);
+        assert.equal(header.status, 'active');
       }
 
       const target = await harness.store.readHeaderRecordSnapshot(harness.revisionId);
@@ -1037,7 +1041,6 @@ async function assertFamilyLifecycle(harness: RetirementHarness, archived: boole
   for (const sessionId of harness.familyIds) {
     const header = await harness.store.readHeaderSnapshot(sessionId);
     assert.equal(header.isArchived, archived);
-    assert.equal(header.status === 'archived', archived);
   }
 }
 

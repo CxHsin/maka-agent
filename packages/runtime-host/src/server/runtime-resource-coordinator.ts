@@ -596,7 +596,7 @@ export class HostRuntimeResourceCoordinator
 
   async #assertActiveSession(sessionId: string): Promise<void> {
     const header = await this.#sessionHeaders.readHeader(sessionId);
-    if (header.isArchived || header.status === 'archived') {
+    if (header.isArchived) {
       throw new Error('Session is archived');
     }
   }
@@ -608,7 +608,7 @@ export class HostRuntimeResourceCoordinator
   > {
     try {
       const header = await this.#sessionHeaders.readHeader(sessionId);
-      return header.isArchived || header.status === 'archived'
+      return header.isArchived
         ? { code: 'session_archived', message: 'Session is archived' }
         : undefined;
     } catch (error) {

@@ -44,7 +44,13 @@
       // executor preparation scripts, so reformatting breaks provenance
       // verification; bundled-tools.json is their generated sibling.
       "!apps/desktop/resources/licenses/**",
-      "!apps/desktop/bundled-tools.json"
+      "!apps/desktop/bundled-tools.json",
+      // Third-party source carried verbatim, for the same reason: a vendored
+      // file that the formatter rewrites is no longer the upstream file, and
+      // re-vendoring from a later commit stops being a clean overwrite. Each
+      // one names its source, commit, and license in its own header. Still
+      // linted — only the formatter skips them.
+      "!packages/eval/harbor/**/vendor/**"
     ]
   },
   "javascript": {

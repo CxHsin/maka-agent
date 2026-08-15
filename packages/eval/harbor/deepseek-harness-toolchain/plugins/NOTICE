@@ -1,0 +1,76 @@
+Third-party material used by the DeepSeek Harness Eval plugins.
+
+Each item below is either carried verbatim under vendor/ or reproduced inside a
+source file. Where a file was modified, the modification is described at the top
+of that file rather than here, so the description travels with the code.
+
+--------------------------------------------------------------------------------
+tool-apply-patch/vendor/apply-diff.mjs
+tool-apply-patch/vendor/apply-diff.test.mjs
+
+  OpenAI Agents SDK for TypeScript/JavaScript
+  https://github.com/openai/openai-agents-js
+  commit e2cbca883dfccae90791c1e9237c15ef897a85d2
+  Files:  packages/agents-core/src/utils/applyDiff.ts
+          packages/agents-core/test/utils/applyDiff.test.ts
+
+  MIT License
+
+  Copyright (c) 2025 OpenAI
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+--------------------------------------------------------------------------------
+tool-apply-patch/index.mjs      — the model-facing tool description
+tool-apply-patch/parse-patch.mjs — the transcribed patch grammar
+
+  OpenAI Codex
+  https://github.com/openai/codex
+  Files:  codex-rs/apply-patch/apply_patch_tool_instructions.md
+            at commit 88c7a4ff074df9e2161c947ca6d91bf824b9d6e6
+          codex-rs/core/src/tools/handlers/apply_patch.lark
+            at commit 88c7a4ff074df9e2161c947ca6d91bf824b9d6e6
+
+  Licensed under the Apache License, Version 2.0 (the "License"); you may not
+  use these files except in compliance with the License. You may obtain a copy
+  of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+  WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+  License for the specific language governing permissions and limitations under
+  the License.
+
+  Modifications: the tool description in index.mjs drops the `*** Delete File:`
+  and `*** Move to:` operations, their grammar productions, and the trailing
+  shell-invocation example; the grammar comment in parse-patch.mjs is a
+  transcription of the lark definition, not a copy of the file.
+
+--------------------------------------------------------------------------------
+tool-apply-patch/index.mjs — the MutationPolicy class
+
+  DeepSeek Harness
+  https://github.com/deepseek-ai/deepseek-harness
+  File:   packages/fs/tool-str-replace-editor/src/index.ts
+
+  MIT License. The sandbox-policy resolution and denial mapping follow that
+  file's MutationPolicy so both tools reach the filesystem the same way; the
+  surrounding tool is this repository's own.

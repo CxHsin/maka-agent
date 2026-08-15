@@ -12,7 +12,7 @@
 # `ctx.fs` as the other two arms' editors do, except for delete and rename —
 # `ctx.fs` has no primitive for either, so those two go through the path the
 # provider publishes for its own execution world. See the plugin's header for
-# what it takes from Codex and from the OpenAI Agents SDK.
+# what it takes from Codex.
 #
 # `package.json` declares no bundles, so the harness composes this tree over an
 # empty entry list: every entry the model can observe is named here, and an

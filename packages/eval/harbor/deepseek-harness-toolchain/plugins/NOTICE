@@ -1,53 +1,19 @@
 Third-party material used by the DeepSeek Harness Eval plugins.
 
-Each item below is either carried verbatim under vendor/ or reproduced inside a
-source file. Where a file was modified, the modification is described at the top
-of that file rather than here, so the description travels with the code.
+Nothing here is carried verbatim as a file. Each item below is reproduced inside
+a source file of this repository, and where it was modified the modification is
+described at the top of that file as well, so the description travels with the
+code.
 
 --------------------------------------------------------------------------------
-tool-apply-patch/vendor/apply-diff.mjs
-tool-apply-patch/vendor/apply-diff.test.mjs
-
-  OpenAI Agents SDK for TypeScript/JavaScript
-  https://github.com/openai/openai-agents-js
-  commit e2cbca883dfccae90791c1e9237c15ef897a85d2
-  Files:  packages/agents-core/src/utils/applyDiff.ts
-          packages/agents-core/test/utils/applyDiff.test.ts
-
-  MIT License
-
-  Copyright (c) 2025 OpenAI
-
-  Permission is hereby granted, free of charge, to any person obtaining a copy
-  of this software and associated documentation files (the "Software"), to deal
-  in the Software without restriction, including without limitation the rights
-  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-  copies of the Software, and to permit persons to whom the Software is
-  furnished to do so, subject to the following conditions:
-
-  The above copyright notice and this permission notice shall be included in all
-  copies or substantial portions of the Software.
-
-  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-  SOFTWARE.
-
---------------------------------------------------------------------------------
-tool-apply-patch/index.mjs       — the model-facing tool description
-tool-apply-patch/parse-patch.mjs — the transcribed patch grammar
-tool-apply-patch/parse-patch.test.mjs — the worked example from the instructions
+tool-apply-patch/index.mjs           — the model-facing tool description
+tool-apply-patch/parse-patch.mjs     — the envelope and hunk parser
+tool-apply-patch/codex-apply.mjs     — locating and applying a file's hunks
+tool-apply-patch/codex-fixtures.json — recorded output of the `codex` binary
 
   OpenAI Codex
   Copyright 2025 OpenAI
   https://github.com/openai/codex
-  Files:  codex-rs/apply-patch/apply_patch_tool_instructions.md
-            at commit 88c7a4ff074df9e2161c947ca6d91bf824b9d6e6
-          codex-rs/core/src/tools/handlers/apply_patch.lark
-            at commit 88c7a4ff074df9e2161c947ca6d91bf824b9d6e6
 
   Licensed under the Apache License, Version 2.0 (the "License"); you may not
   use these files except in compliance with the License. You may obtain a copy
@@ -61,8 +27,12 @@ tool-apply-patch/parse-patch.test.mjs — the worked example from the instructio
   License for the specific language governing permissions and limitations under
   the License.
 
-  Modifications to apply_patch_tool_instructions.md, as reproduced in the
-  DESCRIPTION constant in index.mjs, in full:
+  The model-facing description in index.mjs reproduces
+
+      codex-rs/apply-patch/apply_patch_tool_instructions.md
+        at commit 88c7a4ff074df9e2161c947ca6d91bf824b9d6e6
+
+  with four modifications and no others:
 
     1. The `## apply_patch` heading and the blank line after it are dropped.
     2. "Use the `apply_patch` shell command to edit files" reads "tool" instead
@@ -75,15 +45,50 @@ tool-apply-patch/parse-patch.test.mjs — the worked example from the instructio
        U+201C/U+201D to `"`, U+2019 to `'`. Three lines are affected.
 
   The text is otherwise byte-identical, and every operation the grammar defines
-  is implemented. An earlier version of this file claimed the description also
-  dropped `*** Delete File:` and `*** Move to:` and their grammar productions.
-  That was true when it was written and stopped being true when those two
-  operations were implemented; the notice was not updated with the code. It is
-  recorded here because a modification notice that under-reports what was
-  reproduced is the kind that matters.
+  is implemented, so nothing in it describes something the tool refuses.
 
-  The grammar comment in parse-patch.mjs is a transcription of six productions
-  from the lark definition, not a copy of the file.
+  parse-patch.mjs and codex-apply.mjs are ports — the same algorithms in
+  JavaScript, not a translation of any one function line by line — of
+
+      codex-rs/apply-patch/src/streaming_parser.rs   (`process_line`)
+      codex-rs/apply-patch/src/parser.rs             (markers, `push_context_line`)
+      codex-rs/apply-patch/src/seek_sequence.rs      (`seek_sequence`)
+      codex-rs/apply-patch/src/file_update.rs        (`derive_new_contents_from_chunks`,
+                                                      `compute_replacements`,
+                                                      `apply_replacements`)
+        all at commit a7edf37cb46b5fc4d50bd03df8e5999a86f602eb
+
+  Only the `NormalizeToLf` update mode is ported. It is the `#[default]` for
+  `ApplyPatchFileUpdateMode`; `PreserveLineEndings` is selected by an
+  environment variable the model cannot set, and it is the only reason upstream
+  carries `context_line_indices`, so the ported chunks do not record it.
+
+  parse-patch.mjs also transcribes six productions of
+
+      codex-rs/core/src/tools/handlers/apply_patch.lark
+        at commit 88c7a4ff074df9e2161c947ca6d91bf824b9d6e6
+
+  as a comment, for the reader; that is a transcription, not a copy of the file.
+
+  codex-fixtures.json is generated output, not source: codex-oracle.mjs runs the
+  released `codex` binary over a temporary tree for each case and records what
+  it printed and what the tree became. Where a case was refused, the recorded
+  text is the binary's own diagnostic. Regenerating it requires a `codex` on
+  PATH and is not part of the build or the test run.
+
+  The recorded run used codex-cli 0.147.0, whose apply-patch sources sit at tag
+  rust-v0.147.0 rather than at the commit ported above. The two differ in these
+  files by a refactor — `UpdateFileChunk::default`, `push_context_line`, and the
+  `context_line_indices` field — plus one behavioural change in
+  `seek_sequence`'s end-of-file start position that applies to
+  `PreserveLineEndings` only. Under `NormalizeToLf` they are the same
+  algorithms, which is why the fixtures and the port agree on every case.
+
+  An earlier version of this file said the description also dropped
+  `*** Delete File:` and `*** Move to:` and their grammar productions. That was
+  true when written and stopped being true when both operations were
+  implemented. It is recorded here because a modification notice that
+  under-reports what was reproduced is the kind that matters.
 
 --------------------------------------------------------------------------------
 tool-apply-patch/index.mjs — the MutationPolicy class
@@ -119,10 +124,13 @@ tool-apply-patch/index.mjs — the MutationPolicy class
   surrounding tool is this repository's own.
 
 --------------------------------------------------------------------------------
-tool-apply-patch/parse-patch.mjs — the operation shape
+Removed
 
-  The `create_file` / `update_file` / `delete_file` operation shape follows the
-  OpenAI Agents SDK's ApplyPatchOperation, packages/agents-core/src/types/protocol.ts
-  in the repository and under the licence reproduced at the top of this file,
-  because the vendored applier is that SDK's and its own callers pass it exactly
-  these three shapes.
+  Earlier revisions vendored the OpenAI Agents SDK for TypeScript/JavaScript's
+  `applyDiff` (packages/agents-core/src/utils/applyDiff.ts, MIT, commit
+  e2cbca883dfccae90791c1e9237c15ef897a85d2) under tool-apply-patch/vendor/, on
+  the assumption that one V4A implementation is like another. It is not — the
+  two disagree on where a context-free `+` hunk lands, on trailing newlines, on
+  CRLF, and on how far a near-miss context line may drift — so an arm that
+  exists to measure Codex's contract cannot use it. Nothing from that SDK
+  remains, including the operation names its `ApplyPatchOperation` used.

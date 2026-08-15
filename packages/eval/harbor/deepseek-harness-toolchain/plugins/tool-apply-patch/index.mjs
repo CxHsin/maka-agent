@@ -12,10 +12,12 @@
 // `ctx.tools.register(defineTool(...))` — because a difference in how the tool
 // reaches the filesystem would be a second variable.
 //
-// Sources, both recorded in ../NOTICE:
-//   - The patch grammar and the model-facing description are Codex's.
-//   - Applying one file's hunks is the OpenAI Agents SDK's `applyDiff`,
-//     vendored under vendor/.
+// Everything the model can observe about the contract comes from Codex, all of
+// it recorded in ../NOTICE: the model-facing description, the envelope parser
+// (parse-patch.mjs) and the hunk applier (codex-apply.mjs). An earlier version
+// used the OpenAI Agents SDK's `applyDiff` for the last of these, on the
+// assumption that one V4A implementation is like another; it is not, and the
+// differences are exactly the kind this arm measures.
 //
 // The whole grammar is implemented, `*** Delete File:` and `*** Move to:`
 // included. Those two are the only operations `ctx.fs` has no primitive for —
@@ -32,14 +34,6 @@
 // than escape quietly. The Eval arm mounts `dsh-sandbox-local` at
 // `danger-full-access`, where nothing is confined and the model's own bash can
 // already remove any file, so the refusal never fires there.
-//
-// Operations are applied in order, each one reading the tree the previous one
-// left. That is Codex's semantics, and the reason it is worth stating is that
-// the obvious improvement on it is wrong here: planning the whole envelope
-// against one snapshot and writing afterwards makes a failed hunk cost nothing,
-// but it also makes two sections naming one path contradict each other, and it
-// gives this arm a recovery the reference does not have. Fidelity is the whole
-// value of the arm, in both directions.
 
 import { mkdir, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -47,8 +41,8 @@ import z from '@deepseek-ai/schemastery';
 import { FsError } from '@deepseek-ai/dsh-fs';
 import { sandboxDenialMarker } from '@deepseek-ai/dsh-sandbox';
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import { deriveNewContents } from './codex-apply.mjs';
 import { parsePatch } from './parse-patch.mjs';
-import { applyDiff } from './vendor/apply-diff.mjs';
 
 // Codex's own `apply_patch` tool instructions, carried across so the model gets
 // the text the contract is actually deployed with rather than a paraphrase.
@@ -185,88 +179,155 @@ function resolveOptions(exec) {
   return { ...(cwd === undefined ? {} : { cwd }), signal: exec.signal };
 }
 
-// Codex applies an envelope one operation at a time: read the file, apply that
-// operation's hunks, write it, then look at the next operation
-// (`lib.rs:393-460`). Two sections naming one path therefore compose, the second
-// reading what the first wrote.
+// Verify the whole envelope, then write it — the shape of Codex's own
+// `apply_patch` tool call. `try_verify_apply_patch_args` (`invocation.rs:214`)
+// collects every hunk into a `HashMap` keyed by resolved path, reads each target
+// and computes its new contents, and only then does the caller apply the result.
 //
-// This planned every operation against a single up-front snapshot and wrote
-// afterwards, so that a hunk whose context the model guessed at left the tree
-// untouched. That is the nicer property and it was still wrong: two updates to
-// one file made the second fail against a version the first had already
-// replaced, and a delete followed by an update removed the file and then failed,
-// leaving neither. Being safer than the reference is not free either — this arm
-// exists to measure the reference, and a tool that recovers from failures Codex
-// does not recover from moves the score just as surely as one that is worse.
+// Two consequences, both of which this had wrong in the other direction. A
+// second operation on a path is refused outright rather than composed onto the
+// first, because the map rejects a duplicate key before any work happens. And a
+// hunk whose context does not match costs nothing, because the failure happens
+// while the map is being built and nothing has been written.
+//
+// The standalone `apply_patch` binary does compose sequentially, which is what
+// an earlier version of this file was changed to match. That binary is not what
+// a model calls: `apply_patch.rs:404` — the function-tool handler — and the
+// shell path both go through `verify_apply_patch_args_with_mode`, and so through
+// the duplicate check.
 async function applyOperations(ctx, policy, operations, exec) {
   const options = resolveOptions(exec);
   const sandboxPolicy = policy.resolve(exec);
-  const applied = [];
-  for (const operation of operations) {
-    applied.push(await applyOperation(ctx, policy, operation, { options, sandboxPolicy, exec }));
-  }
-  return applied;
+  const planned = await verifyOperations(ctx, policy, operations, options, exec);
+  return writePlan(ctx, policy, planned, { sandboxPolicy, exec });
 }
 
-async function applyOperation(ctx, policy, operation, run) {
-  const { options, exec } = run;
-  const target = await ctx.fs.resolve(operation.path, options);
-  const info = await ctx.fs.stat(target, exec.signal);
+async function verifyOperations(ctx, policy, operations, options, exec) {
+  const planned = [];
+  const claimed = new Map();
+  const claim = (target, path) => {
+    const key = String(ctx.fs.processPath(target));
+    const existing = claimed.get(key);
+    if (existing !== undefined) {
+      throw new FsError(`multiple operations target ${existing}`, 'FS_IO_ERROR');
+    }
+    claimed.set(key, path);
+  };
 
-  if (operation.type === 'create_file') {
-    // Codex reads whatever is there, records it as overwritten, and writes
-    // anyway (`lib.rs:397-406`); it has no already-exists refusal. Refusing was
-    // this tool's own invention, and it charged the contract for every patch
-    // where a model rewrites a file from scratch.
+  for (const operation of operations) {
+    const target = await ctx.fs.resolve(operation.path, options);
+    claim(target, operation.path);
+    const info = await ctx.fs.stat(target, exec.signal);
+
+    if (operation.type === 'add_file') {
+      // Codex reads whatever is there, records it as overwritten, and writes
+      // anyway (`lib.rs:493-504`); it has no already-exists refusal. Refusing
+      // was this tool's own invention, and it charged the contract for every
+      // patch where a model rewrites a file from scratch.
+      ctx.emit('fs/observed', target, observed(info), exec);
+      planned.push({
+        kind: 'add',
+        target,
+        path: operation.path,
+        info,
+        content: operation.contents,
+      });
+      continue;
+    }
+
+    if (info === undefined) {
+      ctx.emit('fs/observed', target, { kind: 'absent' }, exec);
+      throw new FsError(
+        `Cannot ${operation.type === 'delete_file' ? 'delete' : 'update'} ${operation.path}: it does not exist.`,
+        'FS_NOT_FOUND',
+      );
+    }
+    if (info.type !== 'file') {
+      throw new FsError(`${operation.path} is not a regular file`, 'FS_NOT_REGULAR_FILE');
+    }
     ctx.emit('fs/observed', target, observed(info), exec);
-    const content = located(operation, () => applyDiff('', operation.diff, 'create'));
-    await writeTarget(ctx, policy, { target, content, info }, run);
-    return `A ${operation.path}`;
-  }
 
-  if (info === undefined) {
-    ctx.emit('fs/observed', target, { kind: 'absent' }, exec);
-    throw new FsError(
-      `Cannot ${operation.type === 'delete_file' ? 'delete' : 'update'} ${operation.path}: it does not exist.`,
-      'FS_NOT_FOUND',
-    );
-  }
-  if (info.type !== 'file') {
-    throw new FsError(`${operation.path} is not a regular file`, 'FS_NOT_REGULAR_FILE');
-  }
-  ctx.emit('fs/observed', target, observed(info), exec);
+    if (operation.type === 'delete_file') {
+      policy.requireDirectFilesystem('`*** Delete File:`');
+      planned.push({ kind: 'delete', target, path: operation.path, info });
+      continue;
+    }
 
-  if (operation.type === 'delete_file') {
-    policy.requireDirectFilesystem('`*** Delete File:`');
-    await removeFile(ctx, target);
-    ctx.emit('fs/observed', target, { kind: 'absent' }, exec);
-    return `D ${operation.path}`;
-  }
+    const before = await ctx.fs.readText(target, exec.signal);
+    // Where a mismatched hunk fails, before anything is on disk. The message
+    // already names the file and quotes the lines it could not place, which is
+    // what the model has to rewrite.
+    let content;
+    try {
+      content = deriveNewContents(before, operation.chunks, operation.path);
+    } catch (error) {
+      throw new FsError(error.message, 'FS_EDIT_NOT_FOUND', { cause: error });
+    }
 
-  const before = await ctx.fs.readText(target, exec.signal);
-  const content = located(operation, () => applyDiff(before, operation.diff));
+    if (operation.movePath === undefined) {
+      planned.push({ kind: 'update', target, path: operation.path, info, content });
+      continue;
+    }
 
-  if (operation.movePath === undefined) {
-    await writeTarget(ctx, policy, { target, content, info }, run);
-    return `M ${operation.path}`;
+    policy.requireDirectFilesystem('`*** Move to:`');
+    const destination = await ctx.fs.resolve(operation.movePath, options);
+    claim(destination, operation.movePath);
+    // Codex overwrites an existing destination rather than refusing, so the
+    // write is unconditional; recording what was there first keeps the
+    // observation trail honest about the file about to be replaced.
+    const destinationInfo = await ctx.fs.stat(destination, exec.signal);
+    ctx.emit('fs/observed', destination, observed(destinationInfo), exec);
+    planned.push({
+      kind: 'move',
+      target,
+      path: operation.path,
+      info,
+      content,
+      destination,
+      destinationPath: operation.movePath,
+    });
   }
+  return planned;
+}
 
-  policy.requireDirectFilesystem('`*** Move to:`');
-  const destination = await ctx.fs.resolve(operation.movePath, options);
-  if (ctx.fs.contains?.(target, destination) === true) {
-    throw new FsError(`Cannot move ${operation.path} onto itself`, 'FS_IO_ERROR');
+async function writePlan(ctx, policy, planned, run) {
+  const { exec } = run;
+  const affected = { A: [], M: [], D: [] };
+  for (const step of planned) {
+    if (step.kind === 'delete') {
+      await removeFile(ctx, step.target);
+      ctx.emit('fs/observed', step.target, { kind: 'absent' }, exec);
+      affected.D.push(step.path);
+      continue;
+    }
+    if (step.kind === 'move') {
+      // Destination first, source second — the order Codex applies, so a
+      // failure between them leaves the content present twice rather than not
+      // at all. The write is unconditional: the guard would belong to the
+      // source file's version, which the destination does not have.
+      await writeTarget(
+        ctx,
+        policy,
+        { target: step.destination, content: step.content, unconditional: true },
+        run,
+      );
+      await removeFile(ctx, step.target);
+      ctx.emit('fs/observed', step.target, { kind: 'absent' }, exec);
+      // A rename is reported as a modification of its destination, the way
+      // `AffectedPaths` records it (`lib.rs:634`).
+      affected.M.push(step.destinationPath);
+      continue;
+    }
+    await writeTarget(ctx, policy, step, run);
+    affected[step.kind === 'add' ? 'A' : 'M'].push(step.path);
   }
-  // Codex overwrites an existing destination rather than refusing, so the write
-  // is unconditional; recording what was there first keeps the observation trail
-  // honest about the file that is about to be replaced.
-  const destinationInfo = await ctx.fs.stat(destination, exec.signal);
-  ctx.emit('fs/observed', destination, observed(destinationInfo), exec);
-  // Destination first, source second — the same order Codex applies, so a
-  // failure between them leaves the content present twice rather than not at all.
-  await writeTarget(ctx, policy, { target: destination, content, unconditional: true }, run);
-  await removeFile(ctx, target);
-  ctx.emit('fs/observed', target, { kind: 'absent' }, exec);
-  return `R ${operation.path} -> ${operation.movePath}`;
+  // `print_summary` (`lib.rs:766-781`): added, then modified, then deleted.
+  return [
+    'Success. Updated the following files:',
+    ...affected.A.map((path) => `A ${path}`),
+    ...affected.M.map((path) => `M ${path}`),
+    ...affected.D.map((path) => `D ${path}`),
+  ].join('\n');
 }
 
 async function writeTarget(ctx, policy, { target, content, info, unconditional }, run) {
@@ -296,17 +357,6 @@ async function writeTarget(ctx, policy, { target, content, info, unconditional }
 
 const observed = (info) =>
   info === undefined ? { kind: 'absent' } : { kind: 'present', version: info.version };
-
-// `applyDiff` names the hunk it could not place but not the file it was placing
-// it in, and `Invalid Context 0` in a patch that touches four files tells the
-// model nothing about which section to rewrite.
-function located(operation, run) {
-  try {
-    return run();
-  } catch (error) {
-    throw new FsError(`${operation.path}: ${error.message}`, 'FS_IO_ERROR', { cause: error });
-  }
-}
 
 // `ctx.fs` exposes no delete and no mkdir, so both go through the path the
 // provider publishes for its own execution world — the same path its bash tool
@@ -376,8 +426,10 @@ function registerApplyPatch(ctx, config) {
       },
       async execute(args, exec) {
         const operations = parsePatch(args.input);
-        const applied = await applyOperations(ctx, policy, operations, exec);
-        return `Applied patch:\n${applied.join('\n')}`;
+        // Returned as Codex writes it (`print_summary`, `lib.rs:766-781`),
+        // because the summary is part of the contract the model is scored
+        // against: it is how it learns a rename landed as `M <new path>`.
+        return applyOperations(ctx, policy, operations, exec);
       },
       presentCall: presentApplyPatchCall,
     }),

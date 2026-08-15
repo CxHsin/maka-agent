@@ -1,0 +1,834 @@
+{
+  "codex": "codex-cli 0.147.0",
+  "cases": [
+    {
+      "name": "instructions worked example",
+      "files": {
+        "src/app.py": "def greet():\n    print(\"Hi\")\n",
+        "obsolete.txt": "gone\n"
+      },
+      "patch": "*** Begin Patch\n*** Add File: hello.txt\n+Hello world\n*** Update File: src/app.py\n*** Move to: src/main.py\n@@ def greet():\n-    print(\"Hi\")\n+    print(\"Hello, world!\")\n*** Delete File: obsolete.txt\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nA hello.txt\nM src/main.py\nD obsolete.txt\n",
+      "tree": {
+        "hello.txt": "Hello world\n",
+        "src/main.py": "def greet():\n    print(\"Hello, world!\")\n"
+      }
+    },
+    {
+      "name": "add-only hunk under an anchor lands at EOF, not at the anchor",
+      "files": {
+        "a.txt": "alpha\nbeta\ngamma\ndelta\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@ alpha\n+INSERTED\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "alpha\nbeta\ngamma\ndelta\nINSERTED\n"
+      }
+    },
+    {
+      "name": "add-only hunk with context lines around it",
+      "files": {
+        "a.txt": "one\ntwo\nthree\nfour\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n one\n two\n+INSERTED\n three\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "one\ntwo\nINSERTED\nthree\nfour\n"
+      }
+    },
+    {
+      "name": "file with no trailing newline gains one",
+      "files": {
+        "a.txt": "one\ntwo"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n+ONE\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "ONE\ntwo\n"
+      }
+    },
+    {
+      "name": "CRLF file is normalised to LF",
+      "files": {
+        "a.txt": "one\r\ntwo\r\nthree\r\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-two\n+TWO\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "one\r\nTWO\nthree\r\n"
+      }
+    },
+    {
+      "name": "context matched with trailing whitespace only",
+      "files": {
+        "a.txt": "keep   \nchange\ntail\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n keep\n-change\n+CHANGED\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "keep\nCHANGED\ntail\n"
+      }
+    },
+    {
+      "name": "context matched with leading whitespace differing",
+      "files": {
+        "a.txt": "    indented\nchange\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n indented\n-change\n+CHANGED\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "indented\nCHANGED\n"
+      }
+    },
+    {
+      "name": "curly quotes in the file, straight quotes in the patch",
+      "files": {
+        "a.txt": "say “hello” now\ntail\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-say \"hello\" now\n+said it\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "said it\ntail\n"
+      }
+    },
+    {
+      "name": "en dash in the file, hyphen in the patch",
+      "files": {
+        "a.txt": "range 1–10\ntail\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n range 1-10\n-tail\n+TAIL\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "range 1-10\nTAIL\n"
+      }
+    },
+    {
+      "name": "non-breaking space in the file, plain space in the patch",
+      "files": {
+        "a.txt": "a b\ntail\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-a b\n+ab\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "ab\ntail\n"
+      }
+    },
+    {
+      "name": "two chunks in one file",
+      "files": {
+        "a.txt": "one\ntwo\nthree\nfour\nfive\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n+ONE\n@@\n-five\n+FIVE\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "ONE\ntwo\nthree\nfour\nFIVE\n"
+      }
+    },
+    {
+      "name": "repeated block disambiguated by an @@ anchor",
+      "files": {
+        "a.py": "class A:\n    def f():\n        pass\nclass B:\n    def f():\n        pass\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.py\n@@ class B:\n     def f():\n-        pass\n+        return 1\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.py\n",
+      "tree": {
+        "a.py": "class A:\n    def f():\n        pass\nclass B:\n    def f():\n        return 1\n"
+      }
+    },
+    {
+      "name": "End of File anchor appends at the end",
+      "files": {
+        "a.txt": "head\ntail\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n tail\n+added\n*** End of File\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "head\ntail\nadded\n"
+      }
+    },
+    {
+      "name": "End of File anchor with a repeated line picks the last one",
+      "files": {
+        "a.txt": "x\ny\nx\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+X\n*** End of File\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "x\ny\nX\n"
+      }
+    },
+    {
+      "name": "add file with no lines at all",
+      "files": {},
+      "patch": "*** Begin Patch\n*** Add File: pkg/__init__.py\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nA pkg/__init__.py\n",
+      "tree": {
+        "pkg/__init__.py": ""
+      }
+    },
+    {
+      "name": "add file into a directory that does not exist",
+      "files": {},
+      "patch": "*** Begin Patch\n*** Add File: deep/er/still/a.txt\n+content\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nA deep/er/still/a.txt\n",
+      "tree": {
+        "deep/er/still/a.txt": "content\n"
+      }
+    },
+    {
+      "name": "add file over an existing file",
+      "files": {
+        "a.txt": "old\n"
+      },
+      "patch": "*** Begin Patch\n*** Add File: a.txt\n+new\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nA a.txt\n",
+      "tree": {
+        "a.txt": "new\n"
+      }
+    },
+    {
+      "name": "add file body line without a plus prefix",
+      "files": {},
+      "patch": "*** Begin Patch\n*** Add File: a.txt\nno plus prefix\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 3: 'no plus prefix' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'\n",
+      "tree": {}
+    },
+    {
+      "name": "add file with an empty added line",
+      "files": {},
+      "patch": "*** Begin Patch\n*** Add File: a.txt\n+one\n+\n+three\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nA a.txt\n",
+      "tree": {
+        "a.txt": "one\n\nthree\n"
+      }
+    },
+    {
+      "name": "delete a file that does not exist",
+      "files": {},
+      "patch": "*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch\n",
+      "refused": true,
+      "output": "Failed to delete file /private<root>/missing.txt\n",
+      "tree": {}
+    },
+    {
+      "name": "update a file that does not exist",
+      "files": {},
+      "patch": "*** Begin Patch\n*** Update File: missing.txt\n@@\n-x\n+y\n*** End Patch\n",
+      "refused": true,
+      "output": "Failed to read file to update /private<root>/missing.txt: No such file or directory (os error 2)\n",
+      "tree": {}
+    },
+    {
+      "name": "move only, no hunks",
+      "files": {
+        "old.txt": "body\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 2: Update file hunk for path 'old.txt' is empty\n",
+      "tree": {
+        "old.txt": "body\n"
+      }
+    },
+    {
+      "name": "move with a hunk",
+      "files": {
+        "old.txt": "body\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: old.txt\n*** Move to: sub/new.txt\n@@\n-body\n+BODY\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM sub/new.txt\n",
+      "tree": {
+        "sub/new.txt": "BODY\n"
+      }
+    },
+    {
+      "name": "move onto an existing destination",
+      "files": {
+        "old.txt": "body\n",
+        "new.txt": "clobbered\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-body\n+BODY\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM new.txt\n",
+      "tree": {
+        "new.txt": "BODY\n"
+      }
+    },
+    {
+      "name": "move to appearing after a hunk is a body line",
+      "files": {
+        "a.txt": "keep\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n keep\n*** Move to: b.txt\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 5: Expected update hunk to start with a @@ context marker, got: '*** Move to: b.txt'\n",
+      "tree": {
+        "a.txt": "keep\n"
+      }
+    },
+    {
+      "name": "context line whose leading space the model dropped",
+      "files": {
+        "a.txt": "one\n\ntwo\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n one\n\n-two\n+TWO\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "one\n\nTWO\n"
+      }
+    },
+    {
+      "name": "context that is not in the file",
+      "files": {
+        "a.txt": "one\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-nowhere\n+x\n*** End Patch\n",
+      "refused": true,
+      "output": "Failed to find expected lines in /private<root>/a.txt:\nnowhere\n",
+      "tree": {
+        "a.txt": "one\n"
+      }
+    },
+    {
+      "name": "anchor that is not in the file",
+      "files": {
+        "a.txt": "one\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@ class Missing\n-one\n+ONE\n*** End Patch\n",
+      "refused": true,
+      "output": "Failed to find context 'class Missing' in /private<root>/a.txt\n",
+      "tree": {
+        "a.txt": "one\n"
+      }
+    },
+    {
+      "name": "consecutive @@ markers with nothing between",
+      "files": {
+        "a.txt": "one\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@ outer\n@@ inner\n-one\n+ONE\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 4: Unexpected line found in update hunk: '@@ inner'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)\n",
+      "tree": {
+        "a.txt": "one\n"
+      }
+    },
+    {
+      "name": "nested @@ markers as the instructions describe them",
+      "files": {
+        "a.py": "class BaseClass:\n    def method():\n        old\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.py\n@@ class BaseClass:\n@@     def method():\n-        old\n+        new\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 4: Unexpected line found in update hunk: '@@     def method():'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)\n",
+      "tree": {
+        "a.py": "class BaseClass:\n    def method():\n        old\n"
+      }
+    },
+    {
+      "name": "update with no hunks at all",
+      "files": {
+        "a.txt": "one\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 2: Update file hunk for path 'a.txt' is empty\n",
+      "tree": {
+        "a.txt": "one\n"
+      }
+    },
+    {
+      "name": "trailing @@ with no lines under it",
+      "files": {
+        "a.txt": "one\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n+ONE\n@@ dangling\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 7: Update hunk does not contain any lines\n",
+      "tree": {
+        "a.txt": "one\n"
+      }
+    },
+    {
+      "name": "body line with no prefix inside a hunk",
+      "files": {
+        "a.txt": "one\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\none\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 4: Unexpected line found in update hunk: 'one'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)\n",
+      "tree": {
+        "a.txt": "one\n"
+      }
+    },
+    {
+      "name": "indented marker inside an update body is content",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+    *** Update File: elsewhere\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "    *** Update File: elsewhere\n"
+      }
+    },
+    {
+      "name": "missing opener",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Delete File: a.txt\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch: The first line of the patch must be '*** Begin Patch'\n",
+      "tree": {
+        "a.txt": "x\n"
+      }
+    },
+    {
+      "name": "missing terminator",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\n*** Delete File: a.txt\n",
+      "refused": true,
+      "output": "Invalid patch: The last line of the patch must be '*** End Patch'\n",
+      "tree": {
+        "a.txt": "x\n"
+      }
+    },
+    {
+      "name": "empty envelope",
+      "files": {},
+      "patch": "*** Begin Patch\n*** End Patch\n",
+      "refused": true,
+      "output": "No files were modified.\n",
+      "tree": {}
+    },
+    {
+      "name": "unknown header",
+      "files": {},
+      "patch": "*** Begin Patch\n*** Rename File: a.txt\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 2: '*** Rename File: a.txt' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'\n",
+      "tree": {}
+    },
+    {
+      "name": "header with no path",
+      "files": {},
+      "patch": "*** Begin Patch\n*** Delete File: \n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 2: '*** Delete File:' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'\n",
+      "tree": {}
+    },
+    {
+      "name": "body line outside any section",
+      "files": {},
+      "patch": "*** Begin Patch\n+orphan\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 2: '+orphan' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'\n",
+      "tree": {}
+    },
+    {
+      "name": "text after End Patch",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\n*** Delete File: a.txt\n*** End Patch\nand also\n",
+      "refused": true,
+      "output": "Invalid patch: The last line of the patch must be '*** End Patch'\n",
+      "tree": {
+        "a.txt": "x\n"
+      }
+    },
+    {
+      "name": "indented envelope",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "  *** Begin Patch\n  *** Delete File: a.txt\n  *** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nD a.txt\n",
+      "tree": {}
+    },
+    {
+      "name": "leading newline before the envelope",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "\n*** Begin Patch\n*** Delete File: a.txt\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nD a.txt\n",
+      "tree": {}
+    },
+    {
+      "name": "CRLF envelope",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\r\n*** Delete File: a.txt\r\n*** End Patch\r\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nD a.txt\n",
+      "tree": {}
+    },
+    {
+      "name": "path with spaces",
+      "files": {
+        "dir with spaces/a b.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\n*** Delete File: dir with spaces/a b.txt\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nD dir with spaces/a b.txt\n",
+      "tree": {}
+    },
+    {
+      "name": "delete hunk with a stray line under it",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\n*** Delete File: a.txt\n+stray\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 3: '+stray' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'\n",
+      "tree": {
+        "a.txt": "x\n"
+      }
+    },
+    {
+      "name": "removal of every line leaves an empty file",
+      "files": {
+        "a.txt": "only\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-only\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": ""
+      }
+    },
+    {
+      "name": "old lines ending in an empty element",
+      "files": {
+        "a.txt": "one\ntwo\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n-two\n-\n+ONE\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "ONE\n"
+      }
+    },
+    {
+      "name": "three sections, the third malformed",
+      "files": {
+        "a.txt": "x\n",
+        "b.txt": "y\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+X\n*** Add File: c.txt\n+new\n*** Update File: b.txt\n@@\n-nowhere\n+z\n*** End Patch\n",
+      "refused": true,
+      "output": "Failed to find expected lines in /private<root>/b.txt:\nnowhere\n",
+      "tree": {
+        "a.txt": "X\n",
+        "b.txt": "y\n",
+        "c.txt": "new\n"
+      }
+    },
+    {
+      "name": "tab-indented context",
+      "files": {
+        "a.txt": "\tindented\nchange\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n \tindented\n-change\n+CHANGED\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "\tindented\nCHANGED\n"
+      }
+    },
+    {
+      "name": "pattern longer than the file",
+      "files": {
+        "a.txt": "one\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n-two\n-three\n+X\n*** End Patch\n",
+      "refused": true,
+      "output": "Failed to find expected lines in /private<root>/a.txt:\none\ntwo\nthree\n",
+      "tree": {
+        "a.txt": "one\n"
+      }
+    },
+    {
+      "name": "indented End Patch after an update hunk",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n  *** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "y\n"
+      }
+    },
+    {
+      "name": "indented End Patch after an add hunk",
+      "files": {},
+      "patch": "*** Begin Patch\n*** Add File: a.txt\n+x\n  *** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nA a.txt\n",
+      "tree": {
+        "a.txt": "x\n"
+      }
+    },
+    {
+      "name": "indented next header after an update hunk",
+      "files": {
+        "a.txt": "x\n",
+        "b.txt": "y\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+X\n  *** Delete File: b.txt\n*** End Patch\n",
+      "refused": true,
+      "output": "Failed to find expected lines in /private<root>/a.txt:\nx\n *** Delete File: b.txt\n",
+      "tree": {
+        "a.txt": "x\n",
+        "b.txt": "y\n"
+      }
+    },
+    {
+      "name": "trailing-space End Patch after an update hunk",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch \n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "y\n"
+      }
+    },
+    {
+      "name": "blank line between sections",
+      "files": {
+        "a.txt": "x\n",
+        "b.txt": "y\n"
+      },
+      "patch": "*** Begin Patch\n*** Delete File: a.txt\n\n*** Delete File: b.txt\n*** End Patch\n",
+      "refused": true,
+      "output": "Invalid patch hunk on line 3: '' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'\n",
+      "tree": {
+        "a.txt": "x\n",
+        "b.txt": "y\n"
+      }
+    },
+    {
+      "name": "blank line at the end of an update hunk",
+      "files": {
+        "a.txt": "x\ny\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+X\n\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "X\ny\n"
+      }
+    },
+    {
+      "name": "add hunk after an update hunk with no blank line",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+X\n*** Add File: b.txt\n+new\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nA b.txt\nM a.txt\n",
+      "tree": {
+        "a.txt": "X\n",
+        "b.txt": "new\n"
+      }
+    },
+    {
+      "name": "End of File on a chunk that is not the last",
+      "files": {
+        "a.txt": "one\ntwo\nthree\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-three\n+THREE\n*** End of File\n@@\n-one\n+ONE\n*** End Patch\n",
+      "refused": true,
+      "output": "Failed to find expected lines in /private<root>/a.txt:\none\n",
+      "tree": {
+        "a.txt": "one\ntwo\nthree\n"
+      }
+    },
+    {
+      "name": "chunks given out of file order",
+      "files": {
+        "a.txt": "one\ntwo\nthree\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-three\n+THREE\n@@\n-one\n+ONE\n*** End Patch\n",
+      "refused": true,
+      "output": "Failed to find expected lines in /private<root>/a.txt:\none\n",
+      "tree": {
+        "a.txt": "one\ntwo\nthree\n"
+      }
+    },
+    {
+      "name": "delete then add the same path",
+      "files": {
+        "a.txt": "old\n"
+      },
+      "patch": "*** Begin Patch\n*** Delete File: a.txt\n*** Add File: a.txt\n+new\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nA a.txt\nD a.txt\n",
+      "tree": {
+        "a.txt": "new\n"
+      }
+    },
+    {
+      "name": "add file whose body contains a line starting with plus plus",
+      "files": {},
+      "patch": "*** Begin Patch\n*** Add File: a.txt\n++nested\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nA a.txt\n",
+      "tree": {
+        "a.txt": "+nested\n"
+      }
+    },
+    {
+      "name": "update whose added line starts with a marker prefix",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+*** not a marker\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "*** not a marker\n"
+      }
+    },
+    {
+      "name": "context line that is only a space",
+      "files": {
+        "a.txt": "one\n \ntwo\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n one\n  \n-two\n+TWO\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "one\n \nTWO\n"
+      }
+    },
+    {
+      "name": "CRLF inside an added line",
+      "files": {
+        "a.txt": "x\n"
+      },
+      "patch": "*** Begin Patch\r\n*** Update File: a.txt\r\n@@\r\n-x\r\n+y\r\n*** End Patch\r\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "y\n"
+      }
+    },
+    {
+      "name": "file whose last line has no newline and is the match target",
+      "files": {
+        "a.txt": "one\ntwo"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-two\n+TWO\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "one\nTWO\n"
+      }
+    },
+    {
+      "name": "empty file updated",
+      "files": {
+        "a.txt": ""
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n+added\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "added\n"
+      }
+    },
+    {
+      "name": "an exact match later in the file beats a whitespace-only match earlier",
+      "files": {
+        "a.txt": "target   \nfiller\ntarget\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-target\n+HIT\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "target   \nfiller\nHIT\n"
+      }
+    },
+    {
+      "name": "an exact match later beats a case-folded punctuation match earlier",
+      "files": {
+        "a.txt": "say “hi”\nfiller\nsay \"hi\"\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-say \"hi\"\n+HIT\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "say “hi”\nfiller\nHIT\n"
+      }
+    },
+    {
+      "name": "the first occurrence at or after the previous chunk wins",
+      "files": {
+        "a.txt": "dup\ndup\ndup\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-dup\n+ONE\n@@\n-dup\n+TWO\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "ONE\nTWO\ndup\n"
+      }
+    },
+    {
+      "name": "a second chunk cannot match before the first",
+      "files": {
+        "a.txt": "one\ntwo\none\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-two\n+TWO\n@@\n-one\n+ONE\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "one\nTWO\nONE\n"
+      }
+    },
+    {
+      "name": "an anchor matched loosely still advances the search",
+      "files": {
+        "a.txt": "class A:   \n    x\nclass A:\n    x\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@ class A:\n-    x\n+    y\n*** End Patch\n",
+      "refused": false,
+      "output": "Success. Updated the following files:\nM a.txt\n",
+      "tree": {
+        "a.txt": "class A:   \n    x\nclass A:\n    y\n"
+      }
+    }
+  ]
+}

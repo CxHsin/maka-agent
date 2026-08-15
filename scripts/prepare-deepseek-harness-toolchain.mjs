@@ -124,11 +124,13 @@ async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {
     // importing `@deepseek-ai/dsh-tools` from there would fail to resolve.
     // Here the walk finds lib/dsh/node_modules on the first step up.
     //
-    // Their tests are not runtime artifacts and would only widen the
-    // fingerprint's surface; they run from the repository, in `test:dist`. The
-    // NOTICE stays — attribution travels with the code it covers.
+    // Their `__tests__` directories are not runtime artifacts and would only
+    // widen the fingerprint's surface; they run from the repository, in
+    // `test:dist`, and hold the fixtures and harnesses the tests need as well
+    // as the tests. The NOTICE stays — attribution travels with the code it
+    // covers.
     'cp -R /manifest/plugins /out/lib/dsh/',
-    'find /out/lib/dsh/plugins -name "*.test.mjs" -delete',
+    'find /out/lib/dsh/plugins -type d -name __tests__ -prune -exec rm -rf {} +',
   ].join(' && ');
   await execFileAsync('docker', [
     'run',

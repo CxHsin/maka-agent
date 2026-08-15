@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import yaml from 'js-yaml';
 import { DEEPSEEK_HARNESS_ARMS, TOOLCHAIN_IDENTITIES } from '../toolchain-verification.js';
@@ -78,22 +78,45 @@ const SCHEMA = yaml.DEFAULT_SCHEMA.extend([
 // is what makes the comparison cover what the model actually receives.
 function entries(source: string): Entry[] {
   const document = yaml.load(source, { schema: SCHEMA }) as Array<{ insert?: Entry[] }>;
+  // `cordis.patch.yml` steps are either `{insert: [...]}` or `{id, ...}`, the
+  // second being an override applied to an already-composed entry. Skipping the
+  // second kind silently — which reading only `insert` did — would leave a step
+  // that rewrites the patch tool's description, or drops one arm's reasoning
+  // effort, invisible to every assertion in this file. All three arms compose
+  // by insertion alone; a step that is not an insertion is a change to how they
+  // compose, and it has to be read here before it can be tolerated.
+  const foreign = document.find((step) => step.insert === undefined);
+  assert.equal(
+    foreign,
+    undefined,
+    `composition has a step this test cannot read: ${JSON.stringify(foreign)}`,
+  );
   const inserted = document.flatMap((step) => step.insert ?? []);
   assert.ok(inserted.length > 0, 'composition declares no entries');
   return inserted;
 }
 
 test('the three arms share every profile file that is not the composition', async () => {
+  // The file list is read rather than declared. Naming `package.json` and
+  // `cordis.yml` here would have left a file added to one profile — an
+  // `.npmrc`, a second composition fragment, an `AGENTS.md` the harness reads —
+  // outside the comparison entirely, which is the failure this test exists to
+  // catch.
   const [baseline, ...others] = await Promise.all(
-    Object.values(ARMS).map(async (directory) => ({
-      directory,
-      files: await Promise.all(['package.json', 'cordis.yml'].map((file) => read(directory, file))),
-    })),
+    Object.values(ARMS).map(async (directory) => {
+      const names = (await readdir(profileFile(directory, '.'), { withFileTypes: true }))
+        .filter((entry) => entry.isFile() && entry.name !== 'cordis.patch.yml')
+        .map((entry) => entry.name)
+        .sort();
+      const files = await Promise.all(names.map((file) => read(directory, file)));
+      return { directory, contents: Object.fromEntries(names.map((n, i) => [n, files[i]])) };
+    }),
   );
+  assert.ok(Object.keys(baseline.contents).length > 0, 'a profile directory has no shared files');
   for (const other of others) {
     assert.deepEqual(
-      other.files,
-      baseline.files,
+      other.contents,
+      baseline.contents,
       `${other.directory} diverges from ${baseline.directory} outside cordis.patch.yml`,
     );
   }
@@ -199,20 +222,37 @@ test('the experiment runs the three arms against one another', async () => {
       ),
       'utf8',
     ),
-  ) as { subjects: Array<{ id: string; config: { args: string[] } }> };
+  ) as {
+    subjects: Array<
+      { id: string; config: { args: string[] } & Record<string, unknown> } & Record<string, unknown>
+    >;
+  };
 
   assert.deepEqual(
     experiment.subjects.map(({ id }) => id),
     Object.keys(ARMS),
   );
   // The profile argument is the only thing that may differ: it is what selects
-  // the composition, and therefore the contract.
+  // the composition, and therefore the contract. Every other field of the
+  // subject is compared whole — `kind`, `credentials`, the interpreter, the
+  // credential environment, the base URL, the harness entry point — because a
+  // subject that reaches a different API or runs a different node is not the
+  // same experiment, and none of that is `args[1]`.
   const [first, ...rest] = experiment.subjects;
+  const launch = ({ id: _id, config, ...subject }: (typeof experiment.subjects)[number]) => ({
+    ...subject,
+    config: { ...config, args: config.args.filter((_, index) => index !== 1) },
+  });
+  // The first subject's own profile argument is checked too. Exempting it left
+  // the one arm every other arm is compared against free to name a profile that
+  // is not its own.
+  for (const subject of experiment.subjects) {
+    assert.equal(subject.config.args[1], subject.id, `${subject.id} selects another arm's profile`);
+  }
   for (const subject of rest) {
-    assert.equal(subject.config.args[1], subject.id);
     assert.deepEqual(
-      subject.config.args.filter((_, index) => index !== 1),
-      first.config.args.filter((_, index) => index !== 1),
+      launch(subject),
+      launch(first),
       `${subject.id} is launched differently from ${first.id}`,
     );
   }

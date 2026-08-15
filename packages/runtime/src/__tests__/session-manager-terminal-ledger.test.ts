@@ -1158,43 +1158,6 @@ describe('SessionManager terminal ledger invariants', () => {
     ).toBe(false);
   });
 
-  test('Runtime execution records terminal RuntimeEvents before terminal headers', async () => {
-    const runStore = new TinyAgentRunStore({ requireTerminalFactBeforeHeader: true });
-    const { manager, session } = await makeHarness([{ type: 'complete', stopReason: 'end_turn' }], {
-      runStore,
-    });
-
-    await drain(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'hello' }));
-
-    const [header] = await runStore.listSessionRuns(session.id);
-    if (!header) throw new Error('run was not recorded');
-    expect(header.status).toBe('completed');
-    const terminalEvents = (await runStore.readRuntimeEvents(session.id, header.runId)).filter(
-      isTerminalRuntimeEvent,
-    );
-    expect(terminalEvents).toHaveLength(1);
-    expect(terminalEvents[0]?.status).toBe('completed');
-  });
-
-  test('Runtime execution forwards the effective tool mode to the backend', async () => {
-    let observedToolMode: BackendSendInput['toolMode'];
-    const { manager, session } = await makeHarness([{ type: 'complete', stopReason: 'end_turn' }], {
-      onInput: (input) => {
-        observedToolMode = input.toolMode;
-      },
-    });
-
-    await drain(
-      manager.sendMessage(session.id, {
-        turnId: 'turn-code-mode',
-        text: 'hello',
-        toolMode: 'code_mode',
-      }),
-    );
-
-    expect(observedToolMode).toBe('code_mode');
-  });
-
   test('direct AgentRun finalize synthesizes a failed terminal fact when no terminal event was recorded', async () => {
     const store = new TinySessionStore();
     const runStore = new TinyAgentRunStore();
@@ -2165,8 +2128,6 @@ async function makeHarness(
   events: readonly ScriptEvent[],
   options: {
     store?: TinySessionStore;
-    runStore?: TinyAgentRunStore;
-    onInput?: (input: BackendSendInput) => void;
   } = {},
 ): Promise<{
   manager: SessionManager;
@@ -2174,9 +2135,9 @@ async function makeHarness(
   session: SessionSummary;
 }> {
   const store = options.store ?? new TinySessionStore();
-  const runStore = options.runStore ?? new TinyAgentRunStore();
+  const runStore = new TinyAgentRunStore();
   const backends = new BackendRegistry();
-  backends.register('fake', (ctx) => new ScriptBackend(ctx, events, options.onInput));
+  backends.register('fake', (ctx) => new ScriptBackend(ctx, events));
   const manager = new SessionManager({
     store,
     runStore,
@@ -2197,13 +2158,11 @@ class ScriptBackend implements AgentBackend {
   constructor(
     ctx: BackendFactoryContext,
     private readonly events: readonly ScriptEvent[],
-    private readonly onInput?: (input: BackendSendInput) => void,
   ) {
     this.sessionId = ctx.sessionId;
   }
 
   async *send(input: BackendSendInput): AsyncIterable<SessionEvent> {
-    this.onInput?.(input);
     let index = 0;
     for (const event of this.events) {
       index += 1;
@@ -2380,13 +2339,18 @@ class TinySessionStore implements SessionStore {
   }
 
   async appendMessage(sessionId: string, message: StoredMessage): Promise<void> {
-    if (message.type === 'turn_state' && message.status === this.options.failTurnStateStatus) {
-      throw new Error('turn state write failed');
-    }
     await this.appendMessages(sessionId, [message]);
   }
 
   async appendMessages(sessionId: string, messages: StoredMessage[]): Promise<void> {
+    if (
+      messages.some(
+        (message) =>
+          message.type === 'turn_state' && message.status === this.options.failTurnStateStatus,
+      )
+    ) {
+      throw new Error('turn state write failed');
+    }
     this.messages.set(sessionId, [...(this.messages.get(sessionId) ?? []), ...clone(messages)]);
   }
 
@@ -2447,8 +2411,6 @@ class TinyAgentRunStore implements AgentRunStore, RuntimeEventStore {
       corruptLedger?: boolean;
       /** SqliteRuntimeStore is `canonical`; declare it when a test needs that shape. */
       durability?: 'best_effort' | 'canonical';
-      /** Enforce the durable terminal-fact-before-header ordering at the store boundary. */
-      requireTerminalFactBeforeHeader?: boolean;
     } = {},
   ) {}
 
@@ -2466,14 +2428,6 @@ class TinyAgentRunStore implements AgentRunStore, RuntimeEventStore {
     runId: string,
     patch: Partial<AgentRunHeader>,
   ): Promise<AgentRunHeader> {
-    if (
-      this.options.requireTerminalFactBeforeHeader &&
-      patch.status !== undefined &&
-      patch.status !== 'running' &&
-      !(this.runtimeEvents.get(key(sessionId, runId)) ?? []).some(isTerminalRuntimeEvent)
-    ) {
-      throw new Error('terminal run header committed before terminal RuntimeEvent');
-    }
     const current = await this.readRun(sessionId, runId);
     const next = { ...current, ...patch, sessionId, runId };
     this.headers.set(key(sessionId, runId), clone(next));

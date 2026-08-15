@@ -5477,7 +5477,11 @@ describe('SessionManager permission mode updates', () => {
     const runtimeEventStore = new MemoryRuntimeEventStore();
     const backends = new BackendRegistry();
     const observed: InvocationResult[] = [];
-    backends.register('fake', (ctx) => new FinalTextTestBackend(ctx));
+    let backend: FinalTextTestBackend | undefined;
+    backends.register('fake', (ctx) => {
+      backend = new FinalTextTestBackend(ctx);
+      return backend;
+    });
     const manager = new SessionManager({
       store,
       runStore,
@@ -5493,11 +5497,16 @@ describe('SessionManager permission mode updates', () => {
     const session = await manager.createSession(makeInput());
 
     const sessionEvents = await collectSessionEvents(
-      manager.sendMessage(session.id, { turnId: 'turn-1', text: 'hello' }),
+      manager.sendMessage(session.id, {
+        turnId: 'turn-1',
+        text: 'hello',
+        toolMode: 'code_mode',
+      }),
     );
 
     expect(sessionEvents.map((event) => event.type)).toEqual(['text_complete', 'complete']);
     expect(sessionEvents.map((event) => event.id)).toEqual(['turn-1-final', 'turn-1-complete']);
+    expect(backend?.sendInputs[0]?.toolMode).toBe('code_mode');
     expect(observed.length).toBe(1);
 
     const [run] = await runStore.listSessionRuns(session.id);

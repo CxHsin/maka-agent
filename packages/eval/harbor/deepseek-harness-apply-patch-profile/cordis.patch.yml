@@ -105,21 +105,21 @@
       config:
         timeoutMs: 3900000
 
-    # `cwd` is what a relative path resolves against when a caller supplies no
-    # base. The baseline arm's editor takes absolute paths only and never
-    # reaches this default; Codex's patch language is relative-path-only, so
-    # the backend has to agree with bash about where the model is.
+    # Configured exactly as the baseline configures it, which is not at all.
+    # This carried a `cwd` expression that changed nothing — `dsh-fs-local`
+    # already defaults it to `process.cwd()`, this tool passes the session's own
+    # cwd on every call, and `DSH_CWD` is never set — while making the arms
+    # differ outside the editor row.
     #
-    # No `fs-observation-policy` here, unlike the read/write/edit arm: this
-    # contract has no read-before-edit concept. A hunk carries the surrounding
-    # lines it expects, so a patch written against stale content fails on its
-    # own context. Adding the policy would also make the arm unusable — it has
-    # no read tool to satisfy the policy with, and the shell does not record
-    # observations.
+    # No `fs-observation-policy`, in any arm — see ../deepseek-harness-fs-profile
+    # for why. The claim that used to stand here, that the policy would make
+    # this arm unusable because it has no read tool to satisfy it with, was
+    # simply wrong: this tool emits `fs/observed` with the file's version before
+    # it writes, so the policy would have found its observation and allowed the
+    # write. The reason to leave it out is that it is not part of any edit
+    # contract, not that this contract could not survive it.
     - id: fs-local
       name: '@deepseek-ai/dsh-fs-local'
-      config:
-        cwd: !!js process.env.DSH_CWD ?? process.cwd()
 
     # --- the two tools the model sees ---
     - id: persistent-bash

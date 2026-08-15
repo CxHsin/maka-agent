@@ -8,6 +8,7 @@ import type { Readable } from 'node:stream';
 import { Agent, fetch as undiciFetch, ProxyAgent } from 'undici';
 import {
   decodePreverifiedToolchain,
+  DEEPSEEK_HARNESS_ARMS,
   isExternalProfile,
   TOOLCHAIN_IDENTITIES,
   type ExternalProfile as Profile,
@@ -29,17 +30,8 @@ const resultToken = takeRelayResultToken();
 // lifecycle test pins the two together.
 const DEEPSEEK_HARNESS_PROFILE = 'maka-eval';
 
-// All three arms boot the same one-shot CLI, so anything true of how that CLI
-// behaves is true of all of them. Written as a set rather than a name check so
-// that adding a fourth arm is one edit, not a hunt through the disjunctions.
-const DEEPSEEK_HARNESS_ARMS: readonly Profile[] = [
-  'deepseek-harness',
-  'deepseek-harness-fs',
-  'deepseek-harness-apply-patch',
-];
-
 function isDeepSeekHarness(profile: Profile): boolean {
-  return DEEPSEEK_HARNESS_ARMS.includes(profile);
+  return Object.hasOwn(DEEPSEEK_HARNESS_ARMS, profile);
 }
 
 const PROVIDER_USAGE_CHECKPOINT_SCHEMA = 'maka.external_provider_usage.v2';
@@ -289,9 +281,11 @@ const PROFILE_PREPARERS: Record<Profile, (setup: ProfileSetup) => Promise<string
     );
   },
 
-  'deepseek-harness': deepSeekHarnessArm('deepseek-harness-profile'),
-  'deepseek-harness-fs': deepSeekHarnessArm('deepseek-harness-fs-profile'),
-  'deepseek-harness-apply-patch': deepSeekHarnessArm('deepseek-harness-apply-patch-profile'),
+  'deepseek-harness': deepSeekHarnessArm(DEEPSEEK_HARNESS_ARMS['deepseek-harness']),
+  'deepseek-harness-fs': deepSeekHarnessArm(DEEPSEEK_HARNESS_ARMS['deepseek-harness-fs']),
+  'deepseek-harness-apply-patch': deepSeekHarnessArm(
+    DEEPSEEK_HARNESS_ARMS['deepseek-harness-apply-patch'],
+  ),
 
   zcode: async ({ env, home, proxyBaseUrl }) => {
     const zcodeHome = join(home, '.zcode');

@@ -98,24 +98,42 @@
       config:
         timeoutMs: 3900000
 
-    # `cwd` is what a relative path resolves against when a caller supplies no
-    # base. The baseline arm's editor takes absolute paths only and never
-    # reaches this default; `read`/`write`/`edit` accept relative ones, so the
-    # backend has to agree with bash about where the model is.
+    # Configured exactly as the baseline configures it, which is not at all.
+    #
+    # This carried `cwd: !!js process.env.DSH_CWD ?? process.cwd()` on the
+    # reasoning that a contract accepting relative paths needs the backend to
+    # agree with bash about where the model is. It changed nothing and made the
+    # arms differ outside the editor row: `dsh-fs-local` declares
+    # `cwd: z.string().default(process.cwd())` and reads `opts?.cwd ??
+    # this.config.cwd`, both tools pass the session's own cwd, and `DSH_CWD` is
+    # never set. A setting that cannot be reached is still a difference a
+    # reviewer has to rule out.
     - id: fs-local
       name: '@deepseek-ai/dsh-fs-local'
-      config:
-        cwd: !!js process.env.DSH_CWD ?? process.cwd()
 
-    # Read-before-write/edit, and version-guarded mutation. Present here and
-    # absent from the other two arms because it belongs to THIS contract: the
-    # tool's own prompt guidance tells the model "the default
-    # fs-observation-policy requires it", so omitting the policy would leave
-    # the guidance describing a rule the deployment does not enforce. The
-    # baseline's editor ships without it upstream, and `apply_patch` has no
-    # such concept — it locates edits by context rather than by prior reads.
-    - id: fs-observation-policy
-      name: '@deepseek-ai/dsh-fs-observation-policy'
+    # No `fs-observation-policy`, in any arm.
+    #
+    # It was mounted here on the reasoning that it belongs to this contract,
+    # because `dsh-tool-fs`'s own guidance tells the model "the default
+    # fs-observation-policy requires it". That reasoning does not survive
+    # contact with how the harness actually ships: of the four presets in
+    # `@deepseek-ai/dsh`, three mount `dsh-tool-fs` and none mounts the policy,
+    # which is not even a direct dependency of the harness. And the policy is
+    # not specific to this tool family — its own README documents the
+    # observations `str_replace_editor` records, and every mutation in either
+    # family goes through the same `fs/write-intent` and `fs/edit-intent`
+    # waterfalls. It is substrate, not part of an editor.
+    #
+    # Mounting it in one arm alone gave that arm two failure modes the others
+    # cannot have — `FS_NOT_OBSERVED` for an edit without a prior read, and
+    # `FS_STALE_VERSION` when anything, including the model's own bash, touches
+    # the file in between. On a benchmark where shell and editor are used
+    # together constantly, that is a penalty charged to one arm for a rule the
+    # upstream deployment does not enforce.
+    #
+    # The cost of leaving it out is one sentence of `dsh-tool-fs` guidance
+    # describing a policy that is not mounted. That costs the model an extra
+    # read it would usually do anyway; it never costs it a failed call.
 
     # --- the tools the model sees ---
     - id: persistent-bash
@@ -142,6 +160,15 @@
     # attachment store is mounted, and no arm mounts one.
     - id: fs-tools
       name: '@deepseek-ai/dsh-tool-fs'
+      config:
+        # Matched to the baseline editor's `maxOutputChars`, because how much of
+        # a file one call can return is not part of the edit contract. Left at
+        # the shipped default this arm reads 51200 bytes to the baseline's
+        # 16000 characters — a 3.2x window on the same task, which would show up
+        # as a contract effect on any benchmark task with a large file in it.
+        # The remaining read-side asymmetry, that the patch arm has no read tool
+        # at all, is contract-inherent and stays.
+        readMaxBytes: 16000
 
     - id: sessions
       name: '@deepseek-ai/dsh-session-persistence-jsonl'

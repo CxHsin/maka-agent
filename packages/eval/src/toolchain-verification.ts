@@ -31,8 +31,24 @@ export const TOOLCHAIN_IDENTITY_ENV = 'MAKA_EVAL_VERIFIED_TOOLCHAIN';
 const DEEPSEEK_HARNESS_TOOLCHAIN: ToolchainIdentity = {
   root: '/opt/maka-deepseek-harness-toolchain',
   version: '0.1.0-rc.6',
-  fingerprint: 'sha256:435da4989d384cd5abda9bd70a94b04b180b5e0ca1c9231022ad53b987391e19',
+  fingerprint: 'sha256:749c05fbefdaef7d9e7f80be45dffbbb5ac3e2722725ca5d787f827c38eaeb07',
 };
+
+// The DeepSeek Harness arms, and the profile directory each one composes. The
+// directory is where the edit contract is chosen, and it is the only place the
+// arms are allowed to diverge.
+//
+// One table: the subject builds its profile preparers from it, and the test
+// that holds the arms to differing only in their edit contract reads it rather
+// than restating it. An arm pointed at the wrong directory would otherwise be
+// checked against the composition it was meant to run instead of the one it
+// runs. It lives here, beside the identity table, because both are profile
+// registration and neither should require loading the launcher to consult.
+export const DEEPSEEK_HARNESS_ARMS = {
+  'deepseek-harness': 'deepseek-harness-profile',
+  'deepseek-harness-fs': 'deepseek-harness-fs-profile',
+  'deepseek-harness-apply-patch': 'deepseek-harness-apply-patch-profile',
+} as const satisfies Partial<Record<ExternalProfile, string>>;
 
 export const TOOLCHAIN_IDENTITIES: Readonly<Record<ExternalProfile, ToolchainIdentity>> = {
   codex: {

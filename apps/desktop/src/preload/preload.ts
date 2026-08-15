@@ -827,7 +827,10 @@ const makaBridge = {
     setThinkingLevel(sessionId: string, level: ThinkingLevel | undefined | null): Promise<SessionSummary> {
       return invokeActiveRuntimeHost('sessions:setThinkingLevel', sessionId, level ?? undefined);
     },
-    remove(sessionId: string, options?: { revisionFamily?: boolean }): Promise<void> {
+    remove(
+      sessionId: string,
+      options?: { revisionFamily?: boolean; requireArchived?: boolean },
+    ): Promise<'removed' | 'restored'> {
       return invokeActiveRuntimeHost('sessions:remove', sessionId, options);
     },
     cleanupSessionCopy(sessionId: string): Promise<void> {

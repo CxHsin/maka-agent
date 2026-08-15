@@ -33,6 +33,7 @@ import type { ProjectRecord } from '@maka/core/project';
 import type { ArchivedTasksBridge } from '../../src/renderer/settings/tasks-settings-page';
 import { withScopedMakaBridge } from '../maka-bridge';
 import { getDailyReviewSettingsCopy } from '../../src/renderer/locales/settings-daily-review-copy';
+import { getExternalSessionImportCopy } from '../../src/renderer/locales/external-session-import-copy';
 
 /**
  * Read from the copy table, not typed out again. This selector matched a
@@ -42,6 +43,8 @@ import { getDailyReviewSettingsCopy } from '../../src/renderer/locales/settings-
  * text has to source that text where the UI does.
  */
 const DAILY_REVIEW_DEFAULT_MODEL_LABEL = getDailyReviewSettingsCopy('zh').defaultModel;
+/** Same reason: the 导入任务 stories drive the page by its visible copy. */
+const EXTERNAL_IMPORT_COPY = getExternalSessionImportCopy('zh');
 const STORY_PLATFORM = 'darwin' as const;
 
 // Fidelity convention (#1433): every story below names the real app path
@@ -1332,4 +1335,53 @@ export const ImportTasksNoSource: Story = {
     },
   })],
   render: () => <SettingsStory section="import-tasks" />,
+};
+
+/**
+ * Real path: 加载更多 clicked, second page still in flight.
+ *
+ * The placeholder rows only exist while a request is out, and the fixture's
+ * pages resolve instantly, so the second page is pinned in flight here. Both
+ * this story and 未确认 below need a click to reach their state, and
+ * `scripts/storybook-visual-smoke.mjs` disables every `play` — CI screenshots
+ * them in the default state. They earn their place in the interactions panel
+ * and in local review, not in the smoke.
+ */
+export const ImportTasksLoadingMore: Story = {
+  decorators: [withScopedMakaBridge({
+    ...makaBridge,
+    externalSessions: {
+      ...makaBridge.externalSessions,
+      list: async (input: { adapterId: string; includeArchived?: boolean; cursor?: string }) =>
+        input.cursor === EXTERNAL_SECOND_PAGE
+          ? new Promise(() => undefined)
+          : makaBridge.externalSessions.list(input),
+    },
+  })],
+  render: () => <SettingsStory section="import-tasks" />,
+  play: async ({ canvasElement }) => {
+    const button = await waitForStoryButton(
+      canvasElement,
+      (candidate) => candidate.textContent === EXTERNAL_IMPORT_COPY.loadMore,
+    );
+    await userEvent.click(button);
+  },
+};
+
+/**
+ * Real path: an import Desktop Main could not confirm — the fixture's `import`
+ * always answers `ok: false`, which is the outcome this page has to survive.
+ */
+export const ImportTasksUncertain: Story = {
+  decorators: [withSettingsBridge],
+  render: () => <SettingsStory section="import-tasks" />,
+  play: async ({ canvasElement }) => {
+    const button = await waitForStoryButton(
+      canvasElement,
+      (candidate) =>
+        candidate.getAttribute('aria-label') ===
+        EXTERNAL_IMPORT_COPY.importTask(externalConversations[0].name),
+    );
+    await userEvent.click(button);
+  },
 };

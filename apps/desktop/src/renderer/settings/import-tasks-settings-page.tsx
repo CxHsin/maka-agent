@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Badge } from '@astryxdesign/core/Badge';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Button } from '@astryxdesign/core/Button';
 import { CheckboxInput } from '@astryxdesign/core/CheckboxInput';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { List, ListItem } from '@astryxdesign/core/List';
 import { SegmentedControl, SegmentedControlItem } from '@astryxdesign/core/SegmentedControl';
+import { Skeleton } from '@astryxdesign/core/Skeleton';
 import { HStack, VStack } from '@astryxdesign/core/Stack';
 import { uiLocaleToIntlLocale } from '@maka/core/ui-locale';
 import type { ExternalSessionSummary } from '@maka/core/external-session';
@@ -21,6 +23,16 @@ type CatalogState = {
 };
 
 const EMPTY_CATALOG: CatalogState = { sessions: [], nextCursor: null };
+
+/**
+ * Placeholder rows for an append in flight. Two, because a page is never one
+ * row and a wall of them would overstate what is coming; uneven widths so the
+ * pair reads as two conversations rather than one shape stamped twice.
+ */
+const LOADING_MORE_PLACEHOLDERS = [
+  { label: '62%', description: '80%' },
+  { label: '44%', description: '68%' },
+] as const;
 
 /**
  * Settings · 活动 · 导入任务 — bring another local agent's conversations in as
@@ -59,7 +71,15 @@ export function ImportTasksSettingsPage(props: {
   const [sourceResolved, setSourceResolved] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [importingId, setImportingId] = useState<string | null>(null);
+  /**
+   * A set, not one id: an import in flight used to disable every other row and
+   * the archived filter too, which made one row's progress freeze the page
+   * around it. Only the row doing the work reports it now, so the rest stay
+   * usable — and a second click on the SAME row is what the Host coalesces,
+   * not a click on a different one, which is a different import that should
+   * simply run.
+   */
+  const [importingIds, setImportingIds] = useState<ReadonlySet<string>>(new Set());
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -156,8 +176,8 @@ export function ImportTasksSettingsPage(props: {
 
   const importConversation = useCallback(
     async (sourceSessionId: string) => {
-      if (adapterId === null || importingId !== null) return;
-      setImportingId(sourceSessionId);
+      if (adapterId === null) return;
+      setImportingIds((current) => new Set(current).add(sourceSessionId));
       setImportError(null);
       try {
         const outcome = await window.maka.externalSessions.import({
@@ -178,10 +198,16 @@ export function ImportTasksSettingsPage(props: {
         if (!mountedRef.current) return;
         setImportError(localizedShellErrorMessage(error, copy.importFailedFallback, locale));
       } finally {
-        if (mountedRef.current) setImportingId(null);
+        if (mountedRef.current) {
+          setImportingIds((current) => {
+            const next = new Set(current);
+            next.delete(sourceSessionId);
+            return next;
+          });
+        }
       }
     },
-    [adapterId, copy.importFailedFallback, importingId, locale, mountedRef, props],
+    [adapterId, copy.importFailedFallback, locale, mountedRef, props],
   );
 
   const noSource = sourceResolved && !sourceLoading && !sourceError && adapterIds.length === 0;
@@ -259,12 +285,14 @@ export function ImportTasksSettingsPage(props: {
             label={copy.includeArchived}
             value={includeArchived}
             onChange={setIncludeArchived}
-            isDisabled={catalogLoading || importingId !== null}
+            isDisabled={catalogLoading}
           />
         </VStack>
       </SettingsSection>
 
-      <SettingsSection description={copy.duplicateNote}>
+      {/* No header: what this group used to say — that a repeat import makes a
+          second task — now rides on the control that does it. */}
+      <SettingsSection>
         <VStack gap={3}>
           {catalogError && (
             <Banner
@@ -306,7 +334,13 @@ export function ImportTasksSettingsPage(props: {
           )}
 
           {catalogEmpty && (
-            <EmptyState isCompact title={copy.emptyTitle} description={copy.emptyDescription} />
+            <EmptyState
+              isCompact
+              title={copy.emptyTitle}
+              description={
+                includeArchived ? copy.emptyDescriptionWithArchived : copy.emptyDescription
+              }
+            />
           )}
 
           {catalog.sessions.length > 0 && (
@@ -325,6 +359,8 @@ export function ImportTasksSettingsPage(props: {
                 ]
                   .filter(Boolean)
                   .join(' · ');
+                const importing = importingIds.has(session.id);
+                const uncertain = uncertainIds.has(session.id);
                 return (
                   <ListItem
                     key={session.id}
@@ -332,39 +368,77 @@ export function ImportTasksSettingsPage(props: {
                     description={description.length > 0 ? description : undefined}
                     startContent={<MessageSquare size={ICON_SIZE.control} aria-hidden="true" />}
                     endContent={
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        isLoading={importingId === session.id}
-                        isDisabled={importingId !== null || uncertainIds.has(session.id)}
-                        // Returned, not discarded: Astryx's Button awaits a
-                        // promise-returning `clickAction` and drops repeat
-                        // clicks until it settles. `void`-ing it gave that
-                        // guarantee nothing to await, leaving double-submit to
-                        // the `importingId` state alone -- one render behind.
-                        clickAction={() => importConversation(session.id)}
-                        label={importingId === session.id ? copy.importing : copy.import}
-                        // Every row's button reads 导入; only the accessible
-                        // name can say which conversation it imports.
-                        aria-label={copy.importTask(session.name)}
-                      />
+                      <HStack gap={2} vAlign="center">
+                        {/* The banner above says what to do about an import
+                            whose outcome is unknown; this says which row it is
+                            about. Without it the row is just a dead button and
+                            the reason lives somewhere else on the page. */}
+                        {uncertain && (
+                          <Badge variant="warning" label={copy.importOutcomeUnknownBadge} />
+                        )}
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          isLoading={importing}
+                          isDisabled={importing || uncertain}
+                          // Returned, not discarded: Astryx's Button awaits a
+                          // promise-returning `clickAction` and drops repeat
+                          // clicks until it settles. `void`-ing it gave that
+                          // guarantee nothing to await, leaving double-submit to
+                          // the `importingIds` state alone -- one render behind.
+                          clickAction={() => importConversation(session.id)}
+                          label={importing ? copy.importing : copy.import}
+                          // Attached here rather than as a standing line above
+                          // the list: it explains what this click does, and
+                          // Astryx wires it through `aria-describedby`, so the
+                          // accessible name below is untouched.
+                          tooltip={copy.duplicateNote}
+                          // Every row's button reads 导入; only the accessible
+                          // name can say which conversation it imports.
+                          aria-label={copy.importTask(session.name)}
+                        />
+                      </HStack>
                     }
                   />
                 );
               })}
+              {/* The page used to append silently: the list held still and only
+                  the button's label changed, so the one thing the user wanted
+                  to see — that more rows are on the way — was the one thing
+                  nothing showed. These are shaped like the rows they become. */}
+              {loadingMore &&
+                LOADING_MORE_PLACEHOLDERS.map((placeholder, index) => (
+                  <ListItem
+                    key={`loading-${placeholder.label}`}
+                    aria-hidden="true"
+                    label={<Skeleton width={placeholder.label} height={16} radius={1} index={index} />}
+                    description={
+                      <Skeleton width={placeholder.description} height={12} radius={1} index={index} />
+                    }
+                    startContent={
+                      <Skeleton width={ICON_SIZE.control} height={ICON_SIZE.control} radius={1} index={index} />
+                    }
+                    endContent={<Skeleton width={56} height={28} radius={2} index={index} />}
+                  />
+                ))}
             </List>
           )}
 
           {catalog.nextCursor !== null && adapterId !== null && (
-            <HStack hAlign="center">
-              <Button
-                variant="ghost"
-                size="sm"
-                label={loadingMore ? copy.loadingMore : copy.loadMore}
-                isDisabled={loadingMore}
-                onClick={() => void loadCatalog(adapterId, catalog.nextCursor ?? undefined)}
-              />
-            </HStack>
+            /* Full width and `secondary`: as a centred ghost label this read as
+               a caption under the list rather than the control that extends it.
+               `isLoading` is deliberately not set — Astryx swaps the label for
+               a bare spinner, and a full-width button with nothing in it is
+               worse than one that says what it is doing. The rows above carry
+               the progress. */
+            <Button
+              variant="secondary"
+              size="sm"
+              width="100%"
+              label={loadingMore ? copy.loadingMore : copy.loadMore}
+              isDisabled={loadingMore}
+              onClick={() => void loadCatalog(adapterId, catalog.nextCursor ?? undefined)}
+            />
           )}
         </VStack>
       </SettingsSection>

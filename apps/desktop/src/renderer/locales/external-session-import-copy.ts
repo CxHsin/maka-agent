@@ -15,7 +15,14 @@ type ExternalSessionImportCopy = {
   loading: string;
   listAria: string;
   emptyTitle: string;
+  /**
+   * Two empties, two next steps. With the archived filter off, the catalog may
+   * well have matches the filter is hiding, so the description points at the
+   * filter; with it on, the source really is empty and pointing at a checkbox
+   * the user already ticked would be a dead end.
+   */
   emptyDescription: string;
+  emptyDescriptionWithArchived: string;
   unavailableTitle: string;
   unavailableDescription: string;
   loadFailedTitle: string;
@@ -24,6 +31,12 @@ type ExternalSessionImportCopy = {
   archived: string;
   loadMore: string;
   loadingMore: string;
+  /**
+   * The consequence of importing, attached to the control that causes it. It
+   * used to be a standing line above the list, which explained an outcome far
+   * from the moment anyone meets it — and it cannot be a per-row marking
+   * either, because a successful import closes Settings (see the page).
+   */
   duplicateNote: string;
   import: string;
   importTask: (name: string) => string;
@@ -32,6 +45,8 @@ type ExternalSessionImportCopy = {
   importFailedFallback: string;
   importOutcomeUnknownTitle: string;
   importOutcomeUnknownDescription: string;
+  /** Marks WHICH row the banner above is about. */
+  importOutcomeUnknownBadge: string;
 };
 
 const COPY = {
@@ -42,9 +57,10 @@ const COPY = {
     loading: '正在读取外部对话…',
     listAria: '可导入的对话',
     emptyTitle: '没有可导入的对话',
-    emptyDescription: '当前来源中没有找到符合条件的根对话。',
+    emptyDescription: '当前来源中没有找到符合条件的根对话。勾选「包含已归档的对话」可以看到更多。',
+    emptyDescriptionWithArchived: '当前来源中没有可导入的根对话，已归档的也算在内。',
     unavailableTitle: '没有检测到支持的 Agent',
-    unavailableDescription: 'Maka 会在本机读取 Codex 的对话目录，不会修改其中的文件。',
+    unavailableDescription: 'Maka 目前只能导入 Codex 的本地对话，这台机器上没有找到它的对话目录。',
     loadFailedTitle: '无法读取外部对话',
     loadFailedFallback: '外部对话目录暂时无法读取，请重试。',
     retry: '重试',
@@ -60,6 +76,7 @@ const COPY = {
     importOutcomeUnknownTitle: '需要确认导入结果',
     importOutcomeUnknownDescription:
       '导入结果暂时无法确认。请先在任务列表中查找这个对话；如果它已经出现，请不要再次导入。',
+    importOutcomeUnknownBadge: '未确认',
   },
   en: {
     sourceLabel: 'Source',
@@ -68,9 +85,13 @@ const COPY = {
     loading: 'Reading external conversations…',
     listAria: 'Conversations available to import',
     emptyTitle: 'No conversations to import',
-    emptyDescription: 'No matching root conversations were found in this source.',
+    emptyDescription:
+      'No matching root conversations were found in this source. Turn on “Include archived conversations” to see more.',
+    emptyDescriptionWithArchived:
+      'This source has no root conversations to import, archived ones included.',
     unavailableTitle: 'No supported Agent detected',
-    unavailableDescription: "Maka reads Codex's local session directory without modifying its files.",
+    unavailableDescription:
+      'Maka can currently import Codex conversations only, and no Codex session directory was found on this machine.',
     loadFailedTitle: 'Could not read external conversations',
     loadFailedFallback: 'The external session directory is temporarily unavailable. Try again.',
     retry: 'Retry',
@@ -86,6 +107,7 @@ const COPY = {
     importOutcomeUnknownTitle: 'Check the import result',
     importOutcomeUnknownDescription:
       'Maka could not confirm whether the import completed. Look for this conversation in the task list first; if it is already there, do not import it again.',
+    importOutcomeUnknownBadge: 'Unconfirmed',
   },
 } satisfies UiCatalog<ExternalSessionImportCopy>;
 

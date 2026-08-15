@@ -35,7 +35,7 @@
 // `danger-full-access`, where nothing is confined and the model's own bash can
 // already remove any file, so the refusal never fires there.
 
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import z from '@deepseek-ai/schemastery';
 import { FsError } from '@deepseek-ai/dsh-fs';
@@ -44,90 +44,71 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import { deriveNewContents } from './codex-apply.mjs';
 import { parsePatch } from './parse-patch.mjs';
 
-// Codex's own `apply_patch` tool instructions, carried across so the model gets
-// the text the contract is actually deployed with rather than a paraphrase.
-// From openai/codex, codex-rs/apply-patch/apply_patch_tool_instructions.md at
-// commit 88c7a4ff074df9e2161c947ca6d91bf824b9d6e6 (Apache-2.0).
+// The model-facing text of this contract, and the whole of it.
 //
-// Four differences from upstream, and no others — the full list is in
-// ../NOTICE, which is where a licence reader will look:
-//   1. the `## apply_patch` heading and its blank line are gone;
-//   2. "shell command" reads "tool", this being a function tool taking one
-//      `input` string;
-//   3. the trailing `shell {"command":[...]}` example is gone, same reason;
-//   4. non-ASCII punctuation is flattened to ASCII on three lines.
+// It is not transcribed here. `upstream-apply-patch-instructions.md` beside
+// this file is a byte-for-byte slice of an upstream artifact — lines 277-351 of
+// codex-rs/core/prompt_with_apply_patch_instructions.md at openai/codex
+// a7edf37cb46b5fc4d50bd03df8e5999a86f602eb, Apache-2.0 (see ../NOTICE) — and
+// the adaptations below are the only thing this repository adds to it. A test
+// pins the file's digest and asserts the built description differs from it in
+// exactly these substitutions and nowhere else, so the list is checkable rather
+// than a claim in a comment.
 //
-// Every operation the grammar defines is implemented, so nothing in this text
-// describes something the tool will refuse.
-const DESCRIPTION = `
-Use the \`apply_patch\` tool to edit files.
-Your patch language is a stripped-down, file-oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high-level envelope:
+// Why that artifact and not the tool description upstream registers: at this
+// commit `create_apply_patch_freeform_tool` registers a 105-character
+// description plus `apply_patch.lark` as a grammar the decoder is constrained
+// to. A model on that path cannot emit a malformed envelope. `defineTool` has
+// no freeform or grammar seam — the harness registers JSON function tools and
+// nothing else — so this arm is the unconstrained case, and the file above is
+// upstream's own text for exactly that case: what Codex puts in the system
+// prompt when apply_patch is reached without a grammar. Taking the freeform
+// description instead would give the model 105 characters and no grammar at
+// all, which is not Codex's contract minus a feature but a different and much
+// weaker one.
+//
+// That leaves the tool shape as the one deviation this arm cannot remove, and
+// it is stated as such in ../../../../README.md rather than papered over.
+const DESCRIPTION_SOURCE = 'upstream-apply-patch-instructions.md';
 
-*** Begin Patch
-[ one or more file sections ]
-*** End Patch
+// Each entry is applied exactly once. `why` is the reason the upstream text
+// would be false as written here, not a preference.
+const DESCRIPTION_ADAPTATIONS = [
+  {
+    why: 'a tool description is not a section of a document',
+    from: '## `apply_patch`\n\n',
+    to: '',
+  },
+  {
+    why: 'this is a function tool, not a command on the shell path',
+    from: 'Use the `apply_patch` shell command to edit files.',
+    to: 'Use the `apply_patch` tool to edit files.',
+  },
+  {
+    // Left in, this would send the model to bash for a binary no arm installs.
+    why: 'the shell invocation example describes a delivery this arm does not have',
+    from: '\n\nYou can invoke apply_patch like:\n\n```\nshell {"command":["apply_patch","*** Begin Patch\\n*** Add File: hello.txt\\n+Hello, world!\\n*** End Patch\\n"]}\n```',
+    to: '',
+  },
+];
 
-Within that envelope, you get a sequence of file operations.
-You MUST include a header to specify the action you are taking.
-Each operation starts with one of three headers:
+export function buildDescription(upstream) {
+  let text = upstream;
+  for (const { from, to } of DESCRIPTION_ADAPTATIONS) {
+    const at = text.indexOf(from);
+    if (at < 0 || text.indexOf(from, at + from.length) >= 0) {
+      throw new Error(`tool-apply-patch: description adaptation does not apply exactly once`);
+    }
+    text = text.slice(0, at) + to + text.slice(at + from.length);
+  }
+  return text.trim();
+}
 
-*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
-*** Delete File: <path> - remove an existing file. Nothing follows.
-*** Update File: <path> - patch an existing file in place (optionally with a rename).
-
-May be immediately followed by *** Move to: <new path> if you want to rename the file.
-Then one or more "hunks", each introduced by @@ (optionally followed by a hunk header).
-Within a hunk each line starts with:
-
-For instructions on [context_before] and [context_after]:
-- By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change's [context_after] lines in the second change's [context_before] lines.
-- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs. For instance, we might have:
-@@ class BaseClass
-[3 lines of pre-context]
-- [old_code]
-+ [new_code]
-[3 lines of post-context]
-
-- If a code block is repeated so many times in a class or function such that even a single \`@@\` statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple \`@@\` statements to jump to the right context. For instance:
-
-@@ class BaseClass
-@@ 	 def method():
-[3 lines of pre-context]
-- [old_code]
-+ [new_code]
-[3 lines of post-context]
-
-The full grammar definition is below:
-Patch := Begin { FileOp } End
-Begin := "*** Begin Patch" NEWLINE
-End := "*** End Patch" NEWLINE
-FileOp := AddFile | DeleteFile | UpdateFile
-AddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }
-DeleteFile := "*** Delete File: " path NEWLINE
-UpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }
-MoveTo := "*** Move to: " newPath NEWLINE
-Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
-HunkLine := (" " | "-" | "+") text NEWLINE
-
-A full patch can combine several operations:
-
-*** Begin Patch
-*** Add File: hello.txt
-+Hello world
-*** Update File: src/app.py
-*** Move to: src/main.py
-@@ def greet():
--print("Hi")
-+print("Hello, world!")
-*** Delete File: obsolete.txt
-*** End Patch
-
-It is important to remember:
-
-- You must include a header with your intended action (Add/Delete/Update)
-- You must prefix new lines with \`+\` even when creating a new file
-- File references can only be relative, NEVER ABSOLUTE.
-`.trim();
+export const UPSTREAM_DESCRIPTION = await readFile(
+  new URL(DESCRIPTION_SOURCE, import.meta.url),
+  'utf8',
+);
+const DESCRIPTION = buildDescription(UPSTREAM_DESCRIPTION);
 
 // Lifted from `@deepseek-ai/dsh-tool-str-replace-editor`, which resolves the
 // same question the same way: a confining provider needs the shared policy, and
@@ -179,59 +160,64 @@ function resolveOptions(exec) {
   return { ...(cwd === undefined ? {} : { cwd }), signal: exec.signal };
 }
 
-// Verify the whole envelope, then write it — the shape of Codex's own
-// `apply_patch` tool call. `try_verify_apply_patch_args` (`invocation.rs:214`)
-// collects every hunk into a `HashMap` keyed by resolved path, reads each target
-// and computes its new contents, and only then does the caller apply the result.
+// Two passes over the envelope, which is the shape of Codex's own `apply_patch`
+// tool call and not an optimisation of it.
 //
-// Two consequences, both of which this had wrong in the other direction. A
-// second operation on a path is refused outright rather than composed onto the
-// first, because the map rejects a duplicate key before any work happens. And a
-// hunk whose context does not match costs nothing, because the failure happens
-// while the map is being built and nothing has been written.
+// The first is `try_verify_apply_patch_args` (`invocation.rs:214`): every hunk
+// is collected into a `HashMap` keyed by its resolved path, each target is read,
+// and each update's new contents are computed — all against the pre-patch
+// snapshot, all before anything is written. Two consequences the model can
+// observe: a second operation on a path is refused outright rather than composed
+// onto the first, because the map rejects a duplicate key; and a hunk whose
+// context does not match costs nothing, because the failure happens while the
+// map is being built.
 //
-// The standalone `apply_patch` binary does compose sequentially, which is what
-// an earlier version of this file was changed to match. That binary is not what
-// a model calls: `apply_patch.rs:404` — the function-tool handler — and the
-// shell path both go through `verify_apply_patch_args_with_mode`, and so through
-// the duplicate check.
+// The second pass throws that result away. `ApplyPatchRuntime::run`
+// (`runtimes/apply_patch.rs:176`) hands `req.action.patch` — the raw text the
+// model sent — back to `apply_patch_with_mode`, which re-parses it and applies
+// it sequentially against the live filesystem; the verified `changes` map is
+// carried for approval and telemetry only. So a section reads what the sections
+// before it left behind, and the two passes disagree exactly when an operation
+// changes what a later one will find.
+//
+// An earlier version wrote the verified plan instead, on the reasoning that
+// having computed the contents once there was no reason to compute them twice.
+// That is not a smaller version of this contract, it is a different one, and
+// the reference binary shows the difference in two lines: a rename onto a path
+// a later section also updates leaves that section failing against the renamed
+// file, and `*** Move to:` naming its own source writes the destination and then
+// unlinks it, deleting the file and reporting success.
 async function applyOperations(ctx, policy, operations, exec) {
   const options = resolveOptions(exec);
   const sandboxPolicy = policy.resolve(exec);
-  const planned = await verifyOperations(ctx, policy, operations, options, exec);
-  return writePlan(ctx, policy, planned, { sandboxPolicy, exec });
+  await verifyOperations(ctx, policy, operations, options, exec);
+  return applySequentially(ctx, policy, operations, { options, sandboxPolicy, exec });
 }
 
+// Pass one. Reads and computes; writes nothing, and returns nothing but the
+// guarantee that it did not throw.
 async function verifyOperations(ctx, policy, operations, options, exec) {
-  const planned = [];
   const claimed = new Map();
-  const claim = (target, path) => {
+  for (const operation of operations) {
+    const target = await ctx.fs.resolve(operation.path, options);
+    // Keyed on the source path alone. Upstream carries `move_path` as a value
+    // of the entry, never as a second key (`invocation.rs:232-280`), so a
+    // rename onto a path another section also names is not a duplicate here —
+    // it is resolved by the order pass two applies in.
     const key = String(ctx.fs.processPath(target));
     const existing = claimed.get(key);
     if (existing !== undefined) {
       throw new FsError(`multiple operations target ${existing}`, 'FS_IO_ERROR');
     }
-    claimed.set(key, path);
-  };
+    claimed.set(key, operation.path);
 
-  for (const operation of operations) {
-    const target = await ctx.fs.resolve(operation.path, options);
-    claim(target, operation.path);
     const info = await ctx.fs.stat(target, exec.signal);
-
     if (operation.type === 'add_file') {
       // Codex reads whatever is there, records it as overwritten, and writes
       // anyway (`lib.rs:493-504`); it has no already-exists refusal. Refusing
       // was this tool's own invention, and it charged the contract for every
       // patch where a model rewrites a file from scratch.
       ctx.emit('fs/observed', target, observed(info), exec);
-      planned.push({
-        kind: 'add',
-        target,
-        path: operation.path,
-        info,
-        content: operation.contents,
-      });
       continue;
     }
 
@@ -249,78 +235,84 @@ async function verifyOperations(ctx, policy, operations, options, exec) {
 
     if (operation.type === 'delete_file') {
       policy.requireDirectFilesystem('`*** Delete File:`');
-      planned.push({ kind: 'delete', target, path: operation.path, info });
       continue;
     }
+    if (operation.movePath !== undefined) policy.requireDirectFilesystem('`*** Move to:`');
 
-    const before = await ctx.fs.readText(target, exec.signal);
     // Where a mismatched hunk fails, before anything is on disk. The message
     // already names the file and quotes the lines it could not place, which is
     // what the model has to rewrite.
-    let content;
-    try {
-      content = deriveNewContents(before, operation.chunks, operation.path);
-    } catch (error) {
-      throw new FsError(error.message, 'FS_EDIT_NOT_FOUND', { cause: error });
-    }
+    deriveOrThrow(await ctx.fs.readText(target, exec.signal), operation);
+  }
+}
 
-    if (operation.movePath === undefined) {
-      planned.push({ kind: 'update', target, path: operation.path, info, content });
+// Pass two. Re-resolves, re-reads and re-derives against whatever the sections
+// before it left on disk.
+async function applySequentially(ctx, policy, operations, run) {
+  const { options, exec } = run;
+  const affected = { A: [], M: [], D: [] };
+
+  for (const operation of operations) {
+    // `ctx.fs.writeText` takes the signal, but `rm` and `mkdir` do not, and a
+    // cancelled turn should stop between operations rather than run the rest of
+    // the envelope. Upstream is sequential too, so stopping here leaves the same
+    // partial state a failed operation would.
+    exec.signal?.throwIfAborted();
+    const target = await ctx.fs.resolve(operation.path, options);
+    const info = await ctx.fs.stat(target, exec.signal);
+
+    if (operation.type === 'add_file') {
+      await writeTarget(ctx, policy, { target, content: operation.contents, info }, run);
+      affected.A.push(operation.path);
       continue;
     }
 
-    policy.requireDirectFilesystem('`*** Move to:`');
+    if (info === undefined) {
+      throw new FsError(
+        `Cannot ${operation.type === 'delete_file' ? 'delete' : 'update'} ${operation.path}: it does not exist.`,
+        'FS_NOT_FOUND',
+      );
+    }
+    if (info.type !== 'file') {
+      throw new FsError(`${operation.path} is not a regular file`, 'FS_NOT_REGULAR_FILE');
+    }
+
+    if (operation.type === 'delete_file') {
+      await removeFile(ctx, target);
+      ctx.emit('fs/observed', target, { kind: 'absent' }, exec);
+      affected.D.push(operation.path);
+      continue;
+    }
+
+    const content = deriveOrThrow(await ctx.fs.readText(target, exec.signal), operation);
+    if (operation.movePath === undefined) {
+      await writeTarget(ctx, policy, { target, content, info }, run);
+      affected.M.push(operation.path);
+      continue;
+    }
+
     const destination = await ctx.fs.resolve(operation.movePath, options);
-    claim(destination, operation.movePath);
     // Codex overwrites an existing destination rather than refusing, so the
     // write is unconditional; recording what was there first keeps the
     // observation trail honest about the file about to be replaced.
-    const destinationInfo = await ctx.fs.stat(destination, exec.signal);
-    ctx.emit('fs/observed', destination, observed(destinationInfo), exec);
-    planned.push({
-      kind: 'move',
-      target,
-      path: operation.path,
-      info,
-      content,
+    ctx.emit(
+      'fs/observed',
       destination,
-      destinationPath: operation.movePath,
-    });
+      observed(await ctx.fs.stat(destination, exec.signal)),
+      exec,
+    );
+    // Destination first, source second — the order Codex applies. When the two
+    // are the same path that unlinks what was just written, which is upstream's
+    // behaviour for `*** Move to:` naming its own source and is reproduced here
+    // rather than refused.
+    await writeTarget(ctx, policy, { target: destination, content, unconditional: true }, run);
+    await removeFile(ctx, target);
+    ctx.emit('fs/observed', target, { kind: 'absent' }, exec);
+    // A rename is reported as a modification of its destination, the way
+    // `AffectedPaths` records it (`lib.rs:634`).
+    affected.M.push(operation.movePath);
   }
-  return planned;
-}
 
-async function writePlan(ctx, policy, planned, run) {
-  const { exec } = run;
-  const affected = { A: [], M: [], D: [] };
-  for (const step of planned) {
-    if (step.kind === 'delete') {
-      await removeFile(ctx, step.target);
-      ctx.emit('fs/observed', step.target, { kind: 'absent' }, exec);
-      affected.D.push(step.path);
-      continue;
-    }
-    if (step.kind === 'move') {
-      // Destination first, source second — the order Codex applies, so a
-      // failure between them leaves the content present twice rather than not
-      // at all. The write is unconditional: the guard would belong to the
-      // source file's version, which the destination does not have.
-      await writeTarget(
-        ctx,
-        policy,
-        { target: step.destination, content: step.content, unconditional: true },
-        run,
-      );
-      await removeFile(ctx, step.target);
-      ctx.emit('fs/observed', step.target, { kind: 'absent' }, exec);
-      // A rename is reported as a modification of its destination, the way
-      // `AffectedPaths` records it (`lib.rs:634`).
-      affected.M.push(step.destinationPath);
-      continue;
-    }
-    await writeTarget(ctx, policy, step, run);
-    affected[step.kind === 'add' ? 'A' : 'M'].push(step.path);
-  }
   // `print_summary` (`lib.rs:766-781`): added, then modified, then deleted.
   return [
     'Success. Updated the following files:',
@@ -330,12 +322,33 @@ async function writePlan(ctx, policy, planned, run) {
   ].join('\n');
 }
 
+// `deriveNewContents` reports a context miss as a plain Error; the harness
+// vocabulary for "the lines you named are not in the file" is `FS_EDIT_NOT_FOUND`
+// and only that failure is rewrapped, so a bug in the applier still surfaces as
+// itself.
+function deriveOrThrow(before, operation) {
+  try {
+    return deriveNewContents(before, operation.chunks, operation.path);
+  } catch (error) {
+    throw new FsError(error.message, 'FS_EDIT_NOT_FOUND', { cause: error });
+  }
+}
+
 async function writeTarget(ctx, policy, { target, content, info, unconditional }, run) {
   const { sandboxPolicy, exec } = run;
   const creating = info === undefined;
+  // The two waterfalls do not return the same shape. `fs/write-intent` yields
+  // an `FsWriteIntent`, guard and all; `fs/edit-intent` yields `{version}` and
+  // no `kind` (`dsh-fs/lib/types/index.d.ts:36-42`), so passing it straight to
+  // `writeText` matched neither guard and wrote unconditionally — a decider's
+  // version check was accepted and then dropped on the floor.
   const intent = creating
     ? await ctx.waterfall('fs/write-intent', target, exec, () => ({ kind: 'createIfAbsent' }))
-    : await ctx.waterfall('fs/edit-intent', target, exec, () => undefined);
+    : await ctx
+        .waterfall('fs/edit-intent', target, exec, () => undefined)
+        .then((edit) =>
+          edit === undefined ? undefined : { kind: 'replaceIfVersion', version: edit.version },
+        );
   // A move's guard would belong to the source file's version, which the
   // destination does not have.
   const expected = unconditional
@@ -369,8 +382,12 @@ const observed = (info) =>
 // (`dsh-fs-local` builds it from `realpath(displayPath)`), and removing that
 // deletes whatever the link points at while leaving the link behind, dangling.
 // `displayPath` is the same string Codex would have used.
+// `force` stays off: verification already established the file was there, so a
+// missing path here means it went away underneath the turn. Codex's `fs.remove`
+// reports that; swallowing it would report `D <path>` for a delete that did not
+// happen.
 function removeFile(ctx, target) {
-  return rm(String(target.displayPath ?? ctx.fs.processPath(target)), { force: true });
+  return rm(String(target.displayPath ?? ctx.fs.processPath(target)), { force: false });
 }
 
 // Codex creates a missing parent rather than refusing the patch, and a model
@@ -416,8 +433,7 @@ function registerApplyPatch(ctx, config) {
         input: {
           type: 'string',
           required: true,
-          description:
-            'The patch to apply, as one `*** Begin Patch` / `*** End Patch` envelope. Not JSON-wrapped.',
+          description: 'The patch to apply, as one `*** Begin Patch` / `*** End Patch` envelope.',
         },
       },
       output: {

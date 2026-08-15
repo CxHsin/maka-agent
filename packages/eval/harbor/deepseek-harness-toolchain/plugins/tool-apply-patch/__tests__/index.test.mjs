@@ -146,9 +146,12 @@ describe('apply_patch', () => {
     assert.equal(await read('app.py'), 'def greet():\n    print("Hi")\n');
   });
 
-  it('refuses a rename onto a path the same envelope also edits', async () => {
-    // A rename claims its destination as well as its source, so the map has to
-    // hold both or two sections could silently write the same file.
+  it('lets a rename land on a path a later section then fails to find', async () => {
+    // A rename's destination is not a key: verification holds `move_path` as a
+    // value (invocation.rs:232-280), so both sections pass pass one — the second
+    // is computed against the pre-patch `other.py`. Pass two then renames first,
+    // and the second section reads what the rename left. Confirmed against the
+    // reference binary, which leaves exactly this state.
     await writeFile(join(mounted.root, 'other.py'), 'x = 1\n');
     await assert.rejects(
       run(
@@ -164,9 +167,10 @@ describe('apply_patch', () => {
           '+x = 2',
         ),
       ),
-      /multiple operations target other\.py/u,
+      /Failed to find expected lines in other\.py/u,
     );
-    assert.equal(await read('other.py'), 'x = 1\n');
+    assert.equal(await exists('app.py'), false);
+    assert.equal(await read('other.py'), 'def greet():\n    print("Hello")\n');
   });
 
   it('writes nothing when a later section fails to apply', async () => {
@@ -216,9 +220,15 @@ describe('apply_patch', () => {
     });
   });
 
-  it('refuses to move a file onto itself', async () => {
-    await assert.rejects(
-      run(
+  it('deletes a file moved onto itself, and reports success', async () => {
+    // Not a refusal and not a no-op. `*** Move to:` writes the destination and
+    // then unlinks the source, in that order (lib.rs), so naming the source as
+    // the destination unlinks what was just written. The reference binary does
+    // this, prints `M app.py`, and exits 0; reproducing it is the point of the
+    // arm, and refusing it — which this did — would hide a real footgun of the
+    // contract behind a guard Codex does not have.
+    assert.equal(
+      await run(
         patch(
           '*** Update File: app.py',
           '*** Move to: app.py',
@@ -227,9 +237,9 @@ describe('apply_patch', () => {
           '+    print("Hello")',
         ),
       ),
-      /multiple operations target app\.py/u,
+      'Success. Updated the following files:\nM app.py',
     );
-    assert.equal(await exists('app.py'), true);
+    assert.equal(await exists('app.py'), false);
   });
 
   it('surfaces a syntax error unchanged', async () => {

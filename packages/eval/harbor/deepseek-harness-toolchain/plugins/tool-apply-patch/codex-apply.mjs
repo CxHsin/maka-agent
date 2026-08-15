@@ -46,11 +46,18 @@ export function seekSequence(lines, pattern, start, eof) {
   const searchStart = eof && lines.length >= pattern.length ? lines.length - pattern.length : start;
   const last = lines.length - pattern.length;
 
-  for (const equal of [exact, trimEnd, trimBoth, normalized]) {
+  // Each pass compares a projection of the line against the same projection of
+  // the pattern, so it is applied once per string rather than once per
+  // candidate position. Comparing on the fly recomputed `normalise` for every
+  // (position, pattern line) pair, which on a large file and a long hunk is
+  // quadratic in the file's length for no change in what matches.
+  for (const project of [exact, trimEnd, trimBoth, normalise]) {
+    const haystack = project === exact ? lines : lines.map(project);
+    const needle = project === exact ? pattern : pattern.map(project);
     for (let i = searchStart; i <= last; i += 1) {
       let ok = true;
-      for (let p = 0; p < pattern.length; p += 1) {
-        if (!equal(lines[i + p], pattern[p])) {
+      for (let p = 0; p < needle.length; p += 1) {
+        if (haystack[i + p] !== needle[p]) {
           ok = false;
           break;
         }
@@ -61,10 +68,9 @@ export function seekSequence(lines, pattern, start, eof) {
   return undefined;
 }
 
-const exact = (line, pat) => line === pat;
-const trimEnd = (line, pat) => line.trimEnd() === pat.trimEnd();
-const trimBoth = (line, pat) => line.trim() === pat.trim();
-const normalized = (line, pat) => normalise(line) === normalise(pat);
+const exact = (line) => line;
+const trimEnd = (line) => line.trimEnd();
+const trimBoth = (line) => line.trim();
 
 // The same code points upstream folds, in the same directions.
 const PUNCTUATION = new Map([
@@ -154,11 +160,19 @@ function computeReplacements(originalLines, path, chunks) {
   return replacements;
 }
 
+// Built forward in one pass over the already-sorted, non-overlapping
+// replacements. Splicing each one into a copy instead spreads the replacement
+// segment into the argument list, and a hunk adding more lines than the engine's
+// argument limit — a model rewriting a large generated file — threw a
+// `RangeError` rather than applying.
 function applyReplacements(lines, replacements) {
-  const out = [...lines];
-  // Descending, so an earlier replacement does not shift a later one's index.
-  for (const [start, oldLength, segment] of [...replacements].reverse()) {
-    out.splice(start, oldLength, ...segment);
+  const out = [];
+  let cursor = 0;
+  for (const [start, oldLength, segment] of replacements) {
+    for (let i = cursor; i < start; i += 1) out.push(lines[i]);
+    for (const line of segment) out.push(line);
+    cursor = start + oldLength;
   }
+  for (let i = cursor; i < lines.length; i += 1) out.push(lines[i]);
   return out;
 }

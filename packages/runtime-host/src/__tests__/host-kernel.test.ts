@@ -1,3 +1,4 @@
+import { RuntimeHostProtocolError } from '../protocol/errors.js';
 import { defineInteractiveRuntimeHostComposition } from '../server/host-composition.js';
 import assert from 'node:assert/strict';
 import { execFile, fork, type ChildProcess } from 'node:child_process';
@@ -42,22 +43,23 @@ import {
   RUNTIME_HOST_COMPATIBILITY_EPOCH,
   RUNTIME_HOST_MAX_MESSAGE_BYTES,
   RUNTIME_HOST_PROTOCOL_VERSION,
-  RuntimeHostProtocolError,
   type ClientFrame,
   type ClientSurface,
 } from '../protocol/index.js';
 import {
   RuntimeHostKernel,
   RuntimeHostProcessTerminationRequiredError,
-  startInteractiveRuntimeHostCandidate,
-  type InteractiveRuntimeHostCandidateOptions,
-  type InteractiveRuntimeHostCandidateResult,
   type RuntimeHostComposition,
   type RuntimeHostCompositionContext,
   type RuntimeHostCompositionFactory,
-  type RuntimeHostCompositionSource,
   type RuntimeHostKernelOptions,
-} from '../server/index.js';
+} from '../server/host-kernel.js';
+import {
+  startInteractiveRuntimeHostCandidate,
+  type InteractiveRuntimeHostCandidateOptions,
+  type InteractiveRuntimeHostCandidateResult,
+} from '../server/candidate.js';
+import type { RuntimeHostCompositionSource } from '../server/host-composition.js';
 import { createUnavailableDomainOperationHandlers } from '../server/operation-dispatcher.js';
 import { HostConfigurationChangeService } from '../server/configuration-change-service.js';
 import { HostSessionCatalogChangeService } from '../server/session-catalog-change-service.js';
@@ -2059,25 +2061,23 @@ describe('non-serving Runtime Host kernel', () => {
           }),
         RangeError,
       );
-      await assert.rejects(
-        () =>
-          connectRuntimeHost({
-            rootPath: paths.root,
-            surface: 'tui',
-            protocol: CURRENT_PROTOCOL,
-            clientInstanceId: '',
-          }),
+      await assert.rejects(() =>
+        connectRuntimeHost({
+          rootPath: paths.root,
+          surface: 'tui',
+          protocol: CURRENT_PROTOCOL,
+          clientInstanceId: '',
+        }),
         RuntimeHostProtocolError,
       );
-      await assert.rejects(
-        () =>
-          connectOrSpawnRuntimeHost({
-            rootPath: paths.root,
-            surface: 'tui',
-            protocol: CURRENT_PROTOCOL,
-            compositionId: 'Invalid Composition',
-            candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
-          }),
+      await assert.rejects(() =>
+        connectOrSpawnRuntimeHost({
+          rootPath: paths.root,
+          surface: 'tui',
+          protocol: CURRENT_PROTOCOL,
+          compositionId: 'Invalid Composition',
+          candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+        }),
         RuntimeHostProtocolError,
       );
       await assertPathMissing(paths.root);
@@ -2088,17 +2088,16 @@ describe('non-serving Runtime Host kernel', () => {
       });
       assert.equal(candidate.kind, 'winner');
       if (candidate.kind !== 'winner') return;
-      await assert.rejects(
-        () =>
-          connectOrSpawnRuntimeHost({
-            rootPath: paths.root,
-            surface: 'tui',
-            protocol: CURRENT_PROTOCOL,
-            compositionId: KERNEL_COMPOSITION.descriptor.id,
-            candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
-            clientInstanceId: 'x'.repeat(129),
-            electionDeadlineMs: 100,
-          }),
+      await assert.rejects(() =>
+        connectOrSpawnRuntimeHost({
+          rootPath: paths.root,
+          surface: 'tui',
+          protocol: CURRENT_PROTOCOL,
+          compositionId: KERNEL_COMPOSITION.descriptor.id,
+          candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+          clientInstanceId: 'x'.repeat(129),
+          electionDeadlineMs: 100,
+        }),
         RuntimeHostProtocolError,
       );
       assert.equal(candidate.host.state, 'ready');

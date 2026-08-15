@@ -81,6 +81,11 @@ export async function harness({ files = {}, sandboxMode } = {}) {
         if (expected?.kind === 'replaceIfVersion' && current !== expected.version) {
           throw new FsError(`${targetKey} changed since it was read`, 'FS_STALE_VERSION');
         }
+        // `dsh-fs-local` creates the parent, in `writeFileAtomic`. Leaving that
+        // out here made the tool carry an `ensureParent` of its own that no
+        // mounted provider needed — a fake weaker than the real thing does not
+        // just fail to catch bugs, it invents code.
+        await mkdir(dirname(targetKey), { recursive: true });
         await writeFile(targetKey, content);
         return { version: await version(targetKey) };
       },

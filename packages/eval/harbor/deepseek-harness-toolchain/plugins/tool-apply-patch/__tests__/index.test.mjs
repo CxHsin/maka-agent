@@ -332,12 +332,14 @@ describe('apply_patch under a confining provider', () => {
     assert.equal(await read('app.py'), 'x = 2\n');
   });
 
-  it('creates no directory of its own', async () => {
-    // `mkdir` on a `processPath` is the same way out of the sandbox that delete
-    // and rename refuse for, and it used to run on every write: a create the
-    // provider then denied still left its parent directory behind. A provider
-    // that confines owns the question of whether the directory may exist.
-    await assert.rejects(run(patch('*** Add File: sub/dir/x.txt', '+x')));
-    assert.equal(await exists('sub'), false);
+  it('creates a missing parent through the provider and not around it', async () => {
+    // There was an `ensureParent` here that ran `mkdir` on a `processPath`
+    // before every write — the same way out of the sandbox that delete and
+    // rename refuse for. It was never needed: `dsh-fs-local` creates the parent
+    // itself, in `writeFileAtomic`, under whatever the provider enforces. The
+    // tool now has no call that creates a directory, so there is nothing left
+    // to guard and this asserts the behaviour that replaced it.
+    await run(patch('*** Add File: sub/dir/x.txt', '+x'));
+    assert.equal(await read('sub/dir/x.txt'), 'x\n');
   });
 });

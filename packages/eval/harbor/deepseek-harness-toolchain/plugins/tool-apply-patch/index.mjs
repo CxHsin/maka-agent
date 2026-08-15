@@ -35,8 +35,7 @@
 // `danger-full-access`, where nothing is confined and the model's own bash can
 // already remove any file, so the refusal never fires there.
 
-import { mkdir, readFile, rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile, rm } from 'node:fs/promises';
 import z from '@deepseek-ai/schemastery';
 import { FsError } from '@deepseek-ai/dsh-fs';
 import { sandboxDenialMarker } from '@deepseek-ai/dsh-sandbox';
@@ -360,7 +359,6 @@ async function writeTarget(ctx, policy, { target, content, info, unconditional }
 
   let outcome;
   try {
-    await ensureParent(ctx, policy, target);
     outcome = await ctx.fs.writeText(target, content, expected, exec.signal, sandboxPolicy);
   } catch (error) {
     throw policy.mapError(error, sandboxPolicy);
@@ -388,21 +386,6 @@ const observed = (info) =>
 // happen.
 function removeFile(ctx, target) {
   return rm(String(target.displayPath ?? ctx.fs.processPath(target)), { force: false });
-}
-
-// Codex creates a missing parent rather than refusing the patch, and a model
-// adding a module to a package it is also creating relies on it.
-//
-// Under a confining provider this does nothing at all. `mkdir` on a
-// `processPath` is the same way out of the sandbox that delete and rename are
-// refused for, and it ran on every write rather than only on the ones that need
-// it: a create outside the workspace had its write denied by the provider and
-// still left the directory behind. Leaving the parent to the provider is right
-// in any case — a provider that confines is the thing that knows whether the
-// directory may exist.
-function ensureParent(ctx, policy, target) {
-  if (policy.confines) return undefined;
-  return mkdir(dirname(ctx.fs.processPath(target)), { recursive: true });
 }
 
 function presentApplyPatchCall(args) {

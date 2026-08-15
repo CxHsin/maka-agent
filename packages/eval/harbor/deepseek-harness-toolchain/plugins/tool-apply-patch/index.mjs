@@ -73,7 +73,7 @@ const DESCRIPTION_SOURCE = 'upstream-apply-patch-instructions.md';
 
 // Each entry is applied exactly once. `why` is the reason the upstream text
 // would be false as written here, not a preference.
-const DESCRIPTION_ADAPTATIONS = [
+export const DESCRIPTION_ADAPTATIONS = [
   {
     why: 'a tool description is not a section of a document',
     from: '## `apply_patch`\n\n',

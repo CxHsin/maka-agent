@@ -11,7 +11,9 @@ export type ExternalProfile =
   | 'kimi-code'
   | 'zcode'
   | 'pi'
-  | 'deepseek-harness';
+  | 'deepseek-harness'
+  | 'deepseek-harness-fs'
+  | 'deepseek-harness-apply-patch';
 
 export interface ToolchainIdentity {
   readonly root: string;
@@ -20,6 +22,17 @@ export interface ToolchainIdentity {
 }
 
 export const TOOLCHAIN_IDENTITY_ENV = 'MAKA_EVAL_VERIFIED_TOOLCHAIN';
+
+// The three DeepSeek Harness arms differ only in the profile they compose, and
+// a profile is copied out of this repository rather than installed. So they run
+// one toolchain, named once: three copies of a fingerprint would have to be
+// updated together, and the failure mode of missing one is an arm silently
+// verified against a tree it does not run.
+const DEEPSEEK_HARNESS_TOOLCHAIN: ToolchainIdentity = {
+  root: '/opt/maka-deepseek-harness-toolchain',
+  version: '0.1.0-rc.6',
+  fingerprint: 'sha256:a0882b448718ddfb7b64e33a12369c92b0064baf8388fe08a8ff64fe3dd98896',
+};
 
 export const TOOLCHAIN_IDENTITIES: Readonly<Record<ExternalProfile, ToolchainIdentity>> = {
   codex: {
@@ -57,11 +70,9 @@ export const TOOLCHAIN_IDENTITIES: Readonly<Record<ExternalProfile, ToolchainIde
     version: '0.84.1',
     fingerprint: 'sha256:995a47ce9e2a5cd38865d22c932775b86484396d61889968310246cf7e82e3ec',
   },
-  'deepseek-harness': {
-    root: '/opt/maka-deepseek-harness-toolchain',
-    version: '0.1.0-rc.6',
-    fingerprint: 'sha256:a0882b448718ddfb7b64e33a12369c92b0064baf8388fe08a8ff64fe3dd98896',
-  },
+  'deepseek-harness': DEEPSEEK_HARNESS_TOOLCHAIN,
+  'deepseek-harness-fs': DEEPSEEK_HARNESS_TOOLCHAIN,
+  'deepseek-harness-apply-patch': DEEPSEEK_HARNESS_TOOLCHAIN,
 };
 
 // The identity table is the profile registry: a profile without a pinned

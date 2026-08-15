@@ -9,6 +9,7 @@ import { Agent, fetch as undiciFetch, ProxyAgent } from 'undici';
 import {
   decodePreverifiedToolchain,
   isExternalProfile,
+  TOOLCHAIN_IDENTITIES,
   type ExternalProfile as Profile,
 } from './toolchain-verification.js';
 import { isInferenceAdmissionEvent } from './provider-admission.js';
@@ -28,6 +29,19 @@ const resultToken = takeRelayResultToken();
 // lifecycle test pins the two together.
 const DEEPSEEK_HARNESS_PROFILE = 'maka-eval';
 
+// All three arms boot the same one-shot CLI, so anything true of how that CLI
+// behaves is true of all of them. Written as a set rather than a name check so
+// that adding a fourth arm is one edit, not a hunt through the disjunctions.
+const DEEPSEEK_HARNESS_ARMS: readonly Profile[] = [
+  'deepseek-harness',
+  'deepseek-harness-fs',
+  'deepseek-harness-apply-patch',
+];
+
+function isDeepSeekHarness(profile: Profile): boolean {
+  return DEEPSEEK_HARNESS_ARMS.includes(profile);
+}
+
 const PROVIDER_USAGE_CHECKPOINT_SCHEMA = 'maka.external_provider_usage.v2';
 let atomicWriteSequence = 0;
 
@@ -40,6 +54,47 @@ interface ProfileSetup {
   readonly root: string;
   readonly proxyBaseUrl: string;
   readonly executableArgs: readonly string[];
+}
+
+// The three DeepSeek Harness arms, which differ only in the profile directory
+// they copy — that directory is where the edit contract is chosen, and it is
+// the only place the arms are allowed to diverge. Sharing the preparer is what
+// makes that true rather than merely intended: a change to how the harness is
+// launched cannot reach one arm and miss another.
+function deepSeekHarnessArm(profileDirectory: string): (setup: ProfileSetup) => Promise<undefined> {
+  return async ({ env, home, root, proxyBaseUrl }) => {
+    // The arm supplies its own profile rather than patching a stock one, so the
+    // composition names every entry the model can observe. DSH_HOME must be
+    // writable: the harness links its bundled packages into
+    // profiles/node_modules on first use, which it does offline.
+    env.DSH_HOME = join(home, 'dsh');
+    const profile = join(env.DSH_HOME, 'profiles', DEEPSEEK_HARNESS_PROFILE);
+    await mkdir(profile, { recursive: true, mode: 0o700 });
+    const source = rooted(root, `/opt/maka-agent/packages/eval/harbor/${profileDirectory}`);
+    for (const file of ['package.json', 'cordis.yml', 'cordis.patch.yml']) {
+      await copyFile(join(source, file), join(profile, file));
+    }
+    // Where an Eval-authored plugin row resolves from. A composition copied
+    // under $DSH_HOME cannot name such a plugin by package — Node's upward
+    // `node_modules` walk from there never reaches the harness — so the row
+    // names an absolute path, and this is the one place that path is built.
+    // All three arms run the same toolchain, so its root is read from the arm
+    // whose identity the other two alias.
+    env.MAKA_EVAL_DSH_PLUGINS = rooted(
+      root,
+      `${TOOLCHAIN_IDENTITIES['deepseek-harness'].root}/lib/dsh/plugins`,
+    );
+    env.DEEPSEEK_API_KEY = 'maka-eval-local';
+    env.DEEPSEEK_BASE_URL = proxyBaseUrl;
+    // The harness kills every descendant of its persistent PTY on shutdown,
+    // which removes a task's own background service before the shared-environment
+    // verifier can reach it. What the verifier scores is the environment the
+    // task was left in, so no framework — this one, Maka, or the relay — may
+    // edit it after the subject stops. The patched subprocess package honours
+    // this flag by closing the shell without killing the process group.
+    env.DSH_PRESERVE_BACKGROUND_PROCESSES = '1';
+    return undefined;
+  };
 }
 
 // One preparer per admissible profile, returning the path of any credential
@@ -234,28 +289,9 @@ const PROFILE_PREPARERS: Record<Profile, (setup: ProfileSetup) => Promise<string
     );
   },
 
-  'deepseek-harness': async ({ env, home, root, proxyBaseUrl }) => {
-    // The arm supplies its own profile rather than patching a stock one, so the
-    // composition names every entry the model can observe. DSH_HOME must be
-    // writable: the harness links its bundled packages into
-    // profiles/node_modules on first use, which it does offline.
-    env.DSH_HOME = join(home, 'dsh');
-    const profile = join(env.DSH_HOME, 'profiles', DEEPSEEK_HARNESS_PROFILE);
-    await mkdir(profile, { recursive: true, mode: 0o700 });
-    const source = rooted(root, '/opt/maka-agent/packages/eval/harbor/deepseek-harness-profile');
-    for (const file of ['package.json', 'cordis.yml', 'cordis.patch.yml']) {
-      await copyFile(join(source, file), join(profile, file));
-    }
-    env.DEEPSEEK_API_KEY = 'maka-eval-local';
-    env.DEEPSEEK_BASE_URL = proxyBaseUrl;
-    // The harness kills every descendant of its persistent PTY on shutdown,
-    // which removes a task's own background service before the shared-environment
-    // verifier can reach it. What the verifier scores is the environment the
-    // task was left in, so no framework — this one, Maka, or the relay — may
-    // edit it after the subject stops. The patched subprocess package honours
-    // this flag by closing the shell without killing the process group.
-    env.DSH_PRESERVE_BACKGROUND_PROCESSES = '1';
-  },
+  'deepseek-harness': deepSeekHarnessArm('deepseek-harness-profile'),
+  'deepseek-harness-fs': deepSeekHarnessArm('deepseek-harness-fs-profile'),
+  'deepseek-harness-apply-patch': deepSeekHarnessArm('deepseek-harness-apply-patch-profile'),
 
   zcode: async ({ env, home, proxyBaseUrl }) => {
     const zcodeHome = join(home, '.zcode');
@@ -598,9 +634,7 @@ function classifyExecution(
   // only decides whether the attempt reads as completed or failed.
   const completed =
     output.completed ||
-    ((selected === 'zcode' || selected === 'deepseek-harness') &&
-      exitCode === 0 &&
-      output.nonempty);
+    ((selected === 'zcode' || isDeepSeekHarness(selected)) && exitCode === 0 && output.nonempty);
   const reportedError = output.reportedError;
   if (admittedRequests === 0) {
     return { status: 'infra_failed', failureReason: `${selected} failed before model admission` };

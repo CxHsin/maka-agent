@@ -49,6 +49,10 @@ const DEEPSEEK_HARNESS_TOOLCHAIN_SPEC = {
     version: '0.1.0-rc.6',
     entrypoint: 'lib/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js',
   },
+  // Plugin rows this repository composes into an arm's profile by absolute
+  // path. Named here so a build that failed to copy one is caught now rather
+  // than as a boot failure in a benchmark run.
+  plugins: ['lib/dsh/plugins/tool-apply-patch/index.mjs'],
 };
 
 // Written into the build's own manifest, and the only thing that authorizes
@@ -114,6 +118,17 @@ async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {
     'node -e "require(\'node-pty\')"',
     'cp "$(command -v node)" /out/bin/node',
     'cp -R package.json package-lock.json node_modules /out/lib/dsh/',
+    // The Eval-authored plugin rows land beside that node_modules rather than
+    // beside the profile that names them: a composition file lives under
+    // $DSH_HOME, where Node's upward walk never reaches the harness, so a row
+    // importing `@deepseek-ai/dsh-tools` from there would fail to resolve.
+    // Here the walk finds lib/dsh/node_modules on the first step up.
+    //
+    // Their tests are not runtime artifacts and would only widen the
+    // fingerprint's surface; they run from the repository, in `test:dist`. The
+    // NOTICE stays — attribution travels with the code it covers.
+    'cp -R /manifest/plugins /out/lib/dsh/',
+    'find /out/lib/dsh/plugins -name "*.test.mjs" -delete',
   ].join(' && ');
   await execFileAsync('docker', [
     'run',
@@ -136,6 +151,9 @@ async function prepareDeepSeekHarnessToolchain({ outputRoot, write = false } = {
   // both depend on; the container's `&&` chain already fails the build if the
   // copies or the native module did not work.
   await requireRegularFile(join(root, spec.deepseekHarness.entrypoint), 'harness entrypoint');
+  for (const plugin of spec.plugins) {
+    await requireRegularFile(join(root, plugin), `plugin ${plugin}`);
+  }
 
   const checksums = await checksumTree(root);
   await writeFile(join(root, 'checksums.sha256'), checksums, { mode: 0o644 });
@@ -189,8 +207,11 @@ async function requireRegularFile(path, label) {
 
 async function recordFingerprint(fingerprint) {
   const source = await readFile(identityPath, 'utf8');
+  // The three harness arms share one identity constant, so this rewrites the
+  // constant rather than a table entry — and rewrites exactly one place, which
+  // is the reason the constant exists.
   const pattern =
-    /('deepseek-harness': \{\n\s*root: '[^']+',\n\s*version: ')([^']+)(',\n\s*fingerprint: ')([^']+)(')/u;
+    /(const DEEPSEEK_HARNESS_TOOLCHAIN: ToolchainIdentity = \{\n\s*root: '[^']+',\n\s*version: ')([^']+)(',\n\s*fingerprint: ')([^']+)(')/u;
   if (!pattern.test(source)) throw new Error('deepseek-harness toolchain identity was not found');
   const next = source.replace(
     pattern,

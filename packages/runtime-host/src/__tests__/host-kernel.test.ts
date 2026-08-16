@@ -2061,23 +2061,25 @@ describe('non-serving Runtime Host kernel', () => {
           }),
         RangeError,
       );
-      await assert.rejects(() =>
-        connectRuntimeHost({
-          rootPath: paths.root,
-          surface: 'tui',
-          protocol: CURRENT_PROTOCOL,
-          clientInstanceId: '',
-        }),
+      await assert.rejects(
+        () =>
+          connectRuntimeHost({
+            rootPath: paths.root,
+            surface: 'tui',
+            protocol: CURRENT_PROTOCOL,
+            clientInstanceId: '',
+          }),
         RuntimeHostProtocolError,
       );
-      await assert.rejects(() =>
-        connectOrSpawnRuntimeHost({
-          rootPath: paths.root,
-          surface: 'tui',
-          protocol: CURRENT_PROTOCOL,
-          compositionId: 'Invalid Composition',
-          candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
-        }),
+      await assert.rejects(
+        () =>
+          connectOrSpawnRuntimeHost({
+            rootPath: paths.root,
+            surface: 'tui',
+            protocol: CURRENT_PROTOCOL,
+            compositionId: 'Invalid Composition',
+            candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+          }),
         RuntimeHostProtocolError,
       );
       await assertPathMissing(paths.root);
@@ -2088,16 +2090,17 @@ describe('non-serving Runtime Host kernel', () => {
       });
       assert.equal(candidate.kind, 'winner');
       if (candidate.kind !== 'winner') return;
-      await assert.rejects(() =>
-        connectOrSpawnRuntimeHost({
-          rootPath: paths.root,
-          surface: 'tui',
-          protocol: CURRENT_PROTOCOL,
-          compositionId: KERNEL_COMPOSITION.descriptor.id,
-          candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
-          clientInstanceId: 'x'.repeat(129),
-          electionDeadlineMs: 100,
-        }),
+      await assert.rejects(
+        () =>
+          connectOrSpawnRuntimeHost({
+            rootPath: paths.root,
+            surface: 'tui',
+            protocol: CURRENT_PROTOCOL,
+            compositionId: KERNEL_COMPOSITION.descriptor.id,
+            candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+            clientInstanceId: 'x'.repeat(129),
+            electionDeadlineMs: 100,
+          }),
         RuntimeHostProtocolError,
       );
       assert.equal(candidate.host.state, 'ready');

@@ -226,17 +226,18 @@
 }
 
 /*
- * Project groups are a section label + peer sessions, not a deep tree.
- * Astryx SideNavItem always pads children with spacing-6 (24px); that is the
- * shell-side-nav workspace pattern, but it wastes a full icon column in a
- * narrow session rail. Zero only the project item's own nest so sessions share
- * the time-sort left edge. Child combinator only — do not use a descendant
- * selector that would punch deeper nest levels if any appear later.
+ * Project groups are a real parent-child hierarchy. Keep Astryx's standard
+ * SideNav nesting step (spacing-6 / 24px) so session rows visibly belong to
+ * the project above them instead of sharing the project's left edge. Pin the
+ * value here because StyleX owns the unlayered default and this relationship
+ * is part of the task rail's visual contract. Child combinator only — do not
+ * use a descendant selector that would indent deeper nest levels twice if any
+ * appear later.
  * DOM: .maka-project-row > SideNavItem root > [role=group] > childrenInner
  */
 .maka-project-row > div > [role="group"] > div {
   /* !important: StyleX childrenInner paddingInlineStart is unlayered. */
-  padding-inline-start: 0 !important;
+  padding-inline-start: var(--spacing-6) !important;
 }
 
 .maka-session-row-end,
@@ -284,7 +285,10 @@
  * five things wide.
  *
  * :focus-within covers the keyboard: focus on the row's own button reveals the
- * menu, and focus moving into the menu keeps it revealed.
+ * menu. The native popover's own open state covers the pointer handoff into the
+ * top layer: once the pointer leaves the row, :hover drops before the item can
+ * receive its click, and pointer-events: none on this ancestor otherwise makes
+ * the page underneath the visible popover win hit testing.
  */
 .maka-session-row-time {
   display: inline-flex;
@@ -312,7 +316,8 @@
 }
 
 .maka-session-row:hover > .maka-session-row-action,
-.maka-session-row:focus-within > .maka-session-row-action {
+.maka-session-row:focus-within > .maka-session-row-action,
+.maka-session-row > .maka-session-row-action:has([popover]:popover-open) {
   opacity: 1;
   pointer-events: auto;
 }
@@ -335,9 +340,10 @@
   }
 }
 
-/* SideNavItem owns each row button and only supports non-interactive
- * endContent. Action menus occupy a reserved trailing slot visually, but stay
- * siblings in the DOM so neither control contains the other. */
+/* SideNavItem owns each row button; interactive actions use its trailingAction
+ * sibling slot instead of non-interactive endContent. Menus occupy a reserved
+ * trailing slot visually, but stay siblings in the DOM so neither control
+ * contains the other. */
 .maka-session-row-action {
   position: absolute;
   inset-block-start: calc(
@@ -356,6 +362,7 @@
  * gutter + disclosure + SideNavItem gap. Empty projects have no disclosure and
  * use the default trailing inset above. */
 .maka-project-row
+  > div
   > .maka-session-row-action[data-position="before-disclosure"] {
   inset-inline-end: calc(var(--space-2) + var(--space-6) + var(--space-2));
 }
@@ -365,14 +372,14 @@
  * feedback only while the direct project action is targeted; a plain wrapper
  * :hover selector would also light the header over nested session rows. */
 @media (hover: hover) {
-  .maka-project-row:has(> .maka-session-row-action:hover)
+  .maka-project-row:has(> div > .maka-session-row-action:hover)
     > div
     > .astryx-side-nav-item {
     background-color: var(--color-overlay-hover);
   }
 }
 
-.maka-project-row:has(> .maka-session-row-action button:active)
+.maka-project-row:has(> div > .maka-session-row-action button:active)
   > div
   > .astryx-side-nav-item {
   background-color: var(--color-overlay-pressed);

@@ -2361,14 +2361,6 @@ class TinySessionStore implements SessionStore {
     return clone(next);
   }
 
-  async archive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, { isArchived: true, status: 'archived' });
-  }
-
-  async unarchive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, { isArchived: false, status: 'active' });
-  }
-
   async setFlagged(sessionId: string, isFlagged: boolean): Promise<void> {
     await this.updateHeader(sessionId, { isFlagged });
   }

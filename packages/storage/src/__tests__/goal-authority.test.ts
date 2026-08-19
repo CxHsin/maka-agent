@@ -142,9 +142,9 @@ test('Session retirement atomically removes its Goal authority', async () => {
     const [archived, removed] = await Promise.all(
       sessions.map((session) => stores.sessionStore.readHeaderRecordSnapshot(session.id)),
     );
-    await stores.sessionStore.setSessionsLifecycleVersioned(
+    await stores.sessionStore.setSessionsArchivedVersioned(
       [{ sessionId: archived.header.id, expectedVersion: archived.revision }],
-      'archived',
+      true,
     );
     await stores.sessionStore.removeSessionsVersioned([
       { sessionId: removed.header.id, expectedVersion: removed.revision },

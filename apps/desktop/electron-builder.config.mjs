@@ -6,7 +6,15 @@ export default {
   directories: {
     output: 'release',
   },
-  files: ['dist/**/*', 'dist-renderer/**/*', 'package.json', '!**/__tests__/**'],
+  files: [
+    'dist/**/*',
+    'dist-renderer/**/*',
+    'package.json',
+    '!**/__tests__/**',
+    // FakeBackend and the Desktop E2E candidate bootstrap live under
+    // `test-only/`; they must not reach a packaged app.
+    '!**/test-only/**',
+  ],
   extraResources: [
     {
       from: '../../node_modules/dugite/git',
@@ -30,6 +38,18 @@ export default {
       from: 'resources/workers/filesystem-worker.js',
       to: 'workers/filesystem-worker.js',
     },
+    ...(process.platform === 'win32'
+      ? [
+          {
+            from: 'resources/windows-sandbox/maka-windows-sandbox.exe',
+            to: 'windows-sandbox/maka-windows-sandbox.exe',
+          },
+          {
+            from: 'resources/licenses/cargo/THIRD_PARTY_NOTICES.txt',
+            to: 'licenses/cargo/THIRD_PARTY_NOTICES.txt',
+          },
+        ]
+      : []),
     {
       from: '../../LICENSE',
       to: 'licenses/maka/LICENSE',
@@ -53,6 +73,14 @@ export default {
     {
       from: '../../NOTICE',
       to: 'licenses/maka/NOTICE',
+    },
+    {
+      // Incubator policy requires every release archive to carry a DISCLAIMER
+      // or DISCLAIMER-WIP. Shipping it beside LICENSE and NOTICE is what makes
+      // the repository-root file reach the DMG, the ZIP and the Windows
+      // installer; `assertPackagedResources` then requires it on both paths.
+      from: '../../DISCLAIMER-WIP',
+      to: 'licenses/maka/DISCLAIMER-WIP',
     },
     {
       from: '../../node_modules/electron/dist/LICENSE',

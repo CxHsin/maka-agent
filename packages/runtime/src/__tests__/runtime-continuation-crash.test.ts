@@ -15,7 +15,7 @@ import { createSqliteAgentRunStore } from '@maka/storage';
 
 import { type RuntimeContinuationFailpoint } from '../agent-run.js';
 import { BackendRegistry, SessionManager } from '../session-manager.js';
-import { FakeBackend } from '../fake-backend.js';
+import { FakeBackend } from '../test-only/fake-backend.js';
 import { terminateChildProcessTree } from '../process-tree-terminator.js';
 
 const CRASH_CHILD_ENV = 'MAKA_RUNTIME_CONTINUATION_CRASH_CHILD';

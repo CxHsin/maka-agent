@@ -6,7 +6,6 @@ import { isThinkingLevel } from '@maka/core/model-thinking';
 import { type CreateSessionRequestInput, type SessionListFilter } from '@maka/core/runtime-inputs';
 import { type SessionChangedEvent, type SessionChangedReason, type SessionSummary } from '@maka/core/session';
 import type {
-  SessionCatalogFilter,
   SessionCatalogProjection,
   SessionCreateInput,
   WorkspaceTarget,
@@ -44,6 +43,8 @@ export interface DesktopHostSessionSummary extends SessionSummary {
 
 export interface RuntimeHostSessionCatalogIpcDeps {
   client: RuntimeHostSessionCatalogClient;
+  /** Observer state supplements the Host catalog without falling back to the durable header. */
+  runningTurnIds: (sessionId: string) => readonly string[];
   resolveCreateProject: (
     input: Pick<CreateSessionRequestInput, 'cwd' | 'projectId'>,
   ) => Promise<WorkspaceTarget>;
@@ -70,19 +71,21 @@ export function registerRuntimeHostSessionCatalogIpc(
   const listSessions = async (filter?: SessionListFilter): Promise<DesktopHostSessionSummary[]> => {
     await recoveryTask;
     const parentSessionId = normalizeParentSessionFilter(filter?.subagentParentSessionId);
-    const sessions = await deps.client.listSessions(toHostCatalogFilter(filter));
+    const sessions = await deps.client.listSessions();
     return sessions
       .filter((session) => !pendingCleanup.has(session.id))
       .filter((session) =>
         parentSessionId === undefined ? true : session.subagent?.parentSessionId === parentSessionId,
       )
-      .map(toDesktopHostSessionSummary);
+      .map((session) =>
+        toDesktopHostSessionListSummary(session, deps.runningTurnIds(session.id)),
+      );
   };
   const actionIds = (sessionId: string, options: unknown) =>
     resolveSessionActionIds(() => listSessions(), sessionId, options);
 
-  handleReconnectableRead(ipcMain, 'sessions:list', (_event, filter?: SessionListFilter) =>
-    listSessions(filter),
+  handleReconnectableRead(ipcMain, 'sessions:list', (_event, filter?: unknown) =>
+    listSessions(normalizeSessionListFilter(filter)),
   );
   ipcMain.handle('sessions:cleanupSessionCopy', async (_event, sessionId: string) => {
     await deps.sessionCopyCleanup.cleanup(sessionId);
@@ -191,9 +194,33 @@ export function registerRuntimeHostSessionCatalogIpc(
   ipcMain.handle('sessions:remove', async (_event, sessionId: string, options?: unknown) => {
     requestsRevisionFamily(options);
     const ids = await actionIds(sessionId, { revisionFamily: true });
-    await deps.client.removeSession(sessionId);
-    await finishSessionRetirement(deps, ids, 'deleted');
+    // A task restored under the caller's decision is left alone, and nothing
+    // downstream of the deletion runs for it.
+    const disposition = await deps.client.removeSession(sessionId, {
+      requireArchived: requiresArchivedSession(options),
+    });
+    if (disposition === 'removed') await finishSessionRetirement(deps, ids, 'deleted');
+    return disposition;
   });
+}
+
+/**
+ * Reads the archived premise off the remove options.
+ *
+ * This guards a permanent deletion, so it refuses anything it cannot read
+ * rather than falling through to "no premise stated" — which would be the
+ * destructive answer. It repeats the shape check its sibling does instead of
+ * relying on the caller running that one first.
+ */
+function requiresArchivedSession(options: unknown): boolean {
+  if (options === undefined) return false;
+  if (!options || typeof options !== 'object' || Array.isArray(options)) {
+    throw new Error('Invalid session family action options');
+  }
+  const value = (options as { requireArchived?: unknown }).requireArchived;
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') throw new Error('Invalid requireArchived option');
+  return value;
 }
 
 async function finishSessionRetirement(
@@ -221,22 +248,32 @@ async function updateConfiguration(
   return toDesktopHostSessionSummary(session);
 }
 
-function toHostCatalogFilter(filter: SessionListFilter | undefined): SessionCatalogFilter | undefined {
-  if (!filter) return undefined;
-  const result: SessionCatalogFilter = {
-    ...(filter.isArchived === undefined ? {} : { isArchived: filter.isArchived }),
-    ...(filter.isFlagged === undefined ? {} : { isFlagged: filter.isFlagged }),
-    ...(filter.labelSlug === undefined ? {} : { labelSlug: filter.labelSlug }),
-  };
-  return Object.keys(result).length === 0 ? undefined : result;
-}
-
 function normalizeParentSessionFilter(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error('Invalid subagent parent Session filter');
   }
   return value;
+}
+
+function normalizeSessionListFilter(value: unknown): SessionListFilter | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Invalid Session list filter');
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'subagentParentSessionId')) {
+    throw new Error('Invalid Session list filter keys');
+  }
+  return {
+    ...(record.subagentParentSessionId === undefined
+      ? {}
+      : {
+          subagentParentSessionId: normalizeParentSessionFilter(
+            record.subagentParentSessionId,
+          ),
+        }),
+  };
 }
 
 function normalizeModelTarget(input: CreateSessionRequestInput | undefined): SessionModelTarget {
@@ -294,6 +331,9 @@ export function toDesktopHostSessionSummary(
       ? {}
       : { lastMessagePreview: session.lastMessagePreview }),
     status: session.status,
+    ...(session.liveRunState === undefined
+      ? {}
+      : { runningTurnIds: [...session.liveRunState.runningTurnIds] }),
     ...(session.blockedReason === undefined ? {} : { blockedReason: session.blockedReason }),
     ...(session.statusUpdatedAt === undefined ? {} : { statusUpdatedAt: session.statusUpdatedAt }),
     ...(session.parentSessionId === undefined ? {} : { parentSessionId: session.parentSessionId }),
@@ -319,4 +359,17 @@ export function toDesktopHostSessionSummary(
     collaborationMode: session.collaborationMode,
     orchestrationMode: session.orchestrationMode,
   };
+}
+
+function toDesktopHostSessionListSummary(
+  session: SessionCatalogProjection,
+  runningTurnIds: readonly string[],
+): DesktopHostSessionSummary {
+  const summary = toDesktopHostSessionSummary(session);
+  return runningTurnIds.length === 0
+    ? summary
+    : {
+        ...summary,
+        runningTurnIds: [...new Set([...(summary.runningTurnIds ?? []), ...runningTurnIds])],
+      };
 }

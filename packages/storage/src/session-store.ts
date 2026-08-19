@@ -51,6 +51,7 @@ import type { CreateSessionInput, SessionListFilter } from '@maka/core/runtime-i
 import {
   isSessionToolProfile,
   type SessionHeader,
+  type SessionHeaderPatch,
   type SessionConversationCopy,
   type SessionSummary,
   type StoredMessage,
@@ -259,9 +260,7 @@ export interface SessionStore {
   listTurns(sessionId: string): Promise<TurnRecord[]>;
   appendMessage(sessionId: string, message: StoredMessage): Promise<void>;
   appendMessages(sessionId: string, messages: StoredMessage[]): Promise<void>;
-  updateHeader(sessionId: string, patch: Partial<SessionHeader>): Promise<SessionHeader>;
-  archive(sessionId: string): Promise<void>;
-  unarchive(sessionId: string): Promise<void>;
+  updateHeader(sessionId: string, patch: SessionHeaderPatch): Promise<SessionHeader>;
   setFlagged(sessionId: string, isFlagged: boolean): Promise<void>;
   rename(sessionId: string, name: string): Promise<void>;
   setGeneratedTitleIfAbsent(sessionId: string, title: string): Promise<SessionHeader | null>;
@@ -335,7 +334,7 @@ export interface SessionAuthorityStore extends SessionStore {
   readCatalogRecord(sessionId: string): Promise<SessionCatalogRecord>;
   updateHeaderVersioned(
     sessionId: string,
-    patch: Partial<SessionHeader>,
+    patch: SessionHeaderPatch,
     expectedRevision: number,
   ): Promise<SessionHeaderSnapshot>;
   updateSessionConfiguration(
@@ -347,11 +346,14 @@ export interface SessionAuthorityStore extends SessionStore {
     messageId: string,
   ): Promise<SessionHeaderSnapshot>;
   probeSessionRemoval(sessionId: string): Promise<ProbeSessionRemovalResult>;
-  setSessionsLifecycleVersioned(
+  setSessionsArchivedVersioned(
     sessions: readonly VersionedSessionIdentity[],
-    state: 'active' | 'archived',
+    isArchived: boolean,
   ): Promise<SessionHeaderSnapshot[]>;
-  removeSessionsVersioned(sessions: readonly VersionedSessionIdentity[]): Promise<string[]>;
+  removeSessionsVersioned(
+    sessions: readonly VersionedSessionIdentity[],
+    archiveSessions?: readonly VersionedSessionIdentity[],
+  ): Promise<string[]>;
   reconcileOrphanedAgentGraphRetirements(): Promise<string[]>;
   listPendingSessionRetirementCleanupIds(sessionId?: string): Promise<string[]>;
   completeSessionRetirementCleanup(sessionId: string): Promise<void>;
@@ -773,14 +775,14 @@ class SqliteSessionStore implements SessionAuthorityStore {
     return () => this.transcriptChangeListeners.delete(listener);
   }
 
-  async updateHeader(sessionId: string, patch: Partial<SessionHeader>): Promise<SessionHeader> {
+  async updateHeader(sessionId: string, patch: SessionHeaderPatch): Promise<SessionHeader> {
     await this.ensureReady();
     return (await this.metadata.update(sessionId, patch)).header;
   }
 
   async updateHeaderVersioned(
     sessionId: string,
-    patch: Partial<SessionHeader>,
+    patch: SessionHeaderPatch,
     expectedRevision: number,
   ): Promise<SessionHeaderSnapshot> {
     await this.ensureReady();
@@ -841,17 +843,22 @@ class SqliteSessionStore implements SessionAuthorityStore {
     return projectRemovalProbe(await this.metadata.probeRemoval(sessionId));
   }
 
-  async setSessionsLifecycleVersioned(
+  async setSessionsArchivedVersioned(
     sessions: readonly VersionedSessionIdentity[],
-    state: 'active' | 'archived',
+    isArchived: boolean,
   ): Promise<SessionHeaderSnapshot[]> {
     await this.ensureReady();
-    return (await this.metadata.setLifecycleVersioned(sessions, state)).map(projectHeaderSnapshot);
+    return (await this.metadata.setArchivedVersioned(sessions, isArchived)).map(
+      projectHeaderSnapshot,
+    );
   }
 
-  async removeSessionsVersioned(sessions: readonly VersionedSessionIdentity[]): Promise<string[]> {
+  async removeSessionsVersioned(
+    sessions: readonly VersionedSessionIdentity[],
+    archiveSessions: readonly VersionedSessionIdentity[] = [],
+  ): Promise<string[]> {
     await this.ensureReady();
-    return this.metadata.removeVersioned(sessions);
+    return this.metadata.removeVersioned(sessions, archiveSessions);
   }
 
   async reconcileOrphanedAgentGraphRetirements(): Promise<string[]> {
@@ -867,26 +874,6 @@ class SqliteSessionStore implements SessionAuthorityStore {
   async completeSessionRetirementCleanup(sessionId: string): Promise<void> {
     await this.ensureReady();
     await this.metadata.completeSessionRetirementCleanup(sessionId);
-  }
-
-  async archive(sessionId: string): Promise<void> {
-    const now = Date.now();
-    await this.updateHeader(sessionId, {
-      isArchived: true,
-      archivedAt: now,
-      status: 'archived',
-      statusUpdatedAt: now,
-    });
-  }
-
-  async unarchive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, {
-      isArchived: false,
-      archivedAt: undefined,
-      status: 'active',
-      blockedReason: undefined,
-      statusUpdatedAt: Date.now(),
-    });
   }
 
   async setFlagged(sessionId: string, isFlagged: boolean): Promise<void> {
@@ -1027,7 +1014,7 @@ export function normalizeSessionHeader(
     Array.isArray(header.labels) &&
     header.labels.every((label) => typeof label === 'string') &&
     typeof header.isArchived === 'boolean' &&
-    (header.archivedAt === undefined || isFiniteNumber(header.archivedAt)) &&
+    !Object.prototype.hasOwnProperty.call(header, 'archivedAt') &&
     isSessionStatus(header.status) &&
     (header.blockedReason === undefined || isSessionBlockedReason(header.blockedReason)) &&
     (header.statusUpdatedAt === undefined || isFiniteNumber(header.statusUpdatedAt)) &&

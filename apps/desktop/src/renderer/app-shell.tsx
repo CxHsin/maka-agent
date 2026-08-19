@@ -10,8 +10,10 @@ import {
   type SetStateAction,
 } from 'react';
 import type { ScheduledTask } from '@maka/core/scheduled-task';
+import type { ProjectRecord } from '@maka/core/project';
 import type { QuoteRef } from '@maka/core/events';
 import type { SessionSummary } from '@maka/core/session';
+import type { ChatDefaultPermissionMode } from '@maka/core/settings';
 import type { SlashCommandIdForSurface } from '@maka/core/slash-command-catalog';
 import type { UiLocale, UiLocalePreference } from '@maka/core/ui-locale';
 import { collapseSessionRevisions } from '@maka/core/session-revisions';
@@ -35,6 +37,7 @@ import {
   type ToastErrorAction,
   type NavSelection,
   SessionListPanel,
+  type SessionHistoryGroup,
   SkillsPage,
   type SessionViewMode,
   TitlebarSessionIdentity,
@@ -48,6 +51,7 @@ import {
   getSharedUiCopy,
   reconcileInteractions,
 } from '@maka/ui';
+import type { ConnectionEvent } from '@maka/core/connections';
 import { GitBranch, MessageCircleQuestion, Minimize2, Network } from '@maka/ui/icons';
 import { useKeyboardHelp } from './keyboard-help';
 import { useCommandPalette } from './command-palette';
@@ -81,6 +85,8 @@ import {
   removeStagedCompanionQuote,
   stageCompanionQuote,
 } from './quote-companion-panel-state';
+import { UNRESOLVED_NEW_TASK_DRAFT_KEY } from './new-task-reload-intent';
+import { useNewTaskChoice } from './use-new-task-choice';
 import { sideChatTitleFromPrompt } from './side-chat-command';
 import { parseDesktopSlashCommand } from './desktop-slash-command';
 import {
@@ -94,7 +100,11 @@ import {
 } from './plan-mode-panel';
 import { McpPage } from './mcp-page';
 import { getOnboardingActivationCandidate, useOnboardingSnapshot } from './use-onboarding-snapshot';
-import type { AppUpdateStatus, OnboardingSnapshot } from '../preload/bridge-contract.js';
+import type {
+  AppUpdateStatus,
+  DesktopSessionSummary,
+  OnboardingSnapshot,
+} from '../preload/bridge-contract.js';
 import { DESKTOP_TRANSCRIPT_RANGE_MAX_BYTES } from '../preload/transcript-contract.js';
 import {
   isAppUpdateInstallFailure,
@@ -128,6 +138,7 @@ import { useActiveExecutionBoundary } from './use-active-execution-boundary';
 import {
   SESSION_LIST_EXPANDED_MAX_WIDTH,
   SESSION_LIST_EXPANDED_MIN_WIDTH,
+  readSessionListViewMode,
 } from './session-list-layout';
 import { modelSetupToastCopy } from './model-connection-errors';
 import type { AppShellCommandListOptions } from './app-shell-command-actions';
@@ -172,7 +183,6 @@ import {
   useAppShellNavRefSync,
   useSessionEventHealthPolling,
   useShellRunUpdates,
-  useSettledSessionTransientReconcile,
 } from './app-shell-effects';
 import {
   EMPTY_LIVE_CONTENT_SEED,
@@ -189,6 +199,7 @@ import { useComposerMentions } from './use-composer-mentions';
 import { useAppShellSessionWorkspace } from './use-app-shell-session-workspace';
 import { useShellMemoryPill } from './use-shell-memory-pill';
 import { useShellConnections } from './use-shell-connections';
+import { useNewTaskTarget } from './use-new-task-target';
 import { useShellChatModel } from './use-shell-chat-model';
 import { useShellLiveTurn } from './use-shell-live-turn';
 import { useShellLayout } from './use-shell-layout';
@@ -211,7 +222,9 @@ function rebaseWorkspaceFileReferences(
     )
     .map((reference) => ({ ...reference, start: reference.start - offset }));
 }
+
 import { useSettingsModal } from './use-settings-modal';
+import { RemoteProjectDirectoryDialog } from './remote-project-directory-dialog';
 import { useSystemUiLocale } from './use-system-ui-locale';
 import {
   isSessionWorkspaceUnavailableError,
@@ -223,7 +236,18 @@ import type { SideNavImperativeCollapseHandle } from '@astryxdesign/core/SideNav
 type ComposerImportOwner = {
   sessionId: string | undefined;
   navSection: NavSelection['section'];
+  newTaskDraftKey?: string;
 };
+
+function newTaskDraftKey(target: {
+  profileId: string;
+  hostId: string;
+  projectId: string | null;
+} | undefined): string {
+  return target
+    ? JSON.stringify(['new-task', target.profileId, target.hostId, target.projectId])
+    : UNRESOLVED_NEW_TASK_DRAFT_KEY;
+}
 
 /**
  * Grace period before the committed-history fallback force-settles an
@@ -346,7 +370,6 @@ function AppShellContent({
     setActiveId,
     startNewSession,
     clearOwnedSessionState,
-    clearRuntimeHostSessionState,
     messages,
     setMessages,
     transcriptRangeRef,
@@ -367,7 +390,6 @@ function AppShellContent({
     setSessionEventHealthBySession,
     setPendingPermissionModeBySession,
     setPendingSessionModelBySession,
-    clearTurnTransientState,
   } = useAppShellSessionWorkspace(toastApi);
   const interactionHydrationEpochRef = useRef(new Map<string, number>());
   const markInteractionChanged = useCallback((sessionId: string) => {
@@ -375,14 +397,16 @@ function AppShellContent({
     epochs.set(sessionId, (epochs.get(sessionId) ?? 0) + 1);
   }, []);
 
-  const attachmentDraftKey = activeId ?? 'new-session';
+  const onboarding = useOnboardingSnapshot(initialOnboardingSnapshot);
+  const newTask = useNewTaskTarget({ toastApi, uiLocale });
+  const currentNewTaskDraftKey = newTaskDraftKey(newTask.target);
+  const attachmentDraftKey = activeId ?? currentNewTaskDraftKey;
   const {
     pendingAttachments,
     pickAttachments,
     attachFilePaths,
     removeAttachment,
     clearSubmittedAttachments,
-    clearAllAttachments,
   } = useAppShellComposerAttachments({
     draftKey: attachmentDraftKey,
     toastApi,
@@ -392,13 +416,14 @@ function AppShellContent({
     addQuote,
     removeQuote,
     clearQuotes,
-    clearAllQuotes,
   } = useAppShellComposerQuotes({ draftKey: attachmentDraftKey });
   const [newChatPlanModeActive, setNewChatPlanModeActive] = useState(false);
   const [scheduledTaskCreateRequestNonce, setScheduledTaskCreateRequestNonce] = useState(0);
   const [pendingCollaborationModeBySession, setPendingCollaborationModeBySession] = useState<Record<string, boolean>>({});
   const [newChatSwarmModeActive, setNewChatSwarmModeActive] = useState(false);
   const [newChatGraphModeActive, setNewChatGraphModeActive] = useState(false);
+  const [newTaskPermissionChoice, setNewTaskPermissionChoice] =
+    useNewTaskChoice<ChatDefaultPermissionMode>(currentNewTaskDraftKey);
   const [pendingOrchestrationModeBySession, setPendingOrchestrationModeBySession] = useState<Record<string, boolean>>({});
   const [historyLoadPendingSessionId, setHistoryLoadPendingSessionId] = useState<string>();
   const [transcriptTurnIndex, setTranscriptTurnIndex] = useState<{
@@ -431,20 +456,69 @@ function AppShellContent({
     streamingSessionIds,
     activeLiveTurnSnapshot,
   } = useAppShellSessionUiReads(sessionUiController, activeId);
-  // PR-MEMORY-VISIBILITY-INDICATOR-0: session-context memory state (MEMORY.md
-  // injected into the system prompt). State and the fire-and-forget refresh
-  // live in `useShellMemoryPill`; recompute is triggered on mount (bootstrap
-  // subscriptions) and when Settings closes (closeSettings).
-  const { memoryActive, clearMemoryActive, refreshMemoryActive } = useShellMemoryPill({ toastApi, uiLocale });
-  const {
-    connections,
-    defaultConnection,
-    setConnections,
-    setDefaultConnection,
-    refreshConnections,
-    handleConnectionEvent,
-  } = useShellConnections({ toastApi, uiLocale });
-  const onboarding = useOnboardingSnapshot(initialOnboardingSnapshot);
+  // The chat surface follows the active Session's Host. Settings and global
+  // commands remain owned by the default Host.
+  const { memoryActive, refreshMemoryActive } = useShellMemoryPill({
+    toastApi,
+    uiLocale,
+    sessionId: activeId,
+  });
+  const newTaskHost = newTask.selectedHost
+    ? { profileId: newTask.selectedHost.profile.id, hostId: newTask.selectedHost.hostId }
+    : undefined;
+  const newTaskConnections = useShellConnections({
+    toastApi,
+    uiLocale,
+    target: { kind: 'new-task', host: newTaskHost },
+  });
+  const defaultHostConnections = useShellConnections({
+    toastApi,
+    uiLocale,
+    target: { kind: 'default' },
+  });
+  const sessionHostConnections = useShellConnections({
+    toastApi,
+    uiLocale,
+    target: { kind: 'session', sessionId: activeId },
+  });
+  const startupConnectionSnapshot =
+    initialOnboardingSnapshot ?? onboarding.mountedSnapshotHandoff;
+  const newTaskUsesDefaultHost =
+    newTask.catalog.hosts.length === 0 ||
+    newTask.selectedProfileId === newTask.catalog.defaultProfileId;
+  let newTaskConnectionSnapshot = newTaskConnections.snapshot;
+  if (!newTaskConnections.hasSnapshot && newTaskUsesDefaultHost) {
+    newTaskConnectionSnapshot = defaultHostConnections.hasSnapshot
+      ? defaultHostConnections.snapshot
+      : startupConnectionSnapshot
+        ? {
+            connections: startupConnectionSnapshot.connections,
+            defaultConnection: startupConnectionSnapshot.defaultSlug,
+            chatModelChoices: startupConnectionSnapshot.chatModelChoices,
+          }
+        : defaultHostConnections.snapshot;
+  }
+  const activeConnectionSnapshot = activeId
+    ? sessionHostConnections.snapshot
+    : newTaskConnectionSnapshot;
+  const connections = activeConnectionSnapshot.connections;
+  const defaultConnection = activeConnectionSnapshot.defaultConnection;
+  const connectionModelChoices = activeConnectionSnapshot.chatModelChoices;
+  const refreshConnections = activeId
+    ? sessionHostConnections.refreshConnections
+    : newTaskConnections.refreshConnections;
+  function refreshConnectionProjections(): Promise<void> {
+    return Promise.all([
+      defaultHostConnections.refreshConnections(),
+      newTaskConnections.refreshConnections(),
+      ...(activeId ? [sessionHostConnections.refreshConnections()] : []),
+    ]).then(() => undefined);
+  }
+  function handleConnectionEvent(event: ConnectionEvent): void {
+    defaultHostConnections.handleConnectionEvent(event);
+    newTaskConnections.handleConnectionEvent(event);
+    if (activeId) sessionHostConnections.handleConnectionEvent(event);
+  }
   const onboardingState = onboarding.snapshot?.state;
   const onboardingSettled = hasSettledInitialOnboarding(onboarding.snapshot?.milestones ?? []);
   const onboardingActivationCandidate = getOnboardingActivationCandidate(
@@ -474,7 +548,6 @@ function AppShellContent({
     userLabel,
     setUserLabel,
     defaultPermissionMode,
-    defaultThinkingLevel,
     setDefaultPermissionMode,
     refreshShellSettings,
   } = useShellAppearance({
@@ -484,9 +557,15 @@ function AppShellContent({
     setUiLocalePreference,
   });
   const shellCopy = getShellCopy(uiLocale).app;
+  const projectActionsCopy = getShellCopy(uiLocale).projectActions;
   const desktopConversationCopy = getDesktopConversationCopy(uiLocale);
   const terminalPanelCopy = desktopConversationCopy.terminalPanel;
   const workbarCopy = desktopConversationCopy.workbar;
+  const newTaskPermissionMode =
+    newTaskPermissionChoice ??
+    newTask.selectedHost?.chatDefaults.permissionMode ??
+    'ask';
+  const setNewTaskPermissionMode = setNewTaskPermissionChoice;
   useEffect(() => {
     if (!isAppUpdateInstallFailure(appUpdateStatus)) {
       notifiedInstallErrorRef.current = null;
@@ -602,7 +681,7 @@ function AppShellContent({
   const persistedComposerDefaults = loadComposerDefaults();
   const [helpOpen, closeHelp, openHelp] = useKeyboardHelp();
   const [paletteOpen, openPalette, closePalette] = useCommandPalette();
-  const [viewMode, setViewMode] = useState<SessionViewMode>('conversation');
+  const [viewMode, setViewMode] = useState<SessionViewMode>(() => readSessionListViewMode());
   const composerRef = useRef<ComposerHandle>(null);
   // The rail's toggle has to reach Astryx's resizable state, not just this
   // boolean — see the prop's note on SessionListPanel. The sidenav is mounted
@@ -686,9 +765,9 @@ function AppShellContent({
     () =>
       deriveStaleSessionIds({
         sessions,
-        knownConnectionSlugs: new Set(connections.map((connection) => connection.slug)),
+        sendOutcomes: onboarding.snapshot?.sessionSendOutcomes ?? {},
       }),
-    [sessions, connections],
+    [sessions, onboarding.snapshot?.sessionSendOutcomes],
   );
   // Status-grouped sidebar. The `chats`
   // filter shows sessions grouped by SessionStatus (Pinned →
@@ -727,6 +806,7 @@ function AppShellContent({
     activeInteraction?.type === 'sandbox_boundary_request' ? activeInteraction : undefined;
   const activeQuestion = activeInteraction?.type === 'user_question_request' ? activeInteraction : undefined;
   const activeSession = sessions.find((session) => session.id === activeId);
+  const activeDesktopSession = activeSession;
   // The shell's reading of the active live turn: streaming/settled flags, the
   // in-flight tool signal, and the #646 turn-wait cues, all derived from the
   // semantic snapshot rather than the projection (#1985).
@@ -761,6 +841,15 @@ function AppShellContent({
   const activeSessionSendOutcome = activeSession
     ? onboarding.snapshot?.sessionSendOutcomes[activeSession.id]
     : undefined;
+  const composerProfileId = activeId
+    ? activeDesktopSession?.profileId
+    : newTask.selectedProfileId;
+  const composerProfileName = activeId
+    ? activeDesktopSession?.profileName
+    : newTask.selectedHost?.profile.name;
+  const modelSettingsOwnsComposerHost =
+    composerProfileId !== undefined &&
+    composerProfileId === newTask.catalog.defaultProfileId;
   const {
     chatModelChoices,
     activeConnection,
@@ -780,13 +869,17 @@ function AppShellContent({
   } = useShellChatModel({
     uiLocale,
     connections,
-    snapshotChoices: onboarding.snapshot?.chatModelChoices,
+    chatModelChoices: connectionModelChoices,
     sessionSendOutcome: activeSessionSendOutcome,
     defaultConnection,
-    activationCandidate: onboardingActivationCandidate,
+    newTaskKey: currentNewTaskDraftKey,
+    activationCandidate: modelSettingsOwnsComposerHost
+      ? onboardingActivationCandidate
+      : undefined,
     activeSession,
     persistedComposerDefaults,
-    defaultThinkingLevel,
+    usePersistedComposerDefaults: modelSettingsOwnsComposerHost,
+    defaultThinkingLevel: newTask.selectedHost?.chatDefaults.thinkingLevel,
     openSettingsSection,
   });
   const newChatProviderType = newChatModel
@@ -855,26 +948,6 @@ function AppShellContent({
     sessionModelChangeRegistry.keysRef.current.delete(sessionId);
   }
 
-  function clearRuntimeHostRendererState(): void {
-    clearRuntimeHostSessionState();
-    interactionHydrationEpochRef.current.clear();
-    turnActionRegistry.clearAll();
-    sessionRowActionRegistry.clearAll();
-    permissionModeChangeRegistry.clearAll();
-    collaborationModeChangeRegistry.clearAll();
-    orchestrationModeChangeRegistry.clearAll();
-    sessionModelChangeRegistry.clearAll();
-    setPendingCollaborationModeBySession({});
-    setPendingOrchestrationModeBySession({});
-    clearRuntimeHostProjectState();
-    clearRuntimeHostModuleData();
-    clearMemoryActive();
-    setConnections([]);
-    setDefaultConnection(null);
-    clearAllAttachments();
-    clearAllQuotes();
-  }
-
   const sessionRowActionHandlers = useStableActions(createAppShellSessionRowActions, {
     uiLocale,
     activeIdRef,
@@ -911,7 +984,7 @@ function AppShellContent({
     refreshSessions,
     saveComposerDefaults,
     sessionsRef,
-    setDefaultPermissionMode,
+    setNewTaskPermissionMode,
     setPendingPermissionModeBySession,
     setPendingSessionModelBySession,
     setSessions,
@@ -1246,7 +1319,7 @@ function AppShellContent({
   const activeBoundarySurface = deriveDesktopExecutionBoundarySurface(
     activeId,
     activeExecutionBoundary,
-    activeId ? (activeSessionForView?.permissionMode ?? 'ask') : defaultPermissionMode,
+    activeId ? (activeSessionForView?.permissionMode ?? 'ask') : newTaskPermissionMode,
   );
   const activePermissionMode = activeBoundarySurface.permissionMode;
   const planMode = usePlanModeState(activeSessionForView);
@@ -1278,7 +1351,7 @@ function AppShellContent({
   const sessionStartPendingRef = useRef(false);
   // Seed sessions from the onboarding snapshot on first load — the snapshot
   // already fetches the session list + connections internally, so separate
-  // `sessions:list` / `connections:list` / `getDefault` IPCs are redundant.
+  // Session and connection snapshot IPCs are redundant.
   // This lets the UI show the sidebar + model picker immediately on first load.
   const initialSnapshotSeededRef = useRef(false);
   const mountedSnapshotSeededRef = useRef(false);
@@ -1300,7 +1373,7 @@ function AppShellContent({
     ) {
       bootstrapFallbackStartedRef.current = true;
       void bootstrapSessions();
-      void refreshConnections();
+      void defaultHostConnections.refreshConnections();
       return;
     }
     let snapshot: OnboardingSnapshot | null = null;
@@ -1325,11 +1398,20 @@ function AppShellContent({
     // refreshSessions() overwrites the seed.
     const next = seedSessions(snapshot.sessions);
     bootstrapSelectionLease.reconcile(collapseSessionRevisions(next));
-    // Seed connections — avoids separate connections:list + getDefault IPCs
-    setConnections(snapshot.connections);
-    setDefaultConnection(snapshot.defaultSlug);
     if (releaseSelectionLease) bootstrapSelectionLease.release();
   }, [initialOnboardingSnapshot, onboarding.mountedSnapshotHandoff, onboarding.error]);
+  useEffect(() => {
+    const snapshot = initialOnboardingSnapshot ?? onboarding.mountedSnapshotHandoff;
+    if (!snapshot) return;
+    defaultHostConnections.seedSnapshot({
+      connections: snapshot.connections,
+      defaultConnection: snapshot.defaultSlug,
+      chatModelChoices: snapshot.chatModelChoices,
+    });
+  }, [
+    initialOnboardingSnapshot,
+    onboarding.mountedSnapshotHandoff,
+  ]);
   // PR110c (@kenji review): suppress hero AND the fallback EmptyChatHero
   // while the initial snapshot is in flight. Otherwise sessions.length===0
   // + snapshot===null flashes the prompt-suggestion EmptyChatHero before
@@ -1708,7 +1790,6 @@ function AppShellContent({
     managedSkillSources,
     bundledSkillCatalog,
     scheduledTasks,
-    clearRuntimeHostModuleData,
     refreshScheduledTasks,
     createScheduledTask,
     updateScheduledTask,
@@ -1745,20 +1826,13 @@ function AppShellContent({
     projectInfo,
     projects,
     projectCapabilities,
-    selectedProjectId,
+    activeProjectCapabilities,
+    localProjects,
     currentProjectId,
     currentProject,
-    projectPickerPending,
     projectPickerPendingRef,
     projectPickerRequestRef,
-    clearRuntimeHostProjectState,
-    refreshAppInfo,
     refreshProjects,
-    addProject,
-    selectProject,
-    selectNoProject,
-    prepareDefaultProject,
-    prepareProject,
     relinkProject,
     renameProject,
     archiveProject,
@@ -1772,6 +1846,7 @@ function AppShellContent({
     sessionId: activeId,
     sessionCwd: activeSession?.cwd,
     sessionProjectId: activeSession?.projectId,
+    sessionProfileKind: activeDesktopSession?.profileKind,
     onProjectSelected: (ownerSessionId) => {
       void refreshSkills();
       void refreshManagedSkillSources();
@@ -1783,30 +1858,72 @@ function AppShellContent({
   // Where a NEW chat starts. Built unconditionally and handed to the composer,
   // which renders it only while no session owns it — the project is fixed once
   // the first message creates one, so there is nothing to pick after that.
+  const selectedNewTaskHost = newTask.catalog.hosts.find(
+    (host) => host.profile.id === newTask.selectedProfileId,
+  );
+  const selectedNewTaskProject = newTask.currentProject?.name ??
+    (newTask.selectedProjectId === null && newTask.selectedHost?.capabilities.selectNoProject
+      ? getConversationCopy(uiLocale).workspace.noProject
+      : undefined);
+  const selectedNewTaskBranch =
+    newTask.selectedHost &&
+      newTask.selectedProjectId === newTask.selectedHost.selectedProjectId
+      ? newTask.selectedHost.branch
+      : undefined;
+  const newTaskCatalogNeedsRetry = Boolean(newTask.error) || newTask.catalog.hosts.some(
+    (host) => host.readiness === 'ready' && host.state === 'error',
+  );
   const workspacePicker: WorkspacePickerModel = {
-    label:
-      currentProject?.name ??
-      (currentProjectId === null && projectCapabilities.selectNoProject
-        ? getConversationCopy(uiLocale).workspace.noProject
-        : undefined),
-    branch: currentProjectId === null ? null : projectInfo?.projectGit.branch,
-    pending: projectPickerPending,
-    projects: projects.filter((project) => project.archivedAt === undefined),
-    selectedProjectId: currentProjectId,
-    ...(projectCapabilities.chooseClientDirectory
-      ? { onAdd: () => void addProject() }
+    label: selectedNewTaskProject ?? selectedNewTaskHost?.profile.name ??
+      (newTask.error ? getShellCopy(uiLocale).projectActions.catalogUnavailable : undefined),
+    ...(selectedNewTaskHost?.profile.kind === 'remote'
+      ? { hostBadge: selectedNewTaskHost.profile.name }
       : {}),
-    onSelectProject: (projectId: string) => {
-      void selectProject(projectId);
-    },
-    ...(projectCapabilities.chooseClientDirectory
-      ? { onRelink: (projectId: string) => void relinkProject(projectId, true) }
-      : {}),
-    ...(projectCapabilities.selectNoProject
-      ? { onSelectNoProject: selectNoProject }
+    branch: newTask.selectedProjectId === null ? null : selectedNewTaskBranch,
+    pending: newTask.pending || (newTask.refreshing && newTask.catalog.hosts.length === 0),
+    selectedGroupId: newTask.selectedProfileId,
+    groups: newTask.catalog.hosts.map((host) => {
+      if (host.readiness !== 'ready' || host.state !== 'available') {
+        return {
+          id: host.profile.id,
+          label: host.profile.name,
+          status: host.readiness === 'ready'
+            ? host.message
+            : getShellCopy(uiLocale).projectActions.runtimeHostReadiness[host.readiness],
+          disabled: true,
+          projects: [],
+        };
+      }
+      const selectedProjectId = host.profile.id === newTask.selectedProfileId
+        ? newTask.selectedProjectId
+        : host.selectedProjectId;
+      return {
+        id: host.profile.id,
+        label: host.profile.name,
+        projects: host.projects.filter((project) => project.archivedAt === undefined),
+        selectedProjectId,
+        onSelectProject: (projectId: string) => newTask.selectProject(host, projectId),
+        ...(host.capabilities.chooseClientDirectory || host.capabilities.chooseHostDirectory
+          ? { onAdd: () => void newTask.addProject(host) }
+          : {}),
+        ...(host.capabilities.chooseClientDirectory
+          ? { onRelink: (projectId: string) => void newTask.relinkProject(host, projectId) }
+          : {}),
+        ...(host.capabilities.selectNoProject
+          ? { onSelectNoProject: () => newTask.selectNoProject(host) }
+          : {}),
+      };
+    }),
+    ...(newTaskCatalogNeedsRetry
+      ? {
+          retry: {
+            label: getShellCopy(uiLocale).projectActions.retryCatalog,
+            onClick: () => void newTask.refresh().catch(() => undefined),
+          },
+        }
       : {}),
   };
-  const taskReadinessWorkspace = activeSession?.cwd ?? projectInfo?.projectPath;
+  const taskReadinessWorkspace = activeSession?.cwd ?? newTask.projectPath;
   const taskReadinessRequest = {
     ...resolveTaskReadinessModelTarget(activeSession, activeSessionSendOutcome, newChatModel),
     ...(taskReadinessWorkspace ? { cwd: taskReadinessWorkspace } : {}),
@@ -1814,13 +1931,17 @@ function AppShellContent({
   const taskReadiness = useTaskSubmissionReadiness(
     taskReadinessRequest,
     onboarding.snapshot,
+    activeId,
+    activeId ? undefined : newTask.target,
   );
   const taskReadinessNotice = deriveTaskReadinessNotice(taskReadiness.snapshot, uiLocale);
   const ignoreTaskReadinessModelTarget =
     activeSession !== undefined && activeSessionSendOutcome?.kind !== 'blocked';
-  const taskSubmissionHardBlocked = isTaskSubmissionHardBlocked(taskReadiness.snapshot, {
-    ignoreModelTarget: ignoreTaskReadinessModelTarget,
-  });
+  const taskSubmissionHardBlocked =
+    (!activeId && !newTask.target) ||
+    isTaskSubmissionHardBlocked(taskReadiness.snapshot, {
+      ignoreModelTarget: ignoreTaskReadinessModelTarget,
+    });
   // The titlebar names the directory the ACTIVE session runs in, so it reads
   // the same projected project state the picker does — `projectInfo` already
   // resolves to the session's own cwd once a session owns it.
@@ -1829,25 +1950,29 @@ function AppShellContent({
     projectPath: projectInfo?.projectPath,
   });
   const sessionProjectGroups = useMemo(
-    () => deriveProjectGroups(visibleSessions, projects, uiLocale),
-    [visibleSessions, projects, uiLocale],
+    () => deriveDesktopSessionGroups(visibleSessions, localProjects, uiLocale),
+    [visibleSessions, localProjects, uiLocale],
   );
   const worktreeSessionIds = useMemo(
-    () => deriveWorktreeSessionIds(visibleSessions, projects),
-    [visibleSessions, projects],
+    () => deriveWorktreeSessionIds(
+      visibleSessions.filter(
+        (session) => session.profileKind !== 'remote',
+      ),
+      localProjects,
+    ),
+    [visibleSessions, localProjects],
   );
-  // 已归档任务 reads the shell's catalog rather than listing again behind the
-  // modal, and writes through the same row actions the rail uses — one owner
-  // for restoring and deleting a task, whichever surface asked.
+  // Archived Local tasks use the Local Host catalog; remote rows identify
+  // their Host instead of resolving Project ids across unrelated catalogs.
   const archivedTasksBridge = useMemo<ArchivedTasksBridge>(
     () => ({
       sessions,
-      projects,
+      projects: localProjects,
       onRestore: (sessionId) => void sessionRowActionHandlers.unarchiveSession(sessionId),
       onDelete: (sessionId) => void sessionRowActionHandlers.deleteSession(sessionId),
       onPurge: (sessionIds) => sessionRowActionHandlers.purgeSessions(sessionIds),
     }),
-    [sessions, projects],
+    [sessions, localProjects],
   );
   const { startModeSession } = useStableActions(createAppShellSessionStartActions, {
     uiLocale,
@@ -1856,24 +1981,30 @@ function AppShellContent({
     composerRef,
     isShellSurfaceOwnerActive,
     openSessionInChat,
-    newChatProjectId: selectedProjectId,
+    newTaskTarget: newTask.target,
     sessionStartPendingRef,
     refreshOnboarding: onboarding.refresh,
     refreshSessions,
     showModelSetupToast,
     toastApi,
   });
-  const projectRowActions: NonNullable<Parameters<typeof SessionListPanel>[0]['projectActions']> = {
-    onNew: createSessionInProject,
-    onRename: renameProject,
-    onArchive: archiveProject,
-    onRestore: restoreProject,
-    ...(projectCapabilities.chooseClientDirectory
+  // Sidebar Project groups are Local. Their catalog mutations remain on the
+  // default-scoped bridge until Settings receives its own Host selector.
+  const projectRowActions: Parameters<typeof SessionListPanel>[0]['projectActions'] =
+    projectCapabilities.setLocalDefault
       ? {
-          onRelink: (projectId: string) => relinkProject(projectId).then(() => undefined),
+          onNew: createSessionInProject,
+          onRename: renameProject,
+          onArchive: archiveProject,
+          onRestore: restoreProject,
+          ...(projectCapabilities.chooseClientDirectory
+            ? {
+                onRelink: (projectId: string) =>
+                  relinkProject(projectId).then(() => undefined),
+              }
+            : {}),
         }
-      : {}),
-  };
+      : undefined;
 
   // Composer mention popups: `/` uses Runtime's session/project-aware,
   // host-compatible projection; `@` uses workspace file search. Keep the
@@ -1881,12 +2012,13 @@ function AppShellContent({
   const { mentionSkills, searchMentionFiles } = useComposerMentions({
     skills,
     sessionId: activeId,
-    projectPath: projectInfo?.projectPath,
+    projectPath: activeId ? projectInfo?.projectPath : newTask.projectPath,
+    newTaskTarget: activeId ? undefined : newTask.target,
     newSessionModel: newChatModel,
     newSessionCollaborationMode: newChatPlanModeActive ? 'plan' : 'agent',
     // Refresh only; Desktop Main re-reads the authoritative default before
     // constructing the Runtime Host preview target.
-    newSessionPermissionMode: defaultPermissionMode,
+    newSessionPermissionMode: newTaskPermissionMode,
   });
 
   const { applyE2eFixture } = useStableActions(createAppShellE2eFixtureActions, {
@@ -1935,13 +2067,14 @@ function AppShellContent({
     upsertSessionSummary,
     newChatModel: newChatModel ?? null,
     pendingNewChatThinkingLevel: newChatThinkingLevel ?? null,
+    newChatPermissionMode: newTaskPermissionMode,
     newChatCollaborationMode: newChatPlanModeActive ? 'plan' : 'agent',
     newChatOrchestrationMode: newChatGraphModeActive
       ? 'graph'
       : newChatSwarmModeActive
         ? 'swarm'
         : 'default',
-    newChatProjectId: selectedProjectId,
+    newTaskTarget: newTask.target,
   });
 
   const { handleTurnFooterAction } = useStableActions(createAppShellTurnActions, {
@@ -2116,6 +2249,10 @@ function AppShellContent({
           active ? shellCopy.graphModeEnabledTitle : shellCopy.graphModeDisabledTitle,
           shellCopy.graphModeStatusDescription,
         );
+        return true;
+      }
+      if (graphCommand.kind === 'history') {
+        toastApi.info(shellCopy.graphHistoryTitle, shellCopy.graphHistoryDescription);
         return true;
       }
       if (graphCommand.kind === 'set_mode') {
@@ -2299,7 +2436,6 @@ function AppShellContent({
   });
   useAppShellHostEffects({
     activeId,
-    hasModalOpen,
     setLiveBrowserSessionIds,
   });
   useAppShellBootstrapSubscriptions({
@@ -2310,7 +2446,6 @@ function AppShellContent({
     clearPendingTurnActionsForSession: turnActionRegistry.clearForSession,
     confirmLiveTurn,
     clearSessionRendererState,
-    clearRuntimeHostRendererState,
     createSession,
     handleConnectionEvent,
     openHelp,
@@ -2321,8 +2456,7 @@ function AppShellContent({
     pendingTurnActionsRef: turnActionRegistry.keysRef,
     projectPickerPendingRef,
     projectPickerRequestRef,
-    refreshAppInfo,
-    refreshConnections,
+    refreshConnections: refreshConnectionProjections,
     refreshMemoryActive,
     refreshMessages,
     refreshScheduledTasks,
@@ -2343,6 +2477,7 @@ function AppShellContent({
     navigationState,
     sessionListCollapsed,
     sessionListWidth,
+    sessionListViewMode: viewMode,
     workbarCollapsed,
     workbarWidth,
     bottomPanelOpen,
@@ -2467,17 +2602,13 @@ function AppShellContent({
     sessionEventHealthBySessionRef,
     setSessionEventHealthBySession,
   });
-  useSettledSessionTransientReconcile({
-    activeId,
-    sessions,
-    liveTurnBySessionRef,
-    clearTurnTransientState,
-  });
-
   function captureComposerImportOwner(): ComposerImportOwner {
     return {
       sessionId: activeIdRef.current,
       navSection: navSelectionRef.current.section,
+      ...(activeIdRef.current === undefined
+        ? { newTaskDraftKey: currentNewTaskDraftKey }
+        : {}),
     };
   }
 
@@ -2495,7 +2626,9 @@ function AppShellContent({
    * send pull a user out of 技能 and into 设置 · 模型.
    */
   function isShellSurfaceOwnerActive(owner: ComposerImportOwner): boolean {
-    return navSelectionRef.current.section === owner.navSection && activeIdRef.current === owner.sessionId;
+    return navSelectionRef.current.section === owner.navSection &&
+      activeIdRef.current === owner.sessionId &&
+      (owner.sessionId !== undefined || owner.newTaskDraftKey === currentNewTaskDraftKey);
   }
 
   /** …and the owner was captured on the chat surface. */
@@ -2525,11 +2658,13 @@ function AppShellContent({
   }
 
   async function createSession() {
-    if (await prepareDefaultProject()) openNewTaskSurface();
+    openNewTaskSurface();
   }
 
   async function createSessionInProject(projectId: string) {
-    if (await prepareProject(projectId)) openNewTaskSurface();
+    if (!newTask.localHost) return;
+    newTask.selectProject(newTask.localHost, projectId);
+    openNewTaskSurface();
   }
 
   function openScheduledTaskForm() {
@@ -2586,6 +2721,7 @@ function AppShellContent({
     // session-context memory state — user may have just flipped the
     // agentReadEnabled switch.
     void refreshMemoryActive();
+    void defaultHostConnections.refreshConnections();
     // Settings pages own optimistic local drafts, so the shell does not see
     // every write live. Refresh its display mirrors on close (e.g. default
     // permission mode) without requiring an app restart.
@@ -2596,16 +2732,24 @@ function AppShellContent({
     const copy = modelSetupToastCopy(reason, description, uiLocale);
     toastApi.toast({
       title: copy.title,
-      description: copy.description,
+      description: !modelSettingsOwnsComposerHost && composerProfileName
+        ? shellCopy.configureModelsOnHost(composerProfileName)
+        : copy.description,
       variant: 'error',
       duration: 8000,
-      action: {
-        label: shellCopy.openModelSettings,
-        onClick: () => openSettingsSection('models'),
-      },
+      ...(modelSettingsOwnsComposerHost
+        ? {
+            action: {
+              label: shellCopy.openModelSettings,
+              onClick: () => openSettingsSection('models'),
+            },
+          }
+        : {}),
     });
-    openSettingsSection('models');
+    if (modelSettingsOwnsComposerHost) openSettingsSection('models');
   }
+
+  const canStageComposerContext = activeId !== undefined || newTask.target !== undefined;
 
   const activeMessageLoadError = activeId ? messageLoadErrorBySession[activeId] : undefined;
   let activeTranscriptRange;
@@ -2650,9 +2794,12 @@ function AppShellContent({
     activeId,
     activePermissionMode,
     canSetPermissionMode: activeBoundarySurface.localInteractionAvailable,
-    clientPathsAccessible: projectCapabilities.viewClientPath,
-    connections,
-    defaultConnection,
+    clientPathsAccessible:
+      activeId
+        ? activeProjectCapabilities.viewClientPath
+        : projectCapabilities.viewClientPath,
+    connections: defaultHostConnections.snapshot.connections,
+    defaultConnection: defaultHostConnections.snapshot.defaultConnection,
     dailyReviewBridge,
     messages,
     sessions,
@@ -2672,7 +2819,7 @@ function AppShellContent({
     openSettingsSection,
     openSkillsFolder,
     openWorkspaceFolder,
-    refreshConnections,
+    refreshConnections: defaultHostConnections.refreshConnections,
     saveDailyReviewMarkdown,
     setNavSelection,
     setPermissionMode,
@@ -2770,7 +2917,7 @@ function AppShellContent({
                   titlebarProjectName
                     ? {
                         name: titlebarProjectName,
-                        ...(projectCapabilities.viewClientPath
+                        ...(activeProjectCapabilities.viewClientPath
                           ? { onOpenFolder: () => void openProjectFolder() }
                           : {}),
                       }
@@ -2822,6 +2969,7 @@ function AppShellContent({
             onViewModeChange={setViewMode}
             groups={viewMode === 'project' ? sessionProjectGroups : undefined}
             worktreeSessionIds={worktreeSessionIds}
+            sessionMeta={runtimeHostSessionMeta}
             moduleMemory={navigationState.moduleMemory}
             onSelect={setNavSelection}
             onSelectSession={sessionListSelectSession}
@@ -2944,6 +3092,7 @@ function AppShellContent({
                   boundaryUnreadableNotice={boundaryUnreadableNotice}
                   activeInteraction={activeInteraction}
                   activeId={activeId}
+                  newTaskDraftKey={currentNewTaskDraftKey}
                   stopPendingBySession={stopPendingBySession}
                   activeSandboxBoundary={activeSandboxBoundary}
                   respondToSandboxBoundary={respondToSandboxBoundary}
@@ -2983,14 +3132,16 @@ function AppShellContent({
                   onRemoveAttachment={removeAttachment}
                   pendingQuotes={pendingQuotes}
                   onRemoveQuote={removeQuote}
-                  onPasteAsQuote={addQuote}
+                  onPasteAsQuote={canStageComposerContext ? addQuote : undefined}
                   onPickAttachments={
-                    revisionDraft && activeId === revisionDraft.draftSessionId
+                    !canStageComposerContext ||
+                      (revisionDraft && activeId === revisionDraft.draftSessionId)
                       ? undefined
                       : pickAttachments
                   }
                   onAttachFilePaths={
-                    revisionDraft && activeId === revisionDraft.draftSessionId
+                    !canStageComposerContext ||
+                      (revisionDraft && activeId === revisionDraft.draftSessionId)
                       ? undefined
                       : attachFilePaths
                   }
@@ -3011,13 +3162,18 @@ function AppShellContent({
                   newChatProviderType={newChatProviderType}
                   onPickNewChatModel={(input) => {
                     setPendingNewChatModel(input);
-                    saveComposerDefaults({ model: input });
+                    if (modelSettingsOwnsComposerHost) saveComposerDefaults({ model: input });
                   }}
                   newChatThinkingLevels={newChatThinkingLevels}
                   newChatThinkingLevel={newChatThinkingLevel}
                   onNewChatThinkingLevelChange={(level) => setPendingNewChatThinkingLevel(level ?? null)}
-                  onOpenModelSettings={() => openSettingsSection('models')}
+                  onOpenModelSettings={modelSettingsOwnsComposerHost
+                    ? () => openSettingsSection('models')
+                    : undefined}
                   noModelConnection={connections.length === 0}
+                  noModelHint={!modelSettingsOwnsComposerHost && composerProfileName
+                    ? shellCopy.configureModelsOnHost(composerProfileName)
+                    : undefined}
                   sendBlocked={
                     Boolean(workspaceReadinessRecovery) ||
                     sessionHealthNotice?.tone === 'destructive' ||
@@ -3221,8 +3377,12 @@ function AppShellContent({
                   taskReadinessNotice?.action === 'workspace_picker'
                     ? activeSession
                       ? openNewTaskSurface
-                      : projectCapabilities.chooseClientDirectory
-                        ? () => void addProject()
+                      : newTask.selectedHost &&
+                          (newTask.selectedHost.capabilities.chooseClientDirectory ||
+                            newTask.selectedHost.capabilities.chooseHostDirectory)
+                        ? () => {
+                            if (newTask.selectedHost) void newTask.addProject(newTask.selectedHost);
+                          }
                         : undefined
                     : taskReadiness.refresh
                 }
@@ -3363,11 +3523,29 @@ function AppShellContent({
 
       <RuntimeHostSshTerminalDialog />
 
+      <RemoteProjectDirectoryDialog
+        host={newTask.directoryHost ? {
+          profileId: newTask.directoryHost.profile.id,
+          hostId: newTask.directoryHost.hostId,
+          name: newTask.directoryHost.profile.name,
+        } : undefined}
+        onClose={newTask.closeDirectoryPicker}
+        onRegistered={(project, host) => {
+          void newTask.acceptRegisteredProject(project, host).catch((error) => {
+            toastApi.error(
+              projectActionsCopy.projectUpdateFailedTitle,
+              localizedShellErrorMessage(
+                error,
+                projectActionsCopy.projectUpdateFailedFallback,
+                uiLocale,
+              ),
+            );
+          });
+        }}
+      />
+
       <AppShellOverlays
         settingsOpen={settingsOpen}
-        connections={connections}
-        defaultConnection={defaultConnection}
-        refreshConnections={refreshConnections}
         closeSettings={closeSettings}
         themePref={themePref}
         setThemePref={setThemePref}
@@ -3413,4 +3591,38 @@ function AppShellContent({
       />
     </div>
   );
+}
+
+function runtimeHostSessionMeta(session: DesktopSessionSummary): string | undefined {
+  return session.profileKind === 'remote' ? session.profileName : undefined;
+}
+
+function deriveDesktopSessionGroups(
+  sessions: readonly DesktopSessionSummary[],
+  projects: readonly ProjectRecord[],
+  locale: UiLocale,
+): SessionHistoryGroup[] {
+  const local: DesktopSessionSummary[] = [];
+  const remote = new Map<string, { label: string; sessions: DesktopSessionSummary[] }>();
+  for (const session of sessions) {
+    if (session.profileKind !== 'remote') {
+      local.push(session);
+      continue;
+    }
+    const key = session.profileId;
+    const group = remote.get(key) ?? {
+      label: session.profileName,
+      sessions: [],
+    };
+    group.sessions.push(session);
+    remote.set(key, group);
+  }
+  return [
+    ...deriveProjectGroups(local, projects, locale),
+    ...[...remote].map(([id, group]) => ({
+      id: `runtime-host:${id}`,
+      label: group.label,
+      sessions: group.sessions,
+    })),
+  ];
 }

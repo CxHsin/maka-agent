@@ -1,3 +1,4 @@
+import { RuntimeHostProtocolError } from '../protocol/errors.js';
 import assert from 'node:assert/strict';
 import { fork, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -27,7 +28,7 @@ import {
   encodeProtocolMessage,
   RUNTIME_HOST_COMPATIBILITY_EPOCH,
   RUNTIME_HOST_PROTOCOL_VERSION,
-  RuntimeHostProtocolError,
+  SESSION_CATALOG_LIVE_RUN_STATE_SCHEMA_VERSION,
   type ClientFrame,
   type SessionCatalogItem,
   type SessionCatalogProjection,
@@ -43,6 +44,10 @@ const CURRENT_PROTOCOL = {
 } as const;
 const PROCESS_TIMEOUT_MS = 10_000;
 const WIRE_OVERSIZED_MODEL_ID = '😀'.repeat(256);
+const KNOWN_EMPTY_LIVE_RUN_STATE = {
+  schemaVersion: SESSION_CATALOG_LIVE_RUN_STATE_SCHEMA_VERSION,
+  runningTurnIds: [],
+} as const;
 
 test('two Clients share stable Session creation, CAS configuration, and catalog continuity', {
   skip: process.platform === 'win32' ? 'Windows SQLite shutdown lifecycle' : false,
@@ -278,7 +283,10 @@ test('two Clients share stable Session creation, CAS configuration, and catalog 
         assert.fail('One Session configuration must commit');
       }
       const configuredSession = requireSessionProjection(committedConfiguration.session);
-      assert.deepEqual(await querySession(desktop, created.id), configuredSession);
+      assert.deepEqual(await querySession(desktop, created.id), {
+        ...configuredSession,
+        liveRunState: KNOWN_EMPTY_LIVE_RUN_STATE,
+      });
       const unchangedConfiguration = await desktop.request('session.configuration.update', {
         sessionId: configuredSession.id,
         expectedRevision: configuredSession.revision,
@@ -347,7 +355,10 @@ test('two Clients share stable Session creation, CAS configuration, and catalog 
         relocatedSession.workspace.hostCwd === (await realpath(firstCwd)) ||
           relocatedSession.workspace.hostCwd === (await realpath(secondCwd)),
       );
-      assert.deepEqual(await querySession(tui, narrowedSession.id), relocatedSession);
+      assert.deepEqual(await querySession(tui, narrowedSession.id), {
+        ...relocatedSession,
+        liveRunState: KNOWN_EMPTY_LIVE_RUN_STATE,
+      });
 
       await setDefaultModel(desktop, connectionId, WIRE_OVERSIZED_MODEL_ID);
       const rejectedSessionId = 'wire-oversized-default-model';
@@ -380,7 +391,10 @@ test('two Clients share stable Session creation, CAS configuration, and catalog 
         }),
         operationError('invalid_request'),
       );
-      assert.deepEqual(await querySession(desktop, relocatedSession.id), relocatedSession);
+      assert.deepEqual(await querySession(desktop, relocatedSession.id), {
+        ...relocatedSession,
+        liveRunState: KNOWN_EMPTY_LIVE_RUN_STATE,
+      });
       await setDefaultModel(tui, connectionId, 'gpt-5');
 
       const read = requireSessionProjection(
@@ -434,41 +448,6 @@ test('two Clients share stable Session creation, CAS configuration, and catalog 
         bulk.length + catalogBeforeBulk.sessions.length,
       );
 
-      const filteredStart = await desktop.request('session.catalog.query', {
-        kind: 'list_start',
-        filter: { labelSlug: 'paged' },
-      });
-      assert.equal(filteredStart.kind, 'page');
-      if (filteredStart.kind !== 'page' || !filteredStart.nextCursor) {
-        assert.fail('Filtered Session catalog must provide a continuation');
-      }
-      assert.equal(filteredStart.sessions.length, 32);
-      const filteredContinuation = await tui.request('session.catalog.query', {
-        kind: 'list_continue',
-        revision: filteredStart.revision,
-        cursor: filteredStart.nextCursor,
-      });
-      assert.equal(filteredContinuation.kind, 'page');
-      if (filteredContinuation.kind !== 'page') {
-        assert.fail('Filtered Session catalog continuation must return a page');
-      }
-      assert.equal(filteredContinuation.sessions.length, 2);
-      assert.equal(
-        [...filteredStart.sessions, ...filteredContinuation.sessions].every((session) =>
-          requireSessionProjection(session).labels.includes('paged'),
-        ),
-        true,
-      );
-      await assert.rejects(
-        desktop.request('session.catalog.query', {
-          kind: 'list_continue',
-          filter: { isFlagged: true },
-          revision: filteredStart.revision,
-          cursor: filteredStart.nextCursor,
-        }),
-        operationError('invalid_request'),
-      );
-
       const staleStart = await desktop.request('session.catalog.query', {
         kind: 'list_start',
       });
@@ -489,16 +468,6 @@ test('two Clients share stable Session creation, CAS configuration, and catalog 
         cursor: staleStart.nextCursor,
       });
       assert.equal(staleContinuation.kind, 'revision_changed');
-      const flagged = await tui.request('session.catalog.query', {
-        kind: 'list_start',
-        filter: { isFlagged: true },
-      });
-      assert.equal(flagged.kind, 'page');
-      if (flagged.kind !== 'page') assert.fail('Flagged Session query must return a page');
-      assert.deepEqual(
-        flagged.sessions.map((session) => session.id).sort(),
-        [created.id, bulkSession.id, oversizedSessionId].sort(),
-      );
 
       await subscription.close();
       const retirementSubscription = await tui.openSessionSubscription({
@@ -507,6 +476,7 @@ test('two Clients share stable Session creation, CAS configuration, and catalog 
       });
       const retirementIterator = retirementSubscription[Symbol.asyncIterator]();
       const beforeArchive = await querySession(desktop, created.id);
+      assert.equal(beforeArchive.status, 'active');
       const heartbeat = await desktop.request('scheduled-task.mutate', {
         kind: 'create',
         input: {
@@ -539,9 +509,11 @@ test('two Clients share stable Session creation, CAS configuration, and catalog 
         }),
       );
       assert.equal(archived.isArchived, true);
+      assert.equal(archived.status, beforeArchive.status);
       assert.equal((await querySession(tui, created.id)).isArchived, true);
       const archivedContinuity = await nextProjection(retirementIterator);
       assert.equal(archivedContinuity.snapshot.session.isArchived, true);
+      assert.equal(archivedContinuity.snapshot.session.status, beforeArchive.status);
       assert.ok(archived.revision > beforeArchive.revision);
 
       const restored = requireSessionProjection(
@@ -551,8 +523,10 @@ test('two Clients share stable Session creation, CAS configuration, and catalog 
         }),
       );
       assert.equal(restored.isArchived, false);
+      assert.equal(restored.status, beforeArchive.status);
       const restoredContinuity = await nextProjection(retirementIterator);
       assert.equal(restoredContinuity.snapshot.session.isArchived, false);
+      assert.equal(restoredContinuity.snapshot.session.status, beforeArchive.status);
 
       assert.deepEqual(
         await desktop.request('session.remove', {
@@ -700,10 +674,10 @@ test('stable Session creation survives response loss and Host restart', {
     host = await startHost(root, capability.rootId);
     const retrying = await connectClient(root, 'desktop');
     try {
-      assert.deepEqual(
-        requireSessionProjection(await retrying.request('session.create', input)),
-        committed,
-      );
+      const retried = requireSessionProjection(await retrying.request('session.create', input));
+      const { liveRunState, ...persistedCommitted } = committed;
+      assert.deepEqual(liveRunState, KNOWN_EMPTY_LIVE_RUN_STATE);
+      assert.deepEqual(retried, persistedCommitted);
     } finally {
       await retrying.close();
     }

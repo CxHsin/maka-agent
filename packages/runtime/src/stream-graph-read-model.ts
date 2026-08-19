@@ -82,7 +82,6 @@ export interface AgentGraphClientOperator {
   scheduledWorkIds: string[];
   readiness: Array<{
     readinessId: string;
-    policyKind: 'map' | 'all_settled';
     status: 'waiting' | 'runnable';
     waitingFor: AgentGraphReadinessWait[];
     omittedWaitingFor: number;
@@ -118,6 +117,7 @@ export interface AgentGraphClientScheduledWork {
     | { kind: 'preset'; presetId: string }
     | { kind: 'operator'; operatorId: string };
   inputIds: string[];
+  selectedResultInputs?: Array<{ sourceGraphId: string; resultId: string }>;
   replaces?: string;
   status: AgentGraphScheduleWorkView['status'];
   instructionPreview: string;
@@ -657,7 +657,6 @@ function buildReadModel(input: BuildAgentGraphClientReadModelInput): BuiltReadMo
       .filter((entry) => entry.operatorId === binding.operatorId)
       .map((entry) => ({
         readinessId: entry.readinessId,
-        policyKind: entry.policyKind,
         status: entry.status,
         waitingFor: entry.waitingFor.slice(0, MAX_OPERATOR_READINESS_WAITS).map(cloneWait),
         omittedWaitingFor: Math.max(0, entry.waitingFor.length - MAX_OPERATOR_READINESS_WAITS),
@@ -1051,6 +1050,9 @@ function clientWork(work: AgentGraphScheduleWorkView): AgentGraphClientScheduled
     workId: work.workId,
     target: { ...work.target },
     inputIds: [...work.inputIds],
+    ...(work.selectedResultInputs
+      ? { selectedResultInputs: work.selectedResultInputs.map((input) => ({ ...input })) }
+      : {}),
     ...(work.replaces ? { replaces: work.replaces } : {}),
     status: work.status,
     instructionPreview: instructionTruncated

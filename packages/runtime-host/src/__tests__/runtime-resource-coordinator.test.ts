@@ -522,7 +522,6 @@ function createHarness() {
         if (state.sessionState === 'missing') throw new SessionNotFoundError(sessionId);
         return {
           cwd: '/workspace',
-          status: state.sessionState === 'archived' ? 'archived' : 'idle',
           isArchived: state.sessionState === 'archived',
         };
       },

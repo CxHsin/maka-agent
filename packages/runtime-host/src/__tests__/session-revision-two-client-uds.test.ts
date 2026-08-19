@@ -10,7 +10,7 @@ import { type AgentGraphOperatorProvisionRequest } from '@maka/core/agent-graph-
 import { type AgentRunHeader } from '@maka/core/agent-run';
 import { type RuntimeEvent } from '@maka/core/runtime-event';
 import { agentGraphIdForRootSession } from '@maka/runtime/stream-graph-coordinator';
-import { FAKE_ASK_USER_QUESTION_PROMPT } from '@maka/runtime/fake-backend';
+import { FAKE_ASK_USER_QUESTION_PROMPT } from '@maka/runtime/test-only/fake-backend';
 import { createAgentGraphControlStore } from '@maka/storage/agent-graph-control-store';
 import { openInteractiveArtifactStoreForWrite } from '@maka/storage/artifact-stores';
 import { openInteractiveExecutionStoresForWrite } from '@maka/storage/execution-stores';
@@ -22,6 +22,7 @@ import {
 } from '@maka/storage/root-authority';
 import { openInteractiveTaskLedgerStoreForWrite } from '@maka/storage/task-ledger-authority';
 import { removePosixEndpointDirectories } from './fixtures/endpoint-hygiene.js';
+import { requireStartedTurn } from './fixtures/execution-host-suite.js';
 import {
   connectRuntimeHost,
   RuntimeHostOperationError,
@@ -56,6 +57,7 @@ test('two Clients share exact retryable Session branch and revision authority', 
     busySessionId,
     linkedChildSourceSessionId,
     metadataLinkedSourceSessionId,
+    ordinaryLinkedChildSessionId,
     archivedOwnedSourceSessionId,
     graphChildSessionId,
     continuationSourceSessionId,
@@ -69,6 +71,7 @@ test('two Clients share exact retryable Session branch and revision authority', 
       busySessionId,
       linkedChildSourceSessionId,
       metadataLinkedSourceSessionId,
+      ordinaryLinkedChildSessionId,
       archivedOwnedSourceSessionId,
       graphChildSessionId,
       continuationSourceSessionId,
@@ -113,6 +116,7 @@ async function verifyConcurrentRevisionAuthority(
   busySessionId: string,
   linkedChildSourceSessionId: string,
   metadataLinkedSourceSessionId: string,
+  ordinaryLinkedChildSessionId: string,
   archivedOwnedSourceSessionId: string,
   graphChildSessionId: string,
   continuationSourceSessionId: string,
@@ -187,6 +191,25 @@ async function verifyConcurrentRevisionAuthority(
         expectedSourceRevision: metadataLinkedSource.revision,
       }),
       operationError('operation_unavailable'),
+    );
+    const ordinaryLinkedChild = await querySession(desktop, ordinaryLinkedChildSessionId);
+    await assert.rejects(
+      desktop.request('session.branch.create', {
+        sourceSessionId: ordinaryLinkedChildSessionId,
+        targetSessionId: 'ordinary-linked-child-branch-target',
+        sourceTurnId: 'metadata-child-turn',
+        expectedSourceRevision: ordinaryLinkedChild.revision,
+      }),
+      operationError('operation_conflict'),
+    );
+    await assert.rejects(
+      desktop.request('session.revision.create', {
+        sourceSessionId: ordinaryLinkedChildSessionId,
+        targetSessionId: 'ordinary-linked-child-revision-target',
+        sourceTurnId: 'metadata-child-turn',
+        expectedSourceRevision: ordinaryLinkedChild.revision,
+      }),
+      operationError('operation_conflict'),
     );
     const archivedOwnedSource = await querySession(desktop, archivedOwnedSourceSessionId);
     await assert.rejects(
@@ -320,21 +343,53 @@ async function verifyConcurrentRevisionAuthority(
       operationError('operation_conflict'),
     );
 
-    await desktop.startTurn({
-      sessionId: busySessionId,
-      turnId: 'busy-turn',
-      content: { text: FAKE_ASK_USER_QUESTION_PROMPT },
-    });
-    const busy = await querySession(desktop, busySessionId);
-    await assert.rejects(
-      tui.request('session.branch.create', {
-        sourceSessionId: busySessionId,
-        targetSessionId: 'busy-source-copy',
-        sourceTurnId: 'busy-turn',
-        expectedSourceRevision: busy.revision,
+    const busyTurn = requireStartedTurn(
+      await desktop.startTurn({
+        sessionId: busySessionId,
+        turnId: 'busy-turn',
+        content: { text: FAKE_ASK_USER_QUESTION_PROMPT },
       }),
-      operationError('session_busy'),
     );
+    // This case only needs a live Turn to prove `session_busy`. Leaving the
+    // parked ask-question continuation for Host SIGTERM leaves live
+    // interactions at close, which poisons composition shutdown (#2295).
+    // Cleanup must still run if the assertion fails, but it must not replace
+    // that failure with a stopTurn error.
+    let assertionError: unknown;
+    try {
+      const busy = await querySession(desktop, busySessionId);
+      await assert.rejects(
+        tui.request('session.branch.create', {
+          sourceSessionId: busySessionId,
+          targetSessionId: 'busy-source-copy',
+          sourceTurnId: 'busy-turn',
+          expectedSourceRevision: busy.revision,
+        }),
+        operationError('session_busy'),
+      );
+    } catch (error) {
+      assertionError = error;
+    }
+    try {
+      const stopped = await desktop.stopTurn(
+        {
+          sessionId: busySessionId,
+          turnId: 'busy-turn',
+          runId: busyTurn.runId,
+        },
+        PROCESS_TIMEOUT_MS,
+      );
+      assert.equal(stopped.status, 'cancelled');
+    } catch (cleanupError) {
+      if (assertionError !== undefined) {
+        throw new AggregateError(
+          [assertionError, cleanupError],
+          'session_busy check failed and parked-turn cleanup failed',
+        );
+      }
+      throw cleanupError;
+    }
+    if (assertionError !== undefined) throw assertionError;
   } finally {
     await Promise.allSettled([desktop.close(), tui.close()]);
   }
@@ -512,6 +567,7 @@ async function seedSource(
   busySessionId: string;
   linkedChildSourceSessionId: string;
   metadataLinkedSourceSessionId: string;
+  ordinaryLinkedChildSessionId: string;
   archivedOwnedSourceSessionId: string;
   graphChildSessionId: string;
   continuationSourceSessionId: string;
@@ -528,7 +584,7 @@ async function seedSource(
     const source = await execution.sessionStore.create({
       cwd: root,
       name: 'Source Session',
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -536,7 +592,7 @@ async function seedSource(
     const busy = await execution.sessionStore.create({
       cwd: root,
       name: 'Busy Session',
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -544,7 +600,7 @@ async function seedSource(
     const linkedChildSource = await execution.sessionStore.create({
       cwd: root,
       name: 'Linked Child Source Session',
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -552,7 +608,7 @@ async function seedSource(
     const metadataLinkedSource = await execution.sessionStore.create({
       cwd: root,
       name: 'Metadata-linked Source Session',
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -560,7 +616,7 @@ async function seedSource(
     const archivedOwnedSource = await execution.sessionStore.create({
       cwd: root,
       name: 'Archived-owned Source Session',
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -568,7 +624,7 @@ async function seedSource(
     const continuationSource = await execution.sessionStore.create({
       cwd: root,
       name: 'Continuation Source Session',
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -838,7 +894,7 @@ async function seedSource(
       {
         cwd: root,
         name: 'Graph Worker',
-        backend: 'fake',
+        backend: 'ai-sdk',
         llmConnectionSlug: 'fake',
         model: 'fake-model',
         permissionMode: 'ask',
@@ -1073,10 +1129,10 @@ async function seedSource(
       ts: 1,
       text: 'delegate without a committed result',
     });
-    await execution.sessionStore.createSubagent({
+    const ordinaryLinkedChild = await execution.sessionStore.createSubagent({
       cwd: root,
       name: 'Metadata-linked Child Session',
-      backend: 'fake',
+      backend: 'ai-sdk',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
@@ -1271,6 +1327,7 @@ async function seedSource(
       busySessionId: busy.id,
       linkedChildSourceSessionId: linkedChildSource.id,
       metadataLinkedSourceSessionId: metadataLinkedSource.id,
+      ordinaryLinkedChildSessionId: ordinaryLinkedChild.header.id,
       archivedOwnedSourceSessionId: archivedOwnedSource.id,
       graphChildSessionId: graphChild.header.id,
       continuationSourceSessionId: continuationSource.id,

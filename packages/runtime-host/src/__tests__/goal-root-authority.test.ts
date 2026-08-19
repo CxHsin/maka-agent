@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import type { AgentRunHeader } from '@maka/core/agent-run';
 import { BackendRegistry, SessionManager } from '@maka/runtime/session-manager';
-import { FakeBackend } from '@maka/runtime/fake-backend';
+import { FakeBackend } from '@maka/runtime/test-only/fake-backend';
 import { GOAL_SET_TOOL_NAME } from '@maka/runtime/goal-tools';
 import { goalCheckpoint } from '@maka/runtime/goal-state';
 import { type RuntimeHostedRootAuthority } from '@maka/runtime/message-authority';

@@ -28,6 +28,7 @@ import {
   type RuntimeHostSessionSubscription,
   RuntimeHostCatalogReadError,
   RuntimeHostOperationError,
+  readRuntimeHostAgentGraphEpochs,
   readRuntimeHostConnectionCatalog,
   readRuntimeHostInvocableSkills,
   readRuntimeHostResources,
@@ -66,9 +67,11 @@ import {
   type ProjectCatalogMutateResult,
   type ProjectCatalogProject,
   type ProjectCatalogProjectDetails,
+  PROJECT_DIRECTORY_MAX_ENTRIES,
+  type ProjectDirectoryEntry,
+  type ProjectDirectoryRoot,
   type QueueRetractInput,
   type QueueRetractResult,
-  type SessionCatalogFilter,
   SESSION_TRANSCRIPT_BOOTSTRAP_MAX_BYTES,
   type SessionCatalogChangedFrame,
   type ScheduledTaskChangedFrame,
@@ -112,6 +115,12 @@ const MAX_SESSION_REVISION_ATTEMPTS = 8;
 const MAX_PRICING_SNAPSHOT_ATTEMPTS = 3;
 
 export type DesktopSessionConfigurationPatch = Partial<SessionConfiguration>;
+
+/**
+ * How a remove settled. `restored` is not a failure: the task left the state
+ * the caller decided against, so nothing was destroyed and nothing is wrong.
+ */
+export type SessionRemoveDisposition = "removed" | "restored";
 
 export type DesktopRuntimeHostClientErrorCode =
   | "catalog_unstable"
@@ -520,12 +529,10 @@ export class DesktopRuntimeHostClient {
     }
   }
 
-  async listSessions(
-    filter?: SessionCatalogFilter,
-  ): Promise<SessionCatalogProjection[]> {
+  async listSessions(): Promise<SessionCatalogProjection[]> {
     this.#assertOpen();
     try {
-      return (await readRuntimeHostSessions(this.connection, filter)).map(requireSessionProjection);
+      return (await readRuntimeHostSessions(this.connection)).map(requireSessionProjection);
     } catch (error) {
       if (error instanceof DesktopRuntimeHostClientError) throw error;
       if (!(error instanceof RuntimeHostCatalogReadError)) throw error;
@@ -556,6 +563,52 @@ export class DesktopRuntimeHostClient {
   async registerProject(path: string): Promise<ProjectCatalogProject> {
     const result = await this.#mutateProject({ kind: "register", path });
     return this.#projectForMutation(result);
+  }
+
+  async listProjectDirectoryRoots(): Promise<readonly ProjectDirectoryRoot[]> {
+    const result = await this.request("project.catalog.query", { kind: "directory_roots" });
+    if (result.kind !== "directory_roots") throw invalidProjection("Project directory roots");
+    return result.roots;
+  }
+
+  async listProjectDirectories(
+    rootId: string,
+    segments: readonly string[],
+  ): Promise<readonly ProjectDirectoryEntry[]> {
+    const entries: ProjectDirectoryEntry[] = [];
+    let result = await this.request(
+      "project.catalog.query",
+      { kind: "directory_list_start", rootId, segments },
+    );
+    const cursors = new Set<string>();
+    while (true) {
+      if (result.kind !== "directory_page") throw invalidProjection("Project directory");
+      if (result.rootId !== rootId || !sameSegments(result.segments, segments)) {
+        throw invalidProjection("Project directory identity");
+      }
+      if (entries.length + result.entries.length > PROJECT_DIRECTORY_MAX_ENTRIES) {
+        throw invalidProjection("Project directory has too many entries");
+      }
+      entries.push(...result.entries);
+      if (result.nextCursor === null) return entries;
+      if (cursors.has(result.nextCursor)) throw repeatedCursor("Project directory");
+      cursors.add(result.nextCursor);
+      result = await this.request("project.catalog.query", {
+        kind: "directory_list_continue",
+        rootId,
+        segments,
+        cursor: result.nextCursor,
+      });
+    }
+  }
+
+  async registerProjectDirectory(
+    rootId: string,
+    segments: readonly string[],
+  ): Promise<ProjectCatalogProject> {
+    return this.#projectForMutation(
+      await this.#mutateProject({ kind: "register_directory", rootId, segments }),
+    );
   }
 
   async relinkProject(projectId: string, path: string): Promise<ProjectCatalogProject> {
@@ -838,14 +891,36 @@ export class DesktopRuntimeHostClient {
     );
   }
 
-  async removeSession(sessionId: string): Promise<void> {
+  /**
+   * Removes a Session, optionally only while it is still archived.
+   *
+   * Replaying a rejected write at the fresh revision is right for a rename or a
+   * configuration patch — the write means the same thing either way. It is
+   * wrong for a remove: a lifecycle write bumps the revision, so a conflict can
+   * be the task being restored, and replaying then destroys a task whose
+   * deletion nobody asked for any more.
+   *
+   * `requireArchived` states the premise the caller decided on. Re-asserting it
+   * against each fresh read is enough to hold it through the commit, because
+   * the Host serializes the two writes that could disagree: `session.remove`
+   * and `session.lifecycle.set` both enter `#withStableFamily`, which queues
+   * per Session id through the admission gate, and the remove compares the
+   * revision on the way in. So a restore either lands before that comparison —
+   * bumping `metadataVersion` and rejecting the remove — or waits until the
+   * retirement has finished. It cannot land between the check and the delete.
+   */
+  async removeSession(
+    sessionId: string,
+    options: { requireArchived?: boolean } = {},
+  ): Promise<SessionRemoveDisposition> {
     for (let attempt = 0; attempt < MAX_SESSION_REVISION_ATTEMPTS; attempt += 1) {
       const current = await this.#requireSession(sessionId);
+      if (options.requireArchived && !current.isArchived) return "restored";
       const result = await this.request("session.remove", {
         sessionId,
         expectedRevision: current.revision,
       });
-      if (result.kind === "removed") return;
+      if (result.kind === "removed") return "removed";
     }
     throw revisionConflict("remove", sessionId);
   }
@@ -1191,6 +1266,11 @@ export class DesktopRuntimeHostClient {
     input: OperationInput<"agent.graph.query">,
   ): Promise<OperationOutput<"agent.graph.query">> {
     return this.request("agent.graph.query", input);
+  }
+
+  listAgentGraphEpochs(rootSessionId: string) {
+    this.#assertOpen();
+    return readRuntimeHostAgentGraphEpochs(this.connection, rootSessionId);
   }
 
   queryAgentGraphOperator(
@@ -1651,6 +1731,10 @@ function repeatedCursor(name: string): DesktopRuntimeHostClientError {
     "projection_unstable",
     `Runtime Host repeated a ${name} cursor`,
   );
+}
+
+function sameSegments(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index]);
 }
 
 function unstableProjection(

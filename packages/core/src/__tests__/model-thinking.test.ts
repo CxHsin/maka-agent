@@ -127,6 +127,17 @@ test('resolveThinkingLevel discards levels the model does not offer', () => {
   assert.equal(resolveThinkingLevel({ providerType: 'openai' }, 'gpt-5.5', 'xhigh'), 'xhigh');
 });
 
+test('Alibaba Token Plan exposes the formal Qwen3.8 effort and disable contract', () => {
+  for (const providerType of ['alibaba-token-plan-cn', 'alibaba-token-plan'] as const) {
+    assert.deepEqual(
+      [...thinkingVariantsForModel(providerType, 'qwen3.8-max')],
+      ['off', 'low', 'medium', 'xhigh'],
+      providerType,
+    );
+    assert.equal(resolveThinkingLevel({ providerType }, 'qwen3.8-max', 'off'), 'off', providerType);
+  }
+});
+
 // Reasoning replay has no toggle: DeepSeek-like relays require
 // reasoning_content in tool-call history (400 otherwise), and other relays
 // ignore it, so the runtime replays unconditionally. That contract is

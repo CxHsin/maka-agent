@@ -6,14 +6,15 @@ import type { BotIncomingMessage, BotRegistry } from '@maka/runtime/bots';
 import type { ComputerUseToolSet } from '@maka/runtime/computer-use-tools';
 import type { MakaTool } from '@maka/runtime/tool-runtime';
 import type { ClientCapabilityProvider, RuntimeHostConnection } from '@maka/runtime-host/client';
-import type {
-  ClientCapabilityCallFrame,
-  OperationInput,
-  OperationKey,
-  SessionAssistantStreamIdentity,
-  SessionCatalogProjection,
-  SessionContinuitySnapshot,
-  SubscriptionFrame,
+import {
+  SESSION_CONTINUITY_SCHEMA_VERSION,
+  type ClientCapabilityCallFrame,
+  type OperationInput,
+  type OperationKey,
+  type SessionAssistantStreamIdentity,
+  type SessionCatalogProjection,
+  type SessionContinuitySnapshot,
+  type SubscriptionFrame,
 } from '@maka/runtime-host/protocol';
 import { z } from 'zod';
 import { createAttachmentApprovalRegistry } from '../attachment-approval.js';
@@ -23,7 +24,7 @@ import {
   type DesktopRuntimeHostCandidateDeps,
 } from '../runtime-host-desktop-candidate.js';
 import { RuntimeHostSessionObservationRegistry } from '../runtime-host-session-observation-registry.js';
-import { desktopSessionResourceKey } from '../../preload/runtime-host-identity.js';
+import { desktopSessionResourceKey } from '../../shared/runtime-host-identity.js';
 
 const TEST_HOST_ID = 'a'.repeat(64);
 const TEST_TARGET_EPOCH = 'test-target-epoch';
@@ -988,7 +989,7 @@ function continuitySnapshot(
   overrides: Partial<SessionContinuitySnapshot> = {},
 ): SessionContinuitySnapshot {
   return {
-    schemaVersion: 3,
+    schemaVersion: SESSION_CONTINUITY_SCHEMA_VERSION,
     session: {
       sessionId: 'session-1',
       metadataRevision: 1,

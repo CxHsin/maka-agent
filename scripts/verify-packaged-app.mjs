@@ -295,7 +295,15 @@ export async function smokePackagedRenderer(executable, { workingDirectory } = {
 
 export async function assertPackagedResources(
   resourcesPath,
-  { requirePath, forbidPath = assertMissing } = {},
+  {
+    requirePath,
+    forbidPath = assertMissing,
+    requireWindowsSandbox = process.platform === 'win32',
+    // The upgrade-lifecycle check runs this against a previously released
+    // build, which predates the disclaimer being packaged. Requiring it there
+    // would fail a release that was correct when it shipped.
+    requireDisclaimer = true,
+  } = {},
 ) {
   const required = [
     'app.asar',
@@ -306,6 +314,7 @@ export async function assertPackagedResources(
     join('workers', 'filesystem-worker.js'),
     join('licenses', 'maka', 'LICENSE'),
     join('licenses', 'maka', 'NOTICE'),
+    ...(requireDisclaimer ? [join('licenses', 'maka', 'DISCLAIMER-WIP')] : []),
     join('licenses', 'dugite', 'LICENSE'),
     join('licenses', 'git', 'NOTICE.txt'),
     join('licenses', 'electron', 'LICENSE'),
@@ -320,6 +329,12 @@ export async function assertPackagedResources(
     join('licenses', 'renderer', 'ALLOGO_LICENSE.txt'),
     join('licenses', 'renderer', 'SEMI_ICONS_LICENSE.txt'),
     join('licenses', 'renderer', 'MINGCUTE_APACHE_LICENSE.txt'),
+    ...(requireWindowsSandbox
+      ? [
+          join('windows-sandbox', 'maka-windows-sandbox.exe'),
+          join('licenses', 'cargo', 'THIRD_PARTY_NOTICES.txt'),
+        ]
+      : []),
   ];
   for (const path of required) {
     await requirePath(join(resourcesPath, path));

@@ -6,7 +6,7 @@ import type { McpConfigStore } from '@maka/storage';
 export interface McpIpcMainDeps {
   ipcMain: Pick<IpcMain, 'handle'>;
   store: McpConfigStore;
-  manager: Pick<McpClientManager, 'sync' | 'statuses' | 'test' | 'reconnect' | 'cancelConnect'>;
+  manager: Pick<McpClientManager, 'sync' | 'statuses' | 'test' | 'cancelConnect'>;
   ensureReady(): Promise<void>;
   publishCapabilities(): Promise<void>;
   onPublicationError(error: unknown): void;
@@ -79,12 +79,6 @@ export function registerMcpIpcMain(deps: McpIpcMainDeps): void {
     await deps.ensureReady();
     const result = await deps.manager.test(serverId);
     deps.emitChanged(deps.manager.statuses());
-    return result;
-  });
-  deps.ipcMain.handle('mcp:reconnect', async (_event, serverId: string) => {
-    await deps.ensureReady();
-    const result = await deps.manager.reconnect(serverId);
-    changed(deps);
     return result;
   });
 }

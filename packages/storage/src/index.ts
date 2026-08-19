@@ -50,7 +50,6 @@ export type {
 export { createSqliteShellRunStore } from './shell-run-store.js';
 export type { ClosableShellRunStore } from './shell-run-store.js';
 export * from './workspace-root.js';
-export * from './connection-store.js';
 export { CREDENTIAL_SCHEMA_VERSION, createFileCredentialStore } from './credential-store.js';
 export type { CredentialCasResult, CredentialKind, CredentialStore } from './credential-store.js';
 export * from './settings-store.js';
@@ -104,6 +103,12 @@ export type {
   TaskLedgerStore,
 } from './task-ledger-store.js';
 export * from './foreign-session-store.js';
+export { createWorkBoardStore, WorkBoardStoreError } from './work-board-store.js';
+export type {
+  WorkBoardMutationOptions,
+  WorkBoardStore,
+  WorkBoardStoreErrorCode,
+} from './work-board-store.js';
 export { createSqliteDeepResearchStore } from './deep-research-store.js';
 export type {
   CreateDeepResearchStoreOptions,

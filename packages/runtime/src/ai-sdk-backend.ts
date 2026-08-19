@@ -82,6 +82,7 @@ import {
   PROVIDER_IMAGE_BUDGET_EXCEEDED_MESSAGE,
 } from '@maka/core/attachments';
 import { stripUndefinedDeep } from '@maka/core/tool-args-identity';
+import { pricingModelKey } from '@maka/core/usage-stats/pricing';
 import type {
   LlmCallRecord,
   PricingConfig,
@@ -138,6 +139,7 @@ import {
   type ModelStreamResult,
   type RepairableAiSdkToolCall,
 } from './model-adapter.js';
+import { buildProviderOptions } from './model-factory.js';
 import { persistedOpenAiResponsesStepMessages } from './openai-responses-continuation.js';
 import type { OpenAiResponsesTransportState } from './openai-responses-websocket.js';
 import {
@@ -148,7 +150,7 @@ import {
 } from './request-projection.js';
 import type { ActiveToolResultPruneDiagnosticPatch } from './active-tool-result-prune.js';
 import { toolResultOutput } from './tool-result-output.js';
-import { buildActiveCompactionHeadAnchor } from './active-full-compact.js';
+import { buildActiveCompactionHeadAnchor } from './active-compaction-kernel.js';
 import { compactionDecisionDiagnosticPatch } from './compaction-boundary.js';
 import type {
   AutomaticMemoryCompactionDecision,
@@ -161,7 +163,6 @@ import {
 } from './context-diagnostics.js';
 import {
   AiSdkCompaction,
-  composeActiveCompactionProjection,
   hasActiveToolResultPruneDiagnosticPatch,
   hasBlockingReplayDiagnostics,
 } from './ai-sdk-compaction.js';
@@ -221,7 +222,6 @@ import {
 import { modelUsesNativeOpenAiResponses, resolveModelRuntime } from './model-runtime.js';
 import {
   applyPatchReplayFactText,
-  freeformApplyPatchResultText,
   normalizeApplyPatchReplayInput,
   routeApplyPatchTools,
   type ApplyPatchProfile,
@@ -671,7 +671,6 @@ function joinPromptFragments(fragments: readonly (string | undefined)[]): string
 export type AppendMessageFn = (m: StoredMessage) => Promise<void>;
 export type ToolTelemetryRecorder = (record: ToolInvocationRecord) => void;
 export type {
-  ActiveFullCompactBlockRecorder,
   HistoryCompactCheckpointLoader,
   HistoryCompactCheckpointRecorder,
   HistoryCompactLoader,
@@ -902,16 +901,6 @@ function nativeApplyPatchFailureOutput(output: ToolResultOutput): ToolResultOutp
   };
 }
 
-function freeformApplyPatchOutput(output: ToolResultOutput): ToolResultOutput {
-  if (output.type === 'text' || output.type === 'error-text') return output;
-  const value = output.type === 'json' || output.type === 'error-json' ? output.value : undefined;
-  const record = value && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
-  const text = record ? freeformApplyPatchResultText(record) : freeformApplyPatchResultText(value);
-  return output.type === 'error-json'
-    ? { type: 'error-text', value: text }
-    : { type: 'text', value: text };
-}
-
 const MAX_PROVIDER_ATTEMPTS_PER_STEP = 10;
 const MAX_IDLE_WATCHDOG_RETRIES_PER_STEP = 1;
 const MAX_INCOMPLETE_STREAM_RETRIES_PER_STEP = 1;
@@ -1050,6 +1039,7 @@ export class AiSdkBackend implements AgentBackend {
   private readonly maxSteps: number | undefined;
   private readonly providerRetrySleep: (delayMs: number, signal: AbortSignal) => Promise<void>;
   private readonly modelAdapter: ModelAdapter;
+  private readonly resolvedProviderOptions: Record<string, unknown>;
   private readonly toolAvailabilityRuntime: ToolAvailabilityRuntime;
   private readonly applyPatchProfile: ApplyPatchProfile | null;
 
@@ -1085,13 +1075,23 @@ export class AiSdkBackend implements AgentBackend {
     this.now = input.now ?? (() => Date.now());
     this.maxSteps = input.maxSteps;
     this.providerRetrySleep = input.providerRetrySleep ?? sleepForProviderRetry;
+    // One resolved options value for every reader: the main call, the
+    // auxiliary memory-extraction call, and the request-shape diagnostics all
+    // describe the same request, so they must not disagree on what was sent.
+    this.resolvedProviderOptions =
+      input.providerOptions ??
+      buildProviderOptions(input.connection, input.modelId, input.header.thinkingLevel);
     this.modelAdapter = new ModelAdapter({
       sessionId: input.sessionId,
       connection: input.connection,
       apiKey: input.apiKey,
       modelId: input.modelId,
       modelFactory: input.modelFactory,
-      providerOptions: input.providerOptions,
+      // `input.providerOptions` is an override escape hatch: when set it owns
+      // the whole provider-options namespace (including reasoning effort), and
+      // the computed defaults are dropped entirely. Keep providerOptions the
+      // single seam — do not re-add a parallel reasoning channel here.
+      providerOptions: this.resolvedProviderOptions,
       newId: this.newId,
       now: this.now,
       ...(input.openAiResponsesTransportState
@@ -1204,9 +1204,7 @@ export class AiSdkBackend implements AgentBackend {
         : {}),
       sourceTools: { ...scope.memorySourceTools },
       sourceActiveTools: [...scope.memorySourceActiveTools],
-      ...(this.input.providerOptions
-        ? { sourceProviderOptions: structuredClone(this.input.providerOptions) }
-        : {}),
+      sourceProviderOptions: structuredClone(this.resolvedProviderOptions),
       ...(this.modelAdapter.maxOutputTokens() !== undefined
         ? { sourceMaxOutputTokens: this.modelAdapter.maxOutputTokens() }
         : {}),
@@ -1987,7 +1985,7 @@ export class AiSdkBackend implements AgentBackend {
                 connection: this.input.connection,
                 modelId: this.input.modelId,
                 systemPrompt,
-                providerOptions: this.input.providerOptions,
+                providerOptions: this.resolvedProviderOptions,
                 providerTools,
                 activeTools: active,
                 priorMessages: priorReplay.messages,
@@ -2051,46 +2049,31 @@ export class AiSdkBackend implements AgentBackend {
               connection: this.input.connection,
               modelId: this.input.modelId,
               systemPrompt,
-              providerOptions: this.input.providerOptions,
+              providerOptions: this.resolvedProviderOptions,
               providerTools,
               activeTools: activeToolsForStep ?? plan.activeTools,
               priorMessages: stepMessages,
             },
             priorShapeBaseline,
           ).requestShapeHash;
-        const activeCompactHook = composeActiveCompactionProjection(
-          this.compaction.buildSemanticCompactProjection(
-            turnId,
-            model,
-            input.runtimeContext,
-            activeCompactionHeadAnchor,
-            (messagesForStep, activeToolsForStep) =>
-              stepRequestShapeHash(messagesForStep, activeToolsForStep),
-            (patch) => {
-              activeCompactDiagnosticPatch = mergeContextBudgetDiagnosticPatches(
-                activeCompactDiagnosticPatch,
-                patch,
-              );
-            },
-            scope,
-            turnAbortController.signal,
-          ),
-          this.compaction.buildActiveFullCompactProjection(
-            turnId,
-            input.runtimeContext,
-            activeCompactionHeadAnchor,
-            (messagesForStep, activeToolsForStep) =>
-              stepRequestShapeHash(messagesForStep, activeToolsForStep),
-            (patch) => {
-              activeCompactDiagnosticPatch = mergeContextBudgetDiagnosticPatches(
-                activeCompactDiagnosticPatch,
-                patch,
-              );
-            },
-          ),
+        const activeCompactHook = this.compaction.buildSemanticCompactProjection(
+          turnId,
+          model,
+          input.runtimeContext,
+          activeCompactionHeadAnchor,
+          (messagesForStep, activeToolsForStep) =>
+            stepRequestShapeHash(messagesForStep, activeToolsForStep),
+          (patch) => {
+            activeCompactDiagnosticPatch = mergeContextBudgetDiagnosticPatches(
+              activeCompactDiagnosticPatch,
+              patch,
+            );
+          },
+          scope,
+          turnAbortController.signal,
         );
         // Deterministic priority on a capacity-replaced step: the hard window
-        // invariant owns the projection, so semantic/active-full compaction
+        // invariant owns the projection, so semantic compaction
         // yields for that step (recorded as a decision) instead of running a
         // second summarizer over the same request.
         const activeCompactAfterMidTurn =
@@ -3281,7 +3264,7 @@ export class AiSdkBackend implements AgentBackend {
   private computeTokenUsageCostUsd(usage: NormalizedAiSdkUsage): number | undefined {
     try {
       const pricing = (this.input.lookupPricing ?? getBuiltinPricing)(
-        `${this.input.connection.providerType}:${this.input.modelId}`,
+        pricingModelKey(this.input.connection.providerType, this.input.modelId),
       );
       if (pricing === null) return undefined;
       return computeCost(
@@ -3315,6 +3298,7 @@ export class AiSdkBackend implements AgentBackend {
     turnId: string;
     callKind: ModelCallKind;
     modelId: string;
+    historyCompactRoute?: ModelCallAttempt['historyCompactRoute'];
     /**
      * Stated by every caller, never defaulted: an unattributed provider request
      * is silently dropped by usage accounting, so the compiler has to be the
@@ -3326,6 +3310,7 @@ export class AiSdkBackend implements AgentBackend {
     const accounting = this.modelCallAccounting(input.callKind, {
       modelId: input.modelId,
       ...(input.runId ? { runId: input.runId } : {}),
+      ...(input.historyCompactRoute ? { historyCompactRoute: input.historyCompactRoute } : {}),
     });
     const runId = input.runId;
     const beforeRunProviderDispatch = this.input.beforeRunProviderDispatch;
@@ -3369,6 +3354,7 @@ export class AiSdkBackend implements AgentBackend {
       runId?: string;
       /** The model this call actually runs against; priced as that model. */
       modelId?: string;
+      historyCompactRoute?: ModelCallAttempt['historyCompactRoute'];
     },
   ): ModelCallAccountingInput | undefined {
     const record = this.input.recordModelCallAttempt;
@@ -3380,6 +3366,9 @@ export class AiSdkBackend implements AgentBackend {
       connectionSlug: this.input.connection.slug,
       providerId: this.input.connection.providerType,
       callKind,
+      ...(identity?.historyCompactRoute
+        ? { historyCompactRoute: identity.historyCompactRoute }
+        : {}),
       record,
       resolveCost: (usage: ProviderRequestUsage) => this.resolveModelCallCost(usage, modelId),
       ...(this.input.assertModelCallAccountingReady
@@ -3410,7 +3399,7 @@ export class AiSdkBackend implements AgentBackend {
   ): ResolvedModelCallCost | undefined {
     try {
       const pricing = (this.input.lookupPricing ?? getBuiltinPricing)(
-        `${this.input.connection.providerType}:${modelId}`,
+        pricingModelKey(this.input.connection.providerType, modelId),
       );
       if (pricing === null) return undefined;
       const costUsd = computeCost(
@@ -3842,9 +3831,22 @@ export class AiSdkBackend implements AgentBackend {
     }
 
     if (!this.canReplayProviderNative(plan)) {
+      // Degrade per item, not per plan: an unsupported provider-executed pair
+      // must not cost unrelated client tool history (#2972). Thinking items
+      // stay in the plan; materializeRuntimeReplayPlan degrades unsupported
+      // reasoning per item via reasoningReplay.
+      const degradedPlan = this.dropUnsupportedReplayItems(plan);
       return {
         status: 'ready',
-        messages: await materializeReplayFallback(),
+        messages:
+          degradedPlan.items.length > 0 || hasProviderHistoryCompactCheckpoint
+            ? await this.materializeRuntimeReplayPlan(
+                degradedPlan,
+                scope.imageBudget,
+                undefined,
+                projectedHistoryCompactCheckpoint,
+              )
+            : await materializeReplayFallback(),
         gate: input.continuation
           ? 'runtime_replay_text_only'
           : 'runtime_replay_unsupported_semantics',
@@ -3876,9 +3878,39 @@ export class AiSdkBackend implements AgentBackend {
     for (const item of plan.items) {
       if (item.kind === 'tool_call' && !support.toolCalls) return false;
       if (item.kind === 'tool_result' && !support.toolResults) return false;
+      if (
+        (item.kind === 'tool_call' || item.kind === 'tool_result') &&
+        item.providerExecuted === true &&
+        !support.providerExecutedTools
+      ) {
+        return false;
+      }
       if (item.kind === 'thinking' && item.signature && !support.signedThinking) return false;
     }
     return true;
+  }
+
+  /**
+   * Per-item counterpart to {@link canReplayProviderNative}: drop only the
+   * items the adapter cannot represent so one unsupported provider-executed
+   * pair does not cost unrelated client tool history (#2972). Call and result
+   * items fall together — a call without its result is a dangling wire item,
+   * and provider-executed pairs are flagged on both items by the plan.
+   */
+  private dropUnsupportedReplayItems(
+    plan: RuntimeEventModelReplayPlan,
+  ): RuntimeEventModelReplayPlan {
+    const support = this.modelAdapter.runtimeEventReplaySupport();
+    return {
+      ...plan,
+      items: plan.items.filter((item) => {
+        if (item.kind === 'tool_call' || item.kind === 'tool_result') {
+          if (!support.toolCalls || !support.toolResults) return false;
+          if (item.providerExecuted === true && !support.providerExecutedTools) return false;
+        }
+        return true;
+      }),
+    };
   }
 
   /**
@@ -3941,7 +3973,16 @@ export class AiSdkBackend implements AgentBackend {
             }
           : undefined;
       }
-      if (replaySupport.openAiResponsesEncryptedThinking) {
+      if (replaySupport.responsesReasoning === 'plaintext-content') {
+        if (item.text.length === 0) return undefined;
+        return {
+          part: {
+            type: 'reasoning' as const,
+            text: item.text,
+          },
+        };
+      }
+      if (replaySupport.responsesReasoning === 'encrypted-content') {
         const openai = item.providerOptions?.openai;
         if (openai && typeof openai === 'object' && !Array.isArray(openai)) {
           const { itemId, reasoningEncryptedContent } = openai as {
@@ -3999,9 +4040,6 @@ export class AiSdkBackend implements AgentBackend {
           `runtime-event:${result.eventId}:tool-result`,
         ));
       if (toolName !== 'apply_patch') return output;
-      if (this.applyPatchProfile?.kind === 'codex-v4a-freeform') {
-        return freeformApplyPatchOutput(output);
-      }
       return result.isError ? nativeApplyPatchFailureOutput(output) : output;
     };
     const pushClientToolResults = async (calls: readonly ToolCallItem[]) => {
@@ -4959,10 +4997,10 @@ function sumOptionalCounts<K extends keyof ActiveToolResultPruneDiagnosticPatch>
 function contextBudgetWithActiveProjectionDiagnostics(
   base: ContextBudgetDiagnostic | undefined,
   patch: ActiveToolResultPruneDiagnosticPatch,
-  activeFullCompactPatch: Partial<ContextBudgetDiagnostic> | undefined,
+  activeCompactionPatch: Partial<ContextBudgetDiagnostic> | undefined,
 ): ContextBudgetDiagnostic | undefined {
   const prunePatch = hasActiveToolResultPruneDiagnosticPatch(patch) ? patch : undefined;
-  const mergedPatch = mergeContextBudgetDiagnosticPatches(prunePatch, activeFullCompactPatch);
+  const mergedPatch = mergeContextBudgetDiagnosticPatches(prunePatch, activeCompactionPatch);
   if (!mergedPatch) return base;
   return mergeContextBudgetDiagnostic(base ?? minimalContextBudgetDiagnostic(), mergedPatch);
 }

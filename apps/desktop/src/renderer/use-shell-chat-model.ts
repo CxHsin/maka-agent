@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import type { ChatModelChoice } from '@maka/core/chat-model-choice';
 import type { LlmConnection } from '@maka/core/llm-connections';
 import type { SessionSendProjection } from '@maka/core/session-send-projection';
@@ -14,6 +14,7 @@ import {
 import { deriveSessionHealthNotice } from './session-health-notice';
 import type { ComposerDefaults } from './composer-defaults';
 import { getDesktopConversationCopy } from './locales/conversation-copy.js';
+import { useNewTaskChoice } from './use-new-task-choice.js';
 
 export type { NewChatModel } from './shell-chat-model-selection';
 
@@ -32,23 +33,21 @@ export type SessionHealthNoticeView = {
  * sticky pick, the thinking-variant lists, and the hard-only session health
  * notice (#1032).
  *
- * Pure move out of AppShell — every memo keeps its exact dependency array (so
- * `chatModelChoices` / `activeThinkingLevels` / `newChatThinkingLevels` retain
- * their referential-stability behavior) and the sticky-pick validation still
- * drops a `pendingNewChatModel` that is no longer an offered choice. The
- * `openSettingsSection` jump is injected so `sessionHealthNotice` can wrap the
- * derived click target; its memo deliberately omits the injected handler from
- * the dep array (see the inline note).
+ * The model catalog is derived from the same Host-scoped connection list as
+ * the labels and selectors, so switching between Hosts cannot mix catalogs.
+ * Sticky picks still drop out when their model is no longer offered.
  */
 export function useShellChatModel(options: {
   uiLocale: UiLocale;
   connections: LlmConnection[];
-  snapshotChoices: ChatModelChoice[] | undefined;
+  chatModelChoices: ChatModelChoice[];
   sessionSendOutcome: SessionSendProjection | undefined;
   defaultConnection: string | null;
+  newTaskKey: string;
   activationCandidate?: NewChatModel;
   activeSession: SessionSummary | undefined;
   persistedComposerDefaults: ComposerDefaults | null;
+  usePersistedComposerDefaults: boolean;
   /** Settings → 通用 → 默认思考级别; undefined means "no preference". */
   defaultThinkingLevel?: ThinkingLevel;
   openSettingsSection: (section: SettingsSection) => void;
@@ -72,15 +71,20 @@ export function useShellChatModel(options: {
 } {
   const { uiLocale, connections, defaultConnection, activationCandidate, activeSession, persistedComposerDefaults, openSettingsSection } = options;
   const conversationCopy = getDesktopConversationCopy(uiLocale);
-  // Persisted composer defaults seed the empty-state model so the home view is
-  // populated before the async `app:info` round-trip completes on mount.
-  const [pendingNewChatModel, setPendingNewChatModel] = useState<NewChatModel | null>(
-    persistedComposerDefaults?.model ?? null,
+  const [pendingNewChatModelChoice, setPendingNewChatModel] = useNewTaskChoice<
+    NewChatModel | null
+  >(
+    options.newTaskKey,
   );
+  const pendingNewChatModel = pendingNewChatModelChoice !== undefined
+    ? pendingNewChatModelChoice
+    : options.usePersistedComposerDefaults
+      ? persistedComposerDefaults?.model ?? null
+      : null;
   const activeConnection = activeSession
     ? connections.find((connection) => connection.slug === activeSession.llmConnectionSlug)
     : undefined;
-  const chatModelChoices = options.snapshotChoices ?? [];
+  const { chatModelChoices } = options;
   // Home / empty-state composer: which model the next NEW chat starts with.
   // An explicit pick stays sticky; otherwise onboarding's readiness-checked
   // candidate wins before the legacy catalog default and first offered choice.
@@ -90,14 +94,12 @@ export function useShellChatModel(options: {
   // explicitly choosing 模型默认 for this one chat, which must beat the
   // configured default or the per-chat picker could not undo it.
   //
-  // The settings value is read here rather than seeded into useState because it
-  // arrives from an async settings fetch, after this hook first mounts — a
-  // useState initializer would silently keep the mount-time `undefined` and the
-  // setting would never take effect. (`persistedComposerDefaults` above can use
-  // an initializer only because it is read synchronously from localStorage.)
-  const [pendingNewChatThinkingLevel, setPendingNewChatThinkingLevel] = useState<
-    ThinkingLevel | null | undefined
-  >(undefined);
+  // The pick carries its target key so a Host or Project switch cannot apply it
+  // to a different execution authority, even for an identically named model.
+  const [pendingNewChatThinkingLevel, setPendingNewChatThinkingLevel] =
+    useNewTaskChoice<ThinkingLevel | null>(
+      options.newTaskKey,
+    );
   const requestedNewChatThinkingLevel =
     pendingNewChatThinkingLevel === undefined
       ? options.defaultThinkingLevel ?? null

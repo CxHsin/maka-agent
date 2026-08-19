@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { access, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -94,16 +95,98 @@ export async function verifyPackagedWindowsApp(
   const resources = join(appDirectory, 'resources');
   const executable = join(appDirectory, executableName);
   const appAsar = join(resources, 'app.asar');
+  const sandboxExecutable = join(resources, 'windows-sandbox', 'maka-windows-sandbox.exe');
+  const requireWindowsSandbox = expectedVersion === undefined;
+  // Same reason as the sandbox above: a packaged resource added after the
+  // baseline release cannot be required of that baseline.
+  const requireDisclaimer = expectedVersion === undefined;
 
   step('checking packaged resources');
   await requirePath(executable);
-  await assertPackagedResources(resources, { requirePath, forbidPath });
+  await assertPackagedResources(resources, {
+    requirePath,
+    forbidPath,
+    requireWindowsSandbox,
+    requireDisclaimer,
+  });
   await requirePath(join(resources, 'git', 'cmd', 'git.exe'));
 
   step('reading the executable architecture');
   const machine = await readMachine(executable);
   if (machine !== amd64Machine) {
     throw new Error(`${executableName} must be x64, found PE machine 0x${machine.toString(16)}.`);
+  }
+
+  if (requireWindowsSandbox) {
+    step('smoking the packaged Windows sandbox');
+    const sandboxMachine = await readMachine(sandboxExecutable);
+    if (sandboxMachine !== amd64Machine) {
+      throw new Error(
+        `maka-windows-sandbox.exe must be x64, found PE machine 0x${sandboxMachine.toString(16)}.`,
+      );
+    }
+    const sandboxLaunch = {
+      version: 1,
+      requestId: 'packaged-sandbox-launch',
+      executable: sandboxExecutable,
+      arguments: ['--self-probe'],
+      cwd: dirname(sandboxExecutable),
+      readRoots: [],
+      writeRoots: [],
+      exactReadRoots: [],
+      exactWriteRoots: [],
+      network: 'restricted',
+      environment: {},
+    };
+    const sandboxManifest = join(workingDirectory, 'packaged-sandbox-manifest.json');
+    await writeFile(
+      sandboxManifest,
+      JSON.stringify({
+        version: 1,
+        requestId: 'packaged-sandbox',
+        clientPid: 0,
+        clientNonce: '0123456789abcdef0123456789abcdef',
+        profileDigest: createHash('sha256').update(JSON.stringify(sandboxLaunch)).digest('hex'),
+        launch: sandboxLaunch,
+      }),
+      'utf8',
+    );
+    const sandboxProbe = await run(sandboxExecutable, ['--broker-local', sandboxManifest]);
+    // The broker relays the child's stdout as the worker response channel and
+    // keeps its own boundary diagnostics on stderr, so the channel split itself
+    // is part of what this probe verifies: the child's --self-probe JSON must
+    // arrive on stdout and the broker's atomic-job diagnostic on stderr.
+    if (
+      !sandboxProbe.stdout.includes('"appContainer":true') ||
+      !sandboxProbe.stdout.includes('"inJob":true')
+    ) {
+      throw new Error(
+        `Packaged Windows sandbox child probe did not reach stdout: ${sandboxProbe.stdout}`,
+      );
+    }
+    if (!sandboxProbe.stderr.includes('"atomicJob":true')) {
+      throw new Error(
+        `Packaged Windows sandbox broker diagnostic did not reach stderr: ${sandboxProbe.stderr}`,
+      );
+    }
+    await assertMissing(sandboxManifest);
+
+    step('relaying command stdio through the packaged sandbox');
+    await run('pwsh', [
+      '-NoProfile',
+      '-File',
+      join(repoRoot, 'experiments', 'windows-sandbox', 'stdio-relay-smoke.ps1'),
+      '-LauncherPath',
+      sandboxExecutable,
+    ]);
+
+    step('running real filesystem-worker operations through the packaged app');
+    // The evidence executes the packaged artifacts themselves: the packaged
+    // broker, the packaged Electron executable as the worker runtime and the
+    // packaged worker bundle under resources — not the repository dist worker
+    // on a copied node.exe.
+    const { verifyWindowsSandboxWorkerE2E } = await import('./verify-windows-sandbox-e2e.mjs');
+    await verifyWindowsSandboxWorkerE2E(appDirectory);
   }
 
   step('reading the product version resource');
@@ -121,13 +204,6 @@ export async function verifyPackagedWindowsApp(
     },
     timeoutMs: 60_000,
   });
-
-  // No filesystem worker smoke here, unlike macOS. The worker exists to enforce
-  // a sandbox profile, and `isBuiltinFilesystemWorkerSandboxAvailable` is false
-  // on Windows (packages/runtime/src/sandbox/default-sandbox-manager.ts), so the
-  // app never launches it — file tools run through the workspace executor
-  // instead. Driving the worker by hand would only prove that a POSIX-only
-  // boundary check rejects Windows paths, which no Windows user can reach.
 
   step('smoking the packaged renderer');
   await smokeRenderer(executable, { workingDirectory });

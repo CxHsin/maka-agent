@@ -38,6 +38,14 @@ function createStateSetter<T>(initial: T): {
   };
 }
 
+async function waitFor(predicate: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) assert.fail(message);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 function renderLiveTurn(liveTurn: LiveTurnProjection): string {
   return renderWithLocale(createElement(ChatView, {
     activeSession: {
@@ -149,7 +157,7 @@ describe('single live-turn handoff', () => {
     assert.equal(markup.split(text).length - 1, 0);
   });
 
-  it('reduces events into the projection and settles only after committed history refreshes', async () => {
+  it('hands terminal streamed text to committed history without waiting for a render callback', async () => {
     const liveTurns = createStateSetter<Record<string, LiveTurnProjection>>({
       'session-1': armLiveTurn('turn-1'),
     });
@@ -166,7 +174,7 @@ describe('single live-turn handoff', () => {
       liveTurnBySessionRef,
       refreshMessages: async (sessionId, options) => {
         refreshes.push({ sessionId, required: options?.requiredAssistantMessageId });
-        return true;
+        return refreshes.length >= 3;
       },
       refreshSessions: async () => [],
       setLiveTurnBySession,
@@ -194,9 +202,15 @@ describe('single live-turn handoff', () => {
     assert.equal(terminal?.steps[0]?.tools[0]?.toolUseId, 'tool-1');
     assert.equal(terminal?.steps[0]?.text?.text, '答案');
 
-    await handlers.settleAssistantStreaming('session-1', 'assistant-1');
+    await waitFor(
+      () => liveTurns.get()['session-1'] === undefined,
+      'Timed out waiting for the durable transcript handoff',
+    );
     assert.equal(liveTurns.get()['session-1'], undefined);
-    assert.ok(refreshes.some((call) => call.required === 'assistant-1'));
+    assert.equal(
+      refreshes.filter((call) => call.required === 'assistant-1').length,
+      3,
+    );
   });
 
   it('publishes visible deltas at most once per animation frame', () => {

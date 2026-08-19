@@ -44,6 +44,8 @@ const STDERR_OVERSIZED_LINE = '[stderr line omitted: exceeds diagnostic limit]';
 const STDERR_CONTINUATION = '[stderr continuation omitted]';
 const MAX_SUMMARIZED_ERROR_BLOCKS = 100;
 const OVERSIZED_TOOL_ERROR_CONTENT = 'server returned oversized error content';
+const MAX_TOOL_REFRESH_PASSES = 3;
+const TOOL_REFRESH_BURST_IDLE_MS = 1_000;
 
 export interface McpClientManagerOptions {
   clientName?: string;
@@ -69,8 +71,42 @@ interface ToolSnapshotEntry {
 interface ToolRefreshState {
   readonly client: Client;
   readonly connectionGeneration: number;
+  // Initial discovery runs before the status transitions to 'connected'; it
+  // still owns the same single-flight gate so a list-changed notification
+  // received while the first tools/list is in flight joins this pass instead
+  // of racing or being dropped.
+  readonly initial: boolean;
+  // Connect-scoped abort for the initial pass: cancelling an installation
+  // must interrupt the in-flight first tools/list instead of waiting out the
+  // server. Post-connect refreshes are torn down via the connection identity
+  // guard and transport close instead.
+  readonly signal?: AbortSignal;
   pending: boolean;
-  promise: Promise<McpToolDescriptor[]>;
+  pendingNotification: boolean;
+  promise: Promise<ToolRefreshResult>;
+}
+
+interface ToolRefreshResult {
+  readonly descriptors: McpToolDescriptor[];
+  readonly initialSnapshot?: Map<string, ToolSnapshotEntry>;
+  readonly suppressed: boolean;
+}
+
+interface ToolRefreshOptions {
+  readonly notification?: boolean;
+  readonly initial?: boolean;
+  readonly signal?: AbortSignal;
+}
+
+interface ToolRefreshNotificationState {
+  readonly client: Client;
+  readonly connectionGeneration: number;
+  // This state intentionally outlives one refresh promise. A notification
+  // sent just after every response must consume the same bounded pass budget,
+  // while an idle interval starts a later independent burst with a new one.
+  refreshPasses: number;
+  suppressed: boolean;
+  lastPassCompletedAt?: number;
 }
 
 interface Connection {
@@ -85,6 +121,7 @@ interface Connection {
   toolSnapshot: Map<string, ToolSnapshotEntry>;
   connectionGeneration?: number;
   refreshState?: ToolRefreshState;
+  refreshNotificationState?: ToolRefreshNotificationState;
   closing: boolean;
 }
 
@@ -112,7 +149,6 @@ export class McpClientManager {
   private readonly clientName: string;
   private readonly clientVersion: string;
   private readonly excludedStdioEnvironmentKeys: readonly string[];
-  private toolSnapshotRevisionValue = 0;
   private readonly toolCallPreparer = new McpToolCallPreparer();
   private readonly bindingManagerId = randomBytes(16).toString('base64url');
   private lastConnectionGeneration = 0;
@@ -229,6 +265,7 @@ export class McpClientManager {
     this.replaceToolSnapshot(entry, new Map());
     entry.connectionGeneration = undefined;
     entry.refreshState = undefined;
+    entry.refreshNotificationState = undefined;
     await safeClose(client, transport);
     await connectPromise?.catch(() => {});
     if (remove) {
@@ -252,6 +289,7 @@ export class McpClientManager {
       this.replaceToolSnapshot(entry, new Map());
       entry.connectionGeneration = undefined;
       entry.refreshState = undefined;
+      entry.refreshNotificationState = undefined;
       return safeClose(entry.client, entry.transport);
     });
     await Promise.all(closing);
@@ -264,29 +302,115 @@ export class McpClientManager {
   async refreshTools(serverId: string): Promise<McpToolDescriptor[]> {
     if (this.closed) throw new Error('MCP client manager is closed');
     const entry = this.requireConnection(serverId);
+    const connectingRefresh = entry.refreshState;
+    // Initial discovery already defines the first callable snapshot. An
+    // explicit refresh during that connect joins it without requesting the
+    // notification-style follow-up pass used after publication.
+    if (
+      entry.status.state === 'connecting' &&
+      entry.client &&
+      connectingRefresh?.client === entry.client &&
+      connectingRefresh.connectionGeneration === entry.connectionGeneration
+    ) {
+      return (await connectingRefresh.promise).descriptors;
+    }
     if (!entry.client || entry.status.state !== 'connected') await this.connect(serverId);
     const client = entry.client;
     if (!client) throw new Error(`MCP server "${serverId}" is not connected`);
     const connectionGeneration = this.requireConnectionGeneration(serverId, entry);
+    const activeRefresh = entry.refreshState;
+    const refreshIsActive =
+      activeRefresh?.client === client &&
+      activeRefresh.connectionGeneration === connectionGeneration;
+    if (!refreshIsActive) {
+      entry.refreshNotificationState = {
+        client,
+        connectionGeneration,
+        refreshPasses: 0,
+        suppressed: false,
+      };
+    }
+    const result = await this.startToolRefresh(serverId, entry, client, connectionGeneration);
+    return result.descriptors;
+  }
+
+  private startToolRefresh(
+    serverId: string,
+    entry: Connection,
+    client: Client,
+    connectionGeneration: number,
+    options: ToolRefreshOptions = {},
+  ): Promise<ToolRefreshResult> {
+    const notification = options.notification ?? false;
     if (
       entry.refreshState?.client === client &&
       entry.refreshState.connectionGeneration === connectionGeneration
     ) {
       entry.refreshState.pending = true;
+      entry.refreshState.pendingNotification ||= notification;
       return entry.refreshState.promise;
     }
 
     const state: ToolRefreshState = {
       client,
       connectionGeneration,
+      initial: options.initial ?? false,
+      signal: options.signal,
       pending: false,
-      promise: Promise.resolve([]),
+      pendingNotification: notification,
+      promise: Promise.resolve({ descriptors: [], suppressed: false }),
     };
-    state.promise = this.refreshToolLoop(serverId, entry, state).finally(() => {
-      if (entry.refreshState === state) entry.refreshState = undefined;
-    });
+    state.promise = this.refreshToolLoop(serverId, entry, state);
     entry.refreshState = state;
     return state.promise;
+  }
+
+  private async refreshToolsAfterNotification(
+    serverId: string,
+    entry: Connection,
+    client: Client,
+    connectionGeneration: number,
+  ): Promise<McpToolDescriptor[]> {
+    let notificationState = entry.refreshNotificationState;
+    if (
+      notificationState?.client !== client ||
+      notificationState.connectionGeneration !== connectionGeneration
+    ) {
+      notificationState = {
+        client,
+        connectionGeneration,
+        refreshPasses: 0,
+        suppressed: false,
+      };
+      entry.refreshNotificationState = notificationState;
+    }
+    const activeRefresh = entry.refreshState;
+    if (
+      activeRefresh?.client === client &&
+      activeRefresh.connectionGeneration === connectionGeneration
+    ) {
+      activeRefresh.pending = true;
+      activeRefresh.pendingNotification = true;
+      return (await activeRefresh.promise).descriptors;
+    }
+    if (
+      notificationState.lastPassCompletedAt !== undefined &&
+      this.now() - notificationState.lastPassCompletedAt >= TOOL_REFRESH_BURST_IDLE_MS
+    ) {
+      notificationState.refreshPasses = 0;
+      notificationState.suppressed = false;
+    }
+    if (notificationState.suppressed) {
+      return Promise.reject(this.toolRefreshFrequencyError(serverId));
+    }
+    if (notificationState.refreshPasses >= MAX_TOOL_REFRESH_PASSES) {
+      notificationState.suppressed = true;
+      return Promise.reject(this.toolRefreshFrequencyError(serverId));
+    }
+    const result = await this.startToolRefresh(serverId, entry, client, connectionGeneration, {
+      notification: true,
+    });
+    return result.descriptors;
   }
 
   async callTool(
@@ -435,28 +559,13 @@ export class McpClientManager {
       entry.stdioTransport = connected.stdioTransport;
       const connectionGeneration = this.allocateConnectionGeneration();
       entry.connectionGeneration = connectionGeneration;
-      const definitions = await listAllTools(
-        connected.client,
-        serverId,
-        this.timeouts.listToolsMs,
-        signal,
-      );
-      if (
-        signal.aborted ||
-        entry.closing ||
-        connected.isClosed() ||
-        entry.client !== connected.client ||
-        entry.connectionGeneration !== connectionGeneration
-      ) {
-        throw new Error(`MCP server "${serverId}" connection changed during tool discovery`);
-      }
-      const snapshot = createToolSnapshot(
-        serverId,
-        definitions,
-        this.bindingManagerId,
-        connectionGeneration,
-      );
       const connectedClient = connected.client;
+      // Install the generation-fenced handler BEFORE initial discovery, and
+      // run that first discovery through the same single-flight refresh owner
+      // as explicit refreshes and notifications. A tools/list_changed that
+      // arrives while the first tools/list response is in flight then joins
+      // the active pass instead of being dropped, so the published snapshot
+      // cannot settle on a list the server already declared stale.
       connectedClient.setNotificationHandler('notifications/tools/list_changed', async () => {
         if (
           this.connections.get(serverId) !== entry ||
@@ -465,7 +574,12 @@ export class McpClientManager {
         ) {
           return;
         }
-        await this.refreshTools(serverId).catch((error) => {
+        await this.refreshToolsAfterNotification(
+          serverId,
+          entry,
+          connectedClient,
+          connectionGeneration,
+        ).catch((error) => {
           if (
             this.connections.get(serverId) !== entry ||
             entry.client !== connectedClient ||
@@ -483,13 +597,40 @@ export class McpClientManager {
           });
         });
       });
-      this.replaceToolSnapshot(entry, snapshot.entries);
+      const initialRefresh = await this.startToolRefresh(
+        serverId,
+        entry,
+        connectedClient,
+        connectionGeneration,
+        { initial: true, signal },
+      );
+      if (
+        signal.aborted ||
+        entry.closing ||
+        connected.isClosed() ||
+        entry.client !== connected.client ||
+        entry.connectionGeneration !== connectionGeneration
+      ) {
+        throw new Error(`MCP server "${serverId}" connection changed during tool discovery`);
+      }
+      const initialSnapshot = initialRefresh.initialSnapshot;
+      if (!initialSnapshot) {
+        throw new Error(`MCP server "${serverId}" returned no initial tool snapshot`);
+      }
+      // Initial discovery prepares snapshots while the connection is still
+      // connecting, but publication and the connected status transition stay
+      // in one synchronous commit. Observers can therefore never advertise a
+      // binding that callTool still rejects as not connected.
+      this.replaceToolSnapshot(entry, initialSnapshot);
       this.update(entry, {
         serverId,
         state: 'connected',
         transport: connected.kind,
-        toolCount: snapshot.descriptors.length,
-        tools: snapshot.descriptors,
+        toolCount: initialRefresh.descriptors.length,
+        tools: initialRefresh.descriptors,
+        error: initialRefresh.suppressed
+          ? errorMessage(this.toolRefreshFrequencyError(serverId))
+          : undefined,
         stderrTail: entry.status.stderrTail,
         updatedAt: this.now(),
       });
@@ -509,6 +650,7 @@ export class McpClientManager {
         this.replaceToolSnapshot(entry, new Map());
         entry.connectionGeneration = undefined;
         entry.refreshState = undefined;
+        entry.refreshNotificationState = undefined;
       }
       if (signal.aborted) {
         if (!entry.closing && this.connections.get(serverId) === entry) {
@@ -599,47 +741,136 @@ export class McpClientManager {
     serverId: string,
     entry: Connection,
     state: ToolRefreshState,
-  ): Promise<McpToolDescriptor[]> {
-    while (true) {
-      state.pending = false;
-      let definitions: McpDiscoveredTool[] | undefined;
-      let failure: unknown;
-      try {
-        definitions = await listAllTools(state.client, serverId, this.timeouts.listToolsMs);
-      } catch (error) {
-        failure = error;
-      }
-      if (
-        this.connections.get(serverId) !== entry ||
-        entry.client !== state.client ||
-        entry.connectionGeneration !== state.connectionGeneration ||
-        entry.status.state !== 'connected'
-      ) {
-        throw safeMcpOperationError(serverId, 'connection changed during tool refresh', failure);
-      }
-      if (state.pending) continue;
-      if (failure !== undefined) {
-        throw safeMcpOperationError(serverId, 'tool refresh failed', failure);
-      }
-      if (!definitions) throw new Error(`MCP server "${serverId}" returned no tool definitions`);
+  ): Promise<ToolRefreshResult> {
+    let latestSnapshot:
+      | { entries: Map<string, ToolSnapshotEntry>; descriptors: McpToolDescriptor[] }
+      | undefined;
+    const finish = (
+      snapshot: NonNullable<typeof latestSnapshot>,
+      suppressed: boolean,
+    ): ToolRefreshResult => ({
+      descriptors: snapshot.descriptors.map(cloneTool),
+      ...(state.initial ? { initialSnapshot: snapshot.entries } : {}),
+      suppressed,
+    });
+    try {
+      while (true) {
+        const notificationPass = state.pendingNotification;
+        state.pending = false;
+        state.pendingNotification = false;
+        if (notificationPass) {
+          const notificationState = entry.refreshNotificationState;
+          if (
+            notificationState?.client !== state.client ||
+            notificationState.connectionGeneration !== state.connectionGeneration
+          ) {
+            throw safeMcpOperationError(
+              serverId,
+              'connection changed during tool refresh',
+              undefined,
+            );
+          }
+          if (notificationState.suppressed) {
+            if (state.initial && latestSnapshot) return finish(latestSnapshot, true);
+            throw this.toolRefreshFrequencyError(serverId);
+          }
+          if (notificationState.refreshPasses >= MAX_TOOL_REFRESH_PASSES) {
+            notificationState.suppressed = true;
+            if (state.initial && latestSnapshot) return finish(latestSnapshot, true);
+            throw this.toolRefreshFrequencyError(serverId);
+          }
+          notificationState.refreshPasses += 1;
+        }
+        let definitions: McpDiscoveredTool[] | undefined;
+        let failure: unknown;
+        try {
+          definitions = await listAllTools(
+            state.client,
+            serverId,
+            this.timeouts.listToolsMs,
+            state.signal,
+          );
+        } catch (error) {
+          failure = error;
+        }
+        if (!this.ownsToolRefresh(serverId, entry, state)) {
+          throw safeMcpOperationError(serverId, 'connection changed during tool refresh', failure);
+        }
+        const notificationState = entry.refreshNotificationState;
+        const notificationStateMatches =
+          notificationState?.client === state.client &&
+          notificationState.connectionGeneration === state.connectionGeneration;
+        const refreshSuppressed = notificationStateMatches && notificationState.suppressed;
+        if (failure !== undefined) {
+          if (refreshSuppressed) throw this.toolRefreshFrequencyError(serverId);
+          if (state.pending) continue;
+          throw safeMcpOperationError(serverId, 'tool refresh failed', failure);
+        }
+        if (!definitions) {
+          if (refreshSuppressed) throw this.toolRefreshFrequencyError(serverId);
+          if (state.pending) continue;
+          throw new Error(`MCP server "${serverId}" returned no tool definitions`);
+        }
 
-      const snapshot = createToolSnapshot(
-        serverId,
-        definitions,
-        this.bindingManagerId,
-        state.connectionGeneration,
-        entry.toolSnapshot,
-      );
-      this.replaceToolSnapshot(entry, snapshot.entries);
-      this.update(entry, {
-        ...entry.status,
-        tools: snapshot.descriptors,
-        toolCount: snapshot.descriptors.length,
-        error: undefined,
-        updatedAt: this.now(),
-      });
-      return snapshot.descriptors.map(cloneTool);
+        const snapshot = createToolSnapshot(
+          serverId,
+          definitions,
+          this.bindingManagerId,
+          state.connectionGeneration,
+          entry.toolSnapshot,
+        );
+        latestSnapshot = snapshot;
+        if (notificationStateMatches) notificationState.lastPassCompletedAt = this.now();
+        if (refreshSuppressed) {
+          if (state.initial) return finish(snapshot, true);
+          throw this.toolRefreshFrequencyError(serverId);
+        }
+        if (state.pending) continue;
+        if (!state.initial) {
+          this.replaceToolSnapshot(entry, snapshot.entries);
+          this.update(entry, {
+            ...entry.status,
+            tools: snapshot.descriptors,
+            toolCount: snapshot.descriptors.length,
+            error: undefined,
+            updatedAt: this.now(),
+          });
+          if (!this.ownsToolRefresh(serverId, entry, state)) {
+            throw safeMcpOperationError(
+              serverId,
+              'connection changed during tool refresh',
+              undefined,
+            );
+          }
+          if (state.pending) continue;
+        }
+        return finish(snapshot, false);
+      }
+    } finally {
+      // Release the gate synchronously on every exit. A promise `.finally`
+      // runs one microtask after settlement, so a refresh requested in that
+      // window would join a settled promise and receive descriptors from a
+      // list that started before it asked.
+      if (entry.refreshState === state) entry.refreshState = undefined;
     }
+  }
+
+  private ownsToolRefresh(serverId: string, entry: Connection, state: ToolRefreshState): boolean {
+    return (
+      this.connections.get(serverId) === entry &&
+      !entry.closing &&
+      entry.client === state.client &&
+      entry.connectionGeneration === state.connectionGeneration &&
+      (entry.status.state === 'connected' || (state.initial && entry.status.state === 'connecting'))
+    );
+  }
+
+  private toolRefreshFrequencyError(serverId: string): Error {
+    return safeMcpOperationError(
+      serverId,
+      'tool refresh failed',
+      new Error('tool list changed too frequently during discovery'),
+    );
   }
 
   private watchClientClose(serverId: string, entry: Connection, client: Client): () => boolean {
@@ -661,6 +892,7 @@ export class McpClientManager {
     this.replaceToolSnapshot(entry, new Map());
     entry.connectionGeneration = undefined;
     entry.refreshState = undefined;
+    entry.refreshNotificationState = undefined;
     this.update(entry, {
       ...entry.status,
       state: 'disconnected',

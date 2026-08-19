@@ -1,10 +1,16 @@
 import {
   LONG_SIDEBAR_PROJECT_ID,
   LONG_SIDEBAR_PROJECT_NAME,
+  LONG_SIDEBAR_SESSION_PREFIX,
 } from '../src/main/e2e-fixture/seed-helpers';
+import type { Locator } from '@playwright/test';
 import { expect, test } from './fixtures';
 
-test('project navigation and actions remain adjacent keyboard controls', async ({
+function sessionRow(sidebar: Locator, sessionId: string): Locator {
+  return sidebar.locator(`[data-session-id*=${JSON.stringify(sessionId)}]`);
+}
+
+test('project navigation and actions follow their visual keyboard order', async ({
   projectSidebarWindow: page,
 }) => {
   await page.keyboard.press('Escape');
@@ -28,12 +34,22 @@ test('project navigation and actions remain adjacent keyboard controls', async (
   const controlledGroup = page.locator(`[id="${controlledGroupId}"]`);
   const firstSessionControl = controlledGroup.locator('[data-session-id] button').first();
 
+  await expect(navigation).toBeVisible();
+  await expect(firstSessionControl).toBeVisible();
+  const [projectNavigationBox, firstSessionBox] = await Promise.all([
+    navigation.boundingBox(),
+    firstSessionControl.boundingBox(),
+  ]);
+  expect(projectNavigationBox).not.toBeNull();
+  expect(firstSessionBox).not.toBeNull();
+  expect(firstSessionBox!.x - projectNavigationBox!.x).toBeGreaterThanOrEqual(20);
+
   await expect(projectRow.locator('button button')).toHaveCount(0);
   await expect(navigation).toHaveAttribute('aria-expanded', 'true');
 
-  await action.focus();
+  await navigation.focus();
   await page.keyboard.press('Tab');
-  await expect(navigation).toBeFocused();
+  await expect(action).toBeFocused();
   await page.keyboard.press('Tab');
   await expect(firstSessionControl).toBeFocused();
 
@@ -61,4 +77,48 @@ test('project navigation and actions remain adjacent keyboard controls', async (
   await expect(page.getByRole('dialog', { name: '重命名项目' })).toBeVisible();
   await page.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(action).toBeFocused();
+});
+
+test('task row action menu accepts pointer selection', async ({
+  projectSidebarWindow: page,
+}) => {
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-maka-contract="search-modal"]')).not.toBeVisible();
+
+  const sidebar = page.getByRole('navigation', { name: '任务列表' });
+  const taskRow = sessionRow(sidebar, `${LONG_SIDEBAR_SESSION_PREFIX}00`);
+  await taskRow.hover();
+  await taskRow.getByRole('button', { name: '任务操作', exact: true }).click();
+
+  const rename = page.getByRole('menuitem', { name: '重命名', exact: true });
+  await expect(rename).toBeVisible();
+  await rename.click();
+
+  await expect(page.getByRole('dialog', { name: '重命名任务' })).toBeVisible();
+});
+
+test('rail grouping survives a renderer reload', async ({ projectSidebarWindow: page }) => {
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-maka-contract="search-modal"]')).not.toBeVisible();
+
+  const sidebar = page.getByRole('navigation', { name: '任务列表' });
+  const byTime = sidebar.getByRole('radio', { name: '按时间', exact: true });
+  const byProject = sidebar.getByRole('radio', { name: '按项目', exact: true });
+
+  await expect(byTime).toBeChecked();
+  await byProject.click();
+  await expect(byProject).toBeChecked();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('maka-chat-list-view-mode-v1')))
+    .toBe('project');
+
+  await page.reload();
+  await expect(page.locator('[data-maka-contract="search-modal"][open]')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-maka-contract="search-modal"]')).not.toBeVisible();
+
+  await expect(sidebar.getByRole('radio', { name: '按项目', exact: true })).toBeChecked();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem('maka-chat-list-view-mode-v1')))
+    .toBe('project');
 });

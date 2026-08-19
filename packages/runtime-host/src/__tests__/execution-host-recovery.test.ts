@@ -25,7 +25,7 @@ import {
 import {
   FAKE_ASK_USER_QUESTION_PROMPT,
   FAKE_WAIT_FOR_STEERING_PROMPT,
-} from '@maka/runtime/fake-backend';
+} from '@maka/runtime/test-only/fake-backend';
 import { type MakaTool, type MakaToolContext } from '@maka/runtime/tool-runtime';
 import {
   openInteractiveExecutionStoresForRead,

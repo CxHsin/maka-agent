@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
+import { userEvent } from 'storybook/test';
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import type { ComponentProps } from 'react';
 import type { ProjectRecord } from '@maka/core/project';
@@ -6,8 +7,10 @@ import type { SessionSummary, StoredMessage } from '@maka/core/session';
 import {
   ChatSurfaceLayout,
   ChatView,
+  clearGlobalInputHistory,
   Composer,
   deriveTitlebarProjectName,
+  saveGlobalInputHistoryEntry,
   SessionListPanel,
   TitlebarSessionIdentity,
 } from '@maka/ui';
@@ -182,14 +185,31 @@ const baseComposerProps: ComposerProps = {
   // session owns it, so the active-session stories below carry it without
   // showing it.
   workspacePicker: {
-    label: 'maka-agent',
-    branch: 'opencode/storybook-surface-coverage',
-    projects: catalogProjects.filter((item) => item.archivedAt === undefined),
-    selectedProjectId: 'project-maka',
-    onAdd: noop,
-    onSelectProject: noop,
-    onRelink: noop,
-    onSelectNoProject: noop,
+    label: 'backend-service',
+    hostBadge: 'Lab server',
+    selectedGroupId: 'lab-server',
+    groups: [
+      {
+        id: 'local',
+        label: 'This device',
+        projects: catalogProjects.filter((item) => item.archivedAt === undefined),
+        selectedProjectId: 'project-maka',
+        onAdd: noop,
+        onSelectProject: noop,
+        onRelink: noop,
+        onSelectNoProject: noop,
+      },
+      {
+        id: 'lab-server',
+        label: 'Lab server',
+        projects: [
+          project({ id: 'project-backend', name: 'backend-service' }),
+          project({ id: 'project-infra', name: 'infrastructure' }),
+        ],
+        selectedProjectId: 'project-backend',
+        onSelectProject: noop,
+      },
+    ],
   },
   onSend: noop,
   onStop: noop,
@@ -586,6 +606,29 @@ export const NewChatComposer: Story = {
   ),
 };
 
+// A ready Local Host with no registered Projects must still expose its two
+// bootstrap actions while another Host owns the draft.
+export const NewChatComposerEmptyLocalHost: Story = {
+  render: () => (
+    <ComposedShell
+      session={null}
+      chat={{ messages: [] }}
+      composer={{
+        newChatModel: { llmConnectionSlug: 'anthropic-main', model: 'claude-sonnet-4-5' },
+        onPickNewChatModel: noop,
+        onOpenModelSettings: noop,
+        workspacePicker: {
+          ...baseComposerProps.workspacePicker!,
+          groups: baseComposerProps.workspacePicker!.groups.map((group) =>
+            group.id === 'local'
+              ? { ...group, projects: [], selectedProjectId: undefined }
+              : group),
+        },
+      }}
+    />
+  ),
+};
+
 // Real path: 新任务 → 切换项目 → 项目 picker 处于 pending（切换中）。
 // Production passes `pending: projectPickerPending` while a project switch is
 // in flight; the trigger locks with a spinner and every menu row disables,
@@ -936,4 +979,40 @@ export const ModeOnWithPendingAttachments: Story = {
       }}
     />
   ),
+};
+
+const RECALLED_PROMPT = '帮我把 composer 的样式再收紧一点';
+
+// Real path: the user has sent this prompt before and starts retyping it, so
+// the editor offers the rest inside the field.
+//
+// A review driver, not coverage: the render smoke opens stories in embedded
+// mode, which disables autoplay (FIDELITY.md), so nothing below is executed by
+// CI. The active-offer lifecycle — Tab, caret, focus, composition, trigger-menu
+// priority, streaming Escape — is pinned in
+// `apps/desktop/e2e/composer-inline-completion.spec.ts`, which does run.
+export const ComposerInlineSuggestion: Story = {
+  // Seeded through the module's own write path, before the story mounts:
+  // `useComposerHistory` reads storage once at mount and thereafter follows
+  // that module's writes, so poking the key from `play` would seed a list
+  // nobody holds.
+  loaders: [
+    async () => {
+      clearGlobalInputHistory();
+      saveGlobalInputHistoryEntry(RECALLED_PROMPT);
+      return {};
+    },
+  ],
+  render: () => <ComposedShell chat={{ messages: [] }} />,
+  play: async ({ canvasElement }) => {
+    // Scoped to this canvas, not the document: Storybook can have other
+    // stories mounted, and a document-wide lookup would drive whichever
+    // composer happened to be first.
+    const editable = canvasElement.querySelector<HTMLElement>(
+      '.maka-composer-editor [contenteditable="true"]',
+    );
+    if (!editable) return;
+    await userEvent.click(editable);
+    await userEvent.keyboard(RECALLED_PROMPT.slice(0, 3));
+  },
 };

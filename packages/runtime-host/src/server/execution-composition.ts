@@ -1,4 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
+import {
+  describeChatConfigurationReason,
+  NO_REAL_CONNECTION_CODE,
+} from '@maka/core/connection-error-copy';
+import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
 import { generalizedErrorMessage } from '@maka/core/redaction';
 import { emptyPlanSessionState } from '@maka/core/plan';
 import type { PermissionMode } from '@maka/core/permission';
@@ -23,7 +28,6 @@ import {
   createFilesystemWorkerLaunchSpecProvider,
   FilesystemWorkerClient,
 } from '@maka/runtime/filesystem-worker';
-import { FakeBackend } from '@maka/runtime/fake-backend';
 import { isOAuthEnrollmentProviderEnabled } from '@maka/runtime/oauth-provider-contracts';
 import {
   loadHistoryCompactCheckpointsFromRunLedger,
@@ -31,7 +35,6 @@ import {
 } from '@maka/runtime/history-compact-ledger';
 import { prepareSkillInvocationMessageFromInventory } from '@maka/runtime/skill-invocation';
 import { RuntimeReadModel } from '@maka/runtime/runtime-read-model';
-import { routeWebSearchTools } from '@maka/runtime/native-web-search-tool';
 import {
   renderAgentSwarmSupervisorWake,
   shouldWakeAgentSwarmSupervisor,
@@ -100,6 +103,7 @@ import { createHostAiSdkBackend } from './execution-model-composition.js';
 import {
   createInteractiveRunComposer,
   createInteractiveRunComposerFactory,
+  routeInteractiveRunToolSurface,
 } from './interactive-run-composer.js';
 import {
   createHostGoalEvaluator,
@@ -135,6 +139,10 @@ import { HostNetworkProxyCoordinator } from './network-proxy-coordinator.js';
 import { HostOAuthExecutionAuthority } from './oauth-execution-authority.js';
 import { HostOAuthCoordinator, type HostOAuthCoordinatorInput } from './oauth-coordinator.js';
 import { HostPlanCoordinator } from './plan-coordinator.js';
+import {
+  HostProjectDirectoryAuthority,
+  type PublishedProjectDirectoryRoot,
+} from './project-directory-authority.js';
 import { HostProjectCatalogCoordinator } from './project-catalog-coordinator.js';
 import { HostProjectMembershipGate } from './project-membership-gate.js';
 import { RootAdmissionOwner } from './root-admission-owner.js';
@@ -160,6 +168,8 @@ import { HostWebSearchCoordinator } from './web-search-coordinator.js';
 import {
   createHostWebSearchService,
   createHostWebSearchToolFromService,
+  resolveHostTavilyWebSearchReadiness,
+  shouldResolveHostTavilyWebSearchReadiness,
 } from './web-search-tool.js';
 import { createHostWebFetchService, createHostWebFetchToolFromService } from './web-fetch-tool.js';
 import { createHostExecutionArtifactServices } from './execution-artifacts.js';
@@ -177,6 +187,7 @@ export interface CreateExecutionRuntimeHostCompositionOptions {
   readonly managedWorkspaceGitRuntime?: VerifiedGitRuntimeInput;
   readonly bootstrapRuntimePolicy?: boolean;
   readonly skillHomeDirectory?: string;
+  readonly projectDirectoryRoots?: readonly PublishedProjectDirectoryRoot[];
 }
 
 export interface ExecutionRuntimeHostCompositionDependencies {
@@ -275,7 +286,18 @@ export async function createExecutionRuntimeHostComposition(
     });
     await stores.messageReceiptStore.beginHostEpoch(context.hostEpoch);
     const backends = new BackendRegistry();
-    backends.register('fake', (backendContext) => new FakeBackend(backendContext));
+    // `fake` is a retired backend kind: this build never writes it, but a
+    // session or Automation persisted by an older one still can, and activation
+    // dispatches straight off that durable value. Registering an explicit
+    // refusal — rather than the test backend, or a read-path rewrite of the
+    // durable header — is what turns "no factory for kind=fake" into the
+    // product's existing answer for these rows: this task came from the retired
+    // local simulation, configure a real model and start a new one.
+    backends.register('fake', () => {
+      throw new Error(
+        `${NO_REAL_CONNECTION_CODE}:fake_backend: ${describeChatConfigurationReason('fake_backend')}`,
+      );
+    });
     const runtimePolicyActivation = new RuntimePolicyActivationGate();
     const runtimePolicy = new HostRuntimePolicyCoordinator(
       runtimePolicyStores,
@@ -452,6 +474,7 @@ export async function createExecutionRuntimeHostComposition(
       { publish: (sessionId: string) => hostChanges.publishSessionCatalog(sessionId) },
       projectMembership,
       context.requestDrain,
+      new HostProjectDirectoryAuthority(options.projectDirectoryRoots),
     );
     let rootCoordinator: RootTurnCoordinator | undefined;
     let canonicalProjection: CanonicalSessionProjectionReader | undefined;
@@ -634,6 +657,8 @@ export async function createExecutionRuntimeHostComposition(
               memory: requireMemory(memory),
               taskLedger,
               clientCapabilities: requireClientCapabilities(clientCapabilities),
+              resolveTavilyWebSearchReadiness: () =>
+                resolveHostTavilyWebSearchReadiness(runtimePolicyStores.operations),
               ...(scheduledTaskTool ? { scheduledTaskTool } : {}),
               planStore: openedPlanStore,
               deepResearchTools: requireDeepResearch(deepResearch).toolsForSession(
@@ -672,6 +697,49 @@ export async function createExecutionRuntimeHostComposition(
       stopSession: (sessionId, input) =>
         requireRootCoordinator(rootCoordinator).stopSession(sessionId, input),
     };
+    const resolveInteractiveToolSurface = async (input: {
+      readonly connectionSlug?: string;
+      readonly modelId: string;
+      readonly hostTools: readonly MakaTool[];
+      readonly boundTools?: readonly MakaTool[];
+      readonly childTools?: readonly MakaTool[];
+      readonly parentAgentTools?: readonly MakaTool[];
+    }) => {
+      const [runtimePolicy, resolved] = await Promise.all([
+        runtimePolicyStores.runtimePolicy.getSnapshot(),
+        input.connectionSlug
+          ? runtimePolicyStores.operations.resolveExecutionConnection(input.connectionSlug)
+          : Promise.resolve(undefined),
+      ]);
+      let connection: RuntimeExecutionConnection | undefined;
+      if (resolved?.kind === 'ready') {
+        const { models, ...configuration } = resolved.connection;
+        connection = {
+          ...configuration,
+          defaultModel: input.modelId,
+          ...(models ? { models: [...models] } : {}),
+        };
+      }
+      const tavilyReady =
+        connection && shouldResolveHostTavilyWebSearchReadiness(runtimePolicy.policy)
+          ? await resolveHostTavilyWebSearchReadiness(runtimePolicyStores.operations)
+          : false;
+      return {
+        runtimePolicy,
+        surface: routeInteractiveRunToolSurface({
+          runtimePolicy,
+          ...(connection ? { connection } : {}),
+          modelId: input.modelId,
+          hostTools: input.hostTools,
+          ...(input.boundTools ? { boundTools: input.boundTools } : {}),
+          ...(input.childTools ? { childTools: input.childTools } : {}),
+          ...(input.parentAgentTools ? { parentAgentTools: input.parentAgentTools } : {}),
+          taskLedger,
+          worktreePatchWriteBackAvailable: true,
+          tavilyReady,
+        }),
+      };
+    };
     resolveAvailableToolNames = async (sessionId: string): Promise<string[]> => {
       const header = await stores.sessionStore.readHeaderSnapshot(sessionId);
       if (header.subagentRuntime) {
@@ -686,7 +754,13 @@ export async function createExecutionRuntimeHostComposition(
         if (tools.length !== header.subagentRuntime.toolNames.length) {
           throw new Error('Subagent runtime tool snapshot is unavailable');
         }
-        return tools.map((tool) => tool.name);
+        const { surface } = await resolveInteractiveToolSurface({
+          connectionSlug: header.llmConnectionSlug,
+          modelId: header.model,
+          hostTools: [],
+          boundTools: tools,
+        });
+        return (surface.boundTools ?? []).map((tool) => tool.name);
       }
       if (header.subagentParent) {
         throw new Error('Linked child session is missing its durable runtime snapshot');
@@ -694,14 +768,20 @@ export async function createExecutionRuntimeHostComposition(
       const capabilitySnapshot =
         requireClientCapabilities(clientCapabilities).snapshotForSession(sessionId);
       try {
-        const [graphTools, planState, runtimePolicySnapshot] = await Promise.all([
+        const [graphTools, planState] = await Promise.all([
           requireGraphCoordinator(graphCoordinator).toolsForSession(sessionId),
           openedPlanStore.readState(sessionId),
-          runtimePolicyStores.runtimePolicy.getSnapshot(),
         ]);
+        const { runtimePolicy, surface } = await resolveInteractiveToolSurface({
+          connectionSlug: header.llmConnectionSlug,
+          modelId: header.model,
+          hostTools: [...hostTools, ...graphTools],
+          childTools: childAgentTools.childTools,
+          parentAgentTools: childAgentTools.parentTools,
+        });
         const runProfile = hostedExecutionRunProfile(header.toolProfile);
         return createInteractiveRunComposer({
-          runtimePolicy: runtimePolicySnapshot,
+          runtimePolicy,
           skills,
           memory: requireMemory(memory),
           taskLedger,
@@ -713,10 +793,10 @@ export async function createExecutionRuntimeHostComposition(
             : {}),
           ...(capabilitySnapshot ? { clientCapabilities: capabilitySnapshot } : {}),
           builtinTools,
-          hostTools: [...hostTools, ...graphTools],
+          hostTools: surface.hostTools,
           ...(scheduledTaskTool ? { scheduledTaskTool } : {}),
           goalTools: requireGoal(goal).tools,
-          parentAgentTools: childAgentTools.parentTools,
+          ...(surface.parentAgentTools ? { parentAgentTools: surface.parentAgentTools } : {}),
           plan: {
             store: openedPlanStore,
             state: planState,
@@ -747,18 +827,31 @@ export async function createExecutionRuntimeHostComposition(
         const capabilitySnapshot =
           requireClientCapabilities(clientCapabilities).snapshotForSession(previewSessionId);
         try {
-          const runtimePolicySnapshot = await runtimePolicyStores.runtimePolicy.getSnapshot();
+          const catalog = await runtimePolicyStores.connectionCatalog.getSnapshot();
+          const target = catalog.defaultTarget;
+          const connection = target
+            ? catalog.connections.find(
+                (candidate) => candidate.connectionId === target.connectionId,
+              )
+            : undefined;
+          const { runtimePolicy, surface } = await resolveInteractiveToolSurface({
+            ...(connection ? { connectionSlug: connection.slug } : {}),
+            modelId: target?.modelId ?? '',
+            hostTools,
+            childTools: childAgentTools.childTools,
+            parentAgentTools: childAgentTools.parentTools,
+          });
           return createInteractiveRunComposer({
-            runtimePolicy: runtimePolicySnapshot,
+            runtimePolicy,
             skills,
             memory: requireMemory(memory),
             taskLedger,
             ...(capabilitySnapshot ? { clientCapabilities: capabilitySnapshot } : {}),
             builtinTools,
-            hostTools,
+            hostTools: surface.hostTools,
             ...(scheduledTaskTool ? { scheduledTaskTool } : {}),
             goalTools: requireGoal(goal).tools,
-            parentAgentTools: childAgentTools.parentTools,
+            ...(surface.parentAgentTools ? { parentAgentTools: surface.parentAgentTools } : {}),
             plan: {
               store: openedPlanStore,
               state: emptyPlanSessionState(previewSessionId),
@@ -797,25 +890,13 @@ export async function createExecutionRuntimeHostComposition(
     sessionEffects = sessionEffectCoordinator;
     const resolveChildTools = async (sessionId: string): Promise<readonly MakaTool[]> => {
       const header = await stores.sessionStore.readHeader(sessionId);
-      const [resolved, snapshot] = await Promise.all([
-        runtimePolicyStores.operations.resolveExecutionConnection(header.llmConnectionSlug),
-        runtimePolicyStores.runtimePolicy.getSnapshot(),
-      ]);
-      if (resolved.kind !== 'ready') {
-        return childAgentTools.childTools.filter((tool) => tool.name !== 'WebSearch');
-      }
-      const { models, ...connection } = resolved.connection;
-      return routeWebSearchTools({
-        tools: childAgentTools.childTools,
-        settings: snapshot.policy.webSearch,
-        connection: {
-          ...connection,
-          defaultModel: header.model,
-          ...(models ? { models: [...models] } : {}),
-        },
-        model: header.model,
-        privacy: snapshot.policy.privacy,
+      const { surface } = await resolveInteractiveToolSurface({
+        connectionSlug: header.llmConnectionSlug,
+        modelId: header.model,
+        hostTools: [],
+        childTools: childAgentTools.childTools,
       });
+      return surface.childTools ?? [];
     };
     const subagentCatalog = createConfiguredSubagentCatalog({
       getPresets: async () =>
@@ -1085,7 +1166,7 @@ export async function createExecutionRuntimeHostComposition(
       isSessionDeliverable: async (sessionId) => {
         try {
           const header = await stores.sessionStore.readHeaderSnapshot(sessionId);
-          return !header.isArchived && header.status !== 'archived';
+          return !header.isArchived;
         } catch (error) {
           if (isSessionNotFoundError(error)) return false;
           throw error;

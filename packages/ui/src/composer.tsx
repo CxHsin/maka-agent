@@ -170,6 +170,8 @@ export interface ComposerHandle {
   clearDraft(draftKey: string): void;
   /** Write a specific session draft before navigation changes the active key. */
   setDraft(draftKey: string, text: string): void;
+  /** Read a specific draft without changing the active input. */
+  getDraft(draftKey: string): string;
   /** Append to a specific session draft without replacing newer text. */
   appendDraft?(draftKey: string, text: string): void;
   /** Move focus to the input without changing its content. */
@@ -297,6 +299,8 @@ export const Composer = forwardRef<
      * constant footprint (#740).
      */
     noModelConnection?: boolean;
+    /** Optional Host-aware replacement for the generic no-model hint. */
+    noModelHint?: string;
     /**
      * Optional edit-and-resend banner above the composer. Desktop owns the
      * revision draft; Composer only renders the notice + cancel affordance.
@@ -594,6 +598,7 @@ export const Composer = forwardRef<
     saveCurrentDraft,
     clearDraft,
     setDraft,
+    getDraft,
     appendDraft,
     activeDraftKey,
   } = useComposerDraft({
@@ -602,7 +607,7 @@ export const Composer = forwardRef<
     onDraftKeyChange: resetPromptHistoryNavigation,
     persistence: props.draftPersistence,
   });
-  const { resetNavigation, rememberSentEntry, handleArrowKey } = useComposerHistory({
+  const { resetNavigation, rememberSentEntry, handleArrowKey, matchCompletion } = useComposerHistory({
     text: textPort,
     saveCurrentDraft,
   });
@@ -1009,6 +1014,9 @@ export const Composer = forwardRef<
         focusInput();
         textPort.setValue(nextText);
       },
+      getDraft(draftKey: string) {
+        return getDraft(draftKey);
+      },
       appendDraft(draftKey: string, nextText: string) {
         const next = appendDraft(draftKey, nextText);
         if (activeDraftKey() !== draftKey) return;
@@ -1350,7 +1358,7 @@ export const Composer = forwardRef<
     <>
       {!props.hidden && noModelConnection && (
         <div className="maka-composer-no-model-hint" role="status">
-          <span>{copy.noModelHint}</span>
+          <span>{props.noModelHint ?? copy.noModelHint}</span>
           {props.onOpenModelSettings && (
             <UiButton
               variant="ghost"
@@ -1538,6 +1546,14 @@ export const Composer = forwardRef<
                 // surfaces, and clearable from Settings · 数据 (see
                 // use-composer-history.ts).
                 hasHistory={false}
+                // The rest of the newest past prompt this draft is a prefix
+                // of, offered as dim text after the caret. What is offered is
+                // ours to decide; whether it can be shown — caret at the end,
+                // no trigger menu, not mid-composition — and how it wraps,
+                // scrolls, announces and commits are the input's, which is the
+                // only thing that knows those states.
+                inlineCompletion={matchCompletion(text) ?? undefined}
+                inlineCompletionLabel={copy.inlineCompletionHint}
                 triggers={triggers}
                 pasteAsToken={pasteAsToken}
                 onFiles={onInputFiles}

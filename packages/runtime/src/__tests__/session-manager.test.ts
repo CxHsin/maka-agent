@@ -77,7 +77,7 @@ import {
   RuntimeKernel,
   type RuntimeKernelLike,
 } from '../runtime-kernel.js';
-import { FAKE_ASK_USER_QUESTION_PROMPT, FakeBackend } from '../fake-backend.js';
+import { FAKE_ASK_USER_QUESTION_PROMPT, FakeBackend } from '../test-only/fake-backend.js';
 import { RuntimeReadModel, RuntimeReadModelError } from '../runtime-read-model.js';
 import type { AgentBackend } from '@maka/core/backend-types';
 import type { MakaTool } from '../tool-runtime.js';
@@ -151,6 +151,62 @@ test('sendMessage rejects removed Automation as a live trigger', async () => {
  * before a turn starts and after it ends, and a crash between a turn's end and
  * its status write leaves `running` in storage forever.
  */
+test('listSessions preserves known-empty live run state', async () => {
+  const store = new MemorySessionStore();
+  let runningTurnIds: string[] = [];
+  const manager = new SessionManager({
+    store,
+    backends: new BackendRegistry(),
+    newId: nextId(),
+    now: nextNow(1),
+    runtimeKernel: {
+      runningTurnIds: () => [...runningTurnIds],
+    } as unknown as RuntimeKernelLike,
+  });
+  const session = await manager.createSession(makeInput());
+
+  assert.deepEqual((await manager.listSessions())[0]?.runningTurnIds, []);
+
+  runningTurnIds = ['turn-live'];
+  assert.deepEqual((await manager.listSessions())[0]?.runningTurnIds, ['turn-live']);
+  assert.equal((await store.readHeader(session.id)).status, 'active');
+});
+
+test('listChildSessions preserves known-empty live run state', async () => {
+  const store = new MemorySessionStore();
+  const runningTurnIdsBySession = new Map<string, string[]>();
+  const manager = new SessionManager({
+    store,
+    backends: new BackendRegistry(),
+    newId: nextId(),
+    now: nextNow(1),
+    runtimeKernel: {
+      runningTurnIds: (sessionId: string) => [...(runningTurnIdsBySession.get(sessionId) ?? [])],
+    } as unknown as RuntimeKernelLike,
+  });
+  const parent = await manager.createSession(makeInput({ name: 'Parent' }));
+  const child = await manager.createSession(
+    makeInput({
+      name: 'Child',
+      subagentParent: {
+        kind: 'subagent',
+        parentSessionId: parent.id,
+        spawnedBy: {
+          parentRunId: 'parent-run',
+          parentTurnId: 'parent-turn',
+          toolCallId: 'tool-call',
+        },
+        lifecycle: 'foreground',
+      },
+    }),
+  );
+
+  assert.deepEqual((await manager.listChildSessions(parent.id))[0]?.runningTurnIds, []);
+
+  runningTurnIdsBySession.set(child.id, ['turn-live']);
+  assert.deepEqual((await manager.listChildSessions(parent.id))[0]?.runningTurnIds, ['turn-live']);
+});
+
 describe('SessionManager Plan control boundaries', () => {
   test('an exact approval retry completes Session side effects after a partial failure', async () => {
     const store = new MemorySessionStore();
@@ -1574,7 +1630,7 @@ describe('SessionManager claimed graph intent execution', () => {
       ),
     ).toMatchObject({ text: 'summarize the routed records' });
 
-    await store.archive(child.id);
+    await store.updateHeader(child.id, { isArchived: true });
     const retry = await manager.runClaimedAgentGraphIntent({
       ...graphExecutionInput(claim, 'summarize the routed records'),
     });
@@ -2028,7 +2084,7 @@ describe('SessionManager claimed graph intent execution', () => {
     );
 
     const archivedChild = await createGraphOperatorSession(store, parent.id);
-    await store.archive(archivedChild.id);
+    await store.updateHeader(archivedChild.id, { isArchived: true });
     const archivedClaim = graphIntentClaim(
       {
         claimId: `graph_claim_${'3'.repeat(32)}`,
@@ -3891,7 +3947,14 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const modelCalls: ModelCallAttempt[] = [];
     const summarizerModel = new MockLanguageModelV4({
       doGenerate: {
-        content: [{ type: 'text', text: 'MANUAL_COMPACT_SUMMARY' }],
+        content: [
+          {
+            type: 'text',
+            // Structured so it passes the summarizer's checkpoint validation
+            // (#3029) while keeping the sentinel greppable.
+            text: '## Goal\nMANUAL_COMPACT_SUMMARY\n\n## Progress\n- done\n\n## Next Steps\n1. continue\n\n## Critical Context\n- (none)',
+          },
+        ],
         finishReason: { unified: 'stop', raw: 'stop' },
         usage: {
           inputTokens: { total: 41, noCache: 41, cacheRead: 0, cacheWrite: 0 },
@@ -5087,46 +5150,6 @@ describe('SessionManager permission mode updates', () => {
     );
     if (modeNote?.type !== 'system_note') throw new Error('mode_change note was not written');
     expect(modeNote.data).toEqual({ from: 'explore', to: 'ask' });
-  });
-
-  test('backend configuration updates rebuild an already-active backend', async () => {
-    const store = new MemorySessionStore();
-    const backends = new BackendRegistry();
-    const built: string[] = [];
-    backends.register('fake', (ctx) => {
-      built.push(
-        `${ctx.header.backend}:${ctx.header.llmConnectionSlug}:${ctx.header.model}:${ctx.header.cwd}`,
-      );
-      return new TestBackend(ctx);
-    });
-    backends.register('ai-sdk', (ctx) => {
-      built.push(
-        `${ctx.header.backend}:${ctx.header.llmConnectionSlug}:${ctx.header.model}:${ctx.header.cwd}`,
-      );
-      return new TestBackend(ctx);
-    });
-    const manager = new SessionManager({ store, backends, newId: nextId(), now: nextNow(5_000) });
-    const session = await manager.createSession(makeInput());
-
-    await drain(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'hello' }));
-    expect(built).toEqual(['fake:fake:fake-model:/tmp/cwd']);
-
-    const summary = await manager.updateSession(session.id, {
-      backend: 'ai-sdk',
-      llmConnectionSlug: 'zai-coding-plan',
-      model: 'glm-4.7',
-      cwd: '/tmp/worktree-cwd',
-    });
-    expect(summary.backend).toBe('ai-sdk');
-    expect(summary.llmConnectionSlug).toBe('zai-coding-plan');
-    expect(summary.cwd).toBe('/tmp/worktree-cwd');
-    expect(store.disposeCount).toBe(1);
-
-    await drain(manager.sendMessage(session.id, { turnId: 'turn-2', text: 'again' }));
-    expect(built).toEqual([
-      'fake:fake:fake-model:/tmp/cwd',
-      'ai-sdk:zai-coding-plan:glm-4.7:/tmp/worktree-cwd',
-    ]);
   });
 
   test('starts a new turn without workspace identity when safety inspection fails', async () => {
@@ -10102,6 +10125,128 @@ describe('SessionManager permission mode updates', () => {
     ).toEqual([]);
   });
 
+  test('retryChildAgent fails closed without a complete continuation composition', async () => {
+    const store = new MemorySessionStore();
+    const runStore = new MemoryAgentRunStore();
+    const backends = new BackendRegistry();
+    let providerDispatches = 0;
+    backends.register('fake', (ctx) => ({
+      kind: 'fake' as const,
+      sessionId: ctx.sessionId,
+      async *send(input: BackendSendInput): AsyncIterable<SessionEvent> {
+        providerDispatches += 1;
+        yield {
+          type: 'error',
+          id: `${input.turnId}-error`,
+          turnId: input.turnId,
+          ts: 1,
+          recoverable: true,
+          reason: 'RateLimit',
+          message: 'provider 429',
+        };
+        yield {
+          type: 'complete',
+          id: `${input.turnId}-complete`,
+          turnId: input.turnId,
+          ts: 2,
+          stopReason: 'error',
+        };
+      },
+      async stop(): Promise<void> {},
+      async respondToSandboxBoundary(): Promise<void> {},
+      async dispose(): Promise<void> {},
+    }));
+    const inspectContinuationSafety = async () => ({
+      workspaceIdentity: '/tmp/cwd',
+      backgroundOperationsSettled: true,
+      availableToolNames: [] as string[],
+    });
+    const composeManager = (options: {
+      runtimeEventStore?: RuntimeEventStore;
+      withSafetyInspector?: boolean;
+    }) =>
+      new SessionManager({
+        store,
+        runStore,
+        runtimeEventStore: options.runtimeEventStore ?? runStore,
+        backends,
+        childTools: [testTool('Read'), testTool('Glob'), testTool('Grep')],
+        ...(options.withSafetyInspector ? { inspectContinuationSafety } : {}),
+        newId: nextId(),
+        now: nextNow(6_845),
+        runtimeSource: 'test',
+      });
+    const eventStoreWithoutAuthority = new Proxy(runStore, {
+      get(target, property, receiver) {
+        if (property === 'continuationAuthorityCapability') return undefined;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const seeder = composeManager({});
+    const session = await seeder.createSession(makeInput({ permissionMode: 'ask' }));
+    const parentRun = makeRunHeader({
+      sessionId: session.id,
+      runId: 'parent-run',
+      turnId: 'parent-turn',
+      status: 'completed',
+      createdAt: 100,
+      updatedAt: 110,
+      completedAt: 110,
+    });
+    await seedRuntimeRun(runStore, parentRun, [
+      runtimeEvent({
+        id: 'parent-complete',
+        sessionId: session.id,
+        runId: parentRun.runId,
+        turnId: parentRun.turnId,
+        ts: 110,
+        status: 'completed',
+        actions: { endInvocation: true },
+      }),
+    ]);
+    const first = await seeder.spawnChildAgent(session.id, {
+      turnId: 'child-rate-limited',
+      parentRunId: parentRun.runId,
+      spec: { id: LOCAL_READ_AGENT_ID, name: 'Reader', systemPrompt: 'read only' },
+      prompt: 'inspect auth',
+    });
+    expect(first.status).toBe('failed');
+    expect(first.failureClass).toBe('RateLimit');
+    if (!first.runId) throw new Error('rate-limited child run id was not recorded');
+    const runsBeforeRetries = await runStore.listSessionRuns(session.id);
+
+    const incompleteCompositions = [
+      {
+        label: 'continuation authority and safety inspector are both missing',
+        runtimeEventStore: eventStoreWithoutAuthority,
+        withSafetyInspector: false,
+      },
+      {
+        label: 'continuation authority is missing its safety inspector',
+        runtimeEventStore: runStore,
+        withSafetyInspector: false,
+      },
+      {
+        label: 'safety inspector is missing its continuation authority',
+        runtimeEventStore: eventStoreWithoutAuthority,
+        withSafetyInspector: true,
+      },
+    ];
+    for (const composition of incompleteCompositions) {
+      const manager = composeManager(composition);
+      await expectRejects(
+        manager.retryChildAgent(session.id, {
+          parentRunId: parentRun.runId,
+          sourceRunId: first.runId,
+        }),
+        /composition is incomplete/,
+      );
+    }
+    expect(providerDispatches).toBe(1);
+    expect(await runStore.listSessionRuns(session.id)).toHaveLength(runsBeforeRetries.length);
+  });
+
   test('parent and child runs can read their ledger while only parents may compact session history', async () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
@@ -11790,37 +11935,6 @@ describe('SessionManager permission mode updates', () => {
     expect(output.budget.projectedBytes <= output.budget.maxBytes).toBe(true);
   });
 
-  test('rejects backend configuration updates while a turn is actively streaming', async () => {
-    const store = new MemorySessionStore();
-    const backends = new BackendRegistry();
-    const gate = makeGate();
-    backends.register('fake', (ctx) => new TestBackend(ctx, gate));
-    const manager = new SessionManager({ store, backends, newId: nextId(), now: nextNow(7_000) });
-    const session = await manager.createSession(makeInput());
-
-    const iterator = manager
-      .sendMessage(session.id, { turnId: 'turn-1', text: 'hello' })
-      [Symbol.asyncIterator]();
-    await iterator.next();
-
-    await expectRejects(
-      manager.updateSession(session.id, {
-        backend: 'ai-sdk',
-        llmConnectionSlug: 'zai-coding-plan',
-        model: 'glm-4.7',
-        cwd: '/tmp/worktree-cwd',
-      }),
-      /Cannot change backend configuration while a turn is running/,
-    );
-    const header = await store.readHeader(session.id);
-    expect(header.backend).toBe('fake');
-    expect(header.llmConnectionSlug).toBe('fake');
-
-    gate.release();
-    await iterator.next();
-    await iterator.next();
-  });
-
   test('backend build failure after user append writes a failed terminal run fact', async () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
@@ -13184,6 +13298,7 @@ describe('SessionManager permission mode updates', () => {
         }),
       ),
       summary: 'durable checkpoint',
+      summaryFormat: 'legacy_freeform',
     });
     await seedRun(
       runStore,
@@ -13280,6 +13395,7 @@ describe('SessionManager permission mode updates', () => {
         }),
       ),
       summary: 'durable checkpoint before projection loss',
+      summaryFormat: 'legacy_freeform',
     });
     const durableEvent = makeRunEvent({
       sessionId: session.id,
@@ -16636,6 +16752,7 @@ class HistoryCompactCheckpointBackend implements AgentBackend {
         },
       ],
       summary: 'persist the bounded checkpoint',
+      summaryFormat: 'legacy_freeform',
     });
     this.ctx.recordHistoryCompactCheckpoint?.(
       { ...checkpoint, checkpointId: 'hcheckpoint-test' },
@@ -16687,6 +16804,7 @@ class HistoryCompactCheckpointCacheProbeBackend implements AgentBackend {
           },
         ],
         summary: 'share this checkpoint across session backends',
+        summaryFormat: 'legacy_freeform',
       });
       this.ctx.recordHistoryCompactCheckpoint?.(
         { ...checkpoint, checkpointId: 'hcheckpoint-shared' },
@@ -16745,6 +16863,7 @@ class HistoryCompactCheckpointMonotonicProbeBackend implements AgentBackend {
             sessionId: this.sessionId,
             coveredRuntimeEvents,
             summary: `${input.turnId} checkpoint`,
+            summaryFormat: 'legacy_freeform',
           }),
           input.turnId,
         )
@@ -16797,6 +16916,7 @@ class SameCoverageCheckpointReplacementProbeBackend implements AgentBackend {
           sessionId: this.sessionId,
           coveredRuntimeEvents,
           summary: `${input.turnId} summary`,
+          summaryFormat: 'legacy_freeform',
           ...(current ? { previousCheckpointId: current.checkpointId } : {}),
         }),
         input.turnId,
@@ -16853,6 +16973,7 @@ class SerializedCheckpointProbeBackend implements AgentBackend {
         sessionId: this.sessionId,
         coveredRuntimeEvents,
         summary: `${input.turnId} checkpoint`,
+        summaryFormat: 'legacy_freeform',
       }),
       input.turnId,
     );
@@ -16915,6 +17036,7 @@ class RecoveringCheckpointWriteProbeBackend implements AgentBackend {
           sessionId: this.sessionId,
           coveredRuntimeEvents,
           summary: `${input.turnId} checkpoint`,
+          summaryFormat: 'legacy_freeform',
         }),
         input.turnId,
       );
@@ -16976,6 +17098,7 @@ class CheckpointRecorderContractProbeBackend implements AgentBackend {
           sessionId: this.sessionId,
           coveredRuntimeEvents,
           summary: `${input.turnId} checkpoint`,
+          summaryFormat: 'legacy_freeform',
         }),
         input.turnId,
       );
@@ -17035,6 +17158,7 @@ class InitialCheckpointLoadRaceProbeBackend implements AgentBackend {
           sessionId: this.sessionId,
           coveredRuntimeEvents,
           summary: 'stale checkpoint during initial load',
+          summaryFormat: 'legacy_freeform',
         }),
         input.turnId,
       );
@@ -17328,23 +17452,6 @@ class MemorySessionStore implements SessionStore {
     const next = { ...current, ...patch };
     this.headers.set(sessionId, next);
     return next;
-  }
-
-  async archive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, {
-      isArchived: true,
-      status: 'archived',
-      statusUpdatedAt: 1,
-    });
-  }
-
-  async unarchive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, {
-      isArchived: false,
-      status: 'active',
-      blockedReason: undefined,
-      statusUpdatedAt: 1,
-    });
   }
 
   async setFlagged(sessionId: string, isFlagged: boolean): Promise<void> {

@@ -2,17 +2,9 @@ export {
   connectRuntimeHost,
   connectExistingRuntimeHost,
   connectRemoteRuntimeHost,
-  normalizeRemoteRuntimeHostUrl,
   RuntimeHostOperationError,
   RuntimeHostRequestInterruptedError,
-  type ConnectRuntimeHostInput,
-  type ConnectRuntimeHostResult,
-  type ConnectRemoteRuntimeHostInput,
-  type ConnectRemoteRuntimeHostResult,
   type RuntimeHostConnection,
-  type RuntimeHostRequestDispatch,
-  type RuntimeHostRequestInterruptionReason,
-  type RuntimeHostUnavailableReason,
   type DirectRequestOperationKey,
 } from './connection.js';
 export {
@@ -22,7 +14,6 @@ export {
   createFileRuntimeHostProfileCatalog,
   createRuntimeHostProfileCredentialStore,
   connectRemoteRuntimeHostProfile,
-  decodeRuntimeHostProfileDocument,
   remoteRuntimeHostUnavailableError,
   sameResolvedRuntimeHostProfileTarget,
   type RemoteRuntimeHostProfile,
@@ -30,13 +21,11 @@ export {
   type ResolvedRuntimeHostProfile,
   type RuntimeHostProfile,
   type RuntimeHostProfileCatalog,
-  type RuntimeHostProfileCredentialStore,
   type RuntimeHostProfileDocument,
 } from './host-profile.js';
 export {
   createRuntimeHostReconnectingConnection,
   isRuntimeHostReconnectingConnection,
-  type RuntimeHostReconnectingConnection,
 } from './reconnecting-connection.js';
 export {
   openRuntimeHostSshTunnel,
@@ -51,19 +40,15 @@ export {
   startRuntimeHostReconnectLifecycle,
   type RuntimeHostReconnectBackoff,
   type RuntimeHostReconnectLifecycle,
-  type RuntimeHostReconnectResource,
 } from './reconnect-lifecycle.js';
 export {
   RuntimeHostSubscriptionError,
   type DecodedSessionTranscriptPage,
   type RuntimeHostSessionSubscription,
-  type RuntimeHostSubscriptionFailureReason,
 } from './session-subscription.js';
-export { waitForRuntimeHostReady } from './wait-for-ready.js';
 export {
   RuntimeHostStartupError,
   runtimeHostStartupError,
-  type RuntimeHostStartupFailureReason,
 } from './startup-error.js';
 export {
   RuntimeHostCatalogReadError,
@@ -74,23 +59,18 @@ export {
   readRuntimeHostProjects,
   readRuntimeHostSessions,
   readRuntimeHostSkillCatalog,
-  type RuntimeHostConnectionCatalogEntry,
-  type RuntimeHostConnectionCatalogSnapshot,
-  type RuntimeHostSkillCatalogSnapshot,
 } from './catalog-reader.js';
 export {
   connectOrSpawnRuntimeHost,
-  connectOwnedRuntimeHost,
   type ConnectOrSpawnRuntimeHostInput,
   type ConnectOrSpawnRuntimeHostResult,
-  type ConnectOwnedRuntimeHostResult,
 } from './connect-or-spawn.js';
-export { runHostedExecution, type RunHostedExecutionInput } from './hosted-execution.js';
-export {
-  configureHostedExecutionTarget,
-  type HostedExecutionTargetInput,
-} from './hosted-execution-target.js';
+export { runHostedExecution } from './hosted-execution.js';
 export { type ClientCapabilityProvider } from './client-capability.js';
+export {
+  readRuntimeHostAgentGraphEpochs,
+  type AgentGraphEpochDirectory,
+} from './agent-graph-reader.js';
 export {
   startRuntimeHostCapabilityProviderService,
   type RuntimeHostCapabilityProviderService,
@@ -98,8 +78,15 @@ export {
 export { loadOrCreateRuntimeHostClientInstanceId } from './client-instance-identity.js';
 export { consumeAccessCredentialDelivery } from '../control/access-credential-delivery.js';
 export {
+  RUNTIME_HOST_SETUP_FRAME_PREFIX,
+  RUNTIME_HOST_SETUP_ERROR_CODE_MAX_BYTES,
+  RUNTIME_HOST_SETUP_ERROR_MESSAGE_MAX_BYTES,
+  decodeRuntimeHostSetupFrame,
+  encodeRuntimeHostSetupFrame,
+  type RuntimeHostSetupFrame,
+  type RuntimeHostSetupPhase,
+} from './setup-frame.js';
+export {
   createOAuthPresentationClientProvider,
-  OAUTH_PRESENTATION_SERVICE_ID,
-  OAUTH_PRESENTATION_SERVICE_VERSION,
   type OAuthPresentationBackend,
 } from './oauth-presentation.js';

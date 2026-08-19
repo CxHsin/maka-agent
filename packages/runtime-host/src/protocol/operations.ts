@@ -111,6 +111,8 @@ export type {
   TurnMessageSubmitResult,
 } from './message.js';
 export type {
+  LiveTurnSnapshot,
+  TurnProviderRetry,
   TurnQueryInput,
   TurnRegenerateInput,
   TurnResumeParkReason,
@@ -198,6 +200,7 @@ export type OperationKey = keyof OperationSpecMap;
 // Remote credentials are fail-closed: adding a protocol operation does not
 // grant it to remote owners until this policy is deliberately updated.
 export const REMOTE_OWNER_OPERATION_GRANTS = Object.freeze([
+  'agent.graph.epochs.query',
   'agent.graph.operator.query',
   'agent.graph.query',
   'agent.graph.stop',

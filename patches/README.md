@@ -26,9 +26,9 @@ Streaming tool-call association for gateways that reuse or omit `index` / `id`
 
 Delete when that guard passes against an unpatched package.
 
-## `@astryxdesign/core@0.3.0`
+## `@astryxdesign/core@0.4.0`
 
-Four published component seams drop host-owned state or semantics:
+Six published component seams drop host-owned state or semantics:
 
 - `ChatLayout` needs a conversation identity that resets scroll/unread state
   without remounting its composer slot and discarding the live draft.
@@ -43,6 +43,18 @@ Four published component seams drop host-owned state or semantics:
   `ChatLayoutContextValue` publishes the hook's existing `unlock`.
 - `ChatToolCalls` needs a stable row slot for product styling and E2E geometry.
 - `List` must forward its published `aria-label` to the rendered list element.
+- `ChatComposerInput` publishes no seam for an inline completion, and one drawn
+  beside the editable cannot agree with it about wrapping, the caret, the
+  composition state or an open trigger menu: measured, a one-row field offering
+  a 116-character completion showed 57 and Tab committed all 116.
+  `inlineCompletion` / `inlineCompletionLabel` draw the offer inside the editor,
+  excluded from `serialize`, so the preview and the insertion are one layout.
+  Upstream ask: [facebook/astryx#4822](https://github.com/facebook/astryx/issues/4822).
+- `SideNavItem` needs an interactive `trailingAction` sibling between its
+  navigation control and nested items. `endContent` renders inside the primary
+  control, while a sibling outside `SideNavItem` can only come before the
+  project control or after all of its tasks; neither produces the visual Tab
+  order used by the task rail.
 
 Blank UA-CH `navigator.userAgentData.platform` must also not mean "not Apple".
 Electron builds with a rewritten identity ship `platform: ''`, which made every

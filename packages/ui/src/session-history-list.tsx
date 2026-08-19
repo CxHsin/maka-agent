@@ -74,6 +74,7 @@ export function SessionHistoryList(props: {
   staleSessionIds?: Set<string>;
   groups?: ReadonlyArray<SessionHistoryGroup>;
   worktreeSessionIds?: ReadonlySet<string>;
+  sessionMeta?(session: SessionSummary): string | undefined;
   projectActions?: ProjectRowActions;
   groupVariant?: SessionHistoryGroupVariant;
   onSelectSession(sessionId: string): void;
@@ -124,6 +125,7 @@ export function SessionHistoryList(props: {
         streamingSessionIds={props.streamingSessionIds}
         staleSessionIds={props.staleSessionIds}
         worktreeSessionIds={props.worktreeSessionIds}
+        sessionMeta={props.sessionMeta}
         onSelectSession={props.onSelectSession}
         rowActions={props.rowActions}
         projectActions={props.projectActions}
@@ -144,6 +146,7 @@ function SessionListGroups(props: {
   streamingSessionIds?: Set<string>;
   staleSessionIds?: Set<string>;
   worktreeSessionIds?: ReadonlySet<string>;
+  sessionMeta?(session: SessionSummary): string | undefined;
   onSelectSession(sessionId: string): void;
   rowActions?: SessionRowActions;
   projectActions?: ProjectRowActions;
@@ -204,6 +207,7 @@ function SessionListGroups(props: {
         streaming={props.streamingSessionIds?.has(session.id) ?? false}
         stale={props.staleSessionIds?.has(session.id) ?? false}
         worktree={props.worktreeSessionIds?.has(session.id) ?? false}
+        meta={props.sessionMeta?.(session)}
         onSelectSession={props.onSelectSession}
         actions={props.rowActions}
         onStartRename={startRename}
@@ -214,6 +218,7 @@ function SessionListGroups(props: {
       props.activeId,
       props.onSelectSession,
       props.rowActions,
+      props.sessionMeta,
       props.staleSessionIds,
       props.streamingSessionIds,
       props.worktreeSessionIds,
@@ -318,15 +323,6 @@ function ProjectNavRow(props: {
   const hasActions = props.project !== undefined && props.projectActions !== undefined;
   return (
     <div data-project-id={props.groupKey} className="maka-project-row">
-      {props.project && props.projectActions ? (
-        <ProjectItemActions
-          key="actions"
-          project={props.project}
-          actions={props.projectActions}
-          onStartRename={props.onStartRename}
-          position={hasSessions ? 'before-disclosure' : 'trailing'}
-        />
-      ) : null}
       <SideNavItem
         key="navigation"
         label={props.label}
@@ -339,8 +335,18 @@ function ProjectNavRow(props: {
             reserveAction={hasActions}
           />
         }
+        trailingAction={
+          props.project && props.projectActions ? (
+            <ProjectItemActions
+              project={props.project}
+              actions={props.projectActions}
+              onStartRename={props.onStartRename}
+              position={hasSessions ? 'before-disclosure' : 'trailing'}
+            />
+          ) : undefined
+        }
       >
-        {/* Nest indent zeroed one level in sidebar.css (time-sort left edge). */}
+        {/* sidebar.css preserves one SideNav nesting step for project hierarchy. */}
         {hasSessions ? (
           <VStack gap={0.5}>{props.sessions.map((session) => props.renderSession(session))}</VStack>
         ) : undefined}
@@ -355,6 +361,7 @@ const SessionNavRow = memo(function SessionNavRow(props: {
   streaming: boolean;
   stale: boolean;
   worktree: boolean;
+  meta?: string;
   onSelectSession(sessionId: string): void;
   actions?: SessionRowActions;
   onStartRename(target: SessionRenameTarget, opener: HTMLElement | null): void;
@@ -377,6 +384,7 @@ const SessionNavRow = memo(function SessionNavRow(props: {
   const rowDescription = [
     ...signals.slice(1).map((entry) => entry.tooltip ?? entry.label),
     props.worktree ? copy.worktreeAriaLabel : undefined,
+    props.meta,
     props.session.lastMessageAt
       ? formatAbsoluteTimestamp(props.session.lastMessageAt, locale)
       : undefined,
@@ -434,6 +442,7 @@ const SessionNavRow = memo(function SessionNavRow(props: {
           // the two on hover or keyboard focus. The span is rendered even with
           // no timestamp so the column exists on every row.
           <span className="maka-session-row-end">
+            {props.meta ? <Badge variant="neutral" label={props.meta} /> : null}
             <span className="maka-session-row-time">
               {props.session.lastMessageAt ? (
                 <RelativeTime
@@ -519,8 +528,9 @@ function ProjectItemActions(props: {
     })();
   }
 
-  // Projects keep a permanent MoreMenu. It is a sibling of SideNavItem so the
-  // row's collapse button and the menu remain separate interactive controls.
+  // Projects keep a permanent MoreMenu. SideNavItem's trailingAction slot puts
+  // it after the collapse button and before the nested tasks, so visual and
+  // keyboard order agree without nesting either interactive control.
   const menuItems = project.archivedAt !== undefined
     ? [
         {
@@ -715,12 +725,9 @@ interface SessionRowSignal {
  * with unread text drew the same accent dot as one that is running. Now it
  * draws its own neutral dot and unread is still in the list behind it.
  *
- * `streaming` is the only live-run source the rail actually has. It knows only
- * about turns THIS renderer sent, which is a real limit — a task running under
- * a bot channel or a second window reads as idle here. The fix for that is a
- * live-run projection from Runtime Host, which is not in this change; there is
- * no `runningTurnIds` on a `SessionSummary` that reaches Desktop, so reading it
- * would be reading a field nothing populates.
+ * Runtime Host live-run state and renderer-local streaming are deliberately
+ * ORed. Host state covers bot channels and other windows; local streaming
+ * covers the short synchronization window before a catalog refresh arrives.
  */
 function sessionRowSignals(
   session: SessionSummary,
@@ -729,12 +736,17 @@ function sessionRowSignals(
 ): SessionRowSignal[] {
   const copy = getConversationCopy(locale).sessions;
   const signals: SessionRowSignal[] = [];
+  const requiresUserAttention =
+    session.status === 'waiting_for_user' || session.status === 'blocked';
 
   // `active`, through the same vocabulary as everything else here: streaming is
   // the system working on it right now, which is what that semantic names.
   // Writing `accent` directly would resolve to the identical colour and reopen
   // the drift this change closed — half the row's dots deciding for themselves.
-  if (options.streaming) {
+  if (
+    !requiresUserAttention &&
+    (options.streaming || (session.runningTurnIds?.length ?? 0) > 0)
+  ) {
     signals.push({
       variant: dotForStatus('active'),
       label: copy.respondingAriaLabel,
@@ -744,7 +756,9 @@ function sessionRowSignals(
   }
 
   const { label, variant } = presentSessionStatus(session.status, locale);
-  if (variant) {
+  const liveStateOwnsRunningStatus =
+    session.status === 'running' && session.runningTurnIds !== undefined;
+  if (variant && !liveStateOwnsRunningStatus) {
     const blockedDetail =
       session.status === 'blocked' && session.blockedReason
         ? describeBlockedReason(session.blockedReason, locale)
@@ -752,10 +766,7 @@ function sessionRowSignals(
     signals.push({
       variant,
       label,
-      // A `running` header with nothing streaming here: the run ended without
-      // its status write landing, or it is running somewhere this renderer
-      // cannot see. Still pulsing — the row should not change shape based on
-      // which projection delivered it.
+      // Persisted `running` is a fallback only when live state is unknown.
       isPulsing: session.status === 'running',
       tooltip: blockedDetail ? `${label} · ${blockedDetail}` : label,
     });

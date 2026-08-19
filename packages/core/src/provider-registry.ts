@@ -17,6 +17,16 @@ export type ProviderCatalogGroup = 'recommended' | 'plans' | 'api' | 'aggregator
 
 export type ApplyPatchProtocol = 'openai-structured' | 'codex-v4a-freeform';
 
+export type ProviderResponsesContract =
+  | {
+      readonly adapter: 'openai';
+      readonly reasoningReplay: 'encrypted-content';
+    }
+  | {
+      readonly adapter: 'open-responses';
+      readonly reasoningReplay: 'plaintext-content';
+    };
+
 type ProviderRuntimeAdapterDefinition =
   | { kind: 'anthropic'; auth: 'api-key' | 'bearer'; normalizeBaseUrl: boolean }
   | { kind: 'claude-subscription' }
@@ -30,7 +40,8 @@ type ProviderRuntimeAdapterDefinition =
       name: 'provider' | 'connection';
       includeUsage?: boolean;
       requireBaseUrl?: boolean;
-      supportsOpenAiResponses?: true;
+      /** Presence enables Responses and fixes the only supported SDK/replay pairing. */
+      responses?: ProviderResponsesContract;
       replayAssistantReasoningAs?: 'reasoning';
       replayAssistantReasoningDetails?: true;
     };
@@ -499,6 +510,9 @@ if (!alibabaTokenPlanGlobal.api) {
 // the plan's image models (qwen-image / wan) are not tool-callable, so only the
 // tool-calling text models are pinned here. China and global share one model list.
 const alibabaTokenPlanModelIds = [
+  // qwen3.8-max-preview is a retired compatibility alias which the service
+  // routes to this formal id. New selections must use the billed model id.
+  'qwen3.8-max',
   'qwen3.7-max',
   'qwen3.7-plus',
   'qwen3.6-plus',
@@ -833,8 +847,8 @@ const providerRegistry = {
     runtimeAdapter: {
       kind: 'openai-compatible',
       name: 'provider',
-      supportsOpenAiResponses: true,
       applyPatchProtocol: 'codex-v4a-freeform',
+      responses: { adapter: 'open-responses', reasoningReplay: 'plaintext-content' },
     },
     modelDiscovery: { kind: 'protocol' },
     category: 'domestic',
@@ -972,7 +986,7 @@ const providerRegistry = {
     runtimeAdapter: {
       kind: 'openai-compatible',
       name: 'provider',
-      supportsOpenAiResponses: true,
+      responses: { adapter: 'openai', reasoningReplay: 'encrypted-content' },
     },
     modelDiscovery: { kind: 'protocol' },
     category: 'overseas',
@@ -995,12 +1009,11 @@ const providerRegistry = {
     runtimeAdapter: {
       kind: 'openai-compatible',
       name: 'provider',
-      supportsOpenAiResponses: true,
+      responses: { adapter: 'openai', reasoningReplay: 'encrypted-content' },
     },
     modelDiscovery: {
       kind: 'protocol',
       auth: 'oauth-bearer',
-      filter: 'fallback-models',
     },
     category: 'oauth',
     catalogBadge: 'Account',

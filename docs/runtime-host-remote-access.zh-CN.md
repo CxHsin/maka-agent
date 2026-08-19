@@ -4,7 +4,23 @@
 
 Maka Desktop、TUI 和 CLI 可以通过 TLS、SSH 或明确启用的明文 WebSocket 连接 Runtime Host。
 
-## 准备 Host
+## 设置 Linux Host
+
+在具备 Node.js 22.19 或更新版本以及可用 systemd user manager 的 Linux 机器上，发布版 CLI 可以用一个命令安装并验证持久 Runtime Host：
+
+```sh
+npx --yes maka-agent@next runtime-host setup \
+  --principal my-desktop \
+  --preset desktop-client \
+  --root /srv/maka \
+  --project-root projects=/srv/projects
+```
+
+`--principal` 应使用稳定标识；重复执行会替换该 Client 的 credential，不会不断累积 credential。命令会把当前精确版本的 Maka 安装到托管目录，启动仅监听 loopback 的服务，验证新 credential，然后只显示一次连接信息。TUI 或 CLI 使用 `terminal-client`。
+
+在 Host 上运行 `npx --yes maka-agent@next runtime-host service uninstall` 会删除 service 与托管 package，但保留 State Root 和 Project 数据。
+
+## 手动设置 Host
 
 在远程机器构建 Maka，选择持久的 State Root，并注册允许 remote Client 使用的 Project：
 
@@ -13,6 +29,18 @@ npm run build
 npm --workspace maka-agent exec -- maka runtime-host project add /srv/projects/example --root /srv/maka
 npm --workspace maka-agent exec -- maka runtime-host project list --root /srv/maka
 ```
+
+Desktop 目录选择器默认发布运行服务的用户主目录。如需改为明确的目录 allowlist，可在启动服务时传入一个或多个命名根目录：
+
+```sh
+npm --workspace maka-agent exec -- maka runtime-host serve \
+  --root /srv/maka \
+  --project-root projects=/srv/projects \
+  --project-root data=/mnt/data \
+  --websocket-port 7443
+```
+
+只要提供了 `--project-root <label>=<absolute-path>`，远程目录浏览就只会显示这些根目录。该参数最多可重复八次。Maka 会在启动时解析每个根目录，并确保浏览和注册始终限制在当前选择的根目录内。
 
 Project path 始终留在 Host。为每个 Client 签发 credential：
 
@@ -24,6 +52,23 @@ npm --workspace maka-agent exec -- maka runtime-host access issue \
 ```
 
 TUI 或 CLI 使用 `terminal-client`。命令只显示 credential 一次。
+
+在使用 systemd user manager 的 Linux 上，持久安装的 CLI 可以让 loopback Host 在 SSH 会话结束后
+继续运行：
+
+```sh
+maka runtime-host service install \
+  --root /srv/maka \
+  --project-root projects=/srv/projects
+maka runtime-host service status --json
+```
+
+安装命令会持久保存当前精确的 Node 与 Maka CLI 路径。重复执行会更新同一个 service；未指定
+WebSocket port 时会保留现有端口。卸载 npm 包前，应先执行
+`maka runtime-host service uninstall`。卸载 service 会保留 State Root 与 Project 数据。如果
+systemd user lingering 未启用，安装会给出可操作的错误，不会声称服务能够持久运行。Service
+必须从持久的全局 Maka 安装中安装，不能使用 `npx`。替换操作只会在新的 Runtime Host ready
+之后提交；失败时会恢复之前的 service。
 
 ## 选择连接方式
 
@@ -73,9 +118,9 @@ Client Profile 还必须单独持久化明文风险确认。Maka 不会把 TLS �
 
 ## 连接 Desktop
 
-打开`设置 → 工作区 → Runtime Host`，选择**添加远程 Host**，选定连接方式，再填写对应 endpoint、ready event 中的 `rootId` 和刚签发的 credential，然后选择**保存并连接**。
+打开`设置 → 工作区 → Runtime Host`，选择**添加远程 Host**，选定连接方式，再填写对应 endpoint、ready event 中的 `rootId` 和刚签发的 credential，然后选择**保存并启用**。
 
-Credential 与 Profile 分开存储。连接失败时，当前 Host 会继续工作，未完成的 Profile 会被删除。连接后从 Host 已注册的 Project 中选择一个；Client 本地目录操作不可用。
+Credential 与 Profile 分开存储。Desktop 会让 Local 与每个已启用的 remote Host 独立保持连接，并允许指定一个默认 Host 来创建新 Session；已有 Session 仍使用自己的 Host。Remote connection 失败时仍会显示，但不会中断其他 Host。连接后从该 Host 已注册的 Project 中选择一个；Client 本地目录操作不可用。
 
 ## 连接 TUI 或 CLI
 

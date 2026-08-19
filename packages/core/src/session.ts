@@ -25,31 +25,16 @@ import { isPermissionDecisionFields } from './interaction-record-schema.js';
 import { isTokenUsageFields, type TokenUsageFields } from './usage-record-schema.js';
 import { decodeCanonicalToolResultContent } from './tool-result-record-schema.js';
 import type { SubagentWorkspaceBinding } from './subagent-workspace.js';
+import { decodeTurnOrigin, type TurnOrigin } from './turn-origin.js';
 
 export { DEEP_RESEARCH_SESSION_LABEL, isDeepResearchSession } from './explore-agent.js';
 
-/**
- * `archived` is still here and still written by `SessionStore.archive()`
- * alongside `isArchived`; consolidating those two onto one authority is its own
- * change (#2984, PR 3) because it rewrites stored rows.
- *
- * `review` and `done` have no writer in current source, but they stay: this
- * list is read back out of storage, and narrowing it is a data migration, not a
- * cleanup. `resolveLegacyStatus` in the JSONL importer (removed in #2656) let
- * both values through into real SQLite stores verbatim, and `normalizeSession
- * Header` throws on an unrecognised status for the WHOLE header — so one stored
- * row carrying `done` fails an entire catalog page, not just its own row.
- * Removing them needs a schema migration or a tolerant read, which is its own
- * change with its own review.
- */
+/** Runtime execution states. Archive visibility is represented by `isArchived`. */
 export const SESSION_STATUSES = [
   'active',
   'running',
   'waiting_for_user',
   'blocked',
-  'review',
-  'done',
-  'archived',
   'aborted',
 ] as const;
 
@@ -215,7 +200,6 @@ export interface SessionHeader {
   labels: string[];
 
   isArchived: boolean;
-  archivedAt?: number;
   status: SessionStatus;
   blockedReason?: SessionBlockedReason;
   statusUpdatedAt?: number;
@@ -271,6 +255,10 @@ export interface SessionHeader {
   schemaVersion: 1;
 }
 
+export type SessionHeaderPatch = Partial<Omit<SessionHeader, 'isArchived'>> & {
+  readonly isArchived?: never;
+};
+
 export type BackendKind = 'ai-sdk' | 'fake';
 
 export interface SessionSummary {
@@ -288,8 +276,9 @@ export interface SessionSummary {
   blockedReason?: SessionBlockedReason;
   statusUpdatedAt?: number;
   /**
-   * The turns the runtime is running for this session right now. Omitted when
-   * there are none.
+   * The turns the runtime is running for this session right now. An explicit
+   * empty array means the runtime authoritatively knows there are none; omission
+   * means the summary source does not know the live state.
    *
    * Projected from the live runs, never persisted: "a run is in flight" is a
    * fact about the running process, so it must read false again after a crash.
@@ -303,8 +292,9 @@ export interface SessionSummary {
    * answer that from an arbitrary one of them.
    *
    * Only populated where the runtime is in a position to know: session LISTS
-   * come from the authority holding the runs. A summary returned by a mutation
-   * (rename, model change) describes the header alone and omits it.
+   * come from the authority holding the runs and include the field even when it
+   * is empty. A summary returned by a mutation (rename, model change) describes
+   * the header alone and omits it.
    */
   runningTurnIds?: string[];
   parentSessionId?: string;
@@ -680,12 +670,8 @@ export interface UserMessage extends MessageContent {
   /** Canonical RuntimeEvent that materialized this mid-Turn steering projection. */
   steeringEventId?: string;
   /** Non-user trigger source. Lets the chat mark turns the user did not
-   * hand-type. Mirrors TurnOrigin in runtime-inputs. */
-  origin?:
-    | { kind: 'scheduled_task'; scheduledTaskId: string }
-    | { kind: 'legacy_automation'; automationId: string }
-    | { kind: 'goal'; goalId: string }
-    | { kind: 'agent_graph'; graphId: string; wakeId: string; attemptId: string };
+   * hand-type. */
+  origin?: TurnOrigin;
 }
 
 /** Prefer the human-facing view of a user message when one was stored. */
@@ -960,25 +946,6 @@ const ASSISTANT_THINKING_SHAPE = defineObjectShape<AssistantThinking>()(
   ['text'],
   ['signature', 'providerOptions', 'parts'],
 );
-type MessageOrigin = NonNullable<UserMessage['origin']>;
-type ScheduledTaskOrigin = Extract<MessageOrigin, { kind: 'scheduled_task' }>;
-type LegacyAutomationOrigin = Extract<MessageOrigin, { kind: 'legacy_automation' }>;
-type GoalOrigin = Extract<MessageOrigin, { kind: 'goal' }>;
-type AgentGraphOrigin = Extract<MessageOrigin, { kind: 'agent_graph' }>;
-const SCHEDULED_TASK_ORIGIN_SHAPE = defineObjectShape<ScheduledTaskOrigin>()(
-  ['kind', 'scheduledTaskId'],
-  [],
-);
-const LEGACY_AUTOMATION_ORIGIN_SHAPE = defineObjectShape<LegacyAutomationOrigin>()(
-  ['kind', 'automationId'],
-  [],
-);
-const GOAL_ORIGIN_SHAPE = defineObjectShape<GoalOrigin>()(['kind', 'goalId'], []);
-const AGENT_GRAPH_ORIGIN_SHAPE = defineObjectShape<AgentGraphOrigin>()(
-  ['kind', 'graphId', 'wakeId', 'attemptId'],
-  [],
-);
-
 const SYSTEM_NOTE_KINDS = new Set([
   'session_start',
   'session_resume',
@@ -999,10 +966,10 @@ export function decodeStoredMessage(value: unknown): StoredMessage {
       if (
         hasExactShape(message, USER_MESSAGE_SHAPE) &&
         hasMessageEnvelope(message, true) &&
-        (message.origin === undefined || decodeMessageOrigin(message.origin) !== undefined)
+        (message.origin === undefined || decodeTurnOrigin(message.origin) !== undefined)
       ) {
         const { displayText, attachments, quotes, inlineReferences, origin, ...envelope } = message;
-        const decodedOrigin = origin === undefined ? undefined : decodeMessageOrigin(origin);
+        const decodedOrigin = origin === undefined ? undefined : decodeTurnOrigin(origin);
         try {
           return {
             ...envelope,
@@ -1155,49 +1122,6 @@ function isAssistantThinking(value: unknown): value is AssistantThinking {
         value.parts.length > 0 &&
         value.parts.every(isAssistantThinkingPart)))
   );
-}
-
-function isGoalOrigin(value: unknown): value is GoalOrigin {
-  return (
-    isRecord(value) &&
-    hasExactShape(value, GOAL_ORIGIN_SHAPE) &&
-    value.kind === 'goal' &&
-    typeof value.goalId === 'string'
-  );
-}
-
-function isAgentGraphOrigin(value: unknown): value is AgentGraphOrigin {
-  return (
-    isRecord(value) &&
-    hasExactShape(value, AGENT_GRAPH_ORIGIN_SHAPE) &&
-    value.kind === 'agent_graph' &&
-    typeof value.graphId === 'string' &&
-    typeof value.wakeId === 'string' &&
-    typeof value.attemptId === 'string'
-  );
-}
-
-function isScheduledTaskOrigin(value: unknown): value is ScheduledTaskOrigin {
-  return (
-    isRecord(value) &&
-    hasExactShape(value, SCHEDULED_TASK_ORIGIN_SHAPE) &&
-    value.kind === 'scheduled_task' &&
-    typeof value.scheduledTaskId === 'string'
-  );
-}
-
-function decodeMessageOrigin(value: unknown): MessageOrigin | undefined {
-  if (isScheduledTaskOrigin(value) || isGoalOrigin(value) || isAgentGraphOrigin(value))
-    return value;
-  if (
-    isRecord(value) &&
-    hasExactShape(value, LEGACY_AUTOMATION_ORIGIN_SHAPE) &&
-    (value.kind === 'automation' || value.kind === 'legacy_automation') &&
-    typeof value.automationId === 'string'
-  ) {
-    return { kind: 'legacy_automation', automationId: value.automationId };
-  }
-  return undefined;
 }
 
 function isOptionalFiniteDuration(value: unknown): boolean {

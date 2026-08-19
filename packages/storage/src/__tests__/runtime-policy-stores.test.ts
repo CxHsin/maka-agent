@@ -1051,6 +1051,106 @@ describe('runtime policy stores', () => {
     });
   });
 
+  test('releases the canonical default target when a selection change removes its model', async () => {
+    await withInteractiveOwner(async ({ stores }) => {
+      const connection = await createConnection(
+        stores,
+        0,
+        connectionDraft('selection-default', 'ollama', 'Selection default'),
+      );
+      const widened = await stores.connectionCatalog.update({
+        expected: connectionBasis(connection),
+        changes: {
+          name: connection.name,
+          enabled: true,
+          enabledModelIds: ['gpt-5', 'llama3.3'],
+          relayModelProfiles: null,
+        },
+      });
+      assert.equal(widened.kind, 'committed');
+      if (widened.kind !== 'committed') return;
+      const widenedEntry = widened.snapshot.connections[0];
+      assert.ok(widenedEntry);
+      assert.equal(
+        (
+          await stores.connectionCatalog.setDefaultTarget({
+            expectedCatalogRevision: widened.snapshot.revision,
+            target: { connectionId: connection.connectionId, modelId: 'gpt-5' },
+          })
+        ).kind,
+        'committed',
+      );
+
+      const narrowed = await stores.connectionCatalog.update({
+        expected: connectionBasis(widenedEntry),
+        changes: {
+          name: connection.name,
+          enabled: true,
+          enabledModelIds: ['llama3.3'],
+          relayModelProfiles: null,
+        },
+      });
+      assert.equal(narrowed.kind, 'committed');
+      if (narrowed.kind !== 'committed') return;
+      // Not `llama3.3`: a surviving member of the set is not the user's answer.
+      assert.equal(narrowed.snapshot.defaultTarget, null);
+      assert.equal((await stores.connectionCatalog.getSnapshot()).defaultTarget, null);
+    });
+  });
+
+  test('releases the canonical default target when its connection is disabled', async () => {
+    await withInteractiveOwner(async ({ stores }) => {
+      const connection = await createConnection(
+        stores,
+        0,
+        connectionDraft('default-disabled', 'ollama', 'Default disabled'),
+      );
+      const catalog = await stores.connectionCatalog.getSnapshot();
+      assert.equal(
+        (
+          await stores.connectionCatalog.setDefaultTarget({
+            expectedCatalogRevision: catalog.revision,
+            target: { connectionId: connection.connectionId, modelId: 'gpt-5' },
+          })
+        ).kind,
+        'committed',
+      );
+
+      const disabled = await stores.connectionCatalog.update({
+        expected: connectionBasis(connection),
+        changes: {
+          name: connection.name,
+          enabled: false,
+          enabledModelIds: connection.enabledModelIds,
+          relayModelProfiles: null,
+        },
+      });
+      assert.equal(disabled.kind, 'committed');
+      if (disabled.kind !== 'committed') return;
+      assert.equal(disabled.snapshot.defaultTarget, null);
+      assert.equal((await stores.connectionCatalog.getSnapshot()).defaultTarget, null);
+    });
+  });
+
+  test('rejects a stated default target that names an unselected model', async () => {
+    await withInteractiveOwner(async ({ stores }) => {
+      const connection = await createConnection(
+        stores,
+        0,
+        connectionDraft('stated-default', 'ollama', 'Stated default'),
+      );
+      const catalog = await stores.connectionCatalog.getSnapshot();
+      const rejected = await stores.connectionCatalog.setDefaultTarget({
+        expectedCatalogRevision: catalog.revision,
+        target: { connectionId: connection.connectionId, modelId: 'llama3.3' },
+      });
+      assert.equal(rejected.kind, 'invalid_default_target');
+      const unchanged = await stores.connectionCatalog.getSnapshot();
+      assert.equal(unchanged.defaultTarget, null);
+      assert.equal(unchanged.revision, catalog.revision);
+    });
+  });
+
   test('keeps an emptied model selection across the next canonical discovery', async () => {
     await withInteractiveOwner(async ({ stores }) => {
       const connection = await createConnection(

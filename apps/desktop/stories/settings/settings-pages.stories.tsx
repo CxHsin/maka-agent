@@ -22,6 +22,7 @@ import type { ExternalSessionSummary } from '@maka/core/external-session';
 import type { SessionSummary } from '@maka/core/session';
 import { revisionFamilySessionIds } from '@maka/core/session-revisions';
 import type { LlmConnection, ProviderType } from '@maka/core/llm-connections';
+import { buildChatModelChoices } from '@maka/core/chat-model-choice';
 import type { LocalMemoryBackupInfo, LocalMemoryEntryPreview, LocalMemoryState } from '@maka/core/local-memory';
 import { buildHealthSnapshot } from '@maka/core/health';
 import { createDefaultSettings, mergeSettings } from '@maka/core/settings';
@@ -31,6 +32,10 @@ import { createUiLocaleUpdateGate } from '../../src/renderer/settings/ui-locale-
 import type { ConnectionsBridge } from '../../src/renderer/settings/providers-panel';
 import type { ProjectRecord } from '@maka/core/project';
 import type { ArchivedTasksBridge } from '../../src/renderer/settings/tasks-settings-page';
+import type {
+  DesktopRuntimeHostProfileSnapshot,
+  DesktopSessionSummary,
+} from '../../src/preload/bridge-contract.js';
 import { withScopedMakaBridge } from '../maka-bridge';
 import { getDailyReviewSettingsCopy } from '../../src/renderer/locales/settings-daily-review-copy';
 
@@ -88,11 +93,12 @@ const connections: LlmConnection[] = [
 ];
 
 const connectionsBridge: ConnectionsBridge = {
-  async list() {
-    return connections;
-  },
-  async getDefault() {
-    return 'zai-live';
+  async getSnapshot() {
+    return {
+      connections,
+      defaultConnection: 'zai-live',
+      chatModelChoices: buildChatModelChoices(connections),
+    };
   },
   async setDefault() {
     /* noop */
@@ -572,12 +578,46 @@ const healthSignals: HealthSignal[] = [
 
 const healthSnapshot: HealthSnapshot = buildHealthSnapshot(NOW - 45_000, healthSignals);
 
-const makaBridge = {
-  settings: {
-    get: async () => createDefaultSettings(),
-    update: async (patch: Parameters<typeof window.maka.settings.update>[0]): Promise<UpdateAppSettingsResult> => {
-      return { settings: mergeSettings(createDefaultSettings(), patch) };
+const runtimeHostProfiles: DesktopRuntimeHostProfileSnapshot = {
+  defaultProfileId: 'local',
+  entries: [
+    {
+      profile: { id: 'local', name: 'Local', kind: 'local' },
+      enabled: true,
+      isDefault: true,
+      readiness: 'ready',
+      hostId: 'storybook-local-host',
     },
+  ],
+};
+
+let storyClientSettings = createDefaultSettings();
+let storyRuntimeHostSettings = createDefaultSettings();
+
+const makaBridge = {
+  runtimeHostProfiles: {
+    getSnapshot: async () => runtimeHostProfiles,
+    addAndEnable: async () => ({ kind: 'connected' as const, snapshot: runtimeHostProfiles }),
+    remove: async () => runtimeHostProfiles,
+    setEnabled: async () => runtimeHostProfiles,
+    setDefault: async () => runtimeHostProfiles,
+    subscribeChanges: () => () => undefined,
+  },
+  settings: {
+    getClient: async () => storyClientSettings,
+    get: async () => storyRuntimeHostSettings,
+    updateClient: async (
+      patch: Parameters<typeof window.maka.settings.updateClient>[0],
+    ): Promise<UpdateAppSettingsResult> => {
+      storyClientSettings = mergeSettings(storyClientSettings, patch);
+      return { settings: storyClientSettings };
+    },
+    update: async (patch: Parameters<typeof window.maka.settings.update>[0]): Promise<UpdateAppSettingsResult> => {
+      storyRuntimeHostSettings = mergeSettings(storyRuntimeHostSettings, patch);
+      return { settings: storyRuntimeHostSettings };
+    },
+    subscribeClientChanged: () => () => undefined,
+    subscribeExternalChanged: () => () => undefined,
     usageStats: async (): Promise<UsageStats> => usageStats,
     bots: {
       listStatuses: async () => ({}),
@@ -717,7 +757,7 @@ function archivedTask(
     isArchived: true,
     labels: [],
     hasUnread: false,
-    status: 'archived',
+    status: 'active',
     backend: 'ai-sdk',
     llmConnectionSlug: 'zai-live',
     connectionLocked: true,
@@ -814,7 +854,15 @@ const archivedTaskProjects: ProjectRecord[] = [
  */
 function useArchivedTasksStoryBridge(seed: readonly SessionSummary[]): ArchivedTasksBridge {
   const toast = useToast();
-  const [sessions, setSessions] = useState<SessionSummary[]>([...seed]);
+  const [sessions, setSessions] = useState<DesktopSessionSummary[]>(() =>
+    seed.map((session) => ({
+      ...session,
+      runtimeHostId: 'storybook-local',
+      profileId: 'local',
+      profileName: 'Local',
+      profileKind: 'local',
+    })),
+  );
   const confirmDelete = (sessionId: string) =>
     toast.confirm({
       title: `彻底删除「${sessions.find((session) => session.id === sessionId)?.name ?? ''}」？`,
@@ -852,7 +900,13 @@ function useArchivedTasksStoryBridge(seed: readonly SessionSummary[]): ArchivedT
     },
     onPurge: async (sessionIds) => {
       drop(sessionIds);
-      return { removed: sessionIds.length, remaining: [], verified: true, firstError: undefined };
+      return {
+        removed: sessionIds.length,
+        remaining: [],
+        restored: [],
+        verified: true,
+        firstError: undefined,
+      };
     },
   };
 }
@@ -1091,9 +1145,6 @@ function SettingsStoryFrame(props: SettingsStoryProps) {
         }}
       >
         <SettingsSurface
-          connections={props.connections ?? connections}
-          defaultSlug={props.defaultSlug === undefined ? 'zai-live' : props.defaultSlug}
-          onRefresh={async () => undefined}
           onClose={noop}
           themePref={themePref}
           onThemeChange={setThemePref}

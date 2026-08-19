@@ -177,6 +177,8 @@ export async function createHostAiSdkBackend(input: HostAiSdkBackendInput): Prom
           resolveModel: resolveHistoryCompactModel,
           providerOptions,
         });
+  const historyCompactRoute =
+    target.connection.providerType === 'openai-codex' ? 'provider_native' : 'text_summary';
   let telemetryDrainRequested = false;
   const persistTelemetry = async (operation: () => Promise<void>): Promise<void> => {
     try {
@@ -382,10 +384,10 @@ export async function createHostAiSdkBackend(input: HostAiSdkBackendInput): Prom
           : {}),
         loadHistoryCompactCheckpoint: input.context.loadHistoryCompactCheckpoint,
         summarizeHistoryCompact,
+        historyCompactRoute,
         recordHistoryCompactCheckpoint: input.context.recordHistoryCompactCheckpoint,
         loadTurnRuntimeEvents: input.context.loadTurnRuntimeEvents,
         allowMidTurnHistoryCompaction: input.context.allowMidTurnHistoryCompaction,
-        recordActiveFullCompactBlock: input.context.recordActiveFullCompactBlock,
         recordSemanticCompactBlock: input.context.recordSemanticCompactBlock,
         recordRunTrace: input.context.recordRunTrace,
         ...(commitRunComposition

@@ -512,7 +512,6 @@ const withConfiguredMcpBridge = withScopedMakaBridge({
     remove: async () => configuredMcpConfig,
     cancelInstall: async () => configuredMcpConfig,
     test: async () => ({ ok: true, status: configuredMcpStatuses[0], latencyMs: 42 }),
-    reconnect: async () => configuredMcpStatuses[0],
     subscribeChanges: () => () => {},
   },
 });
@@ -527,7 +526,6 @@ const withEditorMcpBridge = withScopedMakaBridge({
     remove: async () => editorMcpConfig,
     cancelInstall: async () => editorMcpConfig,
     test: async () => ({ ok: false, status: editorMcpStatus, latencyMs: 0 }),
-    reconnect: async () => editorMcpStatus,
     subscribeChanges: () => () => {},
   },
 });
@@ -542,7 +540,6 @@ const withEmptyMcpBridge = withScopedMakaBridge({
     remove: async () => ({ version: 1, mcpServers: {} }),
     cancelInstall: async () => ({ version: 1, mcpServers: {} }),
     test: async () => ({ ok: true, status: configuredMcpStatuses[0], latencyMs: 42 }),
-    reconnect: async () => configuredMcpStatuses[0],
     subscribeChanges: () => () => {},
   },
 });
@@ -557,7 +554,6 @@ const withFailedMcpBridge = withScopedMakaBridge({
     remove: async () => failedMcpConfig,
     cancelInstall: async () => failedMcpConfig,
     test: async () => ({ ok: false, status: failedMcpStatuses[0], latencyMs: 30_000 }),
-    reconnect: async () => failedMcpStatuses[0],
     subscribeChanges: () => () => {},
   },
 });

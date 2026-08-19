@@ -395,18 +395,16 @@ async function createExecutionStoresForWrite<K extends StorageRootKind, E extend
         run(() => sessionStore.updateSessionConfiguration(sessionId, input)),
       markSessionReadThroughMessage: (sessionId, messageId) =>
         run(() => sessionStore.markSessionReadThroughMessage(sessionId, messageId)),
-      archive: (sessionId) => run(() => sessionStore.archive(sessionId)),
-      unarchive: (sessionId) => run(() => sessionStore.unarchive(sessionId)),
       setFlagged: (sessionId, isFlagged) =>
         run(() => sessionStore.setFlagged(sessionId, isFlagged)),
       rename: (sessionId, name) => run(() => sessionStore.rename(sessionId, name)),
       setGeneratedTitleIfAbsent: (sessionId, title) =>
         run(() => sessionStore.setGeneratedTitleIfAbsent(sessionId, title)),
       remove: (sessionId) => run(() => sessionStore.remove(sessionId)),
-      setSessionsLifecycleVersioned: (sessions, state) =>
-        run(() => sessionStore.setSessionsLifecycleVersioned(sessions, state)),
-      removeSessionsVersioned: (sessions) =>
-        run(() => sessionStore.removeSessionsVersioned(sessions)),
+      setSessionsArchivedVersioned: (sessions, isArchived) =>
+        run(() => sessionStore.setSessionsArchivedVersioned(sessions, isArchived)),
+      removeSessionsVersioned: (sessions, archiveSessions) =>
+        run(() => sessionStore.removeSessionsVersioned(sessions, archiveSessions)),
       reconcileOrphanedAgentGraphRetirements: () =>
         run(() => sessionStore.reconcileOrphanedAgentGraphRetirements()),
       listPendingSessionRetirementCleanupIds: (sessionId) =>

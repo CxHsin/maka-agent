@@ -11,7 +11,7 @@ import {
   classifyTerminalRuntimeLedger,
   commitTerminalRunWithRuntimeFact,
 } from '@maka/runtime/terminal-run-commit';
-import { FakeBackend, FAKE_ASK_USER_QUESTION_PROMPT } from '@maka/runtime/fake-backend';
+import { FakeBackend, FAKE_ASK_USER_QUESTION_PROMPT } from '@maka/runtime/test-only/fake-backend';
 import {
   IMPLEMENTATION_AGENT_DEFINITION,
   LOCAL_READ_AGENT_PROFILE,

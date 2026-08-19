@@ -4,6 +4,7 @@ import type { ProjectRecord } from '@maka/core/project';
 import type { DesktopProjectCapabilities } from '../../preload/bridge-contract.js';
 import {
   Badge,
+  Banner,
   Button,
   EmptyState,
   MoreMenu,
@@ -20,9 +21,13 @@ import { settingsActionErrorMessage } from './settings-error-copy';
 import { SettingsPage, SettingsSection } from './settings-section';
 import { RuntimeHostProfilesSection } from './runtime-host-profiles-section.js';
 import { useKeyedActionGuard } from './use-action-guard';
+import { useOptionalRuntimeHostSettingsTarget } from './runtime-host-settings-target.js';
+import { getSettingsSharedCopy } from '../locales/settings-shared-copy.js';
+import { RemoteProjectDirectoryDialog } from '../remote-project-directory-dialog.js';
 
 const NO_PROJECT_CAPABILITIES: DesktopProjectCapabilities = {
   chooseClientDirectory: false,
+  chooseHostDirectory: false,
   selectNoProject: false,
   setLocalDefault: false,
   viewClientPath: false,
@@ -44,12 +49,16 @@ const NO_PROJECT_CAPABILITIES: DesktopProjectCapabilities = {
  */
 export function ProjectsSettingsPage(props: {
   settings: AppSettings;
+  runtimeHostStatus: 'loading' | 'ready' | 'unavailable' | 'error';
   onUpdate(
     patch: Parameters<typeof window.maka.settings.update>[0],
   ): Promise<UpdateAppSettingsResult>;
+  onRetryRuntimeHost(): Promise<void>;
 }) {
+  const host = useOptionalRuntimeHostSettingsTarget();
   const locale = useUiLocale();
   const copy = getSettingsProjectsCopy(locale);
+  const sharedCopy = getSettingsSharedCopy(locale);
   const toast = useToast();
   const mountedRef = useMountedRef();
   const actionGuard = useKeyedActionGuard<string>();
@@ -59,34 +68,45 @@ export function ProjectsSettingsPage(props: {
   const [homePath, setHomePath] = useState<string | undefined>(undefined);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
+  const [directoryPickerOpen, setDirectoryPickerOpen] = useState(false);
   const reloadGeneration = useRef(0);
 
   const reload = useCallback(async () => {
+    if (!host) return;
     const generation = ++reloadGeneration.current;
-    const snapshot = await window.maka.projects.getSnapshot();
+    const snapshot = await window.maka.projects.getSnapshot(undefined, host);
     if (mountedRef.current && generation === reloadGeneration.current) {
       setProjects([...snapshot.projects]);
       setCapabilities(snapshot.capabilities);
     }
-  }, [mountedRef]);
+  }, [host, mountedRef]);
 
   useEffect(() => {
-    void reload();
-    const unsubscribe = window.maka.projects.subscribeChanges(() => void reload());
-    const unsubscribeRuntimeHost = window.maka.runtimeHostProfiles.subscribeChanges((event) => {
-      if (!event.targetChanged) return;
-      reloadGeneration.current += 1;
+    if (!host) {
       setProjects([]);
       setCapabilities(NO_PROJECT_CAPABILITIES);
-    });
-    // Paths render unabbreviated until this lands, which is why
-    // `collapseHomePath` treats an unknown home as a no-op rather than a bug.
-    void window.maka.app.info().then((info) => {
-      if (mountedRef.current) setHomePath(info.homePath);
-    });
+      setHomePath(undefined);
+      return;
+    }
+    let cancelled = false;
+    setHomePath(undefined);
+    void reload();
+    const unsubscribeProjects = window.maka.projects.subscribeChanges(
+      () => void reload(),
+      undefined,
+      host,
+    );
+    const unsubscribeHosts = window.maka.runtimeHostProfiles.subscribeChanges(() => void reload());
+    void window.maka.app.info(host).then(
+      (info) => {
+        if (!cancelled && mountedRef.current) setHomePath(info.homePath);
+      },
+      () => undefined,
+    );
     return () => {
-      unsubscribe();
-      unsubscribeRuntimeHost();
+      cancelled = true;
+      unsubscribeProjects();
+      unsubscribeHosts();
     };
   }, [reload, mountedRef]);
 
@@ -121,6 +141,28 @@ export function ProjectsSettingsPage(props: {
     await props.onUpdate({ projects: { defaultProjectId: projectId } });
   }
 
+  if (!host) {
+    return (
+      <SettingsPage as="section" aria-label={copy.section}>
+        <RuntimeHostProfilesSection />
+        <Banner
+          status={props.runtimeHostStatus === 'error' ? 'error' : 'warning'}
+          title={props.runtimeHostStatus === 'loading'
+            ? sharedCopy.loading
+            : sharedCopy.runtimeHostUnavailable}
+          endContent={props.runtimeHostStatus === 'error' ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              label={sharedCopy.retry}
+              onClick={() => void props.onRetryRuntimeHost()}
+            />
+          ) : undefined}
+        />
+      </SettingsPage>
+    );
+  }
+
   return (
     <SettingsPage as="section" aria-label={copy.section}>
       <RuntimeHostProfilesSection />
@@ -134,15 +176,17 @@ export function ProjectsSettingsPage(props: {
             ? `${copy.sectionHelp} ${copy.defaultUnavailable}`
             : copy.sectionHelp
         }
-        action={capabilities.chooseClientDirectory ? (
+        action={capabilities.chooseClientDirectory || capabilities.chooseHostDirectory ? (
           <Button
             variant="secondary"
             size="sm"
             label={copy.addProject}
-            clickAction={async () => {
-              const result = await window.maka.projects.add();
-              if (result.ok) await reload();
-            }}
+            clickAction={capabilities.chooseHostDirectory
+              ? () => setDirectoryPickerOpen(true)
+              : async () => {
+                  const result = await window.maka.projects.add(host);
+                  if (result.ok) await reload();
+                }}
           />
         ) : undefined}
       >
@@ -221,6 +265,7 @@ export function ProjectsSettingsPage(props: {
                                       async () => {
                                         const result = await window.maka.projects.reveal(
                                           project.id,
+                                          host,
                                         );
                                         if (!result.ok) throw new Error(result.reason);
                                       },
@@ -243,7 +288,7 @@ export function ProjectsSettingsPage(props: {
                                     destructive: true,
                                   });
                                   if (!ok) return;
-                                  await window.maka.projects.archive(project.id);
+                                  await window.maka.projects.archive(project.id, host);
                                   // Removing the default leaves the preference
                                   // pointing at nothing; clear it in the same
                                   // action rather than leaving a dangling id.
@@ -267,7 +312,7 @@ export function ProjectsSettingsPage(props: {
                 await runRowAction(
                   `rename:${project.id}`,
                   async () => {
-                    await window.maka.projects.rename(project.id, next);
+                    await window.maka.projects.rename(project.id, next, host);
                     setRenamingId(null);
                   },
                   copy.renameFailed,
@@ -343,6 +388,14 @@ export function ProjectsSettingsPage(props: {
           </List>)
         )}
       </SettingsSection>
+      <RemoteProjectDirectoryDialog
+        host={directoryPickerOpen ? host : undefined}
+        onClose={() => setDirectoryPickerOpen(false)}
+        onRegistered={() => {
+          setDirectoryPickerOpen(false);
+          void reload();
+        }}
+      />
     </SettingsPage>
   );
 }

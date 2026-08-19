@@ -1,3 +1,4 @@
+import { RuntimeHostProtocolError } from '../protocol/errors.js';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -7,11 +8,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import WebSocket from 'ws';
 import { consumeAccessCredentialDeliveryFromControlDirectory } from '../control/access-credential-delivery.js';
-import {
-  encodeProtocolMessage,
-  RUNTIME_HOST_MAX_MESSAGE_BYTES,
-  RuntimeHostProtocolError,
-} from '../protocol/index.js';
+import { encodeProtocolMessage, RUNTIME_HOST_MAX_MESSAGE_BYTES } from '../protocol/index.js';
 import {
   openRuntimeHostAccessAuthority,
   type RuntimeHostAccessAuthority,
@@ -171,6 +168,7 @@ test('credential revocation during WebSocket upgrade cannot admit stale authorit
       });
     },
     issue: async () => assert.fail('Credential issue is not expected'),
+    replace: async () => assert.fail('Credential replacement is not expected'),
     revoke: async () => assert.fail('Credential revoke is not expected'),
     subscribeRevocations: () => () => undefined,
   };

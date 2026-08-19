@@ -172,6 +172,21 @@ test('the alias table is selected by provider and names only renames', () => {
     CLAUDE_SUBSCRIPTION_MODEL_ID_ALIASES,
   );
   assert.equal(modelIdAliasesForProvider('anthropic'), undefined);
+  for (const providerType of ['alibaba-token-plan-cn', 'alibaba-token-plan'] as const) {
+    assert.deepEqual(
+      reconcileConnectionAfterModelFetch(
+        {
+          defaultModel: 'qwen3.8-max-preview',
+          enabledModelIds: ['qwen3.8-max-preview'],
+          hasModelInventory: true,
+        },
+        [{ id: 'qwen3.8-max' }, { id: 'qwen3.7-max' }],
+        { aliases: modelIdAliasesForProvider(providerType) },
+      ),
+      { defaultModel: 'qwen3.8-max', enabledModelIds: ['qwen3.8-max'] },
+      providerType,
+    );
+  }
   const offered = curatedCatalogFallbackModelsForProvider('claude-subscription') ?? [];
   for (const [renamed, target] of Object.entries(CLAUDE_SUBSCRIPTION_MODEL_ID_ALIASES)) {
     assert.ok(offered.includes(target), `${target} is not offered by the curated inventory`);

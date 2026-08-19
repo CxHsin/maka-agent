@@ -16,7 +16,7 @@ import {
 import { createWorkspaceWritePermissionProfile } from '@maka/core/permission-profile';
 import { decodeRunCompositionSnapshot } from '@maka/core/run-composition';
 import { decodeCanonicalToolResultContent } from '@maka/core/tool-result-record-schema';
-import { type ModelCallKind } from '@maka/core/model-call-attempt';
+import { type ModelCallAttempt, type ModelCallKind } from '@maka/core/model-call-attempt';
 import { type RuntimeEvent } from '@maka/core/runtime-event';
 import { createDefaultRuntimePolicy } from '@maka/core/runtime-policy';
 import type { PlanSessionState, PlanStore } from '@maka/core/plan';
@@ -90,9 +90,23 @@ const MODEL_ID = 'hosted-real-model';
 const API_KEY = 'hosted-provider-key';
 const RESPONSE_TEXT = 'Hosted real-model execution completed.';
 const SUMMARY_TEXT = '## Goal\nContinue hosted real-model execution.';
+// History compaction validates checkpoint structure (#3029), so its requests
+// get a compaction-shaped completion instead of the shared one-section text.
+const COMPACT_SUMMARY_TEXT = [
+  '## Goal',
+  'Continue hosted real-model execution.',
+  '',
+  '## Progress',
+  '- hosted compaction exercised',
+  '',
+  '## Next Steps',
+  '1. continue',
+  '',
+  '## Critical Context',
+  '- (none)',
+].join('\n');
 const CLIENT_CAPABILITY_RESULT_TEXT = 'HOSTED_CLIENT_CAPABILITY_RESULT_SENTINEL';
 const CHILD_AGENT_RESULT_TEXT = 'HOSTED_CHILD_AGENT_RESULT_SENTINEL';
-const WEB_RESEARCH_CHILD_RESULT_TEXT = 'HOSTED_WEB_RESEARCH_RESULT_SENTINEL';
 const MAX_IMPLEMENTATION_CHILD_PTY_READS = 5;
 const MIN_IMPLEMENTATION_CHILD_REQUESTS = 6;
 const MAX_IMPLEMENTATION_CHILD_REQUESTS =
@@ -100,7 +114,7 @@ const MAX_IMPLEMENTATION_CHILD_REQUESTS =
 const HEADLESS_CODING_V1_PROMPT_HASH =
   'sha256:0e3389e330b8b8f0db1c7a8b8e2126325fe4c672d6eff279afcd3f9412e52271';
 const HEADLESS_CODING_V1_TOOLS_HASH =
-  'sha256:ea1f293096e5e209ae49346f46b0e8ff9b54ae17452a5a23149ad7233afaeafc';
+  'sha256:c062194603f93b568da5ca59b865b316156b5f218ba854c291aa9582859b3de4';
 const execFileAsync = promisify(execFile);
 
 test('backend creation aborts a stalled canonical connection read', async () => {
@@ -256,6 +270,127 @@ test('provider dispatch fails closed when the Run Composition commit fails', asy
   } finally {
     await backend?.dispose();
     await provider.close();
+  }
+});
+
+test('Codex OAuth history compaction uses the provider-native route and preserves failure facts', async () => {
+  const modelId = 'gpt-5.6-sol';
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const attempts: ModelCallAttempt[] = [];
+  const oauthTokens: OAuthSubscriptionTokens = {
+    access_token: codexAccessToken('compact-account'),
+    refresh_token: 'compact-refresh-token',
+    expires_at: Date.now() + 60_000,
+  };
+  const oauthCredentials = {
+    bind: () => ({
+      providerType: 'openai-codex' as const,
+      connectionSlug: 'backend-creation-connection',
+      resolve: async () => oauthTokens,
+    }),
+  } as unknown as HostOAuthExecutionAuthority;
+  const backend = await createHostAiSdkBackend(
+    backendCreationFixture({
+      abortSignal: new AbortController().signal,
+      modelId,
+      oauthCredentials,
+      resolveExecutionConnection: async () => ({
+        kind: 'ready',
+        connection: {
+          slug: 'backend-creation-connection',
+          providerType: 'openai-codex',
+          enabledModelIds: [modelId],
+          models: [
+            {
+              id: modelId,
+              capabilities: { chat: true, functionCalling: true },
+              contextWindow: 32_768,
+              maxOutputTokens: 1_024,
+            },
+          ],
+        },
+        networkProxy: { enabled: false },
+        secretMaterial: { connection: { secret: 'oauth-material' } },
+      }),
+      readPricing: async () => ({ revision: 0, overrides: [] }),
+      recordHistoryCompactCheckpoint: async () => undefined,
+      recordModelCallAttempt: async ({ attempt }) => {
+        attempts.push(attempt);
+      },
+      createFetchTransport: () => ({
+        fetch: async (url, init) => {
+          requests.push({
+            url: String(url),
+            body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+          });
+          return Response.json(
+            {
+              error: {
+                message: 'request rejected without echoing this body',
+                code: 'invalid_request_error',
+              },
+            },
+            {
+              status: 400,
+              headers: { 'x-request-id': 'req-codex-compact' },
+            },
+          );
+        },
+        close: async () => undefined,
+      }),
+    }),
+  );
+
+  try {
+    const runtimeContext: RuntimeEvent[] = [
+      compactRuntimeTextEvent(
+        'compact-old-user',
+        'turn-old-user',
+        'user',
+        'user',
+        'a'.repeat(8_000),
+      ),
+      compactRuntimeTextEvent(
+        'compact-old-model',
+        'turn-old-model',
+        'model',
+        'agent',
+        'b'.repeat(8_000),
+      ),
+      compactRuntimeTextEvent(
+        'compact-recent-user',
+        'turn-recent-user',
+        'user',
+        'user',
+        'recent context',
+      ),
+    ];
+    const result = await backend.compactHistory({
+      turnId: 'turn-compact',
+      runId: 'run-compact',
+      runtimeContext,
+      minRecentTurns: 1,
+    });
+
+    assert.equal(requests.length, 1, JSON.stringify(result));
+    assert.match(requests[0]!.url, /\/codex\/responses$/);
+    const requestText = JSON.stringify(requests[0]!.body);
+    assert.match(requestText, /"type":"compaction_trigger"/);
+    assert.doesNotMatch(requestText, /context summarization assistant/i);
+    assert.equal(result.contextBudget?.historyCompactWriteFailures, 1);
+    assert.equal(result.contextBudget?.compactionDecisions?.[0]?.decision, 'failedOpen');
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0]?.callKind, 'history_compact');
+    assert.equal(attempts[0]?.providerId, 'openai-codex');
+    assert.equal(attempts[0]?.historyCompactRoute, 'provider_native');
+    assert.equal(attempts[0]?.status, 'failed');
+    assert.equal(attempts[0]?.errorClass, 'RequestRejected');
+    assert.equal(attempts[0]?.httpStatus, 400);
+    assert.equal(attempts[0]?.providerCode, 'invalid_request_error');
+    assert.equal(attempts[0]?.providerRequestId, 'req-codex-compact');
+    assert.equal(attempts[0]?.retryable, false);
+  } finally {
+    await backend.dispose();
   }
 });
 
@@ -766,10 +901,11 @@ test('hosted execution freezes the headless coding provider wire contract', asyn
     assert.deepEqual(responsesToolNames(request?.body), [
       'ArchiveRead',
       'Bash',
+      'Edit',
       'Glob',
       'Grep',
       'Read',
-      'apply_patch',
+      'Write',
     ]);
     const bash = (tools as Array<Record<string, unknown>>).find((tool) => tool.name === 'Bash');
     assert.ok(bash);
@@ -965,6 +1101,8 @@ test('production Host executes a canonical ai-sdk Session against a real provide
     assert.equal(remembered.result.kind, 'committed');
 
     const turnIds: string[] = [];
+    // Cross the history high-water without making the text-only compact input
+    // exceed this fixture's 2,304-token summarizer budget.
     for (let index = 0; index < 5; index += 1) {
       const turnId = randomUUID();
       turnIds.push(turnId);
@@ -973,10 +1111,10 @@ test('production Host executes a canonical ai-sdk Session against a real provide
         session.id,
         turnId,
         index === 0
-          ? `Reply with the hosted execution result.${' HISTORY_PRESSURE'.repeat(160)}`
+          ? `Reply with the hosted execution result.${' HISTORY_PRESSURE'.repeat(128)}`
           : index === 1
-            ? `/skill:hosted-skill Continue hosted execution turn ${index}.${' HISTORY_PRESSURE'.repeat(160)}`
-            : `Continue hosted execution turn ${index}.${' HISTORY_PRESSURE'.repeat(160)}`,
+            ? `/skill:hosted-skill Continue hosted execution turn ${index}.${' HISTORY_PRESSURE'.repeat(128)}`
+            : `Continue hosted execution turn ${index}.${' HISTORY_PRESSURE'.repeat(128)}`,
         connectionContext,
       );
       const terminal = await waitForTerminal(
@@ -1029,6 +1167,8 @@ test('production Host executes a canonical ai-sdk Session against a real provide
     assert.match(requestText, /HOSTED_PERSONALIZATION_SENTINEL/);
     assert.match(requestText, /HOSTED_MEMORY_SENTINEL/);
     assert.match(JSON.stringify(mainRequests[1]?.body), /HOSTED_SKILL_BODY_MUST_STAY_LAZY/);
+    // Tavily is selected but no web-search credential exists, so the provider
+    // must never see WebSearch in the effective root tool surface.
     assert.deepEqual(toolNames(request?.body), [
       'ArchiveRead',
       'AskUserQuestion',
@@ -1051,7 +1191,6 @@ test('production Host executes a canonical ai-sdk Session against a real provide
       'SkillSearch',
       'StopBackgroundTask',
       'WebFetch',
-      'WebSearch',
       'Write',
       'WriteStdin',
       'load_tools',
@@ -1480,13 +1619,13 @@ test('production Host executes a durable runnable child with an exact tool ceili
     );
 
     const requests = provider.requests.filter((request) => request.body.stream === true);
-    assert.equal(requests.length, 7);
+    assert.equal(requests.length, 4);
     assert.ok(toolNames(requests[0]?.body).includes('load_tools'));
     assert.equal(toolNames(requests[0]?.body).includes('agent_spawn'), false);
     assert.ok(toolNames(requests[1]?.body).includes('agent_spawn'));
+    // The same routed child surface removes web_research when Tavily cannot run.
     assert.deepEqual(toolParameterEnum(requests[1]?.body, 'agent_spawn', 'profile'), [
       'local_read',
-      'web_research',
       'implementation',
     ]);
     // A child now carries the archive decoder alongside its allowlist (#2026).
@@ -1495,9 +1634,6 @@ test('production Host executes a durable runnable child with an exact tool ceili
     // can read back a result the runtime itself pruned.
     assert.deepEqual(toolNames(requests[2]?.body), ['ArchiveRead', 'Glob', 'Grep', 'Read']);
     assert.ok(toolNames(requests[3]?.body).includes('agent_spawn'));
-    assert.deepEqual(toolNames(requests[4]?.body), ['ArchiveRead', 'WebSearch']);
-    assert.deepEqual(toolNames(requests[5]?.body), ['ArchiveRead', 'WebSearch']);
-    assert.ok(toolNames(requests[6]?.body).includes('agent_spawn'));
 
     const sessions = await execution.sessionStore.listForRecovery();
     const child = sessions.find((session) => session.subagentRuntime?.profile === 'local_read');
@@ -1505,7 +1641,7 @@ test('production Host executes a durable runnable child with an exact tool ceili
       (session) => session.subagentRuntime?.profile === 'web_research',
     );
     assert.ok(child);
-    assert.ok(webChild);
+    assert.equal(webChild, undefined);
     assert.equal(child?.subagentRuntime?.profile, 'local_read');
     assert.equal(child?.subagentParent?.parentSessionId, parent.id);
     if (!child) return;
@@ -1520,31 +1656,6 @@ test('production Host executes a durable runnable child with an exact tool ceili
       childMessages.find((message) => message.type === 'assistant')?.text,
       CHILD_AGENT_RESULT_TEXT,
     );
-    if (!webChild) return;
-    const webChildRuns = await execution.agentRunStore.listSessionRuns(webChild.id);
-    assert.equal(webChildRuns.length, 1);
-    assert.equal(webChildRuns[0]?.status, 'completed');
-    const webChildMessages = await execution.sessionStore.readMessagesSnapshot(webChild.id);
-    assert.equal(
-      webChildMessages.find((message) => message.type === 'assistant')?.text,
-      WEB_RESEARCH_CHILD_RESULT_TEXT,
-    );
-    const webChildEvents = await execution.runtimeEventStore.readRuntimeEvents(
-      webChild.id,
-      webChildRuns[0]!.runId,
-    );
-    const searchResult = webChildEvents.find(
-      (event) => event.content?.kind === 'function_response' && event.content.name === 'WebSearch',
-    );
-    assert.ok(searchResult?.content?.kind === 'function_response');
-    assert.deepEqual(decodeCanonicalToolResultContent(searchResult.content.result), {
-      kind: 'web_search_error',
-      ok: false,
-      provider: 'tavily',
-      query: 'latest hosted web result',
-      reason: 'not_configured',
-      message: 'Configure a Tavily API key before using web search.',
-    });
     const artifacts = await openInteractiveArtifactStoreForWrite(owner.lease);
     const childArtifacts = await artifacts.listTurnArtifacts(child.id, childRuns[0]!.turnId);
     assert.equal(childArtifacts.length, 1);
@@ -1858,6 +1969,83 @@ test('production Host publishes and retires an implementation child patch', asyn
         }
       }
     }
+  }
+});
+
+test('Host auxiliary calls preserve resolved DeepSeek reasoning settings', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'maka-host-deepseek-auxiliary-'));
+  const provider = await startProvider();
+  const capability = await resolveStorageRoot({
+    path: join(base, 'interactive'),
+    kind: 'interactive',
+  });
+  const owner = await tryAcquireInteractiveRootOwner(capability);
+  assert.ok(owner);
+  if (!owner) return;
+
+  try {
+    const policy = await openInteractiveRuntimePolicyStoresForWrite(owner.lease);
+    const usage = await openInteractiveUsageStoresForWrite(owner.lease);
+    const execution = await openInteractiveExecutionStoresForWrite(owner.lease);
+    const created = await policy.connectionCatalog.create({
+      expectedCatalogRevision: 0,
+      connection: {
+        slug: 'deepseek-auxiliary',
+        name: 'DeepSeek auxiliary',
+        providerType: 'deepseek',
+        baseUrl: provider.baseUrl,
+        enabled: true,
+        enabledModelIds: ['deepseek-v4-flash'],
+      },
+    });
+    assert.equal(created.kind, 'committed');
+    if (created.kind !== 'committed') return;
+    const connection = created.snapshot.connections[0];
+    assert.ok(connection);
+    if (!connection) return;
+    const credential = await policy.credentialVault.set({
+      locator: {
+        scope: 'connection',
+        connectionId: connection.connectionId,
+        kind: 'api_key',
+      },
+      expected: null,
+      secret: API_KEY,
+    });
+    assert.equal(credential.kind, 'committed');
+    await publishConnectionModel(policy, connection.connectionId, 'deepseek-v4-flash');
+    const session = await execution.sessionStore.create({
+      cwd: capability.canonicalPath,
+      backend: 'ai-sdk',
+      llmConnectionSlug: 'deepseek-auxiliary',
+      model: 'deepseek-v4-flash',
+      thinkingLevel: 'high',
+      permissionMode: 'ask',
+    });
+    const effects = createHostSessionEffectModel({
+      runtimePolicy: policy,
+      oauthCredentials: new HostOAuthExecutionAuthority(policy),
+      claudeDeviceId: capability.rootId,
+      usage,
+      requestDrain: () => assert.fail('Auxiliary telemetry must not drain the Host'),
+      newId: () => 'deepseek-title-call',
+    });
+
+    await effects.generateTitle({
+      sessionId: session.id,
+      header: session,
+      sourceText: 'Explain the DeepSeek auxiliary reasoning seam',
+      abortSignal: new AbortController().signal,
+    });
+    const request = provider.requests.at(-1);
+    assert.ok(request);
+    assert.equal(request.url, '/v1/responses');
+    assert.equal(request.authorization, `Bearer ${API_KEY}`);
+    assert.deepEqual(request.body.reasoning, { effort: 'high' });
+  } finally {
+    await owner.close();
+    await provider.close();
+    await rm(base, { recursive: true, force: true });
   }
 });
 
@@ -2786,6 +2974,8 @@ function backendCreationFixture(input: {
   recordRunTrace?: (event: RunTraceEvent) => unknown;
   runtimeCommitSink?: HostAiSdkBackendInput['runtimeCommitSink'];
   recordRunComposition?: BackendFactoryContext['recordRunComposition'];
+  recordHistoryCompactCheckpoint?: BackendFactoryContext['recordHistoryCompactCheckpoint'];
+  recordModelCallAttempt?: BackendFactoryContext['recordModelCallAttempt'];
   createFetchTransport?: HostAiSdkBackendInput['createFetchTransport'];
   createRunComposer?: HostAiSdkBackendInput['createRunComposer'];
 }): HostAiSdkBackendInput {
@@ -2826,6 +3016,7 @@ function backendCreationFixture(input: {
       clientCapabilities: {
         snapshotForSession: input.snapshotClientCapabilities ?? (() => undefined),
       } as unknown as HostClientCapabilityCoordinator,
+      resolveTavilyWebSearchReadiness: async () => false,
     });
   return {
     context: {
@@ -2844,6 +3035,12 @@ function backendCreationFixture(input: {
         : {}),
       ...(input.recordRunTrace ? { recordRunTrace: input.recordRunTrace } : {}),
       ...(input.recordRunComposition ? { recordRunComposition: input.recordRunComposition } : {}),
+      ...(input.recordHistoryCompactCheckpoint
+        ? { recordHistoryCompactCheckpoint: input.recordHistoryCompactCheckpoint }
+        : {}),
+      ...(input.recordModelCallAttempt
+        ? { recordModelCallAttempt: input.recordModelCallAttempt }
+        : {}),
       store: {
         appendMessage: async () => undefined,
         readExecutionBoundary: async () => input.executionBoundary,
@@ -2869,6 +3066,11 @@ function backendCreationFixture(input: {
       telemetry: {
         recordLlmCall: async () => undefined,
         recordToolInvocation: async () => undefined,
+      },
+      modelCalls: {
+        markRunPendingReprojection: async () => undefined,
+        recordModelCallAttempt: async () => undefined,
+        clearPendingReprojection: async () => undefined,
       },
     },
     requestDrain: () => undefined,
@@ -2910,6 +3112,27 @@ function readyExecutionConnection(
         ? { requestHeaders: { secret: JSON.stringify(customization.requestHeaders) } }
         : {}),
     },
+  };
+}
+
+function compactRuntimeTextEvent(
+  id: string,
+  turnId: string,
+  role: 'user' | 'model',
+  author: 'user' | 'agent',
+  text: string,
+): RuntimeEvent {
+  return {
+    id,
+    invocationId: 'compact-invocation',
+    runId: 'compact-source-run',
+    sessionId: 'backend-creation-session',
+    turnId,
+    ts: 1,
+    partial: false,
+    role,
+    author,
+    content: { kind: 'text', text },
   };
 }
 
@@ -3050,6 +3273,7 @@ function responsesToolNames(body: Record<string, unknown> | undefined): string[]
 }
 
 function responsesDeveloperPrompt(body: Record<string, unknown> | undefined): string | undefined {
+  if (typeof body?.instructions === 'string') return body.instructions;
   const input = Array.isArray(body?.input) ? body.input : [];
   const developer = input.find(
     (message): message is Record<string, unknown> =>
@@ -3213,9 +3437,11 @@ async function handleProviderRequest(
     return;
   }
   if (body.stream !== true) {
+    const serialized = JSON.stringify(body);
     const isMemoryExtraction = /Perform the first stage of long-term-memory extraction/.test(
-      JSON.stringify(body),
+      serialized,
     );
+    const isHistoryCompaction = /context summarization assistant/.test(serialized);
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(
       JSON.stringify({
@@ -3236,7 +3462,9 @@ async function handleProviderRequest(
                     requestedItems: [],
                     incidentalItems: [],
                   })
-                : SUMMARY_TEXT,
+                : isHistoryCompaction
+                  ? COMPACT_SUMMARY_TEXT
+                  : SUMMARY_TEXT,
             },
             finish_reason: 'stop',
           },
@@ -3287,25 +3515,7 @@ async function handleProviderRequest(
   }
   if (flow.kind === 'child_agent' && streamRequestIndex === 4) {
     assert.ok(toolNames(body).includes('agent_spawn'));
-    respondProviderToolCall(response, streamRequestIndex, 'agent_spawn', {
-      profile: 'web_research',
-      task: 'Find one current hosted web result.',
-      isolation: 'same_workspace',
-      write_back: 'summary',
-    });
-    return;
-  }
-  if (flow.kind === 'child_agent' && streamRequestIndex === 5) {
-    assert.deepEqual(toolNames(body), ['ArchiveRead', 'WebSearch']);
-    respondProviderToolCall(response, streamRequestIndex, 'WebSearch', {
-      query: 'latest hosted web result',
-      limit: 1,
-    });
-    return;
-  }
-  if (flow.kind === 'child_agent' && streamRequestIndex === 6) {
-    assert.deepEqual(toolNames(body), ['ArchiveRead', 'WebSearch']);
-    respondProviderText(response, WEB_RESEARCH_CHILD_RESULT_TEXT);
+    respondProviderText(response, RESPONSE_TEXT);
     return;
   }
   if (flow.kind === 'implementation_child_agent' && streamRequestIndex === 3) {

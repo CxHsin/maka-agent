@@ -275,9 +275,9 @@ test('session retirement forgets a terminal Goal without recreating deleted auth
 
     const retirement = await coordinator.beginSessionRetirement([session.id], 'archive');
     const header = await stores.sessionStore.readHeaderRecordSnapshot(session.id);
-    await stores.sessionStore.setSessionsLifecycleVersioned(
+    await stores.sessionStore.setSessionsArchivedVersioned(
       [{ sessionId: session.id, expectedVersion: header.revision }],
-      'archived',
+      true,
     );
     retirement.commit();
 

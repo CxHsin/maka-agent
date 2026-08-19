@@ -9,14 +9,16 @@ import type {
   DirectRequestOperationKey,
   RuntimeHostSessionSubscription,
 } from '@maka/runtime-host/client';
-import { RuntimeHostSubscriptionError } from '@maka/runtime-host/client';
-import type {
-  InteractionPendingSnapshot,
-  OperationInput,
-  OperationOutput,
-  SessionCatalogProjection,
-  SessionContinuitySnapshot,
-  SubscriptionFrame,
+import { RuntimeHostOperationError, RuntimeHostSubscriptionError } from '@maka/runtime-host/client';
+import {
+  SESSION_CONTINUITY_SCHEMA_VERSION,
+  type GoalProjection,
+  type InteractionPendingSnapshot,
+  type OperationInput,
+  type OperationOutput,
+  type SessionCatalogProjection,
+  type SessionContinuitySnapshot,
+  type SubscriptionFrame,
 } from '@maka/runtime-host/protocol';
 import {
   createRuntimeHostMakaSessionDriver,
@@ -63,6 +65,210 @@ describe('Runtime Host Maka Session driver', () => {
       }),
       /requires an explicit Project/,
     );
+  });
+
+  test('exposes the session goal from the pushed continuity snapshot', async () => {
+    const armedGoal = goalProjection({ status: 'active' });
+    const subscription = new FakeSubscription(
+      continuitySnapshot({ goal: armedGoal }),
+      Promise.resolve([]),
+    );
+    const connection = new FakeConnection([subscription]);
+    const driver = createRuntimeHostMakaSessionDriver({
+      connection: connection.value,
+      cwd: '/repo',
+      llmConnectionSlug: 'openai-main',
+      model: 'gpt-5',
+      newId: () => 'session-id',
+    });
+
+    // No session attached yet: no channel, no goal.
+    assert.equal(driver.getGoal!(), null);
+
+    const observations: Array<string | null> = [];
+    const unsubscribe = driver.subscribeGoalChanges!((goal) =>
+      observations.push(goal === null ? null : `${goal.status}@${goal.revision}`),
+    );
+
+    await driver.createSession({
+      cwd: '/repo',
+      backend: 'ai-sdk',
+      llmConnectionSlug: 'openai-main',
+      model: 'gpt-5',
+      permissionMode: 'ask',
+    });
+
+    // Channel adoption publishes the snapshot's goal without any RPC.
+    assert.equal(driver.getGoal!()?.goalId, 'goal-1');
+    assert.deepEqual(observations, ['active@1']);
+    assert.equal(
+      connection.requests.some(({ operation }) => operation === 'goal.query'),
+      false,
+    );
+
+    // A pushed projection frame with a bumped revision updates the read and
+    // notifies listeners — this is how an abort auto-pause reaches the TUI.
+    const pausedGoal = goalProjection({ status: 'paused', revision: 2, pausedAt: 90 });
+    subscription.push({
+      kind: 'subscription.session_projection',
+      hostEpoch: 'host-1',
+      subscriptionId: 'subscription-1',
+      sequence: 1,
+      snapshot: continuitySnapshot({ goal: pausedGoal, projectionRevision: 2 }),
+    });
+    await waitFor(() => driver.getGoal!()?.status === 'paused');
+    assert.deepEqual(observations, ['active@1', 'paused@2']);
+
+    // An unchanged goal in a later frame must not re-notify. Proven by the
+    // exact sequence: if it had notified, a duplicate 'paused@2' would appear
+    // before the 'cleared@3' below.
+    subscription.push({
+      kind: 'subscription.session_projection',
+      hostEpoch: 'host-1',
+      subscriptionId: 'subscription-1',
+      sequence: 2,
+      snapshot: continuitySnapshot({ goal: pausedGoal, projectionRevision: 3 }),
+    });
+    subscription.push({
+      kind: 'subscription.session_projection',
+      hostEpoch: 'host-1',
+      subscriptionId: 'subscription-1',
+      sequence: 3,
+      snapshot: continuitySnapshot({
+        goal: goalProjection({ status: 'cleared', revision: 3 }),
+        projectionRevision: 4,
+      }),
+    });
+    await waitFor(() => observations.length === 3);
+    assert.deepEqual(observations, ['active@1', 'paused@2', 'cleared@3']);
+
+    // startNewSession drops the channel: goal reads null and listeners hear it.
+    driver.startNewSession();
+    assert.equal(driver.getGoal!(), null);
+    assert.deepEqual(observations, ['active@1', 'paused@2', 'cleared@3', null]);
+
+    unsubscribe();
+  });
+
+  test('controlGoal applies actions with the snapshot revision and retries conflicts', async () => {
+    const armedGoal = goalProjection({ status: 'active' });
+    const subscription = new FakeSubscription(
+      continuitySnapshot({ goal: armedGoal }),
+      Promise.resolve([]),
+    );
+    const connection = new FakeConnection([subscription]);
+    const driver = createRuntimeHostMakaSessionDriver({
+      connection: connection.value,
+      cwd: '/repo',
+      llmConnectionSlug: 'openai-main',
+      model: 'gpt-5',
+      newId: () => 'session-id',
+    });
+
+    // No session attached: no-op, no RPC.
+    assert.equal(await driver.controlGoal!('pause'), null);
+    assert.equal(
+      connection.requests.some(({ operation }) => operation === 'goal.control'),
+      false,
+    );
+
+    await driver.createSession({
+      cwd: '/repo',
+      backend: 'ai-sdk',
+      llmConnectionSlug: 'openai-main',
+      model: 'gpt-5',
+      permissionMode: 'ask',
+    });
+
+    // Clean path: one control request carrying the snapshot revision, no query.
+    connection.goalControlOutcomes.push(
+      goalProjection({ status: 'paused', revision: 2, pausedAt: 90 }),
+    );
+    assert.equal((await driver.controlGoal!('pause'))?.status, 'paused');
+    let controlRevisions = connection.requests
+      .filter(({ operation }) => operation === 'goal.control')
+      .map(({ input }) => (input as OperationInput<'goal.control'>).expectedRevision);
+    assert.deepEqual(controlRevisions, [1]);
+    assert.equal(
+      connection.requests.some(({ operation }) => operation === 'goal.query'),
+      false,
+    );
+
+    // The host broadcasts the pause; the snapshot folds it before the next action.
+    subscription.push({
+      kind: 'subscription.session_projection',
+      hostEpoch: 'host-1',
+      subscriptionId: 'subscription-1',
+      sequence: 1,
+      snapshot: continuitySnapshot({
+        goal: goalProjection({ status: 'paused', revision: 2, pausedAt: 90 }),
+        projectionRevision: 2,
+      }),
+    });
+    await waitFor(() => driver.getGoal!()?.revision === 2);
+
+    // Conflict path: re-query for the fresh revision and retry against it.
+    connection.goalControlOutcomes.push(
+      new RuntimeHostOperationError('goal.control', 'operation_conflict', 'revision conflict'),
+      goalProjection({ status: 'active', revision: 4 }),
+    );
+    connection.goalQueryResults.push(
+      goalProjection({ status: 'paused', revision: 3, pausedAt: 95 }),
+    );
+    assert.equal((await driver.controlGoal!('resume'))?.revision, 4);
+    controlRevisions = connection.requests
+      .filter(({ operation }) => operation === 'goal.control')
+      .map(({ input }) => (input as OperationInput<'goal.control'>).expectedRevision);
+    assert.deepEqual(controlRevisions, [1, 2, 3]);
+    assert.equal(
+      connection.requests.filter(({ operation }) => operation === 'goal.query').length,
+      1,
+    );
+
+    // Conflict where a concurrent controller removed the goal mid-flight: null
+    // (for clear, that is the desired end state).
+    connection.goalControlOutcomes.push(
+      new RuntimeHostOperationError('goal.control', 'operation_conflict', 'revision conflict'),
+    );
+    connection.goalQueryResults.push(null);
+    assert.equal(await driver.controlGoal!('clear'), null);
+
+    // Status conflict (invalid transition): the re-query returns the SAME
+    // revision — every accepted transition bumps it — proving a refusal, not
+    // a race. The host's reason is rethrown, not a misleading retry-exhaustion
+    // error, and the loop stops instead of burning the remaining attempts.
+    connection.goalControlOutcomes.push(
+      new RuntimeHostOperationError(
+        'goal.control',
+        'operation_conflict',
+        'Goal cannot pause from status paused',
+      ),
+    );
+    connection.goalQueryResults.push(
+      goalProjection({ status: 'paused', revision: 2, pausedAt: 90 }),
+    );
+    await assert.rejects(driver.controlGoal!('pause'), /Goal cannot pause from status paused/);
+    const attempts = connection.requests.filter(
+      ({ operation }) => operation === 'goal.control',
+    ).length;
+    assert.equal(attempts, 5); // 1 clean + 2 raced + 1 raced-then-gone + 1 refused — no futile retries
+
+    // A third conflict has no retry left to serve, so preserve that final Host
+    // reason instead of replacing it with a generic retry-exhaustion message.
+    connection.goalControlOutcomes.push(
+      new RuntimeHostOperationError('goal.control', 'operation_conflict', 'revision conflict 1'),
+      new RuntimeHostOperationError('goal.control', 'operation_conflict', 'revision conflict 2'),
+      new RuntimeHostOperationError(
+        'goal.control',
+        'operation_conflict',
+        'Goal cannot resume from status active',
+      ),
+    );
+    connection.goalQueryResults.push(
+      goalProjection({ status: 'paused', revision: 3, pausedAt: 95 }),
+      goalProjection({ status: 'paused', revision: 4, pausedAt: 95 }),
+    );
+    await assert.rejects(driver.controlGoal!('resume'), /Goal cannot resume from status active/);
   });
 
   test('honors explicit Project intent before inheriting the current workspace', async () => {
@@ -1225,6 +1431,10 @@ class FakeConnection {
   interactionQuery: unknown;
   executionBoundary: unknown = { kind: 'managed', access: 'read_write', revision: 1 };
   skillStartBlocked = false;
+  /** Scripted outcomes for goal.control: return the result goal, or throw (e.g. operation_conflict). */
+  readonly goalControlOutcomes: Array<GoalProjection | Error> = [];
+  /** Scripted goal.query results, shifted per call; defaults to null (no goal). */
+  readonly goalQueryResults: Array<GoalProjection | null> = [];
   readonly value: RuntimeHostMakaSessionDriverInput['connection'];
 
   constructor(
@@ -1271,6 +1481,21 @@ class FakeConnection {
           hostCwd: create.workspace.kind === 'host_path' ? create.workspace.path : '/project',
         },
       }) as OperationOutput<K>;
+    }
+    if (operation === 'goal.control') {
+      const outcome = this.goalControlOutcomes.shift();
+      if (outcome === undefined) throw new Error('Unexpected goal.control request');
+      if (outcome instanceof Error) throw outcome;
+      return {
+        sessionId: (input as OperationInput<'goal.control'>).sessionId,
+        goal: outcome,
+      } as OperationOutput<K>;
+    }
+    if (operation === 'goal.query') {
+      return {
+        sessionId: (input as OperationInput<'goal.query'>).sessionId,
+        goal: this.goalQueryResults.shift() ?? null,
+      } as OperationOutput<K>;
     }
     if (operation === 'session.configuration.update') {
       const update = input as OperationInput<'session.configuration.update'>;
@@ -1425,7 +1650,7 @@ function continuitySnapshot(
   overrides: Partial<SessionContinuitySnapshot> = {},
 ): SessionContinuitySnapshot {
   return {
-    schemaVersion: 3,
+    schemaVersion: SESSION_CONTINUITY_SCHEMA_VERSION,
     session: {
       sessionId: 'session-1',
       metadataRevision: 1,
@@ -1439,6 +1664,27 @@ function continuitySnapshot(
     goal: null,
     queue: { hostEpoch: 'host-1', queueRevision: 0, steering: [], followup: [] },
     interactions: { pending: [] },
+    ...overrides,
+  };
+}
+
+function goalProjection(overrides: Partial<GoalProjection> = {}): GoalProjection {
+  return {
+    goalId: 'goal-1',
+    revision: 1,
+    sessionId: 'session-id',
+    condition: 'Ship the feature',
+    status: 'active',
+    setAt: 1,
+    iterations: 2,
+    maxIterations: 50,
+    consecutiveNoProgress: 0,
+    blockCap: 8,
+    tokenBudget: 100_000,
+    tokensSpent: 12_000,
+    lastReason: null,
+    achievedAt: null,
+    pausedAt: null,
     ...overrides,
   };
 }

@@ -9,6 +9,7 @@ import {
 } from '@maka/core/explore-agent';
 import { activePlanExecution, type PlanSessionState, type PlanStore } from '@maka/core/plan';
 import type { PermissionMode } from '@maka/core/permission';
+import type { RuntimeExecutionConnection } from '@maka/core/llm-connections';
 import type { RuntimePolicySnapshot } from '@maka/core/runtime-policy';
 import type { SessionToolProfile } from '@maka/core/session';
 import {
@@ -74,6 +75,7 @@ import {
   hostedExecutionRunProfile,
   projectHostedExecutionTools,
 } from './hosted-execution-tool-profile.js';
+import { shouldResolveHostTavilyWebSearchReadiness } from './web-search-tool.js';
 
 const INTERACTIVE_RUN_COMPOSER_ID = 'maka.interactive';
 const INTERACTIVE_RUN_COMPOSER_REVISION = '1';
@@ -315,11 +317,67 @@ export interface InteractiveRunComposerFactoryInput
     'runtimePolicy' | 'boundTools' | 'boundToolNames' | 'clientCapabilities' | 'plan'
   > {
   readonly clientCapabilities: HostClientCapabilityCoordinator;
+  readonly resolveTavilyWebSearchReadiness: () => Promise<boolean>;
   readonly resolveRootTools?: (sessionId: string) => Promise<readonly MakaTool[]>;
   readonly childTools?: readonly MakaTool[];
   readonly worktreePatchWriteBackAvailable?: boolean;
   readonly planStore?: PlanStore;
   readonly deepResearchTools?: readonly MakaTool[];
+}
+
+export interface InteractiveRunToolSurfaceInput {
+  readonly runtimePolicy: RuntimePolicySnapshot;
+  readonly connection?: RuntimeExecutionConnection;
+  readonly modelId: string;
+  readonly hostTools: readonly MakaTool[];
+  readonly boundTools?: readonly MakaTool[];
+  readonly childTools?: readonly MakaTool[];
+  readonly parentAgentTools?: readonly MakaTool[];
+  readonly taskLedger: TaskLedgerStore;
+  readonly worktreePatchWriteBackAvailable?: boolean;
+  readonly tavilyReady: boolean;
+}
+
+/** Routes every model-visible tool surface through the same policy and readiness snapshot. */
+export function routeInteractiveRunToolSurface(input: InteractiveRunToolSurfaceInput): {
+  readonly hostTools: readonly MakaTool[];
+  readonly boundTools?: readonly MakaTool[];
+  readonly childTools?: readonly MakaTool[];
+  readonly parentAgentTools?: readonly MakaTool[];
+} {
+  const route = (tools: readonly MakaTool[]): MakaTool[] => {
+    const webFetchTools = routeWebFetchTools(tools, input.runtimePolicy.policy.privacy);
+    if (!input.connection) {
+      return webFetchTools.filter((tool) => tool.name !== 'WebSearch');
+    }
+    return routeWebSearchTools({
+      tools: webFetchTools,
+      settings: input.runtimePolicy.policy.webSearch,
+      connection: input.connection,
+      model: input.modelId,
+      tavilyReady: input.tavilyReady,
+      privacy: input.runtimePolicy.policy.privacy,
+    });
+  };
+  const childTools = input.childTools ? route(input.childTools) : undefined;
+  return {
+    hostTools: route(input.hostTools),
+    ...(input.boundTools ? { boundTools: route(input.boundTools) } : {}),
+    ...(childTools ? { childTools } : {}),
+    ...(childTools
+      ? {
+          parentAgentTools: buildParentAgentTools({
+            taskLedger: input.taskLedger,
+            definitions: listRunnableBuiltinAgentDefinitions({
+              tools: childTools,
+              worktreeChildExecutorAvailable: input.worktreePatchWriteBackAvailable,
+            }),
+          }),
+        }
+      : input.parentAgentTools
+        ? { parentAgentTools: input.parentAgentTools }
+        : {}),
+  };
 }
 
 export function createInteractiveRunComposerFactory(
@@ -344,36 +402,26 @@ export function createInteractiveRunComposerFactory(
               backendContext.abortSignal,
             )
           : [];
+      const tavilyReady = shouldResolveHostTavilyWebSearchReadiness(runtimePolicy.policy)
+        ? await readDuringBackendCreation(
+            input.resolveTavilyWebSearchReadiness,
+            backendContext.abortSignal,
+          )
+        : false;
       const candidateHostTools = [...(input.hostTools ?? []), ...rootTools];
-      const webSearchRouting = {
-        tools: routeWebFetchTools(candidateHostTools, runtimePolicy.policy.privacy),
-        settings: runtimePolicy.policy.webSearch,
+      const toolSurface = routeInteractiveRunToolSurface({
+        runtimePolicy,
         connection,
-        model: modelId,
-        privacy: runtimePolicy.policy.privacy,
-      } as const;
-      const hostTools = routeWebSearchTools(webSearchRouting);
-      const boundTools = backendContext.tools
-        ? routeWebSearchTools({
-            ...webSearchRouting,
-            tools: routeWebFetchTools(backendContext.tools, runtimePolicy.policy.privacy),
-          })
-        : undefined;
-      const routedChildTools = input.childTools
-        ? routeWebSearchTools({
-            ...webSearchRouting,
-            tools: routeWebFetchTools(input.childTools, runtimePolicy.policy.privacy),
-          })
-        : undefined;
-      const parentAgentTools = routedChildTools
-        ? buildParentAgentTools({
-            taskLedger: input.taskLedger,
-            definitions: listRunnableBuiltinAgentDefinitions({
-              tools: routedChildTools,
-              worktreeChildExecutorAvailable: input.worktreePatchWriteBackAvailable,
-            }),
-          })
-        : input.parentAgentTools;
+        modelId,
+        hostTools: candidateHostTools,
+        ...(backendContext.tools ? { boundTools: backendContext.tools } : {}),
+        ...(input.childTools ? { childTools: input.childTools } : {}),
+        ...(input.parentAgentTools ? { parentAgentTools: input.parentAgentTools } : {}),
+        taskLedger: input.taskLedger,
+        worktreePatchWriteBackAvailable: input.worktreePatchWriteBackAvailable,
+        tavilyReady,
+      });
+      const { hostTools, boundTools, parentAgentTools } = toolSurface;
       const composer = createInteractiveRunComposer({
         runtimePolicy,
         skills: input.skills,

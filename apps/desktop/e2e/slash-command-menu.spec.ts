@@ -1,4 +1,4 @@
-import { FAKE_HOLD_OPEN_PROMPT } from '@maka/runtime/fake-backend';
+import { FAKE_HOLD_OPEN_PROMPT } from '@maka/runtime/test-only/fake-backend';
 import { expect, test, COMPOSER_INPUT } from './fixtures';
 
 test('shows only slash commands executable in the current session state', async ({
@@ -123,11 +123,17 @@ test('dispatches a staged slash command instead of steering it into a running tu
   await expect(page.getByRole('button', { name: '插入消息' })).toBeVisible();
   await composer.press('Enter');
 
-  await composer.fill('/');
+  // After the steering send the composer remounts. `fill('/')` can land
+  // before the contentEditable is focused, so the `/` trigger never
+  // populates. An empty command group then makes `/compact` look absent
+  // and the `/side` click waits out the timeout.
+  await composer.click();
+  await composer.pressSequentially('/');
   const menu = page.getByRole('listbox', { name: '命令和技能' });
   const commands = menu.getByRole('group', { name: '命令' });
-  await expect(commands.getByRole('option', { name: /\/compact/ })).toHaveCount(0);
   const side = commands.getByRole('option', { name: /打开侧聊.*\/side/ });
+  await expect(side).toBeVisible();
+  await expect(commands.getByRole('option', { name: /\/compact/ })).toHaveCount(0);
   await side.click();
   await expect.poll(() => composer.textContent()).toBe('/side ');
   await expect(page.locator('.maka-quote-workbar-panel')).toHaveCount(0);

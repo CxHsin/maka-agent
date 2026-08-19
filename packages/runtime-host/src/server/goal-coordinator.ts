@@ -160,7 +160,7 @@ export class HostGoalCoordinator {
       const { goal, controlLease } = snapshot.record;
       try {
         const header = await this.#stores.sessionStore.readHeaderSnapshot(goal.sessionId);
-        if (header.isArchived || header.status === 'archived') {
+        if (header.isArchived) {
           await this.#deleteOrphanedAuthority(snapshot);
           continue;
         }
@@ -315,7 +315,7 @@ export class HostGoalCoordinator {
         if (isSessionNotFoundError(error)) return notFound('Session does not exist');
         throw error;
       }
-      if (header.isArchived || header.status === 'archived') {
+      if (header.isArchived) {
         return sessionArchived('Archived Session Goal state cannot be controlled');
       }
       const current = this.manager.get(input.sessionId);

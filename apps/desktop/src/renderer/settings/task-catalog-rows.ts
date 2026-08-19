@@ -20,8 +20,18 @@ import { deriveSessionRail } from '../session-rail.js';
  * in-flight companion forks, another property of its own view rather than of
  * the archived catalog.
  */
-export function archivedTaskRows(sessions: readonly SessionSummary[]): SessionSummary[] {
+export function archivedTaskRows<T extends SessionSummary>(sessions: readonly T[]): T[] {
   return deriveSessionRail(sessions, undefined, (session) => session.isArchived).sessions;
+}
+
+/** Whether an archived row remains because its ordinary parent task was deleted. */
+export function isOrphanedSubagentTask(
+  session: SessionSummary,
+  knownSessionIds: ReadonlySet<string>,
+): boolean {
+  const parentSessionId =
+    session.subagent?.parentSessionId ?? session.subagentParent?.parentSessionId;
+  return parentSessionId !== undefined && !knownSessionIds.has(parentSessionId);
 }
 
 /**
@@ -34,10 +44,10 @@ export function archivedTaskRows(sessions: readonly SessionSummary[]): SessionSu
  * whose project could not be resolved answers to its name alone — `join`
  * renders the missing half as nothing, never as the word "undefined".
  */
-export function matchesArchivedTaskQuery(
-  session: SessionSummary,
+export function matchesArchivedTaskQuery<T extends SessionSummary>(
+  session: T,
   query: string,
-  projectLabelOf: (session: SessionSummary) => string | undefined,
+  projectLabelOf: (session: T) => string | undefined,
 ): boolean {
   const haystack = [session.name, projectLabelOf(session)].join('\n');
   return haystack.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());

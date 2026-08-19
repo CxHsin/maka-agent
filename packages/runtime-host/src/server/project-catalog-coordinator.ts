@@ -23,9 +23,7 @@ import {
   type ProjectCatalogView,
 } from '../protocol/index.js';
 import type { ProjectCatalogOperationHandlerMap } from './operation-dispatcher.js';
-import type { HostProjectCatalogChangeService } from './project-catalog-change-service.js';
 import type { HostProjectMembershipGate } from './project-membership-gate.js';
-import type { HostSessionCatalogChangeService } from './session-catalog-change-service.js';
 
 export class HostProjectCatalogCoordinator {
   readonly handlers: ProjectCatalogOperationHandlerMap = {
@@ -35,8 +33,8 @@ export class HostProjectCatalogCoordinator {
 
   constructor(
     private readonly catalog: ProjectCatalog,
-    private readonly projectChanges: HostProjectCatalogChangeService,
-    private readonly sessionChanges: HostSessionCatalogChangeService,
+    private readonly projectChanges: { publish(): void },
+    private readonly sessionChanges: { publish(sessionId: string): void },
     private readonly membership: HostProjectMembershipGate,
     private readonly requestDrain: () => void,
   ) {}

@@ -5,10 +5,9 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { createProjectCatalog, createSessionStore } from '@maka/storage';
 import type { ConnectionContext } from '../server/operation-dispatcher.js';
-import { HostProjectCatalogChangeService } from '../server/project-catalog-change-service.js';
+import { HostChangeFeed } from '../server/host-change-feed.js';
 import { HostProjectCatalogCoordinator } from '../server/project-catalog-coordinator.js';
 import { HostProjectMembershipGate } from '../server/project-membership-gate.js';
-import { HostSessionCatalogChangeService } from '../server/session-catalog-change-service.js';
 
 test('Host Project Catalog relink merges identities and reassigns every affected Session', async () => {
   const base = await mkdtemp(join(tmpdir(), 'maka-host-project-catalog-'));
@@ -24,30 +23,36 @@ test('Host Project Catalog relink merges identities and reassigns every affected
     })(),
   });
   const sessions = createSessionStore(storageRoot);
-  const projectChanges = new HostProjectCatalogChangeService();
-  const sessionChanges = new HostSessionCatalogChangeService();
+  const hostChanges = new HostChangeFeed();
   const projectFrames: unknown[] = [];
   const sessionFrames: unknown[] = [];
-  projectChanges.attachConnection('desktop', {
-    send: async (frame) => {
-      projectFrames.push(frame);
+  hostChanges.attachConnection(
+    'desktop',
+    {
+      projectCatalog: true,
+      sessionCatalog: true,
     },
-  });
-  projectChanges.attachConnection('tui', {
-    send: async (frame) => {
-      projectFrames.push(frame);
+    {
+      send: async (frame) => {
+        if (frame.kind === 'project.catalog.changed') projectFrames.push(frame);
+        else sessionFrames.push(frame);
+      },
     },
-  });
-  sessionChanges.attachConnection('desktop', {
-    send: async (frame) => {
-      sessionFrames.push(frame);
+  );
+  hostChanges.attachConnection(
+    'tui',
+    { projectCatalog: true },
+    {
+      send: async (frame) => {
+        projectFrames.push(frame);
+      },
     },
-  });
+  );
   const membership = new HostProjectMembershipGate();
   const coordinator = new HostProjectCatalogCoordinator(
     catalog,
-    projectChanges,
-    sessionChanges,
+    { publish: () => hostChanges.publishProjectCatalog() },
+    { publish: (sessionId: string) => hostChanges.publishSessionCatalog(sessionId) },
     membership,
     () => assert.fail('ordinary project mutations must not drain the Host'),
   );

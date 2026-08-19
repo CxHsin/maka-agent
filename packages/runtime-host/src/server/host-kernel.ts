@@ -45,11 +45,8 @@ import {
 import type { RuntimeHostConnectionAuthority } from './connection-authority.js';
 import type { SessionContinuityService } from './session-continuity-service.js';
 import type { ClientCapabilityService } from './client-capability-service.js';
-import type { HostConfigurationChangeService } from './configuration-change-service.js';
-import type { HostProjectCatalogChangeService } from './project-catalog-change-service.js';
+import type { HostChangeFeed } from './host-change-feed.js';
 import { runtimeHostLogBuffer } from '../process-diagnostics.js';
-import type { HostSessionCatalogChangeService } from './session-catalog-change-service.js';
-import type { HostScheduledTaskChangeService } from './scheduled-task-change-service.js';
 import {
   type HostCompositionDescriptor,
   type RuntimeHostCompositionSource,
@@ -99,10 +96,7 @@ export interface RuntimeHostComposition {
   readonly moduleIds?: readonly string[];
   readonly continuity?: SessionContinuityService;
   readonly clientCapabilities?: ClientCapabilityService;
-  readonly configurationChanges?: HostConfigurationChangeService;
-  readonly projectCatalogChanges?: HostProjectCatalogChangeService;
-  readonly sessionCatalogChanges?: HostSessionCatalogChangeService;
-  readonly scheduledTaskChanges?: HostScheduledTaskChangeService;
+  readonly hostChanges?: HostChangeFeed;
   releaseConnection?(connectionId: string): void;
   beginDrain(): void;
   recover(): Promise<void>;
@@ -367,10 +361,7 @@ export class RuntimeHostKernel {
         resolveHandlers: () => this.#operationHandlers,
         resolveContinuity: () => this.#composition?.continuity,
         resolveClientCapabilities: () => this.#composition?.clientCapabilities,
-        resolveConfigurationChanges: () => this.#composition?.configurationChanges,
-        resolveProjectCatalogChanges: () => this.#composition?.projectCatalogChanges,
-        resolveSessionCatalogChanges: () => this.#composition?.sessionCatalogChanges,
-        resolveScheduledTaskChanges: () => this.#composition?.scheduledTaskChanges,
+        resolveHostChanges: () => this.#composition?.hostChanges,
         beginOperation: (request) => this.#beginOperation(request),
         onTeardown: releaseTransport,
       });

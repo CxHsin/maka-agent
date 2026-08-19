@@ -90,9 +90,7 @@ import { HostAgentGraphExecutionCoordinator } from './agent-graph-execution-coor
 import { HostScheduledTaskCoordinator } from './scheduled-task-coordinator.js';
 import { recoverClientCapabilityOutcomes } from './client-capability-recovery.js';
 import { HostConnectionEffectCoordinator } from './connection-effect-coordinator.js';
-import { HostConfigurationChangeService } from './configuration-change-service.js';
-import { HostSessionCatalogChangeService } from './session-catalog-change-service.js';
-import { HostScheduledTaskChangeService } from './scheduled-task-change-service.js';
+import { HostChangeFeed } from './host-change-feed.js';
 import { HostConfigurationCoordinator } from './configuration-coordinator.js';
 import { HostContextCoordinator } from './context-coordinator.js';
 import { HostClientCapabilityCoordinator } from './client-capability-coordinator.js';
@@ -137,7 +135,6 @@ import { HostNetworkProxyCoordinator } from './network-proxy-coordinator.js';
 import { HostOAuthExecutionAuthority } from './oauth-execution-authority.js';
 import { HostOAuthCoordinator, type HostOAuthCoordinatorInput } from './oauth-coordinator.js';
 import { HostPlanCoordinator } from './plan-coordinator.js';
-import { HostProjectCatalogChangeService } from './project-catalog-change-service.js';
 import { HostProjectCatalogCoordinator } from './project-catalog-coordinator.js';
 import { HostProjectMembershipGate } from './project-membership-gate.js';
 import { RootAdmissionOwner } from './root-admission-owner.js';
@@ -406,15 +403,12 @@ export async function createExecutionRuntimeHostComposition(
           initiatingConnectionId: string,
         ) => Promise<string[]>)
       | undefined;
-    const configurationChanges = new HostConfigurationChangeService();
-    const sessionCatalogChanges = new HostSessionCatalogChangeService();
-    const scheduledTaskChanges = new HostScheduledTaskChangeService();
-    const projectCatalogChanges = new HostProjectCatalogChangeService();
+    const hostChanges = new HostChangeFeed();
     const projectMembership = new HostProjectMembershipGate();
     const workspaceResolver = new HostWorkspaceResolver(
       openedProjectCatalog,
       projectMembership,
-      () => projectCatalogChanges.publish(),
+      () => hostChanges.publishProjectCatalog(),
     );
     const skills = new HostSkillCatalogCoordinator(
       new SkillCatalogRepository({
@@ -454,8 +448,8 @@ export async function createExecutionRuntimeHostComposition(
     );
     const projects = new HostProjectCatalogCoordinator(
       openedProjectCatalog,
-      projectCatalogChanges,
-      sessionCatalogChanges,
+      { publish: () => hostChanges.publishProjectCatalog() },
+      { publish: (sessionId: string) => hostChanges.publishSessionCatalog(sessionId) },
       projectMembership,
       context.requestDrain,
     );
@@ -517,7 +511,7 @@ export async function createExecutionRuntimeHostComposition(
       sessionAdmission,
       context.requestDrain,
       createSessionTranscriptReader({ stores, canonicalPermissionOutcomes }),
-      (sessionId) => sessionCatalogChanges.publish(sessionId),
+      (sessionId) => hostChanges.publishSessionCatalog(sessionId),
     );
     const continuityCoordinator = continuity;
     unsubscribeTranscriptChanges = stores.sessionStore.subscribeTranscriptChanges((sessionId) =>
@@ -954,7 +948,7 @@ export async function createExecutionRuntimeHostComposition(
       observeBackendInvalidation(manager.refreshIdleBackends());
     };
     const registerConfigurationMutation = (): void => {
-      configurationChanges.publish();
+      hostChanges.publishConfiguration();
       registerBackendInvalidation();
     };
     clientCapabilities = new HostClientCapabilityCoordinator({
@@ -969,7 +963,7 @@ export async function createExecutionRuntimeHostComposition(
       isProviderEnabled: isOAuthEnrollmentProviderEnabled,
       acquireResidency: () => context.acquireResidency('oauth'),
       invalidateBackends: () => {
-        configurationChanges.publish();
+        hostChanges.publishConfiguration();
         return manager.refreshIdleBackends();
       },
       onFatal: (error) => {
@@ -1168,7 +1162,13 @@ export async function createExecutionRuntimeHostComposition(
       runtimePolicy: runtimePolicyStores,
       nativeEffects: clientCapabilities,
       createSession: (input) => sessionCatalog.createForHost(input),
-      changes: scheduledTaskChanges,
+      changes: {
+        publish: (
+          revision: number,
+          reason: Parameters<HostChangeFeed['publishScheduledTask']>[1],
+          taskId: string,
+        ) => hostChanges.publishScheduledTask(revision, reason, taskId),
+      },
       acquireResidency: () => context.acquireResidency('scheduled-task'),
       requestDrain: context.requestDrain,
     });
@@ -1541,10 +1541,7 @@ export async function createExecutionRuntimeHostComposition(
       workspaceExecution: requireWorkspaceExecution(workspaceExecution),
       continuity: continuityCoordinator,
       clientCapabilities,
-      configurationChanges,
-      projectCatalogChanges,
-      sessionCatalogChanges,
-      scheduledTaskChanges,
+      hostChanges,
       releaseConnection: (connectionId: string) => {
         for (const module of domainModules) module.releaseConnection?.(connectionId);
       },

@@ -41,6 +41,7 @@ export function projectGoalState(goal: GoalState): GoalProjection {
     lastReason: goal.lastReason ?? null,
     achievedAt: goal.achievedAt ?? null,
     pausedAt: goal.pausedAt ?? null,
+    armedAt: goal.armedAt ?? null,
   });
 }
 
@@ -62,5 +63,6 @@ export function worstCaseGoalProjection(sessionId: string): GoalProjection {
     lastReason: '界'.repeat(GOAL_REASON_TEXT_LIMIT.codeUnits),
     achievedAt: Number.MAX_SAFE_INTEGER,
     pausedAt: Number.MAX_SAFE_INTEGER,
+    armedAt: Number.MAX_SAFE_INTEGER,
   };
 }

@@ -949,6 +949,7 @@ function goalProjection(revision: number) {
     lastReason: null,
     achievedAt: null,
     pausedAt: null,
+    armedAt: null,
   };
 }
 

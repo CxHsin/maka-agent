@@ -36,11 +36,13 @@ const PROVIDER_UNAVAILABLE_PROVIDER_CODES: ReadonlySet<string> = new Set([
   'server_error', // OpenAI-compatible stream errors can omit the HTTP status.
 ]);
 
-/** Provider codes meaning the model is temporarily at capacity. */
-const PROVIDER_CAPACITY_CODES: ReadonlySet<string> = new Set([
-  'resource-exhausted',
-  'resource_exhausted',
-]);
+/**
+ * xAI emits this code for transient model capacity failures, including when
+ * the same payload is relayed through an OpenAI-compatible gateway. Do not
+ * add the generic gRPC/Google `resource_exhausted` spelling here: that code
+ * represents quota exhaustion and needs different user guidance.
+ */
+const PROVIDER_CAPACITY_CODES: ReadonlySet<string> = new Set(['resource-exhausted']);
 
 /**
  * A provider failure normalized into classification evidence. classifyError's
@@ -149,10 +151,11 @@ export function providerRetryMetadata(error: unknown): ProviderRetryMetadata {
   const errorClass = classifyProviderFacts(facts);
   const retryAfterMs = parseRetryAfterMs(facts.responseHeaders ?? {});
   if (errorClass === 'ProviderCapacity') {
-    if (retryAfterMs === null) return { retryable: false };
+    // Capacity is transient even when the provider sends a malformed delay;
+    // fall back to the adapter's bounded local backoff in that case.
     return {
       retryable: true,
-      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+      ...(retryAfterMs !== undefined && retryAfterMs !== null ? { retryAfterMs } : {}),
     };
   }
   if (errorClass === 'RateLimit' || status === 429) {
@@ -619,6 +622,7 @@ export function classifyError(error: unknown): string {
 function classifyProviderFacts(facts: ProviderErrorFacts): string {
   const { target: classificationTarget, evidence } = facts;
   const { text, statusCode, code, structuredCodes } = evidence;
+  const normalizedCode = code.toLowerCase();
   if (text.includes('abort')) return 'Abort';
   if (code === OPENAI_RESPONSES_WEBSOCKET_TRANSPORT_ERROR) return 'Network';
   if (statusCode === '402' || code === '402') return 'ProviderBilling';
@@ -626,7 +630,7 @@ function classifyProviderFacts(facts: ProviderErrorFacts): string {
   if (statusCode === '401' || statusCode === '403' || code === '401' || code === '403')
     return 'Auth';
   if (
-    PROVIDER_CAPACITY_CODES.has(code) ||
+    PROVIDER_CAPACITY_CODES.has(normalizedCode) ||
     structuredCodes.some((c) => PROVIDER_CAPACITY_CODES.has(c))
   ) {
     return 'ProviderCapacity';

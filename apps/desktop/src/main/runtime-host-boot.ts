@@ -536,6 +536,7 @@ owner = await startRuntimeHostDesktopOwner(
                   label: "MCP",
                   description:
                     "Use MCP tools connected by this Desktop client.",
+                  invalidToolPolicy: "omit" as const,
                   tools: mcpTools,
                 },
               ]),

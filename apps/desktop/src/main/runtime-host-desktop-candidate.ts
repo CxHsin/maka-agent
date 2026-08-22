@@ -716,6 +716,7 @@ export async function createDesktopRuntimeHostCandidate(
             desktopSessionResourceKey({ ...scope, sessionId }),
           onSessionUsed: (sessionId) => nativeSessionIds.add(sessionId),
           onComputerUseTurnUsed: watchComputerUseTurn,
+          onInvalidTool: reportError,
           isTargetValid: deps.isTargetValid,
           onClosed: () => providers.delete(provider),
         },

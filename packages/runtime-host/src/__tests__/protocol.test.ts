@@ -205,8 +205,8 @@ describe('Runtime Host bootstrap protocol', () => {
     );
   });
 
-  test('publishes a new compatibility epoch for typed context compaction outcomes', () => {
-    assert.ok(RUNTIME_HOST_COMPATIBILITY_EPOCH > 39);
+  test('publishes a new compatibility epoch for provider capacity retry progress', () => {
+    assert.ok(RUNTIME_HOST_COMPATIBILITY_EPOCH > 41);
   });
 
   test('selects the highest mutually supported protocol and rejects a gap', () => {

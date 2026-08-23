@@ -604,14 +604,13 @@ export function isContextOverflowErrorText(text: string): boolean {
 
 /**
  * Classifies a provider error by DESCENDING evidence strength over the
- * normalized evidence (Error, string, or plain stream-error-part object):
- * abort → 402 → 429 → 401/403 (numeric fields, never substrings) → the
- * provider's structured overflow code → bare 413 (HTTP: request entity too
- * large — itself input-side evidence, Cerebras sends it with no body) →
- * vetoable free-text overflow relations → generic 5xx → weak word
- * heuristics. Specific overflow evidence outranks a generic 5xx because
- * proxies (LiteLLM) wrap provider overflows in 503s; the weak heuristics
- * rank last so "generate" can never become a rate limit.
+ * normalized evidence (Error, string, or plain stream-error-part object): an
+ * explicit RetryError abort → known transport codes → the provider's
+ * structured capacity and overflow codes → numeric HTTP fallbacks →
+ * vetoable free-text relations → generic 5xx → weak word heuristics. Exact
+ * provider evidence outranks generic HTTP/text evidence because gateways can
+ * wrap a provider failure in a misleading status or message; the weak
+ * heuristics rank last so "generate" can never become a rate limit.
  */
 export function classifyError(error: unknown): string {
   if (RetryError.isInstance(error) && error.reason === 'abort') return 'Abort';
@@ -623,12 +622,7 @@ function classifyProviderFacts(facts: ProviderErrorFacts): string {
   const { target: classificationTarget, evidence } = facts;
   const { text, statusCode, code, structuredCodes } = evidence;
   const normalizedCode = code.toLowerCase();
-  if (text.includes('abort')) return 'Abort';
   if (code === OPENAI_RESPONSES_WEBSOCKET_TRANSPORT_ERROR) return 'Network';
-  if (statusCode === '402' || code === '402') return 'ProviderBilling';
-  if (statusCode === '429' || code === '429') return 'RateLimit';
-  if (statusCode === '401' || statusCode === '403' || code === '401' || code === '403')
-    return 'Auth';
   if (
     PROVIDER_CAPACITY_CODES.has(normalizedCode) ||
     structuredCodes.some((c) => PROVIDER_CAPACITY_CODES.has(c))
@@ -638,6 +632,11 @@ function classifyProviderFacts(facts: ProviderErrorFacts): string {
   // Structured provider evidence: the parsed error JSON's code/type is the
   // only unconditional signal for a context overflow.
   if (structuredCodes.some((c) => CONTEXT_OVERFLOW_PROVIDER_CODES.has(c))) return 'ContextLength';
+  if (text.includes('abort')) return 'Abort';
+  if (statusCode === '402' || code === '402') return 'ProviderBilling';
+  if (statusCode === '429' || code === '429') return 'RateLimit';
+  if (statusCode === '401' || statusCode === '403' || code === '401' || code === '403')
+    return 'Auth';
   if (statusCode === '413' || code === '413') return 'ContextLength';
   // Free-text overflow relations on the composite text, veto-first inside.
   if (isContextOverflowErrorText(text)) return 'ContextLength';

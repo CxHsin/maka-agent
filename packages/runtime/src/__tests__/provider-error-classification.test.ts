@@ -226,6 +226,20 @@ describe('Provider error classification', () => {
     });
     assert.equal(classifyError(topLevelCode), 'ProviderCapacity');
 
+    const capacityWithAbortText = Object.assign(new Error('Request aborted by upstream'), {
+      name: 'AI_APICallError',
+      data: { error: { code: 'resource-exhausted' } },
+    });
+    assert.equal(classifyError(capacityWithAbortText), 'ProviderCapacity');
+
+    const capacityWithRateLimitStatus = Object.assign(new Error('Too many requests'), {
+      name: 'AI_APICallError',
+      statusCode: 429,
+      data: { error: { code: 'resource-exhausted' } },
+    });
+    assert.equal(classifyError(capacityWithRateLimitStatus), 'ProviderCapacity');
+    assert.deepEqual(providerRetryMetadata(capacityWithRateLimitStatus), { retryable: true });
+
     const ambiguousQuotaCode = Object.assign(new Error('resource exhausted'), {
       name: 'AI_APICallError',
       data: { error: { code: 'resource_exhausted' } },

@@ -198,14 +198,14 @@ export function deriveFailedTurnRecovery(input: FailedTurnRecoveryInput, locale:
   if (lower === 'provider_billing' || lower === 'auth' || lower.includes('auth') || lower === '401' || lower === '403') {
     return { action: 'check_connection', label: copy.connection };
   }
-  if (lower === 'provider_capacity') {
-    return { action: 'retry', label: copy.capacity };
-  }
   if (input.partialOutputRetained) {
     return { action: 'continue', label: copy.partial };
   }
   if (input.toolActivityCount > 0) {
     return { action: 'inspect_tool', label: copy.toolRecord };
+  }
+  if (lower === 'provider_capacity') {
+    return { action: 'retry', label: copy.capacity };
   }
   if (lower === 'context_overflow') {
     return { action: 'continue', label: copy.contextOverflow };

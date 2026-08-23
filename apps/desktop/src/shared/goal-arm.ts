@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import type { GoalState } from '@maka/runtime/goal-state';
+import type { DesktopGoalState } from './desktop-goal-state.js';
 
 /**
  * What the renderer sends to arm a Goal.
@@ -34,10 +34,10 @@ export interface GoalArmRequest {
 }
 
 export type GoalArmOutcome =
-  | { readonly kind: 'armed'; readonly goal: GoalState }
+  | { readonly kind: 'armed'; readonly goal: DesktopGoalState }
   | {
       readonly kind: 'reconciled';
-      readonly currentGoal: GoalState | null;
+      readonly currentGoal: DesktopGoalState | null;
       readonly matchesRequestedState: boolean;
     }
   | { readonly kind: 'reconciliation_unavailable' };

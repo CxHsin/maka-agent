@@ -606,6 +606,7 @@ test('goal.arm creates one Goal per Session and refuses a second while it is unf
     assert.equal(armed.result.goal.goalId, 'goal-armed');
     assert.equal(armed.result.goal.status, 'active');
     assert.equal(armed.result.goal.armedAt, 10);
+    assert.equal(armed.result.goal.boundTurnId, null);
     assert.equal(armed.result.goal.maxIterations, 20);
     assert.equal(armed.result.goal.tokenBudget, 50_000);
     assert.deepEqual(
@@ -616,6 +617,7 @@ test('goal.arm creates one Goal per Session and refuses a second while it is unf
       armed,
       'every client reads the Goal the Host just armed',
     );
+
     await waitForAsync(async () => (await goalStore.read(session.id)) !== null);
 
     const second = await coordinator.handlers['goal.arm'](
@@ -659,6 +661,7 @@ test('goal.arm creates one Goal per Session and refuses a second while it is unf
 
     await coordinator.close();
   } finally {
+    await stores.sessionStore.close?.();
     await goalStore.close();
     await owner.close();
     await rm(base, { recursive: true, force: true });

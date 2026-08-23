@@ -119,4 +119,8 @@ test('an armed goal waits for its first Turn without looking like it is running'
   assert.ok(markup.includes('Autonomous goal set; takes hold on the next Turn'));
   assert.ok(!markup.includes('Autonomous goal running'));
   assert.ok(!markup.includes('Autonomous goal paused'));
+  assert.ok(markup.includes('The goal has not started; click to clear it.'));
+  assert.ok(markup.includes('It will not take hold on the next Turn unless resumed.'));
+  assert.ok(!markup.includes('Maka continues after each iteration'));
+  assert.ok(!markup.includes('no more tokens burn'));
 });

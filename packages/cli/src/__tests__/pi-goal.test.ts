@@ -32,6 +32,7 @@ import {
   goalStatusLineText,
   goalSummaryLines,
   isLiveGoalStatus,
+  shouldAnnounceGoalAttachment,
 } from '../pi-goal.js';
 
 function goal(overrides: Partial<GoalProjection> = {}): GoalProjection {
@@ -52,6 +53,7 @@ function goal(overrides: Partial<GoalProjection> = {}): GoalProjection {
     achievedAt: null,
     pausedAt: null,
     armedAt: null,
+    boundTurnId: null,
     ...overrides,
   };
 }
@@ -98,6 +100,21 @@ describe('pi-goal display helpers', () => {
       goalStatusLineText(goal({ status: 'paused', pausedAt: 31_000 }), now),
       'goal paused 3/50',
     );
+  });
+
+  test('armed Goals remain set until their first bound Turn, without a running notice or elapsed time', () => {
+    const armed = goal({ armedAt: 1_000 });
+    assert.equal(goalStatusLineText(armed, 61_000), 'goal set 3/50');
+    assert.deepEqual(goalSummaryLines(armed, 61_000).slice(0, 2), [
+      'Goal: Ship the feature',
+      'Status: set · 3/50 iterations',
+    ]);
+    assert.equal(
+      goalAttachedNoticeText(armed),
+      'Autonomous goal is set (3/50): Ship the feature — it takes hold on the next Turn.',
+    );
+    assert.equal(shouldAnnounceGoalAttachment(armed), false);
+    assert.equal(shouldAnnounceGoalAttachment(goal()), true);
   });
 
   test('summary lines include budget only when set and the evaluator note only when present', () => {

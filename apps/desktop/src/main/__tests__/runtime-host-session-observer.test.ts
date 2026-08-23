@@ -2859,6 +2859,7 @@ test("publishes Host sidecar and graph invalidations without inventing Session s
         achievedAt: null,
         pausedAt: null,
         armedAt: null,
+        boundTurnId: null,
       },
     }),
   });
@@ -2968,6 +2969,7 @@ function activeGoal() {
     achievedAt: null,
     pausedAt: null,
     armedAt: null,
+    boundTurnId: null,
   };
 }
 

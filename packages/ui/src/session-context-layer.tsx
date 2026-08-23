@@ -33,7 +33,7 @@ import {
   Tooltip,
   type DropdownMenuOption,
 } from '@astryxdesign/core';
-import { getConversationCopy } from './conversation-copy.js';
+import { getConversationCopy, type GoalDisplayPhase } from './conversation-copy.js';
 import { ICON_SIZE, Pause, Play } from './icons.js';
 import { useUiLocale } from './locale-context.js';
 import { dotForStatus } from './status-vocabulary.js';
@@ -119,13 +119,20 @@ export function SessionContextLayer(props: {
     // attention tone.
     const paused = goal.status === 'paused';
     const waiting = goal.status === 'waiting';
-    const armed = goal.armedAt !== undefined;
+    const armed = goal.status === 'active' && goal.armedAt !== undefined;
+    const phase: GoalDisplayPhase = paused
+      ? 'paused'
+      : armed
+        ? 'armed'
+        : waiting
+          ? 'waiting'
+          : 'running';
     const elapsedMs = paused
       ? Math.max(0, goal.pausedAt - goal.setAt)
       : Math.max(0, Date.now() - goal.setAt);
     const goalText = [
       copy.goalProgress(goal.iterations, goal.maxIterations),
-      copy.goalElapsed(elapsedMs),
+      ...(armed ? [] : [copy.goalElapsed(elapsedMs)]),
       goal.tokenBudget !== undefined && goal.tokensSpent !== undefined
         ? copy.goalTokens(goal.tokensSpent, goal.tokenBudget)
         : null,
@@ -184,7 +191,7 @@ export function SessionContextLayer(props: {
                 goal.condition,
                 goal.iterations,
                 goal.maxIterations,
-                goal.status,
+                phase,
               )}
             />
           ) : null}
@@ -210,7 +217,7 @@ export function SessionContextLayer(props: {
               goal.condition,
               goal.iterations,
               goal.maxIterations,
-              goal.status,
+              phase,
             )}
           />
         </div>

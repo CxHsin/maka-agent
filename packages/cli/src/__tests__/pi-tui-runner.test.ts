@@ -7680,6 +7680,7 @@ describe('Maka Pi TUI runner', () => {
       achievedAt: null,
       pausedAt: null,
       armedAt: null,
+      boundTurnId: null,
     };
 
     test('/goal prints the live goal summary and the status line carries the indicator', async () => {

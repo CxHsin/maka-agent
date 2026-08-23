@@ -950,6 +950,7 @@ function goalProjection(revision: number) {
     achievedAt: null,
     pausedAt: null,
     armedAt: null,
+    boundTurnId: null,
   };
 }
 

@@ -24,7 +24,10 @@ import {
 } from '@maka/runtime/goal-state';
 import { decodeGoalProjection, type GoalProjection } from '../protocol/index.js';
 
-export function projectGoalState(goal: GoalState): GoalProjection {
+export function projectGoalState(
+  goal: GoalState,
+  boundTurnId: string | null = null,
+): GoalProjection {
   return decodeGoalProjection({
     goalId: goal.id,
     revision: goal.revision,
@@ -42,6 +45,7 @@ export function projectGoalState(goal: GoalState): GoalProjection {
     achievedAt: goal.achievedAt ?? null,
     pausedAt: goal.pausedAt ?? null,
     armedAt: goal.armedAt ?? null,
+    boundTurnId,
   });
 }
 
@@ -64,5 +68,6 @@ export function worstCaseGoalProjection(sessionId: string): GoalProjection {
     achievedAt: Number.MAX_SAFE_INTEGER,
     pausedAt: Number.MAX_SAFE_INTEGER,
     armedAt: Number.MAX_SAFE_INTEGER,
+    boundTurnId: 't'.repeat(128),
   };
 }

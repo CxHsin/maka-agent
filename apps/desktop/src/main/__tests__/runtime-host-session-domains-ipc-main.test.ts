@@ -117,6 +117,7 @@ test('goal:arm reconciles a lost dispatched response without dispatching again',
         tokensAtStart: 0,
         tokensNow: 120,
         tokensBaselinePending: false,
+        armedAt: 7,
       },
       matchesRequestedState: true,
     },
@@ -311,6 +312,7 @@ test('goal:arm reconciliation reports different, missing, and unavailable author
         tokensAtStart: 0,
         tokensNow: 120,
         tokensBaselinePending: false,
+        armedAt: 7,
       },
       matchesRequestedState: false,
     },
@@ -1219,6 +1221,7 @@ function baseGoalProjection() {
     achievedAt: null,
     pausedAt: null,
     armedAt: 7,
+    boundTurnId: null,
   };
 }
 

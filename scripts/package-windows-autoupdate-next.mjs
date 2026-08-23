@@ -32,6 +32,7 @@ const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const desktopRoot = join(repoRoot, 'apps', 'desktop');
 const rootManifestPath = join(repoRoot, 'package.json');
 const desktopManifestPath = join(desktopRoot, 'package.json');
+const cliManifestPath = join(repoRoot, 'packages', 'cli', 'package.json');
 
 /**
  * The version the auto-update harness serves as "newer than the candidate".
@@ -78,22 +79,27 @@ export async function packageWindowsAutoupdateNext({
   await access(join(desktopRoot, 'release', 'win-unpacked'));
 
   await rm(outputDirectory, { recursive: true, force: true });
-  // electron-builder requires the root and Desktop manifests to have the same
-  // version. `extraMetadata` only changes the packaged app manifest, so
-  // temporarily update both source manifests for the build and restore them
-  // even when electron-builder fails.
-  const [originalRootManifest, originalDesktopManifest] = await Promise.all([
+  // electron-builder requires all product manifests to have the same version.
+  // `extraMetadata` only changes the packaged app manifest, so temporarily
+  // update every source manifest for the build and restore them even when
+  // electron-builder fails.
+  const [originalRootManifest, originalDesktopManifest, originalCliManifest] =
+    await Promise.all([
     readFile(rootManifestPath),
     readFile(desktopManifestPath),
+    readFile(cliManifestPath),
   ]);
   const bumpedRootManifest = JSON.parse(originalRootManifest);
   const bumpedDesktopManifest = JSON.parse(originalDesktopManifest);
+  const bumpedCliManifest = JSON.parse(originalCliManifest);
   bumpedRootManifest.version = nextVersion;
   bumpedDesktopManifest.version = nextVersion;
+  bumpedCliManifest.version = nextVersion;
   try {
     await Promise.all([
       writeFile(rootManifestPath, `${JSON.stringify(bumpedRootManifest, null, 2)}\n`),
       writeFile(desktopManifestPath, `${JSON.stringify(bumpedDesktopManifest, null, 2)}\n`),
+      writeFile(cliManifestPath, `${JSON.stringify(bumpedCliManifest, null, 2)}\n`),
     ]);
     await run('npm', [
       '--workspace',
@@ -115,6 +121,7 @@ export async function packageWindowsAutoupdateNext({
     await Promise.all([
       writeFile(rootManifestPath, originalRootManifest),
       writeFile(desktopManifestPath, originalDesktopManifest),
+      writeFile(cliManifestPath, originalCliManifest),
     ]);
   }
 

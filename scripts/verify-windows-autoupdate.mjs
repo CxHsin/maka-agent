@@ -52,6 +52,7 @@ import {
   verifyPackagedWindowsApp,
 } from './verify-windows-x64.mjs';
 import { compareProductReleaseVersions } from './release-version.mjs';
+import { readProductManifestIdentity } from './product-release-identity.mjs';
 
 const uninstallExecutableName = 'Uninstall Maka.exe';
 const executableName = 'Maka.exe';
@@ -64,6 +65,15 @@ function step(label) {
   console.log(`[verify-windows-autoupdate] ${label}`);
 }
 
+export function runtimeHostSetupPackageForVersion(runtimeHostSetupPackage, version) {
+  const separator = runtimeHostSetupPackage.lastIndexOf('@');
+  if (separator <= 0) {
+    throw new Error(
+      `Cannot derive the Runtime Host setup package for ${JSON.stringify(runtimeHostSetupPackage)}.`,
+    );
+  }
+  return `${runtimeHostSetupPackage.slice(0, separator + 1)}${version}`;
+}
 export async function waitForInstalledProductVersion(
   executablePath,
   {
@@ -419,9 +429,14 @@ export async function verifyWindowsAutoupdate(
     const smokeDirectory = join(temporaryDirectory, 'smoke');
     await mkdir(smokeDirectory, { recursive: true });
     const upgradedStatusExpression = 'window.maka.app.updateStatus()';
+    const product = await readProductManifestIdentity();
     await verifyPackagedWindowsApp(installDirectory, {
       workingDirectory: smokeDirectory,
       expectedVersion: nextVersion,
+      expectedRuntimeHostSetupPackage: runtimeHostSetupPackageForVersion(
+        product.runtimeHostSetupPackage,
+        nextVersion,
+      ),
       smokeRenderer: async (executable, { workingDirectory }) => {
         const smokeHome = join(workingDirectory, 'home');
         const smokeUserData = join(workingDirectory, 'user-data');

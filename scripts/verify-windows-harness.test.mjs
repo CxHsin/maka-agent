@@ -36,7 +36,10 @@ import {
   waitForDevToolsPort,
   waitForUsableRenderer,
 } from './verify-packaged-app.mjs';
-import { waitForInstalledProductVersion } from './verify-windows-autoupdate.mjs';
+import {
+  runtimeHostSetupPackageForVersion,
+  waitForInstalledProductVersion,
+} from './verify-windows-autoupdate.mjs';
 import { verifyPackagedWindowsSandboxLifecycle } from './verify-windows-x64.mjs';
 import {
   WINDOWS_SANDBOX_DEFERRED_HARDENING,
@@ -56,6 +59,7 @@ import {
   waitForInstalledProcessesToExit,
   waitForUninstallRegistrationToClear,
 } from './verify-windows-installer-lifecycle.mjs';
+import { resolveRuntimeHostSetupPackage } from './verify-windows-x64.mjs';
 
 // Tests for the shared release-verification helpers. Everything here is
 // platform-neutral on purpose: the Windows lanes execute these helpers for
@@ -323,6 +327,29 @@ it('reuses the packaged renderer smoke without widening rollback verification', 
       options: { timeoutMs: 30_000 },
     },
   ]);
+});
+
+it('expects the version-bumped Runtime Host setup package after an automatic update', () => {
+  const candidatePackage = 'maka-agent@0.1.11';
+  const upgradedPackage = runtimeHostSetupPackageForVersion(candidatePackage, '0.1.12');
+
+  assert.equal(upgradedPackage, 'maka-agent@0.1.12');
+  assert.equal(
+    resolveRuntimeHostSetupPackage({
+      artifactContract: 'current',
+      productRuntimeHostSetupPackage: candidatePackage,
+      expectedRuntimeHostSetupPackage: upgradedPackage,
+    }),
+    upgradedPackage,
+  );
+  assert.equal(
+    resolveRuntimeHostSetupPackage({
+       artifactContract: 'upgrade-baseline',
+      productRuntimeHostSetupPackage: candidatePackage,
+      expectedRuntimeHostSetupPackage: upgradedPackage,
+    }),
+    undefined,
+  );
 });
 
 async function makeTree(shape) {

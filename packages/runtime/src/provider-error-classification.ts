@@ -360,9 +360,9 @@ export function providerFailureDiagnostic(error: unknown): ProviderFailureDiagno
 }
 
 function durableProviderErrorClass(classified: string, httpStatus: number | undefined): string {
-  // Structured context-overflow evidence can legitimately arrive behind a
-  // generic 4xx/5xx proxy response and remains stronger than the wrapper code.
-  if (classified === 'ContextLength') return classified;
+  // Structured context-overflow and capacity evidence can legitimately arrive
+  // behind a generic 4xx/5xx proxy response and remains stronger than the wrapper code.
+  if (classified === 'ContextLength' || classified === 'ProviderCapacity') return classified;
   if (httpStatus === 401 || httpStatus === 403) return 'Auth';
   if (httpStatus === 402) return 'ProviderBilling';
   if (httpStatus === 408) return 'Timeout';

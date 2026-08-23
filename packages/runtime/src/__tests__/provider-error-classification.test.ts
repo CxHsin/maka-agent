@@ -239,6 +239,22 @@ describe('Provider error classification', () => {
     });
     assert.equal(classifyError(capacityWithRateLimitStatus), 'ProviderCapacity');
     assert.deepEqual(providerRetryMetadata(capacityWithRateLimitStatus), { retryable: true });
+    assert.deepEqual(providerFailureDiagnostic(capacityWithRateLimitStatus), {
+      errorClass: 'ProviderCapacity',
+      httpStatus: 429,
+      providerCode: 'resource-exhausted',
+      retryable: true,
+    });
+    assert.equal(
+      providerFailureDiagnostic(
+        Object.assign(new Error('The model is at capacity'), {
+          name: 'AI_APICallError',
+          statusCode: 503,
+          data: { error: { code: 'resource-exhausted' } },
+        }),
+      ).errorClass,
+      'ProviderCapacity',
+    );
 
     const ambiguousQuotaCode = Object.assign(new Error('resource exhausted'), {
       name: 'AI_APICallError',

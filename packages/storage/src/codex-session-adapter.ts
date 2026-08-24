@@ -24,6 +24,7 @@ import { basename, join, resolve, sep } from 'node:path';
 import type { StoredMessage } from '@maka/core/session';
 import {
   FOREIGN_SESSION_DIGEST_MAX_READ_BYTES,
+  FOREIGN_SESSION_SCAN_MAX_SESSIONS,
   codexRolloutMessage,
   createDigestAccumulator,
   finishDigest,
@@ -51,6 +52,7 @@ export const CODEX_SESSION_ADAPTER_ID = 'codex';
 export const CODEX_ROLLOUT_MAX_BYTES = 64 * 1024 * 1024;
 
 const CODEX_ROLLOUT_HEAD_BYTES = 512 * 1024;
+const CODEX_CATALOG_PAGE_SIZE = FOREIGN_SESSION_SCAN_MAX_SESSIONS * 2;
 const CODEX_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const CODEX_UNSAFE_PATH_CHARS =
   /[\u0000-\u001F\u007F\u0080-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
@@ -202,24 +204,70 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
   }
 
   private async listCatalog(query: ExternalSourceCatalogQuery): Promise<CodexCatalogEntry[]> {
+    if (query.limit !== undefined && query.limit <= 0) return [];
     for (const dbPath of await codexStateDbsNewestFirst(this.codexHome)) {
-      const rows = await readCodexThreadRows(dbPath, query);
-      if (rows === undefined) continue;
-      const entries = await Promise.all(rows.map((row) => this.entryFromRow(row)));
-      return entries
-        .filter((entry): entry is CodexCatalogEntry => entry !== undefined)
-        .filter((entry) => matchesSourceCatalogQuery(entry, query))
-        .sort(compareCatalogEntries)
-        .slice(0, query.limit);
+      const entries = await this.readCatalogFromDatabase(dbPath, query);
+      if (entries === undefined) continue;
+      return entries;
     }
 
     return this.scanRolloutCatalog(query);
   }
 
   private async findCatalogEntry(sessionId: string): Promise<CodexCatalogEntry | undefined> {
-    return (await this.listCatalog({ includeArchived: true })).find(
-      (entry) => entry.id === sessionId,
-    );
+    for (const dbPath of await codexStateDbsNewestFirst(this.codexHome)) {
+      const rows = await readCodexThreadRows(
+        dbPath,
+        { includeArchived: true },
+        { exactId: sessionId },
+      );
+      if (rows === undefined) continue;
+      const entry = rows[0] ? await this.entryFromRow(rows[0]) : undefined;
+      return entry?.id === sessionId ? entry : undefined;
+    }
+
+    return this.findRolloutEntry(sessionId);
+  }
+
+  private async readCatalogFromDatabase(
+    dbPath: string,
+    query: ExternalSourceCatalogQuery,
+  ): Promise<CodexCatalogEntry[] | undefined> {
+    const pageSize = CODEX_CATALOG_PAGE_SIZE;
+    const entries: CodexCatalogEntry[] = [];
+    let offset = 0;
+    for (;;) {
+      const rows = await readCodexThreadRows(dbPath, query, { limit: pageSize, offset });
+      if (rows === undefined) return undefined;
+      const pageEntries = await Promise.all(rows.map((row) => this.entryFromRow(row)));
+      for (const entry of pageEntries) {
+        if (entry && matchesSourceCatalogQuery(entry, query)) entries.push(entry);
+      }
+      if (query.limit !== undefined && entries.length >= query.limit) break;
+      if (rows.length < pageSize) break;
+      offset += rows.length;
+    }
+    entries.sort(compareCatalogEntries);
+    return query.limit === undefined ? entries : entries.slice(0, query.limit);
+  }
+
+  private async findRolloutEntry(sessionId: string): Promise<CodexCatalogEntry | undefined> {
+    const candidates = [
+      ...(await walkRolloutFiles(join(this.codexHome, 'sessions'), false, sessionId)),
+      ...(await walkRolloutFiles(join(this.codexHome, 'archived_sessions'), true, sessionId)),
+    ].sort(compareRolloutCandidates);
+    for (const candidate of candidates) {
+      const head = await readUtf8Prefix(candidate.path, CODEX_ROLLOUT_HEAD_BYTES).catch(
+        () => undefined,
+      );
+      if (head === undefined) continue;
+      const entry = catalogEntryFromRolloutHead(head, candidate);
+      if (entry?.id === sessionId) {
+        const transcriptPath = await this.resolveRolloutPath(entry.transcriptPath, sessionId);
+        if (transcriptPath) return { ...entry, transcriptPath };
+      }
+    }
+    return undefined;
   }
 
   private async entryFromRow(row: CodexThreadRow): Promise<CodexCatalogEntry | undefined> {
@@ -295,6 +343,12 @@ interface RolloutCandidate {
   path: string;
   mtimeMs: number;
   archived: boolean;
+}
+
+interface CodexThreadReadOptions {
+  exactId?: string;
+  limit?: number;
+  offset?: number;
 }
 
 function convertCodexRollout(
@@ -699,6 +753,7 @@ function catalogEntryFromRolloutHead(
 async function readCodexThreadRows(
   dbPath: string,
   query: ExternalSourceCatalogQuery,
+  options: CodexThreadReadOptions = {},
 ): Promise<CodexThreadRow[] | undefined> {
   try {
     const sqlite = await import('node:sqlite');
@@ -745,17 +800,27 @@ async function readCodexThreadRows(
       // belongs to. The archived clause stays: that one is an exact boolean
       // and agrees with the matcher by construction.
       //
-      // The statement has no LIMIT, so dropping the clause widens the read
-      // rather than truncating it.
       const orderColumn = columns.has('updated_at_ms')
         ? 'updated_at_ms'
         : columns.has('updated_at')
           ? 'updated_at'
           : 'id';
+      if (options?.exactId !== undefined) {
+        where.push('id = ?');
+        params.push(options.exactId);
+      }
       const sql =
         `SELECT ${wanted.join(', ')} FROM threads` +
         (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '') +
-        ` ORDER BY ${orderColumn} DESC`;
+        ` ORDER BY ${orderColumn} DESC` +
+        (options?.limit !== undefined
+          ? ' LIMIT ? OFFSET ?'
+          : options?.exactId !== undefined
+            ? ' LIMIT 1'
+            : '');
+      if (options?.limit !== undefined) {
+        params.push(options.limit, options.offset ?? 0);
+      }
       return db.prepare(sql).all(...params) as CodexThreadRow[];
     } finally {
       db.close();
@@ -783,7 +848,11 @@ async function codexStateDbsNewestFirst(codexHome: string): Promise<string[]> {
   }
 }
 
-async function walkRolloutFiles(root: string, archived: boolean): Promise<RolloutCandidate[]> {
+async function walkRolloutFiles(
+  root: string,
+  archived: boolean,
+  expectedId?: string,
+): Promise<RolloutCandidate[]> {
   const files: RolloutCandidate[] = [];
   const visit = async (directory: string): Promise<void> => {
     let entries: Dirent<string>[];
@@ -799,7 +868,8 @@ async function walkRolloutFiles(root: string, archived: boolean): Promise<Rollou
       } else if (
         entry.isFile() &&
         entry.name.startsWith('rollout-') &&
-        entry.name.endsWith('.jsonl')
+        entry.name.endsWith('.jsonl') &&
+        (expectedId === undefined || rolloutFilenameMatchesId(entry.name, expectedId))
       ) {
         try {
           files.push({ path, mtimeMs: (await stat(path)).mtimeMs, archived });

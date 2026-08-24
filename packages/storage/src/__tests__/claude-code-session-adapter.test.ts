@@ -275,6 +275,41 @@ describe('ClaudeCodeSessionAdapter', () => {
     });
   });
 
+  test('drops transcripts without a non-empty cwd from catalog and import', async () => {
+    await withClaudeHome(async (home) => {
+      const directory = join(home, 'projects', '-workspace-project');
+      await mkdir(directory, { recursive: true });
+      const missingCwdId = 'aaaaaaaa-0000-4000-8000-000000000040';
+      const wrongTypeCwdId = 'aaaaaaaa-0000-4000-8000-000000000041';
+      const records = (cwd: unknown) =>
+        [
+          JSON.stringify({
+            type: 'user',
+            ...(cwd === undefined ? {} : { cwd }),
+            message: { role: 'user', content: 'unsafe identity' },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            ...(cwd === undefined ? {} : { cwd }),
+            message: {
+              role: 'assistant',
+              id: 'msg_missing_cwd',
+              model: 'claude-opus-5',
+              content: [{ type: 'text', text: 'reply' }],
+              stop_reason: 'end_turn',
+            },
+          }),
+        ].join('\n') + '\n';
+      await writeFile(join(directory, `${missingCwdId}.jsonl`), records(undefined));
+      await writeFile(join(directory, `${wrongTypeCwdId}.jsonl`), records({ value: 1 }));
+
+      const adapter = new ClaudeCodeSessionAdapter({ claudeHome: home });
+      assert.deepEqual(await adapter.listSessions(), []);
+      await assert.rejects(() => adapter.readSession(missingCwdId), /could not be read/u);
+      await assert.rejects(() => adapter.readSession(wrongTypeCwdId), /could not be read/u);
+    });
+  });
+
   test('a text query filters the source, before paging', async () => {
     // The catalog pages 16 at a time over a source with 1128 sessions here, so
     // the term has to reach the adapter. A filter applied to an assembled page

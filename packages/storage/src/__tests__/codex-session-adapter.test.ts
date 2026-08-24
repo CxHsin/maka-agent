@@ -482,6 +482,51 @@ describe('CodexSessionAdapter', () => {
     });
   });
 
+  test('pages past invalid database rows before applying the catalog limit', async () => {
+    await withCodexHome(async (codexHome) => {
+      const targetId = 'codex-paged-target';
+      const targetPath = await seedMinimalRollout(
+        codexHome,
+        targetId,
+        false,
+        '/workspace/target',
+        'Target task',
+      );
+      const invalidRows = Array.from({ length: 101 }, (_, index) => ({
+        id: `codex-invalid-${index}`,
+        rolloutPath: join(codexHome, 'sessions', `missing-${index}.jsonl`),
+        cwd: '/workspace/other',
+        name: `Invalid ${index}`,
+        createdAtMs: 10_000 + index,
+        updatedAtMs: 10_000 + index,
+        archived: false,
+        source: 'cli',
+      }));
+      await seedStateDatabase(codexHome, [
+        ...invalidRows,
+        {
+          id: targetId,
+          rolloutPath: targetPath,
+          cwd: '/workspace/target',
+          name: 'Target task',
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          archived: false,
+          source: 'cli',
+        },
+      ]);
+
+      const adapter = new CodexSessionAdapter({ codexHome });
+      assert.deepEqual(
+        (await adapter.listCatalogEntries({ limit: 1 })).map((entry) => entry.id),
+        [targetId],
+      );
+      const imported = await adapter.readSession(targetId);
+      assert.equal(imported.sourceSessionId, targetId);
+      assert.equal(imported.metadata.cwd, '/workspace/target');
+    });
+  });
+
   test('uses the same newest rollout when a Codex id has duplicate candidates', async () => {
     await withCodexHome(async (codexHome) => {
       const sessionId = 'codex-duplicate-id';

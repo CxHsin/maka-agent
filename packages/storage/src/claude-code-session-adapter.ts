@@ -443,7 +443,7 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
       }
     }
 
-    if (records.length === 0) return undefined;
+    if (records.length === 0 || cwd.trim().length === 0) return undefined;
     return {
       records,
       cwd,

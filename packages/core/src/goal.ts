@@ -90,6 +90,20 @@ export function isDrivingGoal(goal: Pick<GoalState, 'armedAt'>): boolean {
   return goal.armedAt === undefined;
 }
 
+/** Whether an armed Goal is still waiting for its first bound Turn. */
+export function isGoalArmedAwaitingFirstTurn(goal: {
+  readonly status: GoalStatus;
+  readonly armedAt?: number | null;
+  readonly boundTurnId?: string | null;
+}): boolean {
+  return (
+    goal.status === 'active' &&
+    goal.armedAt !== undefined &&
+    goal.armedAt !== null &&
+    (goal.boundTurnId === undefined || goal.boundTurnId === null)
+  );
+}
+
 export interface GoalCheckpoint {
   readonly goalId: string;
   readonly revision: number;

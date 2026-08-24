@@ -18,6 +18,7 @@
  */
 
 import { useEffect, useReducer, type ReactElement } from 'react';
+import { isGoalArmedAwaitingFirstTurn } from '@maka/core/goal';
 import {
   BreadcrumbItem,
   Breadcrumbs,
@@ -59,6 +60,8 @@ interface SessionContextGoalBase {
   setAt: number;
   /** Present while a user-armed Goal waits for its first Turn. */
   armedAt?: number;
+  /** Present while the first Turn carrying an armed Goal is running. */
+  boundTurnId?: string | null;
   tokensSpent?: number;
   /** When present (a budget exists), the chip shows spent / budget. */
   tokenBudget?: number;
@@ -119,7 +122,7 @@ export function SessionContextLayer(props: {
     // attention tone.
     const paused = goal.status === 'paused';
     const waiting = goal.status === 'waiting';
-    const armed = goal.status === 'active' && goal.armedAt !== undefined;
+    const armed = isGoalArmedAwaitingFirstTurn(goal);
     const phase: GoalDisplayPhase = paused
       ? 'paused'
       : armed

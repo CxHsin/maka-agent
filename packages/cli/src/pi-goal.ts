@@ -25,7 +25,7 @@
  * Codex parallel: codex-rs/tui/src/goal_display.rs.
  */
 
-import type { GoalStatus } from '@maka/core/goal';
+import { isGoalArmedAwaitingFirstTurn, type GoalStatus } from '@maka/core/goal';
 import type { GoalProjection } from '@maka/runtime-host/protocol';
 import { formatTokenCount } from './pi-transcript-format.js';
 import { stripAnsi } from './tui-ansi.js';
@@ -103,7 +103,14 @@ export function formatGoalElapsed(elapsedMs: number): string {
 export function goalStatusLineText(
   goal: Pick<
     GoalProjection,
-    'status' | 'iterations' | 'maxIterations' | 'setAt' | 'pausedAt' | 'achievedAt' | 'armedAt'
+    | 'status'
+    | 'iterations'
+    | 'maxIterations'
+    | 'setAt'
+    | 'pausedAt'
+    | 'achievedAt'
+    | 'armedAt'
+    | 'boundTurnId'
   >,
   now: number,
 ): string {
@@ -140,7 +147,10 @@ export function goalPausedNoticeText(
  * auto-continuing after recovery — a token-burning loop never resumes silently.
  */
 export function goalAttachedNoticeText(
-  goal: Pick<GoalProjection, 'condition' | 'iterations' | 'maxIterations' | 'status' | 'armedAt'>,
+  goal: Pick<
+    GoalProjection,
+    'condition' | 'iterations' | 'maxIterations' | 'status' | 'armedAt' | 'boundTurnId'
+  >,
 ): string {
   const condition = inlineGoalText(goal.condition);
   const short = condition.length > 120 ? `${condition.slice(0, 119)}…` : condition;
@@ -151,7 +161,7 @@ export function goalAttachedNoticeText(
 }
 
 export function shouldAnnounceGoalAttachment(
-  goal: Pick<GoalProjection, 'status' | 'armedAt'>,
+  goal: Pick<GoalProjection, 'status' | 'armedAt' | 'boundTurnId'>,
 ): boolean {
   return (goal.status === 'active' || goal.status === 'waiting') && !isArmedGoal(goal);
 }
@@ -183,6 +193,6 @@ export function goalSummaryLines(goal: GoalProjection, now: number): string[] {
   return lines;
 }
 
-function isArmedGoal(goal: Pick<GoalProjection, 'status' | 'armedAt'>): boolean {
-  return goal.status === 'active' && goal.armedAt !== null;
+function isArmedGoal(goal: Pick<GoalProjection, 'status' | 'armedAt' | 'boundTurnId'>): boolean {
+  return isGoalArmedAwaitingFirstTurn(goal);
 }

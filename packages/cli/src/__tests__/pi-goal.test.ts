@@ -117,6 +117,13 @@ describe('pi-goal display helpers', () => {
     assert.equal(shouldAnnounceGoalAttachment(goal()), true);
   });
 
+  test('a bound first Turn makes the same Goal running again', () => {
+    const running = goal({ armedAt: 1_000, boundTurnId: 'turn-1' });
+    assert.equal(goalStatusLineText(running, 61_000), 'goal 3/50 1m');
+    assert.equal(shouldAnnounceGoalAttachment(running), true);
+    assert.match(goalAttachedNoticeText(running), /Autonomous goal is running/);
+  });
+
   test('summary lines include budget only when set and the evaluator note only when present', () => {
     const plain = goalSummaryLines(goal(), 61_000);
     assert.equal(plain.length, 2);

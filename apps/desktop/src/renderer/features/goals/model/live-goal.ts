@@ -17,13 +17,14 @@
  * under the License.
  */
 
-import type { GoalState, GoalStatus } from '@maka/core/goal';
+import type { GoalStatus } from '@maka/core/goal';
+import type { DesktopGoalState } from '../../../../shared/desktop-goal-state.js';
 
 type LiveGoalStatus = Extract<GoalStatus, 'active' | 'waiting'>;
 
 export type LiveGoalState =
-  | (GoalState & { readonly status: LiveGoalStatus })
-  | (GoalState & { readonly status: 'paused'; readonly pausedAt: number });
+  | (DesktopGoalState & { readonly status: LiveGoalStatus })
+  | (DesktopGoalState & { readonly status: 'paused'; readonly pausedAt: number });
 
 const LIVE_GOAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
   'active',
@@ -31,7 +32,7 @@ const LIVE_GOAL_STATUSES: ReadonlySet<GoalStatus> = new Set([
   'paused',
 ]);
 
-export function isLiveGoal(goal: GoalState): goal is LiveGoalState {
+export function isLiveGoal(goal: DesktopGoalState): goal is LiveGoalState {
   return (
     LIVE_GOAL_STATUSES.has(goal.status) &&
     (goal.status !== 'paused' ||

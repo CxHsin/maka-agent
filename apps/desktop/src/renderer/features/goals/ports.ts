@@ -17,7 +17,7 @@
  * under the License.
  */
 
-import type { GoalState } from '@maka/core/goal';
+import type { DesktopGoalState } from '../../../shared/desktop-goal-state.js';
 import type { GoalArmOutcome } from '../../../shared/goal-arm.js';
 
 export type { GoalArmOutcome } from '../../../shared/goal-arm.js';
@@ -32,7 +32,7 @@ export interface GoalArmInput {
 
 /** The minimum environment capability needed by the Goals feature. */
 export interface GoalService {
-  get(sessionId: string): Promise<GoalState | null>;
+  get(sessionId: string): Promise<DesktopGoalState | null>;
   arm(sessionId: string, goal: GoalArmInput): Promise<GoalArmOutcome>;
   clear(sessionId: string): Promise<void>;
   pause(sessionId: string): Promise<void>;

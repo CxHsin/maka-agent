@@ -195,6 +195,11 @@ export function isSessionToolProfile(value: unknown): value is SessionToolProfil
   return typeof value === 'string' && (SESSION_TOOL_PROFILES as readonly string[]).includes(value);
 }
 
+export interface SessionExternalOrigin {
+  readonly adapterId: string;
+  readonly sourceSessionId: string;
+}
+
 export interface SessionHeader {
   // Identity
   id: string;
@@ -232,6 +237,8 @@ export interface SessionHeader {
   subagentWorkspace?: SubagentWorkspaceBinding;
   /** Immutable Host publication identity for a cross-Session conversation copy. */
   conversationCopy?: SessionConversationCopy;
+  /** Immutable identity of the external Session imported into this Session. */
+  readonly externalOrigin?: SessionExternalOrigin;
   /** Stable root id for an edit-and-resend version family. */
   revisionRootSessionId?: string;
   /** Immediate previous version in the same conversation slot. */

@@ -1,15 +1,33 @@
 import type { Dirent } from 'node:fs';
-import { open, readdir, realpath, stat } from 'node:fs/promises';
+import { readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import type { StoredMessage } from '@maka/core/session';
-import { sanitizeForeignTitle } from '@maka/core/foreign-session';
+import {
+  FOREIGN_SESSION_DIGEST_MAX_READ_BYTES,
+  codexRolloutMessage,
+  createDigestAccumulator,
+  finishDigest,
+  pushDigestMessage,
+  sanitizeForeignTitle,
+  type ForeignSessionDigest,
+  type ForeignSessionSummary,
+} from '@maka/core/foreign-session';
 import type {
   ExternalMakaSession,
   ExternalSessionAdapter,
   ExternalSessionQuery,
   ExternalSessionSummary,
 } from '@maka/core/external-session';
+import {
+  matchesSourceCatalogQuery,
+  normalizeSourcePath,
+  readBoundedUtf8File,
+  readUtf8Prefix,
+  readUtf8Tail,
+  type ExternalSourceCatalogEntry,
+  type ExternalSourceCatalogQuery,
+} from './external-source-catalog.js';
 
 export const CODEX_SESSION_ADAPTER_ID = 'codex';
 export const CODEX_ROLLOUT_MAX_BYTES = 64 * 1024 * 1024;
@@ -19,6 +37,13 @@ const CODEX_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const CODEX_UNSAFE_PATH_CHARS =
   /[\u0000-\u001F\u007F\u0080-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
 const CODEX_ROOT_SOURCE_TOKENS = new Set(['cli', 'exec', 'vscode']);
+const CODEX_ROOT_SOURCE_SQL_VALUES = [
+  'cli',
+  'exec',
+  'vscode',
+  '{"custom":"atlas"}',
+  '{"custom":"chatgpt"}',
+];
 
 export interface CodexSessionAdapterOptions {
   /** Codex's state root. Defaults to `$CODEX_HOME`, then `~/.codex`. */
@@ -27,8 +52,8 @@ export interface CodexSessionAdapterOptions {
   maxRolloutBytes?: number;
 }
 
-interface CodexCatalogEntry extends ExternalSessionSummary {
-  rolloutPath: string;
+interface CodexCatalogEntry extends ExternalSourceCatalogEntry {
+  source: 'codex';
 }
 
 interface CodexThreadRow {
@@ -84,7 +109,20 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
 
   async listSessions(query: ExternalSessionQuery = {}): Promise<readonly ExternalSessionSummary[]> {
     const entries = await this.listCatalog(query);
-    return entries.map(({ rolloutPath: _rolloutPath, ...summary }) => summary);
+    return entries.map((entry) => ({
+      id: entry.id,
+      name: entry.title,
+      cwd: entry.cwd,
+      ...(entry.createdAtMs !== undefined ? { createdAt: entry.createdAtMs } : {}),
+      updatedAt: entry.updatedAtMs,
+      archived: entry.archived,
+    }));
+  }
+
+  async listCatalogEntries(
+    query: ExternalSourceCatalogQuery = {},
+  ): Promise<readonly CodexCatalogEntry[]> {
+    return this.listCatalog(query);
   }
 
   async readSession(sessionId: string): Promise<ExternalMakaSession> {
@@ -92,10 +130,10 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
     const catalogEntry = await this.findCatalogEntry(sessionId);
     if (!catalogEntry) throw new Error(`Codex Session not found: ${sessionId}`);
 
-    const rolloutPath = await this.resolveRolloutPath(catalogEntry.rolloutPath, sessionId);
+    const rolloutPath = await this.resolveRolloutPath(catalogEntry.transcriptPath, sessionId);
     if (!rolloutPath) throw new Error(`Codex rollout is unavailable: ${sessionId}`);
     const text = await readBoundedUtf8File(rolloutPath, this.maxRolloutBytes);
-    const converted = convertCodexRollout(text, sessionId, catalogEntry.name, catalogEntry.cwd);
+    const converted = convertCodexRollout(text, sessionId, catalogEntry.title, catalogEntry.cwd);
 
     return {
       sourceSessionId: sessionId,
@@ -104,32 +142,65 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
     };
   }
 
-  private async listCatalog(query: ExternalSessionQuery): Promise<CodexCatalogEntry[]> {
+  async readDigest(summary: ForeignSessionSummary): Promise<ForeignSessionDigest> {
+    if (summary.source !== 'codex') throw new Error('Codex adapter received another source');
+    const rolloutPath = await this.resolveRolloutPath(summary.transcriptPath, summary.id);
+    if (!rolloutPath) throw new Error(`Codex rollout is unavailable: ${summary.id}`);
+    const { text, truncated } = await readUtf8Tail(
+      rolloutPath,
+      FOREIGN_SESSION_DIGEST_MAX_READ_BYTES,
+    );
+    const acc = createDigestAccumulator();
+    let dropped = 0;
+    const records: ParsedRolloutRecord[] = [];
+    for (const [index, line] of text.split('\n').entries()) {
+      if (line.trim().length === 0) continue;
+      try {
+        const value = JSON.parse(line) as unknown;
+        if (!isRecord(value)) throw new Error('record is not an object');
+        records.push({ line: index + 1, value });
+      } catch {
+        dropped += 1;
+      }
+    }
+    for (const message of codexPresentationRecords(records).values()) {
+      if (message.kind !== 'reasoning') pushDigestMessage(acc, message.kind, message.text);
+    }
+    if (truncated) {
+      acc.warnings.push(
+        `transcript exceeded ${FOREIGN_SESSION_DIGEST_MAX_READ_BYTES} bytes; only its tail was read`,
+      );
+    }
+    if (dropped > 0) acc.warnings.push(`${dropped} malformed transcript lines were skipped`);
+    return finishDigest(acc, {
+      source: summary.source,
+      id: summary.id,
+      title: summary.title,
+      cwd: summary.cwd,
+      gitBranch: summary.gitBranch,
+      updatedAtMs: summary.updatedAtMs,
+    });
+  }
+
+  private async listCatalog(query: ExternalSourceCatalogQuery): Promise<CodexCatalogEntry[]> {
     for (const dbPath of await codexStateDbsNewestFirst(this.codexHome)) {
       const rows = await readCodexThreadRows(dbPath, query);
       if (rows === undefined) continue;
       const entries = await Promise.all(rows.map((row) => this.entryFromRow(row)));
       return entries
         .filter((entry): entry is CodexCatalogEntry => entry !== undefined)
-        .filter((entry) => matchesQuery(entry, query))
-        .sort(compareCatalogEntries);
+        .filter((entry) => matchesSourceCatalogQuery(entry, query))
+        .sort(compareCatalogEntries)
+        .slice(0, query.limit);
     }
 
     return this.scanRolloutCatalog(query);
   }
 
   private async findCatalogEntry(sessionId: string): Promise<CodexCatalogEntry | undefined> {
-    for (const dbPath of await codexStateDbsNewestFirst(this.codexHome)) {
-      const rows = await readCodexThreadRows(dbPath, { includeArchived: true }, sessionId);
-      if (rows === undefined) continue;
-      for (const row of rows) {
-        const entry = await this.entryFromRow(row);
-        if (entry?.id === sessionId) return entry;
-      }
-      break;
-    }
-
-    return this.findRolloutEntry(sessionId);
+    return (await this.listCatalog({ includeArchived: true })).find(
+      (entry) => entry.id === sessionId,
+    );
   }
 
   private async entryFromRow(row: CodexThreadRow): Promise<CodexCatalogEntry | undefined> {
@@ -145,55 +216,43 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
     const updatedAt = normalizeEpochMs(row.updated_at_ms) ?? normalizeEpochMs(row.updated_at);
 
     return {
+      source: 'codex',
       id: row.id,
-      name,
+      title: name,
       cwd: safeCodexCwd(row.cwd),
-      ...(createdAt !== undefined ? { createdAt } : {}),
-      ...(updatedAt !== undefined ? { updatedAt } : {}),
+      ...(createdAt !== undefined ? { createdAtMs: createdAt } : {}),
+      updatedAtMs: updatedAt ?? 0,
       archived: row.archived === true || row.archived === 1,
-      rolloutPath,
+      transcriptPath: rolloutPath,
     };
   }
 
-  private async scanRolloutCatalog(query: ExternalSessionQuery): Promise<CodexCatalogEntry[]> {
+  private async scanRolloutCatalog(
+    query: ExternalSourceCatalogQuery,
+  ): Promise<CodexCatalogEntry[]> {
+    if (query.limit !== undefined && query.limit <= 0) return [];
     const candidates = [
       ...(await walkRolloutFiles(join(this.codexHome, 'sessions'), false)),
       ...(query.includeArchived
         ? await walkRolloutFiles(join(this.codexHome, 'archived_sessions'), true)
         : []),
-    ].sort((a, b) => b.mtimeMs - a.mtimeMs);
+    ].sort(compareRolloutCandidates);
     const entries: CodexCatalogEntry[] = [];
+    const seenIds = new Set<string>();
     for (const candidate of candidates) {
       const head = await readUtf8Prefix(candidate.path, CODEX_ROLLOUT_HEAD_BYTES).catch(
         () => undefined,
       );
       if (head === undefined) continue;
       const entry = catalogEntryFromRolloutHead(head, candidate);
-      if (!entry || !matchesQuery(entry, query)) continue;
-      const rolloutPath = await this.resolveRolloutPath(candidate.path, entry.id);
-      if (rolloutPath) entries.push({ ...entry, rolloutPath });
+      if (!entry || !matchesSourceCatalogQuery(entry, query)) continue;
+      if (seenIds.has(entry.id)) continue;
+      seenIds.add(entry.id);
+      const transcriptPath = await this.resolveRolloutPath(entry.transcriptPath, entry.id);
+      if (transcriptPath) entries.push({ ...entry, transcriptPath });
     }
-    return entries.sort(compareCatalogEntries);
-  }
-
-  private async findRolloutEntry(sessionId: string): Promise<CodexCatalogEntry | undefined> {
-    for (const [root, archived] of [
-      [join(this.codexHome, 'sessions'), false],
-      [join(this.codexHome, 'archived_sessions'), true],
-    ] as const) {
-      for (const candidate of await walkRolloutFiles(root, archived)) {
-        if (!rolloutFilenameMatchesId(basename(candidate.path), sessionId)) continue;
-        const head = await readUtf8Prefix(candidate.path, CODEX_ROLLOUT_HEAD_BYTES).catch(
-          () => undefined,
-        );
-        if (head === undefined) continue;
-        const entry = catalogEntryFromRolloutHead(head, candidate);
-        if (entry?.id !== sessionId) continue;
-        const rolloutPath = await this.resolveRolloutPath(candidate.path, sessionId);
-        if (rolloutPath) return { ...entry, rolloutPath };
-      }
-    }
-    return undefined;
+    entries.sort(compareCatalogEntries);
+    return query.limit === undefined ? entries : entries.slice(0, query.limit);
   }
 
   private async resolveRolloutPath(
@@ -226,6 +285,7 @@ function convertCodexRollout(
   fallbackCwd: string,
 ): ExternalMakaSession {
   const records = parseRolloutRecords(text, expectedSessionId);
+  const presentationByLine = codexPresentationRecords(records);
   const sessionMeta = records.find((record) => record.value.type === 'session_meta')?.value;
   const metaPayload = asRecord(sessionMeta?.payload);
   const actualSessionId = stringField(metaPayload, 'session_id') ?? stringField(metaPayload, 'id');
@@ -233,7 +293,6 @@ function convertCodexRollout(
     throw new Error(`Codex rollout Session id mismatch: expected ${expectedSessionId}`);
   }
 
-  const metaCwd = safeCodexCwd(metaPayload?.cwd);
   const messages: StoredMessage[] = [];
   let activeTurnId: string | undefined;
   let activeTurnIsExplicit = false;
@@ -264,6 +323,51 @@ function convertCodexRollout(
       continue;
     }
 
+    const presentation = presentationByLine.get(record.line);
+    if (presentation) {
+      const eventTurnId = stringField(payload, 'turn_id');
+      if (eventTurnId) {
+        activeTurnId = eventTurnId;
+        activeTurnIsExplicit = true;
+      } else if (presentation.kind === 'user' && !activeTurnIsExplicit) {
+        activeTurnId = generatedCodexId(expectedSessionId, 'turn', record.line);
+      }
+      const turnId = ensureTurnId(record.line);
+      const ts = timestampFor(record);
+      if (presentation.kind === 'user') {
+        firstUserText ??= presentation.text;
+        messages.push({
+          type: 'user',
+          id: presentation.id ?? generatedCodexId(expectedSessionId, 'user', record.line),
+          turnId,
+          ts,
+          text: presentation.text,
+        });
+      } else if (presentation.kind === 'assistant') {
+        messages.push({
+          type: 'assistant',
+          id: presentation.id ?? generatedCodexId(expectedSessionId, 'assistant', record.line),
+          turnId,
+          ts,
+          text: presentation.text,
+          modelId: activeModel,
+          contentOrder: ['text'],
+        });
+      } else {
+        messages.push({
+          type: 'assistant',
+          id: presentation.id ?? generatedCodexId(expectedSessionId, 'reasoning', record.line),
+          turnId,
+          ts,
+          text: '',
+          thinking: { text: presentation.text },
+          contentOrder: ['thinking'],
+          modelId: activeModel,
+        });
+      }
+      continue;
+    }
+
     if (envelope.type === 'event_msg') {
       const eventType = stringField(payload, 'type');
       if (eventType === 'task_started' || eventType === 'turn_started') {
@@ -272,57 +376,6 @@ function convertCodexRollout(
           activeTurnId = turnId;
           activeTurnIsExplicit = true;
         }
-        continue;
-      }
-
-      if (eventType === 'user_message') {
-        if (!activeTurnIsExplicit) {
-          activeTurnId = generatedCodexId(expectedSessionId, 'turn', record.line);
-        }
-        const text = stringField(payload, 'message') ?? mediaOnlyUserText(payload);
-        if (text.length === 0) continue;
-        firstUserText ??= text;
-        const turnId = ensureTurnId(record.line);
-        messages.push({
-          type: 'user',
-          id:
-            stringField(payload, 'client_id') ??
-            generatedCodexId(expectedSessionId, 'user', record.line),
-          turnId,
-          ts: timestampFor(record),
-          text,
-        });
-        continue;
-      }
-
-      if (eventType === 'agent_message') {
-        const text = stringField(payload, 'message');
-        if (!text) continue;
-        messages.push({
-          type: 'assistant',
-          id: generatedCodexId(expectedSessionId, 'assistant', record.line),
-          turnId: ensureTurnId(record.line),
-          ts: timestampFor(record),
-          text,
-          modelId: activeModel,
-          contentOrder: ['text'],
-        });
-        continue;
-      }
-
-      if (eventType === 'agent_reasoning') {
-        const reasoning = stringField(payload, 'text');
-        if (!reasoning) continue;
-        messages.push({
-          type: 'assistant',
-          id: generatedCodexId(expectedSessionId, 'reasoning', record.line),
-          turnId: ensureTurnId(record.line),
-          ts: timestampFor(record),
-          text: '',
-          thinking: { text: reasoning },
-          contentOrder: ['thinking'],
-          modelId: activeModel,
-        });
         continue;
       }
 
@@ -437,7 +490,7 @@ function convertCodexRollout(
     sanitizeForeignTitle(fallbackName) || sanitizeForeignTitle(firstUserText) || expectedSessionId;
   return {
     sourceSessionId: expectedSessionId,
-    metadata: { name, cwd: metaCwd || fallbackCwd },
+    metadata: { name, cwd: fallbackCwd },
     messages,
   };
 }
@@ -445,6 +498,105 @@ function convertCodexRollout(
 interface ParsedRolloutRecord {
   line: number;
   value: JsonRecord;
+}
+
+interface CodexPresentationMessage {
+  kind: 'user' | 'assistant' | 'reasoning';
+  text: string;
+  id?: string;
+}
+
+function codexPresentationRecords(
+  records: readonly ParsedRolloutRecord[],
+): Map<number, CodexPresentationMessage> {
+  const eventMessages = new Map<number, CodexPresentationMessage>();
+  const responseMessages = new Map<number, CodexPresentationMessage>();
+  const seenCompletedItemIds = new Set<string>();
+  for (const record of records) {
+    const envelope = record.value;
+    if (envelope.type === 'response_item') {
+      const message = codexRolloutMessage(envelope);
+      if (message) {
+        responseMessages.set(record.line, {
+          kind: message.role,
+          text: message.text,
+        });
+      }
+      continue;
+    }
+    if (envelope.type !== 'event_msg') continue;
+    const payload = asRecord(envelope.payload);
+    const eventType = stringField(payload, 'type');
+    if (!payload || !eventType) continue;
+
+    if (eventType === 'user_message') {
+      const text = stringField(payload, 'message') ?? mediaOnlyUserText(payload);
+      if (text.length > 0) {
+        eventMessages.set(record.line, {
+          kind: 'user',
+          text,
+          ...(stringField(payload, 'client_id') ? { id: stringField(payload, 'client_id') } : {}),
+        });
+      }
+      continue;
+    }
+    if (eventType === 'agent_message') {
+      const text = stringField(payload, 'message');
+      if (text) eventMessages.set(record.line, { kind: 'assistant', text });
+      continue;
+    }
+    if (eventType === 'agent_reasoning') {
+      const text = stringField(payload, 'text');
+      if (text) eventMessages.set(record.line, { kind: 'reasoning', text });
+      continue;
+    }
+    if (eventType !== 'item_completed') continue;
+
+    const item = asRecord(payload.item);
+    const itemType = stringField(item, 'type')?.toLowerCase();
+    const itemId = stringField(item, 'id') ?? stringField(item, 'client_id');
+    if (itemId !== undefined) {
+      if (seenCompletedItemIds.has(itemId)) continue;
+      seenCompletedItemIds.add(itemId);
+    }
+    if (itemType === 'usermessage') {
+      const text = codexCompletedItemText(item) || codexCompletedItemMediaText(item);
+      if (text.length > 0) {
+        eventMessages.set(record.line, {
+          kind: 'user',
+          text,
+          ...((stringField(item, 'client_id') ?? stringField(item, 'id'))
+            ? { id: stringField(item, 'client_id') ?? stringField(item, 'id') }
+            : {}),
+        });
+      }
+    } else if (itemType === 'agentmessage') {
+      const text = codexCompletedItemText(item);
+      if (text.length > 0) {
+        eventMessages.set(record.line, {
+          kind: 'assistant',
+          text,
+          ...(stringField(item, 'id') ? { id: stringField(item, 'id') } : {}),
+        });
+      }
+    } else if (itemType === 'reasoning') {
+      const text = codexCompletedReasoningText(item);
+      if (text.length > 0) {
+        eventMessages.set(record.line, {
+          kind: 'reasoning',
+          text,
+          ...(stringField(item, 'id') ? { id: stringField(item, 'id') } : {}),
+        });
+      }
+    }
+  }
+  if (eventMessages.size === 0) return responseMessages;
+  const merged = new Map(eventMessages);
+  const eventKinds = new Set([...eventMessages.values()].map((message) => message.kind));
+  for (const [line, responseMessage] of responseMessages) {
+    if (!eventKinds.has(responseMessage.kind)) merged.set(line, responseMessage);
+  }
+  return merged;
 }
 
 function parseRolloutRecords(text: string, sessionId: string): ParsedRolloutRecord[] {
@@ -471,12 +623,13 @@ function parseRolloutRecords(text: string, sessionId: string): ParsedRolloutReco
 function catalogEntryFromRolloutHead(
   text: string,
   candidate: RolloutCandidate,
-): Omit<CodexCatalogEntry, 'rolloutPath'> | undefined {
+): CodexCatalogEntry | undefined {
   const lines = text.split('\n');
   let id: string | undefined;
   let cwd = '';
   let createdAt: number | undefined;
   let firstUserText: string | undefined;
+  let responseUserText: string | undefined;
   for (const line of lines) {
     let record: JsonRecord;
     try {
@@ -494,31 +647,39 @@ function catalogEntryFromRolloutHead(
       cwd = safeCodexCwd(payload.cwd) || cwd;
       createdAt =
         normalizeEpochMs(record.timestamp) ?? normalizeEpochMs(payload.timestamp) ?? createdAt;
-    } else if (
-      record.type === 'event_msg' &&
-      payload.type === 'user_message' &&
-      firstUserText === undefined
-    ) {
-      firstUserText = stringField(payload, 'message');
+    } else if (firstUserText === undefined) {
+      if (record.type === 'event_msg' && payload.type === 'user_message') {
+        firstUserText = stringField(payload, 'message');
+      } else if (record.type === 'event_msg' && payload.type === 'item_completed') {
+        const item = asRecord(payload.item);
+        if (stringField(item, 'type')?.toLowerCase() === 'usermessage') {
+          firstUserText = codexCompletedItemText(item) || codexCompletedItemMediaText(item);
+        }
+      } else {
+        const message = codexRolloutMessage(record);
+        if (message?.role === 'user') responseUserText ??= message.text;
+      }
     }
     if (id && firstUserText !== undefined) break;
   }
+  firstUserText ??= responseUserText;
   if (!isSafeCodexSessionId(id)) return undefined;
   if (!rolloutFilenameMatchesId(basename(candidate.path), id)) return undefined;
   return {
+    source: 'codex',
     id,
-    name: sanitizeForeignTitle(firstUserText) || id,
+    title: sanitizeForeignTitle(firstUserText) || id,
     cwd,
-    ...(createdAt !== undefined ? { createdAt } : {}),
-    updatedAt: candidate.mtimeMs,
+    ...(createdAt !== undefined ? { createdAtMs: createdAt } : {}),
+    updatedAtMs: candidate.mtimeMs,
     archived: candidate.archived,
+    transcriptPath: candidate.path,
   };
 }
 
 async function readCodexThreadRows(
   dbPath: string,
-  query: ExternalSessionQuery,
-  exactId?: string,
+  query: ExternalSourceCatalogQuery,
 ): Promise<CodexThreadRow[] | undefined> {
   try {
     const sqlite = await import('node:sqlite');
@@ -547,12 +708,14 @@ async function readCodexThreadRows(
       ].filter((column) => columns.has(column));
       const where: string[] = [];
       const params: Array<string | number> = [];
-      if (exactId !== undefined) {
-        where.push('id = ?');
-        params.push(exactId);
-      }
       if (!query.includeArchived && columns.has('archived')) {
         where.push('(archived IS NULL OR archived = 0)');
+      }
+      if (columns.has('source')) {
+        where.push(
+          `(source IS NULL OR source IN (${CODEX_ROOT_SOURCE_SQL_VALUES.map(() => '?').join(', ')}))`,
+        );
+        params.push(...CODEX_ROOT_SOURCE_SQL_VALUES);
       }
       if (query.cwd !== undefined && columns.has('cwd')) {
         const variants = cwdSqlVariants(query.cwd);
@@ -567,7 +730,11 @@ async function readCodexThreadRows(
       const sql =
         `SELECT ${wanted.join(', ')} FROM threads` +
         (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '') +
-        ` ORDER BY ${orderColumn} DESC`;
+        ` ORDER BY ${orderColumn} DESC` +
+        (query.limit !== undefined ? ' LIMIT ?' : '');
+      if (query.limit !== undefined) {
+        params.push(Math.max(0, Math.floor(query.limit * 2)));
+      }
       return db.prepare(sql).all(...params) as CodexThreadRow[];
     } finally {
       db.close();
@@ -623,47 +790,6 @@ async function walkRolloutFiles(root: string, archived: boolean): Promise<Rollou
   };
   await visit(root);
   return files;
-}
-
-async function readBoundedUtf8File(path: string, maxBytes: number): Promise<string> {
-  const handle = await open(path, 'r');
-  try {
-    const metadata = await handle.stat();
-    if (!metadata.isFile()) throw new Error('Codex rollout is not a regular file');
-    if (metadata.size > maxBytes) throw new Error(`Codex rollout exceeds ${maxBytes} bytes`);
-    const chunks: Buffer[] = [];
-    let total = 0;
-    for (;;) {
-      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes + 1 - total));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, total);
-      if (bytesRead === 0) break;
-      total += bytesRead;
-      if (total > maxBytes) throw new Error(`Codex rollout exceeds ${maxBytes} bytes`);
-      chunks.push(buffer.subarray(0, bytesRead));
-      if (total === maxBytes) {
-        const probe = Buffer.allocUnsafe(1);
-        if ((await handle.read(probe, 0, 1, total)).bytesRead > 0) {
-          throw new Error(`Codex rollout exceeds ${maxBytes} bytes`);
-        }
-        break;
-      }
-    }
-    return Buffer.concat(chunks, total).toString('utf8');
-  } finally {
-    await handle.close();
-  }
-}
-
-async function readUtf8Prefix(path: string, maxBytes: number): Promise<string> {
-  const handle = await open(path, 'r');
-  try {
-    if (!(await handle.stat()).isFile()) throw new Error('Codex rollout is not a regular file');
-    const buffer = Buffer.allocUnsafe(maxBytes);
-    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
-    return buffer.subarray(0, bytesRead).toString('utf8');
-  } finally {
-    await handle.close();
-  }
 }
 
 function asRecord(value: unknown): JsonRecord | undefined {
@@ -733,13 +859,8 @@ function normalizeEpochMs(value: unknown): number | undefined {
   return undefined;
 }
 
-function normalizePath(value: string): string {
-  const normalized = value.replaceAll('\\', '/').replace(/\/+$/, '');
-  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
-}
-
 function cwdSqlVariants(cwd: string): string[] {
-  const normalized = normalizePath(cwd);
+  const normalized = normalizeSourcePath(cwd);
   const variants = new Set([cwd, normalized]);
   if (/^[A-Za-z]:\//.test(normalized)) variants.add(normalized.replaceAll('/', '\\'));
   if (normalized !== '/') {
@@ -749,13 +870,16 @@ function cwdSqlVariants(cwd: string): string[] {
   return [...variants];
 }
 
-function matchesQuery(entry: ExternalSessionSummary, query: ExternalSessionQuery): boolean {
-  if (!query.includeArchived && entry.archived) return false;
-  return query.cwd === undefined || normalizePath(entry.cwd) === normalizePath(query.cwd);
+function compareCatalogEntries(a: CodexCatalogEntry, b: CodexCatalogEntry): number {
+  return (
+    b.updatedAtMs - a.updatedAtMs ||
+    (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0) ||
+    a.transcriptPath.localeCompare(b.transcriptPath)
+  );
 }
 
-function compareCatalogEntries(a: CodexCatalogEntry, b: CodexCatalogEntry): number {
-  return (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0);
+function compareRolloutCandidates(a: RolloutCandidate, b: RolloutCandidate): number {
+  return b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path);
 }
 
 function stateGeneration(path: string): number {
@@ -800,6 +924,50 @@ function codexToolOutputText(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function codexCompletedItemText(item: JsonRecord | undefined): string {
+  if (!item) return '';
+  const direct = stringField(item, 'content');
+  if (direct) return direct;
+  if (!Array.isArray(item.content)) return '';
+  return item.content
+    .flatMap((part) => {
+      const record = asRecord(part);
+      const type = stringField(record, 'type')?.toLowerCase();
+      return type === 'text' || type === 'input_text' || type === 'output_text'
+        ? [stringField(record, 'text') ?? '']
+        : [];
+    })
+    .filter((text) => text.length > 0)
+    .join('\n');
+}
+
+function codexCompletedReasoningText(item: JsonRecord | undefined): string {
+  if (!item) return '';
+  const summary = codexTextFragments(item.summary_text);
+  if (summary.length > 0) return summary.join('\n');
+  return codexCompletedItemText(item);
+}
+
+function codexTextFragments(value: unknown): string[] {
+  if (typeof value === 'string') return value.length > 0 ? [value] : [];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((part) => {
+    if (typeof part === 'string') return part.length > 0 ? [part] : [];
+    const text = stringField(asRecord(part), 'text');
+    return text ? [text] : [];
+  });
+}
+
+function codexCompletedItemMediaText(item: JsonRecord | undefined): string {
+  if (!item || !Array.isArray(item.content)) return '';
+  const contentTypes = item.content.flatMap((part) => {
+    const type = stringField(asRecord(part), 'type')?.toLowerCase();
+    return type ? [type] : [];
+  });
+  if (contentTypes.some((type) => type.includes('image'))) return '[Image]';
+  return contentTypes.some((type) => type.includes('audio')) ? '[Audio]' : '';
 }
 
 function mediaOnlyUserText(payload: JsonRecord): string {

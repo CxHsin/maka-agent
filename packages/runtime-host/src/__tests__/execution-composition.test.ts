@@ -41,6 +41,36 @@ test('filesystem worker follows the candidate executable runtime', () => {
   assert.equal(runtimeHostFilesystemWorkerRuntime({}), 'node');
 });
 
+test('execution-store facade preserves external origin on imported Sessions', async () => {
+  await withCompositionRoot(async ({ root, owner }) => {
+    const stores = await openInteractiveExecutionStoresForWrite(owner.lease);
+    try {
+      const header = await stores.sessionStore.createImportedSession(
+        {
+          cwd: root,
+          backend: 'fake',
+          llmConnectionSlug: 'fake',
+          model: 'fake-model',
+          permissionMode: 'ask',
+        },
+        [],
+        { adapterId: 'codex', sourceSessionId: 'codex-session-1' },
+      );
+
+      assert.deepEqual(header.externalOrigin, {
+        adapterId: 'codex',
+        sourceSessionId: 'codex-session-1',
+      });
+      assert.deepEqual(
+        (await stores.sessionStore.readHeader(header.id)).externalOrigin,
+        header.externalOrigin,
+      );
+    } finally {
+      await stores.sessionStore.close?.();
+    }
+  });
+});
+
 test('production composition owns the long-term memory database lifecycle', async () => {
   await withCompositionRoot(async ({ root, owner }) => {
     const databasePath = join(root, LONG_TERM_MEMORY_DATABASE_NAME);

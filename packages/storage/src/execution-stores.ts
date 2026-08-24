@@ -6,7 +6,13 @@ import type {
 } from '@maka/core/agent-run';
 import type { RuntimeEvent, ToolBoundaryProtocol } from '@maka/core/runtime-event';
 import type { RuntimeContinuationAuthorityStore } from '@maka/core/runtime-event-store';
-import type { SessionHeader, SessionSummary, StoredMessage, TurnRecord } from '@maka/core/session';
+import type {
+  SessionExternalOrigin,
+  SessionHeader,
+  SessionSummary,
+  StoredMessage,
+  TurnRecord,
+} from '@maka/core/session';
 import type { SessionListFilter } from '@maka/core/runtime-inputs';
 import {
   createSqliteAgentRunStore,
@@ -321,8 +327,8 @@ async function createExecutionStoresForWrite<K extends StorageRootKind, E extend
     sessionStore: {
       ready: () => run(() => sessionStore.ready()),
       create: (input, initialBoundary) => run(() => sessionStore.create(input, initialBoundary)),
-      createImportedSession: (input, messages) =>
-        run(() => sessionStore.createImportedSession(input, messages)),
+      createImportedSession: (input, messages, externalOrigin) =>
+        run(() => sessionStore.createImportedSession(input, messages, externalOrigin)),
       probeStableSessionCreate: (sessionId, requestFingerprint) =>
         run(() => sessionStore.probeStableSessionCreate(sessionId, requestFingerprint)),
       createStableSession: (request, initialBoundary) =>

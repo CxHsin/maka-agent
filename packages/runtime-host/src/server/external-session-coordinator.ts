@@ -4,7 +4,7 @@ import type {
   ExternalSessionSummary,
 } from '@maka/core/external-session';
 import type { CreateSessionInput } from '@maka/core/runtime-inputs';
-import type { SessionHeader, StoredMessage } from '@maka/core/session';
+import type { SessionExternalOrigin, SessionHeader, StoredMessage } from '@maka/core/session';
 import type { SessionCatalogRecord } from '@maka/storage/execution-stores';
 import { ExternalSessionImporter } from '@maka/storage/external-sessions';
 import {
@@ -32,6 +32,7 @@ type ExternalSessionStore = {
   createImportedSession(
     input: CreateSessionInput,
     messages: readonly StoredMessage[],
+    externalOrigin?: SessionExternalOrigin,
   ): Promise<SessionHeader>;
   listHeaders(): Promise<SessionHeader[]>;
   readCatalogRecord(sessionId: string): Promise<SessionCatalogRecord>;
@@ -204,9 +205,9 @@ export class HostExternalSessionCoordinator {
 
     let commitAttempted = false;
     const importer = new ExternalSessionImporter(this.#adapters, {
-      createImportedSession: async (sessionInput, messages) => {
+      createImportedSession: async (sessionInput, messages, externalOrigin) => {
         commitAttempted = true;
-        return this.#sessions.createImportedSession(sessionInput, messages);
+        return this.#sessions.createImportedSession(sessionInput, messages, externalOrigin);
       },
     });
     let header: SessionHeader;

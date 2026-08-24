@@ -4,7 +4,11 @@ import {
   ExternalSessionAdapterRegistry,
   type ExternalSessionAdapter,
 } from '@maka/core/external-session';
-import { type SessionHeader, type StoredMessage } from '@maka/core/session';
+import {
+  type SessionExternalOrigin,
+  type SessionHeader,
+  type StoredMessage,
+} from '@maka/core/session';
 import { headerToSummary } from '@maka/runtime/session-manager';
 import type { SessionCatalogRecord } from '@maka/storage/execution-stores';
 import { EXTERNAL_SESSION_RESULT_MAX_BYTES } from '../protocol/index.js';
@@ -154,6 +158,10 @@ test('coalesces a repeat import issued while the first is still running', async 
   // Same task, and only one of them was ever created. Both callers are told
   // about it, so the one that clicked twice still gets taken to the result.
   assert.equal(first.result.session.id, second.result.session.id);
+  assert.deepEqual(fixture.creates[0]?.externalOrigin, {
+    adapterId: 'codex',
+    sourceSessionId: 'source-0',
+  });
   assert.equal(fixture.creates.length, 1);
   assert.equal(fixture.drainRequests(), 0);
 
@@ -317,6 +325,7 @@ function coordinatorFixture(
     createImportedSession(
       input: Parameters<HostStore['createImportedSession']>[0],
       messages: readonly StoredMessage[],
+      externalOrigin?: SessionExternalOrigin,
     ): Promise<SessionHeader>;
     prepareImportedSessionHistory(sessionId: string): Promise<void>;
     discardImportedSession(sessionId: string): Promise<void>;
@@ -329,14 +338,19 @@ function coordinatorFixture(
   const creates: Array<{
     input: Parameters<HostStore['createImportedSession']>[0];
     messages: readonly StoredMessage[];
+    externalOrigin?: SessionExternalOrigin;
   }> = [];
-  const defaultCreate: HostStore['createImportedSession'] = async (input, messages) => {
+  const defaultCreate: HostStore['createImportedSession'] = async (
+    input,
+    messages,
+    externalOrigin,
+  ) => {
     sequence += 1;
     const header = {
       ...sessionHeader(`imported-${sequence}`, input.cwd, input.name ?? 'Imported'),
       transcriptLedgerVersion: 0 as const,
     };
-    creates.push({ input, messages });
+    creates.push({ input, messages, externalOrigin });
     records.set(header.id, {
       header,
       revision: 1,

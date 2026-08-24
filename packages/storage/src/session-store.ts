@@ -52,6 +52,7 @@ import {
   isSessionToolProfile,
   type SessionHeader,
   type SessionConversationCopy,
+  type SessionExternalOrigin,
   type SessionSummary,
   type StoredMessage,
   type TurnRecord,
@@ -283,6 +284,7 @@ export interface SessionAuthorityStore extends SessionStore {
   createImportedSession(
     input: CreateSessionInput,
     messages: readonly StoredMessage[],
+    externalOrigin?: SessionExternalOrigin,
   ): Promise<SessionHeader>;
   createSubagent(
     input: CreateSessionInput,
@@ -401,6 +403,7 @@ class SqliteSessionStore implements SessionAuthorityStore {
   async createImportedSession(
     input: CreateSessionInput,
     messages: readonly StoredMessage[],
+    externalOrigin?: SessionExternalOrigin,
   ): Promise<SessionHeader> {
     await this.ensureReady();
     assertNoConversationCopyMetadata(input);
@@ -412,6 +415,7 @@ class SqliteSessionStore implements SessionAuthorityStore {
     );
     const header: SessionHeader = {
       ...buildSessionHeader(this.workspaceRoot, input),
+      ...(externalOrigin !== undefined ? { externalOrigin } : {}),
       transcriptLedgerVersion: 0,
     };
     const outcome = await this.metadata.importSession(
@@ -1036,6 +1040,7 @@ export function normalizeSessionHeader(
     isValidConversationCopyLineage(header) &&
     isValidRevisionLineage(header) &&
     isValidSubagentSessionLineage(header) &&
+    isValidSessionExternalOrigin(header.externalOrigin) &&
     (header.lastReadMessageId === undefined || typeof header.lastReadMessageId === 'string') &&
     typeof header.hasUnread === 'boolean' &&
     isBackendKind(header.backend) &&
@@ -1059,6 +1064,18 @@ export function normalizeSessionHeader(
     return { ...withoutBlockedReason, name: normalizedName };
   }
   return { ...header, name: normalizedName };
+}
+
+function isValidSessionExternalOrigin(origin: SessionHeader['externalOrigin']): boolean {
+  if (origin === undefined) return true;
+  return (
+    typeof origin === 'object' &&
+    origin !== null &&
+    typeof origin.adapterId === 'string' &&
+    origin.adapterId.length > 0 &&
+    typeof origin.sourceSessionId === 'string' &&
+    origin.sourceSessionId.length > 0
+  );
 }
 
 function isValidRevisionLineage(header: SessionHeader): boolean {

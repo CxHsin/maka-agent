@@ -137,3 +137,18 @@ test('a bound first Turn makes an armed goal read as running', () => {
   assert.ok(markup.includes('Autonomous goal running'));
   assert.ok(!markup.includes('Autonomous goal set; takes hold on the next Turn'));
 });
+
+test('redacts secrets from the visible Goal condition', () => {
+  const secret = 'sk-ant-api03-abc123def456ghi789jkl0mn1opq';
+  const markup = renderGoalChip({
+    condition: `Use Authorization: Bearer ${secret}`,
+    status: 'waiting',
+    iterations: 4,
+    maxIterations: 50,
+    setAt: Date.now() - 30_000,
+    onClear: () => undefined,
+  });
+
+  assert.equal(markup.includes(secret), false);
+  assert.ok(markup.includes('Authorization: Bearer &lt;redacted&gt;'));
+});

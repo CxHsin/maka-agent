@@ -37,6 +37,7 @@ import {
 import { getConversationCopy, type GoalDisplayPhase } from './conversation-copy.js';
 import { ICON_SIZE, Pause, Play } from './icons.js';
 import { useUiLocale } from './locale-context.js';
+import { redactSecrets } from './redact.js';
 import { dotForStatus } from './status-vocabulary.js';
 
 export interface SessionContextBranch {
@@ -117,6 +118,7 @@ export function SessionContextLayer(props: {
 
   if (props.goal) {
     const goal = props.goal;
+    const condition = redactSecrets(goal.condition);
     // A paused goal burns nothing, while waiting remains live but is not
     // currently executing. Both must be visually still; only paused needs an
     // attention tone.
@@ -191,7 +193,7 @@ export function SessionContextLayer(props: {
               size="sm"
               onClick={goal.onPause}
               tooltip={copy.pauseGoal(
-                goal.condition,
+                condition,
                 goal.iterations,
                 goal.maxIterations,
                 phase,
@@ -206,7 +208,7 @@ export function SessionContextLayer(props: {
               variant="ghost"
               size="sm"
               onClick={goal.onResume}
-              tooltip={copy.resumeGoal(goal.condition, goal.iterations, goal.maxIterations)}
+              tooltip={copy.resumeGoal(condition, goal.iterations, goal.maxIterations)}
             />
           ) : null}
           <IconButton
@@ -217,7 +219,7 @@ export function SessionContextLayer(props: {
             size="sm"
             onClick={goal.onClear}
             tooltip={copy.clearGoal(
-              goal.condition,
+              condition,
               goal.iterations,
               goal.maxIterations,
               phase,
@@ -374,10 +376,10 @@ export function SessionContextLayer(props: {
             this one branched FROM. */}
         <div className="maka-session-context__lineage">
           {props.goal ? (
-            <Tooltip content={props.goal.condition}>
+            <Tooltip content={redactSecrets(props.goal.condition)}>
               <div className="maka-session-context__goal-description">
                 <Text type="supporting" maxLines={1}>
-                  {props.goal.condition}
+                  {redactSecrets(props.goal.condition)}
                 </Text>
               </div>
             </Tooltip>

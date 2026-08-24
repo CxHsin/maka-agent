@@ -26,6 +26,7 @@
  */
 
 import { isGoalArmedAwaitingFirstTurn, type GoalStatus } from '@maka/core/goal';
+import { redactSecrets } from '@maka/core/display-redaction';
 import type { GoalProjection } from '@maka/runtime-host/protocol';
 import { formatTokenCount } from './pi-transcript-format.js';
 import { stripAnsi } from './tui-ansi.js';
@@ -124,7 +125,7 @@ export function goalStatusLineText(
 
 /** Conditions and evaluator notes may legally embed newlines; collapse whitespace so notices stay one line per field. */
 function inlineGoalText(value: string): string {
-  return stripAnsi(value)
+  return redactSecrets(stripAnsi(value))
     .replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();

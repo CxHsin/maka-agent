@@ -209,4 +209,14 @@ describe('pi-goal display helpers', () => {
     const long = goalAttachedNoticeText(goal({ condition: 'x'.repeat(200) }));
     assert.ok(long.includes('…') && long.length <= 210);
   });
+
+  test('redacts secrets from condition text in CLI goal displays', () => {
+    const secret = 'sk-ant-api03-abc123def456ghi789jkl0mn1opq';
+    const current = goal({ condition: `Use Authorization: Bearer ${secret}` });
+
+    for (const text of [goalAttachedNoticeText(current), goalSummaryLines(current, 61_000)[0]!]) {
+      assert.equal(text.includes(secret), false);
+      assert.match(text, /<redacted>/);
+    }
+  });
 });

@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type {
   ConnectionLastTestStatus,
   ConnectionTestErrorClass,
@@ -7,7 +26,7 @@ import type {
 import type { ThinkingLevel } from './model-thinking.js';
 import type { ProviderType } from './provider-registry.js';
 import type { RelayModelProfile } from './model-thinking.js';
-import type { ChatDefaultPermissionMode, ProxyProtocol } from './settings.js';
+import type { ChatDefaultPermissionMode, ProxyProtocol, ShellSettings } from './settings.js';
 import type { SubagentSettings } from './subagent-settings.js';
 import type { JsonObject } from './request-customization.js';
 import {
@@ -24,6 +43,7 @@ export {
 } from './runtime-policy/domain-codec.js';
 export {
   decodeCanonicalRuntimePolicy,
+  decodeRuntimePolicyV2,
   normalizeRuntimePolicyMutation,
 } from './runtime-policy/policy-codec.js';
 export {
@@ -124,6 +144,7 @@ export interface RuntimePolicy {
     readonly defaultProvider: WebSearchProvider;
   };
   readonly subagents: SubagentSettings;
+  readonly shell: ShellSettings;
 }
 
 export interface RuntimePolicySnapshot {
@@ -151,6 +172,7 @@ export type RuntimePolicyMutation =
   | { readonly kind: 'set_chat_defaults'; readonly value: RuntimePolicy['chatDefaults'] }
   | { readonly kind: 'set_web_search'; readonly value: RuntimePolicy['webSearch'] }
   | { readonly kind: 'set_subagents'; readonly value: RuntimePolicy['subagents'] }
+  | { readonly kind: 'set_shell'; readonly value: RuntimePolicy['shell'] }
   | { readonly kind: 'patch_agent_settings'; readonly value: AgentRuntimeSettingsPatch };
 
 export interface MutateRuntimePolicyInput {
@@ -181,6 +203,7 @@ export function createDefaultRuntimePolicy(): RuntimePolicy {
     chatDefaults: { permissionMode: 'ask' },
     webSearch: { enabled: false, defaultProvider: 'model' },
     subagents: { presets: [] },
+    shell: { preference: 'auto', executable: '' },
   };
 }
 
@@ -270,6 +293,22 @@ export interface UpdateCatalogConnectionInput {
 
 export interface RemoveCatalogConnectionInput {
   readonly expected: ConnectionVersionBasis;
+}
+
+/**
+ * Built-in seed evolution as one atomic catalog mutation: a row still exactly
+ * matching a historical system seed follows the current seed — enabled ids AND
+ * the static inventory — and a system default the migration removes is
+ * retargeted in the same document write. Any other inventory is a user
+ * selection and is never touched; an already-null default stays null.
+ */
+export interface MigrateSystemSeedInput {
+  readonly slug: string;
+  readonly providerType: ProviderType;
+  readonly legacyEnabledModelIds: readonly (readonly string[])[];
+  readonly enabledModelIds: readonly string[];
+  readonly defaultModelId: string;
+  readonly retiredModelIds: readonly string[];
 }
 
 export interface SetDefaultConnectionTargetInput {

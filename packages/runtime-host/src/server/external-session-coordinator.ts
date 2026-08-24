@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type {
   ExternalSessionAdapter,
   ExternalSessionAdapterRegistry,
@@ -5,10 +24,12 @@ import type {
 } from '@maka/core/external-session';
 import type { CreateSessionInput } from '@maka/core/runtime-inputs';
 import type { SessionExternalOrigin, SessionHeader, StoredMessage } from '@maka/core/session';
+import type { ExternalSessionImportLookupResult } from '@maka/storage';
 import type { SessionCatalogRecord } from '@maka/storage/execution-stores';
 import { ExternalSessionImporter } from '@maka/storage/external-sessions';
 import {
   EXTERNAL_SESSION_CWD_MAX_BYTES,
+  EXTERNAL_SESSION_IMPORTED_SESSION_IDS_MAX_ITEMS,
   EXTERNAL_SESSION_NAME_MAX_BYTES,
   EXTERNAL_SESSION_PAGE_MAX_ITEMS,
   EXTERNAL_SESSION_RESULT_MAX_BYTES,
@@ -32,8 +53,13 @@ type ExternalSessionStore = {
   createImportedSession(
     input: CreateSessionInput,
     messages: readonly StoredMessage[],
-    externalOrigin?: SessionExternalOrigin,
+    externalOrigin: SessionExternalOrigin,
   ): Promise<SessionHeader>;
+  lookupExternalSessionImports(
+    adapterId: string,
+    sourceSessionIds: readonly string[],
+    recentSessionIdLimit: number,
+  ): Promise<readonly ExternalSessionImportLookupResult[]>;
   listHeaders(): Promise<SessionHeader[]>;
   readCatalogRecord(sessionId: string): Promise<SessionCatalogRecord>;
 };
@@ -142,17 +168,40 @@ export class HostExternalSessionCoordinator {
         ? (await this.#workspaceResolver.resolve(input.workspace)).cwd
         : undefined;
       const offset = input.cursor === undefined ? 0 : Number(input.cursor);
-      const sessions = (
-        await adapter.listSessions({
-          ...(cwd === undefined ? {} : { cwd }),
-          ...(input.includeArchived === undefined
-            ? {}
-            : { includeArchived: input.includeArchived }),
-        })
-      )
-        .map(toWireSummary)
-        .filter((summary): summary is ExternalSessionCatalogItem => summary !== undefined);
-      const page = boundedCatalogPage(sessions, offset);
+      const sessions =
+        // The term reaches the adapter rather than being applied to the page
+        // below: paging happens after this call, so filtering afterwards would
+        // search the 16 rows already fetched instead of the source.
+        (
+          await adapter.listSessions({
+            ...(cwd === undefined ? {} : { cwd }),
+            ...(input.includeArchived === undefined
+              ? {}
+              : { includeArchived: input.includeArchived }),
+            ...(input.text === undefined ? {} : { text: input.text }),
+          })
+        )
+          .map(toWireSummary)
+          .filter((summary): summary is ExternalSessionCatalogItem => summary !== undefined);
+      const candidates = sessions.slice(offset, offset + EXTERNAL_SESSION_PAGE_MAX_ITEMS);
+      const imports = await this.#sessions.lookupExternalSessionImports(
+        input.adapterId,
+        candidates.map(({ id }) => id),
+        EXTERNAL_SESSION_IMPORTED_SESSION_IDS_MAX_ITEMS,
+      );
+      const importsBySource = new Map(imports.map((state) => [state.sourceSessionId, state]));
+      const enrichedCandidates = candidates.map((session) => {
+        const state = importsBySource.get(session.id);
+        return {
+          ...session,
+          importState: {
+            importedCount: state?.livePublishedImportCount ?? 0,
+            importedSessionIds: state?.recentSessionIds ?? [],
+            isImporting: this.#importsInFlight.has(importKey(input.adapterId, session.id)),
+          },
+        };
+      });
+      const page = boundedCatalogPage(enrichedCandidates, offset, sessions.length);
       const nextOffset = offset + page.length;
       return {
         ok: true,
@@ -172,7 +221,7 @@ export class HostExternalSessionCoordinator {
   async importSession(
     input: ExternalSessionImportInput,
   ): Promise<OperationOutcome<'external-session.import'>> {
-    const key = JSON.stringify([input.adapterId, input.sourceSessionId]);
+    const key = importKey(input.adapterId, input.sourceSessionId);
     const running = this.#importsInFlight.get(key);
     if (running) return running;
     const attempt = this.#importSession(input);
@@ -296,6 +345,7 @@ function toWireSummary(summary: ExternalSessionSummary): ExternalSessionCatalogI
     id: summary.id,
     name,
     hostCwd: truncateUtf8(summary.cwd, EXTERNAL_SESSION_CWD_MAX_BYTES),
+    importState: { importedCount: 0, importedSessionIds: [], isImporting: false },
     ...(createdAt === undefined ? {} : { createdAt }),
     ...(updatedAt === undefined ? {} : { updatedAt }),
     ...(typeof summary.archived === 'boolean' ? { archived: summary.archived } : {}),
@@ -303,19 +353,17 @@ function toWireSummary(summary: ExternalSessionSummary): ExternalSessionCatalogI
 }
 
 function boundedCatalogPage(
-  sessions: readonly ExternalSessionCatalogItem[],
+  candidates: readonly ExternalSessionCatalogItem[],
   offset: number,
+  totalCount: number,
 ): ExternalSessionCatalogItem[] {
   const page: ExternalSessionCatalogItem[] = [];
-  const end = Math.min(sessions.length, offset + EXTERNAL_SESSION_PAGE_MAX_ITEMS);
-  for (let index = offset; index < end; index += 1) {
-    const candidate = sessions[index];
-    if (!candidate) break;
+  for (const candidate of candidates) {
     const nextPage = [...page, candidate];
     const nextOffset = offset + nextPage.length;
     const result = {
       sessions: nextPage,
-      nextCursor: nextOffset < sessions.length ? String(nextOffset) : null,
+      nextCursor: nextOffset < totalCount ? String(nextOffset) : null,
     };
     if (Buffer.byteLength(JSON.stringify(result), 'utf8') > EXTERNAL_SESSION_RESULT_MAX_BYTES) {
       break;
@@ -362,6 +410,10 @@ function safeTimestamp(value: number | undefined): number | undefined {
 
 function isSourceSessionNotFound(error: unknown): boolean {
   return error instanceof Error && /Session not found|Session does not exist/i.test(error.message);
+}
+
+function importKey(adapterId: string, sourceSessionId: string): string {
+  return JSON.stringify([adapterId, sourceSessionId]);
 }
 
 function queryFailure(

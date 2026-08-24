@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type {
   AgentRunEvent,
   AgentRunEventType,
@@ -17,6 +36,8 @@ import type { SessionListFilter } from '@maka/core/runtime-inputs';
 import {
   createSqliteAgentRunStore,
   type AgentRunIdentitySearchResult,
+  type AgentRunPageInput,
+  type AgentRunPageResult,
   type AdmitRootTurnInput,
   type AdmitRootTurnResult,
   type CommitRootTurnStartRejectionInput,
@@ -81,6 +102,8 @@ export {
 
 export type {
   AgentRunIdentitySearchResult,
+  AgentRunPageInput,
+  AgentRunPageResult,
   AdmitRootTurnInput,
   AdmitRootTurnResult,
   CommitRootTurnStartRejectionInput,
@@ -104,6 +127,7 @@ export type {
 } from './message-receipt-store.js';
 export type {
   ProbeSessionRemovalResult,
+  ExternalSessionImportLookupResult,
   SessionCatalogPageCursor,
   SessionCatalogPageResult,
   SessionCatalogRecord,
@@ -164,6 +188,7 @@ export interface ExecutionAgentRunReader {
   findRunsById(runId: string, limit: number): Promise<AgentRunIdentitySearchResult>;
   listSessionRuns(sessionId: string): Promise<AgentRunHeader[]>;
   listSessionRunsBounded(sessionId: string, limit: number): Promise<AgentRunIdentitySearchResult>;
+  listSessionRunsPage(sessionId: string, input: AgentRunPageInput): Promise<AgentRunPageResult>;
   readEvents(sessionId: string, runId: string): Promise<AgentRunEvent[]>;
   readEventsBounded(
     sessionId: string,
@@ -317,6 +342,7 @@ async function createExecutionStoresForWrite<K extends StorageRootKind, E extend
   });
   const run = <T>(operation: () => Promise<T>) =>
     runWithStorageRootLease(lease, kind, 'write', operation);
+  let closeTask: Promise<void> | undefined;
 
   const stores: ExecutionStoresWriterBase<K> & E = {
     ...extension,
@@ -329,6 +355,14 @@ async function createExecutionStoresForWrite<K extends StorageRootKind, E extend
       create: (input, initialBoundary) => run(() => sessionStore.create(input, initialBoundary)),
       createImportedSession: (input, messages, externalOrigin) =>
         run(() => sessionStore.createImportedSession(input, messages, externalOrigin)),
+      lookupExternalSessionImports: (adapterId, sourceSessionIds, recentSessionIdLimit) =>
+        run(() =>
+          sessionStore.lookupExternalSessionImports(
+            adapterId,
+            sourceSessionIds,
+            recentSessionIdLimit,
+          ),
+        ),
       probeStableSessionCreate: (sessionId, requestFingerprint) =>
         run(() => sessionStore.probeStableSessionCreate(sessionId, requestFingerprint)),
       createStableSession: (request, initialBoundary) =>
@@ -401,18 +435,16 @@ async function createExecutionStoresForWrite<K extends StorageRootKind, E extend
         run(() => sessionStore.updateSessionConfiguration(sessionId, input)),
       markSessionReadThroughMessage: (sessionId, messageId) =>
         run(() => sessionStore.markSessionReadThroughMessage(sessionId, messageId)),
-      archive: (sessionId) => run(() => sessionStore.archive(sessionId)),
-      unarchive: (sessionId) => run(() => sessionStore.unarchive(sessionId)),
       setFlagged: (sessionId, isFlagged) =>
         run(() => sessionStore.setFlagged(sessionId, isFlagged)),
       rename: (sessionId, name) => run(() => sessionStore.rename(sessionId, name)),
       setGeneratedTitleIfAbsent: (sessionId, title) =>
         run(() => sessionStore.setGeneratedTitleIfAbsent(sessionId, title)),
       remove: (sessionId) => run(() => sessionStore.remove(sessionId)),
-      setSessionsLifecycleVersioned: (sessions, state) =>
-        run(() => sessionStore.setSessionsLifecycleVersioned(sessions, state)),
-      removeSessionsVersioned: (sessions) =>
-        run(() => sessionStore.removeSessionsVersioned(sessions)),
+      setSessionsArchivedVersioned: (sessions, isArchived) =>
+        run(() => sessionStore.setSessionsArchivedVersioned(sessions, isArchived)),
+      removeSessionsVersioned: (sessions, archiveSessions) =>
+        run(() => sessionStore.removeSessionsVersioned(sessions, archiveSessions)),
       reconcileOrphanedAgentGraphRetirements: () =>
         run(() => sessionStore.reconcileOrphanedAgentGraphRetirements()),
       listPendingSessionRetirementCleanupIds: (sessionId) =>
@@ -420,12 +452,17 @@ async function createExecutionStoresForWrite<K extends StorageRootKind, E extend
       completeSessionRetirementCleanup: (sessionId) =>
         run(() => sessionStore.completeSessionRetirementCleanup(sessionId)),
       close: () =>
-        closeExecutionStorePersistence(sessionStore, runtimePersistence, {
-          agentRunStore,
-          conversationOperationalStateStore,
-          messageReceiptStore,
-          interactionStore,
-        }),
+        (closeTask ??= (async () => {
+          if (executionStoresWritersByLease.get(lease) === stores) {
+            executionStoresWritersByLease.delete(lease);
+          }
+          await closeExecutionStorePersistence(sessionStore, runtimePersistence, {
+            agentRunStore,
+            conversationOperationalStateStore,
+            messageReceiptStore,
+            interactionStore,
+          });
+        })()),
     },
     agentRunStore: {
       createRun: (header, options) => run(() => agentRunStore.createRun(header, options)),
@@ -436,6 +473,8 @@ async function createExecutionStoresForWrite<K extends StorageRootKind, E extend
       listSessionRuns: (sessionId) => run(() => agentRunStore.listSessionRuns(sessionId)),
       listSessionRunsBounded: (sessionId, limit) =>
         run(() => agentRunStore.listSessionRunsBounded(sessionId, limit)),
+      listSessionRunsPage: (sessionId, input) =>
+        run(() => agentRunStore.listSessionRunsPage(sessionId, input)),
       listSessionRunsForRecovery: (sessionId) =>
         run(() => agentRunStore.listSessionRunsForRecovery(sessionId)),
       appendEvent: (sessionId, runId, event, options) =>
@@ -588,6 +627,8 @@ async function openExecutionStoresForRead<K extends StorageRootKind, E extends o
       listSessionRuns: (sessionId) => run(() => agentRunStore.listSessionRuns(sessionId)),
       listSessionRunsBounded: (sessionId, limit) =>
         run(() => agentRunStore.listSessionRunsBounded(sessionId, limit)),
+      listSessionRunsPage: (sessionId, input) =>
+        run(() => agentRunStore.listSessionRunsPage(sessionId, input)),
       readEvents: (sessionId, runId) => run(() => agentRunStore.readEvents(sessionId, runId)),
       readEventsBounded: (sessionId, runId, budget) =>
         run(() => agentRunStore.readEventsBounded(sessionId, runId, budget)),

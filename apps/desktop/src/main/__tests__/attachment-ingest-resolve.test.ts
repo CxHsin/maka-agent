@@ -1,6 +1,28 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { resolveIngestItems } from '../attachment-ingest.js';
+import { resolveAttachmentRefs, resolveIngestItems } from '../attachment-ingest.js';
 import { createAttachmentApprovalRegistry } from '../attachment-approval.js';
 
 describe('resolveIngestItems (pre-read validation)', () => {
@@ -209,5 +231,30 @@ describe('resolveIngestItems (pre-read validation)', () => {
         }),
       /无效/,
     );
+  });
+});
+
+describe('resolveAttachmentRefs', () => {
+  test('rejects a path grown beyond the cap before creating a Host artifact', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'att-cap-'));
+    const path = join(dir, 'grew.bin');
+    await writeFile(path, Buffer.alloc(11));
+    let snapshots = 0;
+    try {
+      await assert.rejects(
+        resolveAttachmentRefs({
+          files: [{ path, mimeType: 'application/octet-stream', size: 5 }],
+          maxBytes: 10,
+          snapshot: async () => {
+            snapshots += 1;
+            throw new Error('snapshot must not run');
+          },
+        }),
+        /超出大小限制/,
+      );
+      assert.equal(snapshots, 0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

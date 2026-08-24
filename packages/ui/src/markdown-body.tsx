@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 /**
  * Heavy Markdown rendering pipeline, loaded on demand by `markdown.tsx`.
  *
@@ -17,6 +36,7 @@ import {
 } from '@astryxdesign/core/Markdown';
 import { Link as AstryxLink } from '@astryxdesign/core/Link';
 import { CodeBlock } from '@astryxdesign/core/CodeBlock';
+import { useTranslator } from '@astryxdesign/core/i18n';
 import {
   isMakaUriCandidate,
   isSafeExternalScheme,
@@ -35,6 +55,7 @@ const BASE_MARKDOWN_COMPONENTS = {
 export const MAX_AUTOMATIC_MERMAID_DIAGRAMS = 3;
 export const MAX_AUTOMATIC_MERMAID_SOURCE_LENGTH = 4_000;
 export const MAX_AUTOMATIC_MERMAID_TOTAL_SOURCE_LENGTH = 8_000;
+const CODE_BLOCK_COLLAPSIBLE_THRESHOLD = 10;
 const DEFERRED_MERMAID_LANGUAGE = 'makamermaiddeferred';
 
 /**
@@ -175,6 +196,7 @@ function MarkdownCode(props: {
   density: 'default' | 'compact';
   renderMermaid: boolean;
 }) {
+  const t = useTranslator();
   const language = props.language?.trim().toLowerCase();
   if (props.renderMermaid && (language === 'mermaid' || language === DEFERRED_MERMAID_LANGUAGE)) {
     return (
@@ -186,12 +208,26 @@ function MarkdownCode(props: {
     );
   }
 
+  const codeLines = props.code.split('\n');
+  if (codeLines.length > 1 && codeLines.at(-1) === '') codeLines.pop();
+  const isSingleLine = codeLines.length === 1;
+  const isCollapsible = codeLines.length >= CODE_BLOCK_COLLAPSIBLE_THRESHOLD;
+  const hasLanguageLabel = Boolean(language && language !== 'plaintext');
+
   return (
-    <div className={`maka-markdown-code maka-markdown-code-${props.density}`}>
+    <div
+      className={`maka-markdown-code maka-markdown-code-${props.density}`}
+      data-maka-code-layout={isSingleLine ? 'single-line' : 'multi-line'}>
       <CodeBlock
         code={props.code}
         language={props.language}
+        // Astryx otherwise overlays the copy button on headerless plaintext.
+        // An empty title enables its structural header; once that header becomes
+        // a collapse button, give plaintext the same localized code label that
+        // language fences already provide through their language label.
+        title={isCollapsible && !hasLanguageLabel ? t('@astryx.codeBlock.code') : ''}
         isCollapsible
+        collapsibleThreshold={CODE_BLOCK_COLLAPSIBLE_THRESHOLD}
       />
     </div>
   );

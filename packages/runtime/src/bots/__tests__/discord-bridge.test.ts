@@ -1,7 +1,27 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
+import { createDefaultBotChannel } from '@maka/core/settings';
 
-import { __TEST__ } from '../discord-bridge.js';
+import { DiscordBotBridge, __TEST__ } from '../discord-bridge.js';
 
 const {
   decideDiscordClose,
@@ -12,6 +32,45 @@ const {
   discordMessageToEvent,
   splitDiscordContent,
 } = __TEST__;
+
+class ResetTrackingDiscordBridge extends DiscordBotBridge {
+  receive(payload: string): void {
+    this.handleWsMessage(payload);
+  }
+
+  resetSessionForTest(): void {
+    this.resetSession();
+  }
+
+  currentResumeGatewayUrl(): string | null {
+    return this.resumeGatewayUrl;
+  }
+}
+
+describe('resume gateway url lifecycle', () => {
+  it('clears resumeGatewayUrl when the session is dropped', () => {
+    const bridge = new ResetTrackingDiscordBridge('discord', {
+      ...createDefaultBotChannel('discord'),
+      enabled: true,
+      token: 'token',
+    });
+    bridge.receive(
+      JSON.stringify({
+        op: 0,
+        t: 'READY',
+        s: 3,
+        d: {
+          session_id: 'sess-1',
+          resume_gateway_url: 'wss://resume.example',
+          user: { id: '42', username: 'maka' },
+        },
+      }),
+    );
+    assert.equal(bridge.currentResumeGatewayUrl(), 'wss://resume.example');
+    bridge.resetSessionForTest();
+    assert.equal(bridge.currentResumeGatewayUrl(), null);
+  });
+});
 
 describe('Discord gateway helpers', () => {
   it('classifies stopped, fatal, resumable, and non-resumable closes', () => {

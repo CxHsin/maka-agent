@@ -1,9 +1,27 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { E2eFixtureScenario, E2eFixtureState } from '@maka/core/e2e-fixture';
 import type { UiLocale } from '@maka/core/ui-locale';
-import { createFileCredentialStore, createProjectCatalog } from '@maka/storage';
-import type { CredentialStore } from '@maka/storage';
+import { createProjectCatalog } from '@maka/storage';
 import { resolveStorageRoot } from '@maka/storage/root-authority';
 import {
   E2E_FIXTURE_NOW,
@@ -31,8 +49,9 @@ import {
 import { usageStatsSessions } from './e2e-fixture/scenarios-usage.js';
 
 const E2E_FIXTURE_SCENARIOS = new Set<E2eFixtureScenario>([
-  'fetched-empty',
+  'settings-models',
   'turn-narrative',
+  'turn-narrative-browser',
   'chat-prompt-rail',
   'settings-data',
   'settings-bots-onboarding',
@@ -137,10 +156,12 @@ export function getE2eFixtureState(fixture: E2eFixture | null): E2eFixtureState 
     ...(fixture.scrollMotion ? { scrollMotion: fixture.scrollMotion } : {}),
   };
   switch (fixture.scenario) {
-    case 'fetched-empty':
+    case 'settings-models':
       return { ...state, activeSessionId: TURN_SESSION_ID, openSettingsSection: 'models' };
     case 'turn-narrative':
       return { ...state, activeSessionId: TURN_SESSION_ID, workbarCollapsed: false, workbarTab: 'tasks' };
+    case 'turn-narrative-browser':
+      return { ...state, activeSessionId: TURN_SESSION_ID, workbarCollapsed: false, workbarTab: 'browser' };
     case 'chat-prompt-rail':
       // Workbar collapsed: the rail lives on the chat scrollport's right edge,
       // and the panel would take the width the measurements are about. Whether
@@ -184,7 +205,6 @@ export function getE2eFixtureState(fixture: E2eFixture | null): E2eFixtureState 
 export async function seedE2eFixture(input: {
   workspaceRoot: string;
   fixture: E2eFixture;
-  credentialStore?: Pick<CredentialStore, 'setSecret'>;
   now?: number;
 }): Promise<void> {
   const now = input.now ?? E2E_FIXTURE_NOW;
@@ -194,12 +214,6 @@ export async function seedE2eFixture(input: {
   await resolveStorageRoot({ path: input.workspaceRoot, kind: 'interactive' });
   await writeSettings(input.workspaceRoot, scenario);
   await writeConnections(input.workspaceRoot, now, scenario);
-
-  const credentialStore = input.credentialStore ?? createFileCredentialStore(input.workspaceRoot);
-  await credentialStore.setSecret('zai-live', 'api_key', 'fixture-key-zai-live');
-  if (scenario === 'fetched-empty') {
-    await credentialStore.setSecret('empty-fetched', 'api_key', 'fixture-key-empty-fetched');
-  }
   await writeSession(input.workspaceRoot, turnSession(now), turnMessages(now));
 
   if (scenario === 'chat-prompt-rail') {

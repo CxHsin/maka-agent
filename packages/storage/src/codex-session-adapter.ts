@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type { Dirent } from 'node:fs';
 import { readdir, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -21,7 +40,6 @@ import type {
 } from '@maka/core/external-session';
 import {
   matchesSourceCatalogQuery,
-  normalizeSourcePath,
   readBoundedUtf8File,
   readUtf8Prefix,
   readUtf8Tail,
@@ -78,10 +96,11 @@ type JsonRecord = Record<string, unknown>;
  * Read-only adapter for Codex rollout JSONL.
  *
  * Codex persists presentation history as `event_msg` records and provider
- * protocol facts as `response_item` records. User, assistant, and reasoning
- * messages come from `event_msg` to avoid importing their response-item
- * mirrors twice. Tool calls/results come from response items because they own
- * the stable call identity and raw arguments/output.
+ * protocol facts as `response_item` records. Presentation messages use either
+ * the legacy `user_message` / `agent_*` events or the newer `item_completed`
+ * event. Reading both shapes from `event_msg` avoids importing their
+ * response-item mirrors twice. Tool calls/results come from response items
+ * because they own the stable call identity and raw arguments/output.
  */
 export class CodexSessionAdapter implements ExternalSessionAdapter {
   readonly id = CODEX_SESSION_ADAPTER_ID;
@@ -717,11 +736,17 @@ async function readCodexThreadRows(
         );
         params.push(...CODEX_ROOT_SOURCE_SQL_VALUES);
       }
-      if (query.cwd !== undefined && columns.has('cwd')) {
-        const variants = cwdSqlVariants(query.cwd);
-        where.push(`cwd IN (${variants.map(() => '?').join(', ')})`);
-        params.push(...variants);
-      }
+      // No cwd clause. `cwd IN (...)` enumerated spelling variants of the
+      // query, but SQLite compares them exactly: a row stored `C:\\Repo\\App`
+      // was discarded before `matchesQuery` could see that `c:/repo/app` names
+      // the same project. A prefilter that cannot express the matcher's own
+      // equivalence is not an optimization, it is a second, weaker rule — so
+      // the shared matcher below is the only authority on which project a row
+      // belongs to. The archived clause stays: that one is an exact boolean
+      // and agrees with the matcher by construction.
+      //
+      // The statement has no LIMIT, so dropping the clause widens the read
+      // rather than truncating it.
       const orderColumn = columns.has('updated_at_ms')
         ? 'updated_at_ms'
         : columns.has('updated_at')
@@ -730,11 +755,7 @@ async function readCodexThreadRows(
       const sql =
         `SELECT ${wanted.join(', ')} FROM threads` +
         (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '') +
-        ` ORDER BY ${orderColumn} DESC` +
-        (query.limit !== undefined ? ' LIMIT ?' : '');
-      if (query.limit !== undefined) {
-        params.push(Math.max(0, Math.floor(query.limit * 2)));
-      }
+        ` ORDER BY ${orderColumn} DESC`;
       return db.prepare(sql).all(...params) as CodexThreadRow[];
     } finally {
       db.close();
@@ -859,17 +880,6 @@ function normalizeEpochMs(value: unknown): number | undefined {
   return undefined;
 }
 
-function cwdSqlVariants(cwd: string): string[] {
-  const normalized = normalizeSourcePath(cwd);
-  const variants = new Set([cwd, normalized]);
-  if (/^[A-Za-z]:\//.test(normalized)) variants.add(normalized.replaceAll('/', '\\'));
-  if (normalized !== '/') {
-    variants.add(`${normalized}/`);
-    if (/^[A-Za-z]:\//.test(normalized)) variants.add(`${normalized.replaceAll('/', '\\')}\\`);
-  }
-  return [...variants];
-}
-
 function compareCatalogEntries(a: CodexCatalogEntry, b: CodexCatalogEntry): number {
   return (
     b.updatedAtMs - a.updatedAtMs ||
@@ -940,7 +950,7 @@ function codexCompletedItemText(item: JsonRecord | undefined): string {
         : [];
     })
     .filter((text) => text.length > 0)
-    .join('\n');
+    .join('');
 }
 
 function codexCompletedReasoningText(item: JsonRecord | undefined): string {

@@ -1,24 +1,83 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { readFileSync } from 'node:fs';
+import { resolveProductManifestIdentity } from '../../scripts/product-release-identity.mjs';
+
+function readManifest(relativePath) {
+  return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), 'utf8'));
+}
+
+const { runtimeHostSetupPackage } = resolveProductManifestIdentity({
+  rootManifest: readManifest('../../package.json'),
+  desktopManifest: readManifest('./package.json'),
+  cliManifest: readManifest('../../packages/cli/package.json'),
+});
+
 export default {
   appId: 'com.maka.desktop',
   productName: 'Maka',
   artifactName: 'Maka-${version}-mac-${arch}.${ext}',
   asar: true,
+  extraMetadata: { runtimeHostSetupPackage },
   directories: {
     output: 'release',
   },
-  files: ['dist/**/*', 'dist-renderer/**/*', 'package.json', '!**/__tests__/**'],
+  // `files` names what to include; the production dependency closure of
+  // `package.json` comes along automatically. Renderer-only packages are kept
+  // out of that closure by living in `devDependencies` — vite bundles them into
+  // `dist-renderer`, so a second copy of their sources in `app.asar` is never
+  // loaded. A hand-written exclude list was tried first and could not hold: it
+  // has to name every transitive package too, and it silently went stale.
+  //
+  // `@xterm/headless` stays a dependency on purpose — `@maka/runtime` imports
+  // it for the PTY stack, so only the renderer-side xterm packages moved.
+  files: [
+    'dist/**/*',
+    'dist-renderer/**/*',
+    'package.json',
+    '!**/__tests__/**',
+    // FakeBackend and the Desktop E2E candidate bootstrap live under
+    // `test-only/`; they must not reach a packaged app.
+    '!**/test-only/**',
+    // `build:main` emits renderer sources as tsc side-files so main's tests can
+    // import a few helpers. The main process reaches exactly one of them at
+    // runtime — the cursor overlay engine — while the rest import `react`,
+    // `@maka/ui` and `@astryxdesign/core`, which the renderer now bundles
+    // instead of shipping under `node_modules`. Shipping those files would put
+    // ESM in the archive whose static imports cannot resolve.
+    '!dist/renderer/**',
+    'dist/renderer/computer-use-overlay/**',
+  ],
   extraResources: [
-    {
-      from: '../../node_modules/dugite/git',
-      to: 'git',
-    },
-    {
-      from: 'bundled-git.json',
-      to: 'bundled-git.json',
-    },
     {
       from: 'bundled-tools.json',
       to: 'bundled-tools.json',
+    },
+    {
+      // The app icon is read at runtime by the BrowserWindow `icon` option
+      // and by the permission-overlay card, and `files` above does not carry
+      // `assets/`. Electron reports the missing file as an empty image rather
+      // than an error, so without this the packaged app just draws no window
+      // icon; `assertPackagedResources` requires it on current builds.
+      from: 'assets',
+      to: 'assets',
     },
     {
       // Menu bar status item art. Without this the packaged app resolves an
@@ -30,29 +89,33 @@ export default {
       from: 'resources/workers/filesystem-worker.js',
       to: 'workers/filesystem-worker.js',
     },
+    ...(process.platform === 'win32'
+      ? [
+          {
+            from: 'resources/windows-sandbox/maka-windows-sandbox.exe',
+            to: 'windows-sandbox/maka-windows-sandbox.exe',
+          },
+          {
+            from: 'resources/licenses/cargo/THIRD_PARTY_NOTICES.txt',
+            to: 'licenses/cargo/THIRD_PARTY_NOTICES.txt',
+          },
+        ]
+      : []),
     {
       from: '../../LICENSE',
       to: 'licenses/maka/LICENSE',
     },
     {
-      from: '../../node_modules/dugite/LICENSE',
-      to: 'licenses/dugite/LICENSE',
-    },
-    {
-      from: 'resources/licenses/git/NOTICE.txt',
-      to: 'licenses/git/NOTICE.txt',
-    },
-    {
-      from: 'resources/licenses/git/LICENSE.txt',
-      to: 'licenses/git/LICENSE.txt',
-    },
-    {
-      from: 'resources/licenses/git/SOURCE_OFFER.txt',
-      to: 'licenses/git/SOURCE_OFFER.txt',
-    },
-    {
       from: '../../NOTICE',
       to: 'licenses/maka/NOTICE',
+    },
+    {
+      // Incubator policy requires every release archive to carry a DISCLAIMER
+      // or DISCLAIMER-WIP. Shipping it beside LICENSE and NOTICE is what makes
+      // the repository-root file reach the DMG, the ZIP and the Windows
+      // installer; `assertPackagedResources` then requires it on both paths.
+      from: '../../DISCLAIMER-WIP',
+      to: 'licenses/maka/DISCLAIMER-WIP',
     },
     {
       from: '../../node_modules/electron/dist/LICENSE',
@@ -144,11 +207,18 @@ export default {
     // electron-updater skips the check when there is none. Adding a certificate
     // is then the whole change — the verification follows it.
   },
+  nsis: {
+    // Everything stays at the one-click per-user defaults; the include only
+    // adds the Abort-path pre-upgrade backup/rollback (and its test-only
+    // deterministic failpoint) — see build/installer.nsh for the mechanism
+    // and its exit-code contract with verify-windows-installer-rollback.mjs.
+    include: 'build/installer.nsh',
+  },
   publish: [
     {
       provider: 'github',
-      owner: 'Maka-Agent',
-      repo: 'maka-agent',
+      owner: 'apache',
+      repo: 'maka',
     },
   ],
 };

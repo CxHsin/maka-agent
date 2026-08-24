@@ -1,6 +1,27 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { findProjectByIdentity, type ProjectRecord } from '@maka/core/project';
 import type {
   DesktopProjectCapabilities,
+  DesktopProjectDirectoryEntry,
+  DesktopProjectDirectoryRoot,
   DesktopProjectSnapshot,
 } from '../preload/bridge-contract.js';
 import type { CurrentProjectSelection } from './project-root-controller.js';
@@ -15,11 +36,14 @@ type SelectedDirectoryActionResult =
 export interface ProjectManagementService {
   current(): Promise<CurrentProjectSelection>;
   getSnapshot(): Promise<DesktopProjectSnapshot>;
-  add(): Promise<SelectedDirectoryActionResult>;
+  add(options?: { select?: boolean }): Promise<SelectedDirectoryActionResult>;
   select(
     projectId: unknown,
   ): Promise<{ project: ProjectRecord | null; path: string }>;
   relink(projectId: unknown): Promise<DirectoryActionResult>;
+  directoryRoots(): Promise<readonly DesktopProjectDirectoryRoot[]>;
+  listDirectory(input: unknown): Promise<readonly DesktopProjectDirectoryEntry[]>;
+  registerDirectory(input: unknown): Promise<ProjectRecord>;
   /**
    * The on-disk path of a catalogued project, for surfaces that need to open
    * it. Returns null when the project is unknown, archived, or its folder is
@@ -42,8 +66,18 @@ export interface ProjectManagementCatalog {
   restore(projectId: string): Promise<ProjectRecord>;
 }
 
+export interface ProjectDirectoryCatalog {
+  listDirectoryRoots(): Promise<readonly DesktopProjectDirectoryRoot[]>;
+  listDirectories(
+    rootId: string,
+    segments: readonly string[],
+  ): Promise<readonly DesktopProjectDirectoryEntry[]>;
+  registerDirectory(rootId: string, segments: readonly string[]): Promise<ProjectRecord>;
+}
+
 export function createProjectManagementService(deps: {
   catalog: ProjectManagementCatalog;
+  directoryCatalog?: ProjectDirectoryCatalog;
   chooseDirectory(): Promise<string | undefined>;
   selection: {
     currentSelection(): Promise<CurrentProjectSelection>;
@@ -83,13 +117,15 @@ export function createProjectManagementService(deps: {
       };
     },
 
-    async add() {
+    async add(options) {
       requireLocalDirectoryActions(deps);
       const path = await deps.chooseDirectory();
       if (!path) return { ok: false, reason: 'cancelled' };
       const project = await deps.catalog.register(path);
       const selected = requireSelectableProject(project);
-      deps.selection.setSelection(selected.id, selected.preferredPath);
+      if (options?.select !== false) {
+        deps.selection.setSelection(selected.id, selected.preferredPath);
+      }
       return { ok: true, project: selected, path: selected.preferredPath };
     },
 
@@ -128,6 +164,26 @@ export function createProjectManagementService(deps: {
       return { ok: true, project };
     },
 
+    directoryRoots() {
+      return requireHostDirectoryActions(deps).listDirectoryRoots();
+    },
+
+    listDirectory(input) {
+      const directory = requireDirectoryInput(input);
+      return requireHostDirectoryActions(deps).listDirectories(
+        directory.rootId,
+        directory.segments,
+      );
+    },
+
+    registerDirectory(input) {
+      const directory = requireDirectoryInput(input);
+      return requireHostDirectoryActions(deps).registerDirectory(
+        directory.rootId,
+        directory.segments,
+      );
+    },
+
     async pathFor(projectId) {
       if (!deps.capabilities.viewClientPath) return null;
       const id = requireProjectId(projectId);
@@ -151,6 +207,36 @@ export function createProjectManagementService(deps: {
       return deps.catalog.restore(requireProjectId(projectId));
     },
   };
+}
+
+function requireHostDirectoryActions(
+  deps: {
+    readonly capabilities: DesktopProjectCapabilities;
+    readonly directoryCatalog?: ProjectDirectoryCatalog;
+  },
+): ProjectDirectoryCatalog {
+  if (!deps.capabilities.chooseHostDirectory || !deps.directoryCatalog) {
+    throw new Error('This Runtime Host does not publish project directories');
+  }
+  return deps.directoryCatalog;
+}
+
+function requireDirectoryInput(value: unknown): {
+  readonly rootId: string;
+  readonly segments: readonly string[];
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('Invalid project directory');
+  }
+  const input = value as { rootId?: unknown; segments?: unknown };
+  if (
+    typeof input.rootId !== 'string' ||
+    !Array.isArray(input.segments) ||
+    !input.segments.every((segment) => typeof segment === 'string')
+  ) {
+    throw new TypeError('Invalid project directory');
+  }
+  return { rootId: input.rootId, segments: input.segments };
 }
 
 function requireLocalDirectoryActions(

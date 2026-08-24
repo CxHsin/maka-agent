@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -13,10 +32,11 @@ import {
   createBypassExecutionBoundary,
   createManagedExecutionBoundary,
 } from '@maka/core/sandbox-boundary';
+import { PROVIDER_DEFAULTS } from '@maka/core/llm-connections';
 import { createWorkspaceWritePermissionProfile } from '@maka/core/permission-profile';
 import { decodeRunCompositionSnapshot } from '@maka/core/run-composition';
 import { decodeCanonicalToolResultContent } from '@maka/core/tool-result-record-schema';
-import { type ModelCallKind } from '@maka/core/model-call-attempt';
+import { type ModelCallAttempt, type ModelCallKind } from '@maka/core/model-call-attempt';
 import { type RuntimeEvent } from '@maka/core/runtime-event';
 import { createDefaultRuntimePolicy } from '@maka/core/runtime-policy';
 import type { PlanSessionState, PlanStore } from '@maka/core/plan';
@@ -35,6 +55,7 @@ import {
 } from '@maka/runtime/network/scoped-fetch-transport';
 import { type ScannedSkill } from '@maka/runtime/skills';
 import { agentGraphIdForRootSession } from '@maka/runtime/stream-graph-coordinator';
+import { resolveTurnShellPlan, ShellPreferenceError } from '@maka/runtime/shell-detect';
 import { buildParentAgentTools } from '@maka/runtime/subagent-tools';
 import { SESSION_RECAP_INSTRUCTION } from '@maka/runtime/session-recap';
 import { hostedExecutionToolNames } from '../server/hosted-execution-tool-profile.js';
@@ -59,6 +80,7 @@ import {
 import type { TurnSnapshot, UsageQueryResult } from '../protocol/index.js';
 import type { ClientCapabilityHostFrame } from '../protocol/index.js';
 import { createExecutionRuntimeHostComposition } from '../server/execution-composition.js';
+import { createHostChildAgentToolComposition } from '../server/child-agent-composition.js';
 import {
   createHostDailyReviewModel,
   createHostGoalEvaluator,
@@ -90,17 +112,31 @@ const MODEL_ID = 'hosted-real-model';
 const API_KEY = 'hosted-provider-key';
 const RESPONSE_TEXT = 'Hosted real-model execution completed.';
 const SUMMARY_TEXT = '## Goal\nContinue hosted real-model execution.';
+// History compaction validates checkpoint structure (#3029), so its requests
+// get a compaction-shaped completion instead of the shared one-section text.
+const COMPACT_SUMMARY_TEXT = [
+  '## Goal',
+  'Continue hosted real-model execution.',
+  '',
+  '## Progress',
+  '- hosted compaction exercised',
+  '',
+  '## Next Steps',
+  '1. continue',
+  '',
+  '## Critical Context',
+  '- (none)',
+].join('\n');
 const CLIENT_CAPABILITY_RESULT_TEXT = 'HOSTED_CLIENT_CAPABILITY_RESULT_SENTINEL';
 const CHILD_AGENT_RESULT_TEXT = 'HOSTED_CHILD_AGENT_RESULT_SENTINEL';
-const WEB_RESEARCH_CHILD_RESULT_TEXT = 'HOSTED_WEB_RESEARCH_RESULT_SENTINEL';
 const MAX_IMPLEMENTATION_CHILD_PTY_READS = 5;
 const MIN_IMPLEMENTATION_CHILD_REQUESTS = 6;
 const MAX_IMPLEMENTATION_CHILD_REQUESTS =
   MIN_IMPLEMENTATION_CHILD_REQUESTS + MAX_IMPLEMENTATION_CHILD_PTY_READS - 1;
 const HEADLESS_CODING_V1_PROMPT_HASH =
-  'sha256:0e3389e330b8b8f0db1c7a8b8e2126325fe4c672d6eff279afcd3f9412e52271';
+  'sha256:b2773282ac4755dc8d8a663eafdec68c3fa6f5680ec8557d261b5f723672b467';
 const HEADLESS_CODING_V1_TOOLS_HASH =
-  'sha256:ea1f293096e5e209ae49346f46b0e8ff9b54ae17452a5a23149ad7233afaeafc';
+  'sha256:c062194603f93b568da5ca59b865b316156b5f218ba854c291aa9582859b3de4';
 const execFileAsync = promisify(execFile);
 
 test('backend creation aborts a stalled canonical connection read', async () => {
@@ -171,54 +207,65 @@ test('backend creation admits the enabled bootstrap DeepSeek model before discov
   await backend.dispose();
 });
 
-test('backend creation does not bypass a non-empty DeepSeek inventory', async () => {
+test('backend creation admits an enabled model a live list omits', async () => {
+  // A live list is the strongest observation Maka has and still cannot refuse
+  // on the account's behalf: it answers for the moment it was fetched, and a
+  // model added since then, or filtered out on the way in, is one the account
+  // may well serve. The request goes out and DeepSeek answers for itself
+  // (#1584).
   const modelId = 'deepseek-v4-flash';
-  await assert.rejects(
-    createHostAiSdkBackend(
-      backendCreationFixture({
-        abortSignal: new AbortController().signal,
-        modelId,
-        resolveExecutionConnection: async () => ({
-          kind: 'ready',
-          connection: {
-            slug: 'backend-creation-connection',
-            providerType: 'deepseek',
-            enabledModelIds: [modelId],
-            models: [{ id: 'deepseek-chat' }],
-          },
-          networkProxy: { enabled: false },
-          secretMaterial: { connection: { secret: API_KEY } },
-        }),
-        readPricing: async () => ({ revision: 0, overrides: [] }),
+  const backend = await createHostAiSdkBackend(
+    backendCreationFixture({
+      abortSignal: new AbortController().signal,
+      modelId,
+      resolveExecutionConnection: async () => ({
+        kind: 'ready',
+        connection: {
+          slug: 'backend-creation-connection',
+          providerType: 'deepseek',
+          enabledModelIds: [modelId],
+          models: [{ id: 'deepseek-chat' }],
+          modelSource: 'fetched' as const,
+        },
+        networkProxy: { enabled: false },
+        secretMaterial: { connection: { secret: API_KEY } },
       }),
-    ),
-    /Session model is not enabled/,
+      readPricing: async () => ({ revision: 0, overrides: [] }),
+    }),
   );
+
+  await backend.dispose();
 });
 
-test('backend creation does not treat aliased provider metadata as inventory', async () => {
+test('backend creation admits an enabled model a snapshot never listed', async () => {
+  // `opencode-free` has no model-list endpoint, so its discovery run replays
+  // the array this build shipped and records `modelSource: 'fallback'`. The
+  // user enabled this id; a release snapshot cannot rule on what an account
+  // serves (#1584). Until now the only id that could get through an absent
+  // inventory was a hardcoded `deepseek` / `deepseek-v4-flash` pair (#2896) —
+  // the same situation, conceded for one provider.
   const modelId = 'claude-opus-5';
-  await assert.rejects(
-    createHostAiSdkBackend(
-      backendCreationFixture({
-        abortSignal: new AbortController().signal,
-        modelId,
-        resolveExecutionConnection: async () => ({
-          kind: 'ready',
-          connection: {
-            slug: 'backend-creation-connection',
-            providerType: 'opencode-free',
-            enabledModelIds: [modelId],
-            models: [],
-          },
-          networkProxy: { enabled: false },
-          secretMaterial: {},
-        }),
-        readPricing: async () => ({ revision: 0, overrides: [] }),
+  const backend = await createHostAiSdkBackend(
+    backendCreationFixture({
+      abortSignal: new AbortController().signal,
+      modelId,
+      resolveExecutionConnection: async () => ({
+        kind: 'ready',
+        connection: {
+          slug: 'backend-creation-connection',
+          providerType: 'opencode-free',
+          enabledModelIds: [modelId],
+          models: [{ id: 'grok-code' }],
+          modelSource: 'fetched' as const,
+        },
+        networkProxy: { enabled: false },
+        secretMaterial: {},
       }),
-    ),
-    /Session model is not enabled/,
+      readPricing: async () => ({ revision: 0, overrides: [] }),
+    }),
   );
+
+  await backend.dispose();
 });
 
 test('provider dispatch fails closed when the Run Composition commit fails', async () => {
@@ -259,6 +306,126 @@ test('provider dispatch fails closed when the Run Composition commit fails', asy
   }
 });
 
+test('Codex OAuth history compaction uses the provider-native route and preserves failure facts', async () => {
+  const modelId = 'gpt-5.6-sol';
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const attempts: ModelCallAttempt[] = [];
+  const oauthTokens: OAuthSubscriptionTokens = {
+    access_token: codexAccessToken('compact-account'),
+    refresh_token: 'compact-refresh-token',
+    expires_at: Date.now() + 60_000,
+  };
+  const oauthCredentials = {
+    bind: () => ({
+      providerType: 'openai-codex' as const,
+      connectionSlug: 'backend-creation-connection',
+      resolve: async () => oauthTokens,
+    }),
+  } as unknown as HostOAuthExecutionAuthority;
+  const backend = await createHostAiSdkBackend(
+    backendCreationFixture({
+      abortSignal: new AbortController().signal,
+      modelId,
+      oauthCredentials,
+      resolveExecutionConnection: async () => ({
+        kind: 'ready',
+        connection: {
+          slug: 'backend-creation-connection',
+          providerType: 'openai-codex',
+          enabledModelIds: [modelId],
+          models: [
+            {
+              id: modelId,
+              capabilities: { chat: true, functionCalling: true },
+              contextWindow: 32_768,
+              maxOutputTokens: 1_024,
+            },
+          ],
+        },
+        networkProxy: { enabled: false },
+        secretMaterial: { connection: { secret: 'oauth-material' } },
+      }),
+      readPricing: async () => ({ revision: 0, overrides: [] }),
+      recordHistoryCompactCheckpoint: async () => undefined,
+      recordModelCallAttempt: async ({ attempt }) => {
+        attempts.push(attempt);
+      },
+      createFetchTransport: () => ({
+        fetch: async (url, init) => {
+          requests.push({
+            url: String(url),
+            body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+          });
+          return Response.json(
+            {
+              error: {
+                message: 'request rejected without echoing this body',
+                code: 'invalid_request_error',
+              },
+            },
+            {
+              status: 400,
+              headers: { 'x-request-id': 'req-codex-compact' },
+            },
+          );
+        },
+        close: async () => undefined,
+      }),
+    }),
+  );
+
+  try {
+    const runtimeContext: RuntimeEvent[] = [
+      compactRuntimeTextEvent(
+        'compact-old-user',
+        'turn-old-user',
+        'user',
+        'user',
+        'a'.repeat(8_000),
+      ),
+      compactRuntimeTextEvent(
+        'compact-old-model',
+        'turn-old-model',
+        'model',
+        'agent',
+        'b'.repeat(8_000),
+      ),
+      compactRuntimeTextEvent(
+        'compact-recent-user',
+        'turn-recent-user',
+        'user',
+        'user',
+        'recent context',
+      ),
+    ];
+    const result = await backend.compactHistory({
+      turnId: 'turn-compact',
+      runId: 'run-compact',
+      runtimeContext,
+    });
+
+    assert.equal(requests.length, 1, JSON.stringify(result));
+    assert.match(requests[0]!.url, /\/codex\/responses$/);
+    const requestText = JSON.stringify(requests[0]!.body);
+    assert.match(requestText, /"type":"compaction_trigger"/);
+    assert.doesNotMatch(requestText, /context summarization assistant/i);
+    assert.deepEqual(result.outcome, { kind: 'failed', reason: 'provider_error' });
+    assert.equal(result.contextBudget?.compactionDecisions?.[0]?.decision, 'failedOpen');
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0]?.callKind, 'history_compact');
+    assert.equal(attempts[0]?.providerId, 'openai-codex');
+    assert.equal(attempts[0]?.historyCompactRoute, 'provider_native');
+    assert.equal(attempts[0]?.status, 'failed');
+    assert.equal(attempts[0]?.errorClass, 'RequestRejected');
+    assert.equal(attempts[0]?.httpStatus, 400);
+    assert.equal(attempts[0]?.providerCode, 'invalid_request_error');
+    assert.equal(attempts[0]?.providerRequestId, 'req-codex-compact');
+    assert.equal(attempts[0]?.retryable, false);
+  } finally {
+    await backend.dispose();
+  }
+});
+
 test('backend abort cannot cancel the authority-owned OAuth refresh used by its successor', async () => {
   const base = await mkdtemp(join(tmpdir(), 'maka-host-oauth-backend-'));
   const capability = await resolveStorageRoot({
@@ -272,16 +439,14 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
   let transports: ReturnType<typeof controlledOAuthTransports> | undefined;
   try {
     const policy = await openInteractiveRuntimePolicyStoresForWrite(owner.lease);
-    // claude-subscription discovery is fallback-only (session-scoped OAuth
-    // tokens cannot call GET /v1/models). Create seeds the curated inventory;
-    // pick an id from that inventory rather than opening a fetch ticket.
-    const subscriptionModelId = 'claude-sonnet-5';
+    const subscriptionModelId = PROVIDER_DEFAULTS['openai-codex'].fallbackModels[0] ?? '';
+    assert.ok(subscriptionModelId);
     const created = await policy.connectionCatalog.create({
       expectedCatalogRevision: 0,
       connection: {
         slug: 'backend-creation-connection',
         name: 'OAuth backend creation',
-        providerType: 'claude-subscription',
+        providerType: 'openai-codex',
         enabled: true,
         enabledModelIds: [subscriptionModelId],
       },
@@ -291,40 +456,37 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
     const connection = created.snapshot.connections[0];
     assert.ok(connection);
     if (!connection) return;
-    assert.ok(
-      connection.models.some((model) => model.id === subscriptionModelId),
-      'create must seed the curated claude-subscription inventory',
-    );
     const tokens: OAuthSubscriptionTokens = {
       access_token: 'expired-oauth-access',
       refresh_token: 'rotating-oauth-refresh',
       expires_at: 0,
-      account_uuid: 'oauth-account-v1',
+      account_id: 'oauth-account-v1',
     };
-    await writeFile(
-      join(capability.canonicalPath, 'credential-vault.json'),
-      `${JSON.stringify(
-        {
-          schemaVersion: 1,
-          revision: 1,
-          entries: [
-            {
-              locator: {
-                scope: 'connection',
-                connectionId: connection.connectionId,
-                kind: 'oauth_token',
-              },
-              credentialId: randomUUID(),
-              revision: 1,
-              secret: serializeOAuthSubscriptionTokens(tokens),
-              updatedAt: Date.now(),
-            },
-          ],
-        },
-        null,
-        2,
-      )}\n`,
-      { encoding: 'utf8', mode: 0o600 },
+    const login = await policy.operations.beginInteractiveOAuthLogin(connection.connectionId);
+    assert.equal(login.kind, 'ready');
+    if (login.kind !== 'ready') return;
+    const storedToken = await policy.operations.completeInteractiveOAuthLogin(
+      login.ticket,
+      serializeOAuthSubscriptionTokens(tokens),
+    );
+    assert.equal(storedToken.kind, 'committed');
+    // Codex model discovery is a live call, so seed the inventory through the
+    // fetch operations instead. This used to lean on create seeding a curated
+    // catalog, which only the retired subscription provider had. The fetch
+    // needs the credential above, so it has to come after the login.
+    const fetchTicket = await policy.operations.beginModelFetch(connection.connectionId);
+    assert.equal(fetchTicket.kind, 'ready');
+    if (fetchTicket.kind !== 'ready') return;
+    const seeded = await policy.operations.completeModelFetch(fetchTicket.ticket, {
+      models: [{ id: subscriptionModelId }],
+      source: 'fetched',
+      fetchedAt: 1_800_000_000_000,
+    });
+    assert.equal(seeded.kind, 'committed');
+    if (seeded.kind !== 'committed') return;
+    assert.ok(
+      seeded.snapshot.connections[0]?.models.some((model) => model.id === subscriptionModelId),
+      'the fetch must seed the inventory the backend resolves against',
     );
     transports = controlledOAuthTransports();
     const authority = new HostOAuthExecutionAuthority(policy);
@@ -337,7 +499,6 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
           policy.operations.resolveExecutionConnection('backend-creation-connection'),
         runtimePolicy: policy,
         oauthCredentials: authority,
-        claudeDeviceId: capability.rootId,
         readPricing: async () => ({ revision: 0, overrides: [] }),
         createFetchTransport: transports.create,
       }),
@@ -362,7 +523,6 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
           policy.operations.resolveExecutionConnection('backend-creation-connection'),
         runtimePolicy: policy,
         oauthCredentials: authority,
-        claudeDeviceId: capability.rootId,
         readPricing: async () => ({ revision: 0, overrides: [] }),
         createFetchTransport: transports.create,
       }),
@@ -379,7 +539,10 @@ test('backend abort cannot cancel the authority-owned OAuth refresh used by its 
       ) as OAuthSubscriptionTokens;
       assert.equal(persisted.access_token, 'refreshed-oauth-access');
       assert.equal(persisted.refresh_token, 'rotated-oauth-refresh');
-      assert.equal(persisted.account_uuid, 'oauth-account-v2');
+      assert.equal(persisted.id_token, 'rotated-id-token');
+      // The token endpoint does not re-state the account, so the refresh has to
+      // carry the identity forward rather than drop it.
+      assert.equal(persisted.account_id, 'oauth-account-v1');
       assert.ok((persisted.expires_at ?? 0) > Date.now());
     }
   } finally {
@@ -435,7 +598,6 @@ test('production backend creation continues after a Session Client Capability is
   const context: ConnectionContext = {
     hostEpoch: 'backend-creation-epoch',
     connectionId: 'provider-a',
-    surface: 'desktop',
     principal: 'local_os_user',
     acquireResidency: () => ({ release() {} }),
   };
@@ -523,7 +685,6 @@ test('production backend preserves coordinator Client Capability semantics acros
     const context = {
       hostEpoch: 'client-capability-host-epoch',
       connectionId: 'client-capability-provider',
-      surface: 'tui',
       principal: 'local_os_user',
       acquireResidency: () => ({ release() {} }),
     } satisfies ConnectionContext;
@@ -680,7 +841,6 @@ test('hosted execution freezes the headless coding provider wire contract', asyn
   const context: ConnectionContext = {
     hostEpoch: 'hosted-profile-wire-epoch',
     connectionId: 'hosted-profile-wire-client',
-    surface: 'run',
     principal: 'runtime_host',
     acquireResidency: () => residencies.acquire('hosted-profile-wire-operation'),
   };
@@ -760,16 +920,18 @@ test('hosted execution freezes the headless coding provider wire contract', asyn
     const instructions = responsesDeveloperPrompt(request?.body);
     const tools = request?.body.tools;
     assert.equal(typeof instructions, 'string', JSON.stringify(request?.body));
+    assert.match(instructions ?? '', /^Active model: deepseek-v4-flash$/mu);
     assert.ok(Array.isArray(tools));
     assert.equal(stableHash(instructions), HEADLESS_CODING_V1_PROMPT_HASH);
     assert.equal(stableHash(tools), HEADLESS_CODING_V1_TOOLS_HASH);
     assert.deepEqual(responsesToolNames(request?.body), [
       'ArchiveRead',
       'Bash',
+      'Edit',
       'Glob',
       'Grep',
       'Read',
-      'apply_patch',
+      'Write',
     ]);
     const bash = (tools as Array<Record<string, unknown>>).find((tool) => tool.name === 'Bash');
     assert.ok(bash);
@@ -834,7 +996,6 @@ test('production Host executes a canonical ai-sdk Session against a real provide
   const connectionContext: ConnectionContext = {
     hostEpoch: 'real-model-test-epoch',
     connectionId: 'real-model-test-client',
-    surface: 'tui',
     principal: 'local_os_user',
     acquireResidency: () => ({ release() {} }),
   };
@@ -921,7 +1082,6 @@ test('production Host executes a canonical ai-sdk Session against a real provide
     const execution = await openInteractiveExecutionStoresForWrite(owner.lease);
     const session = await execution.sessionStore.create({
       cwd: root,
-      backend: 'ai-sdk',
       llmConnectionSlug: 'hosted-real-provider',
       model: MODEL_ID,
       permissionMode: 'ask',
@@ -965,6 +1125,8 @@ test('production Host executes a canonical ai-sdk Session against a real provide
     assert.equal(remembered.result.kind, 'committed');
 
     const turnIds: string[] = [];
+    // Cross the history high-water without making the text-only compact input
+    // exceed this fixture's 2,304-token summarizer budget.
     for (let index = 0; index < 5; index += 1) {
       const turnId = randomUUID();
       turnIds.push(turnId);
@@ -973,10 +1135,10 @@ test('production Host executes a canonical ai-sdk Session against a real provide
         session.id,
         turnId,
         index === 0
-          ? `Reply with the hosted execution result.${' HISTORY_PRESSURE'.repeat(160)}`
+          ? `Reply with the hosted execution result.${' HISTORY_PRESSURE'.repeat(128)}`
           : index === 1
-            ? `/skill:hosted-skill Continue hosted execution turn ${index}.${' HISTORY_PRESSURE'.repeat(160)}`
-            : `Continue hosted execution turn ${index}.${' HISTORY_PRESSURE'.repeat(160)}`,
+            ? `/skill:hosted-skill Continue hosted execution turn ${index}.${' HISTORY_PRESSURE'.repeat(128)}`
+            : `Continue hosted execution turn ${index}.${' HISTORY_PRESSURE'.repeat(128)}`,
         connectionContext,
       );
       const terminal = await waitForTerminal(
@@ -1029,6 +1191,8 @@ test('production Host executes a canonical ai-sdk Session against a real provide
     assert.match(requestText, /HOSTED_PERSONALIZATION_SENTINEL/);
     assert.match(requestText, /HOSTED_MEMORY_SENTINEL/);
     assert.match(JSON.stringify(mainRequests[1]?.body), /HOSTED_SKILL_BODY_MUST_STAY_LAZY/);
+    // Tavily is selected but no web-search credential exists, so the provider
+    // must never see WebSearch in the effective root tool surface.
     assert.deepEqual(toolNames(request?.body), [
       'ArchiveRead',
       'AskUserQuestion',
@@ -1051,7 +1215,6 @@ test('production Host executes a canonical ai-sdk Session against a real provide
       'SkillSearch',
       'StopBackgroundTask',
       'WebFetch',
-      'WebSearch',
       'Write',
       'WriteStdin',
       'load_tools',
@@ -1179,7 +1342,6 @@ test('production Host executes and durably supervises an Agent Graph over a real
   const context: ConnectionContext = {
     hostEpoch: 'agent-graph-test-epoch',
     connectionId: 'agent-graph-test-client',
-    surface: 'tui',
     principal: 'local_os_user',
     acquireResidency: () => {
       liveResidencies += 1;
@@ -1234,7 +1396,6 @@ test('production Host executes and durably supervises an Agent Graph over a real
     const execution = await openInteractiveExecutionStoresForWrite(owner.lease);
     const session = await execution.sessionStore.create({
       cwd: project,
-      backend: 'ai-sdk',
       llmConnectionSlug: 'hosted-graph-provider',
       model: MODEL_ID,
       permissionMode: 'bypass',
@@ -1382,7 +1543,6 @@ test('production Host executes a durable runnable child with an exact tool ceili
   const context: ConnectionContext = {
     hostEpoch: 'child-agent-test-epoch',
     connectionId: 'child-agent-test-client',
-    surface: 'tui',
     principal: 'local_os_user',
     acquireResidency: () => ({ release() {} }),
   };
@@ -1435,7 +1595,6 @@ test('production Host executes a durable runnable child with an exact tool ceili
     const execution = await openInteractiveExecutionStoresForWrite(owner.lease);
     const parent = await execution.sessionStore.create({
       cwd: project,
-      backend: 'ai-sdk',
       llmConnectionSlug: 'hosted-child-provider',
       model: MODEL_ID,
       permissionMode: 'bypass',
@@ -1480,13 +1639,13 @@ test('production Host executes a durable runnable child with an exact tool ceili
     );
 
     const requests = provider.requests.filter((request) => request.body.stream === true);
-    assert.equal(requests.length, 7);
+    assert.equal(requests.length, 4);
     assert.ok(toolNames(requests[0]?.body).includes('load_tools'));
     assert.equal(toolNames(requests[0]?.body).includes('agent_spawn'), false);
     assert.ok(toolNames(requests[1]?.body).includes('agent_spawn'));
+    // The same routed child surface removes web_research when Tavily cannot run.
     assert.deepEqual(toolParameterEnum(requests[1]?.body, 'agent_spawn', 'profile'), [
       'local_read',
-      'web_research',
       'implementation',
     ]);
     // A child now carries the archive decoder alongside its allowlist (#2026).
@@ -1494,10 +1653,8 @@ test('production Host executes a durable runnable child with an exact tool ceili
     // agent-permission tools cannot be the thing that decides whether the child
     // can read back a result the runtime itself pruned.
     assert.deepEqual(toolNames(requests[2]?.body), ['ArchiveRead', 'Glob', 'Grep', 'Read']);
+    assert.doesNotMatch(JSON.stringify(requests[2]?.body), /## Response format/u);
     assert.ok(toolNames(requests[3]?.body).includes('agent_spawn'));
-    assert.deepEqual(toolNames(requests[4]?.body), ['ArchiveRead', 'WebSearch']);
-    assert.deepEqual(toolNames(requests[5]?.body), ['ArchiveRead', 'WebSearch']);
-    assert.ok(toolNames(requests[6]?.body).includes('agent_spawn'));
 
     const sessions = await execution.sessionStore.listForRecovery();
     const child = sessions.find((session) => session.subagentRuntime?.profile === 'local_read');
@@ -1505,7 +1662,7 @@ test('production Host executes a durable runnable child with an exact tool ceili
       (session) => session.subagentRuntime?.profile === 'web_research',
     );
     assert.ok(child);
-    assert.ok(webChild);
+    assert.equal(webChild, undefined);
     assert.equal(child?.subagentRuntime?.profile, 'local_read');
     assert.equal(child?.subagentParent?.parentSessionId, parent.id);
     if (!child) return;
@@ -1520,31 +1677,6 @@ test('production Host executes a durable runnable child with an exact tool ceili
       childMessages.find((message) => message.type === 'assistant')?.text,
       CHILD_AGENT_RESULT_TEXT,
     );
-    if (!webChild) return;
-    const webChildRuns = await execution.agentRunStore.listSessionRuns(webChild.id);
-    assert.equal(webChildRuns.length, 1);
-    assert.equal(webChildRuns[0]?.status, 'completed');
-    const webChildMessages = await execution.sessionStore.readMessagesSnapshot(webChild.id);
-    assert.equal(
-      webChildMessages.find((message) => message.type === 'assistant')?.text,
-      WEB_RESEARCH_CHILD_RESULT_TEXT,
-    );
-    const webChildEvents = await execution.runtimeEventStore.readRuntimeEvents(
-      webChild.id,
-      webChildRuns[0]!.runId,
-    );
-    const searchResult = webChildEvents.find(
-      (event) => event.content?.kind === 'function_response' && event.content.name === 'WebSearch',
-    );
-    assert.ok(searchResult?.content?.kind === 'function_response');
-    assert.deepEqual(decodeCanonicalToolResultContent(searchResult.content.result), {
-      kind: 'web_search_error',
-      ok: false,
-      provider: 'tavily',
-      query: 'latest hosted web result',
-      reason: 'not_configured',
-      message: 'Configure a Tavily API key before using web search.',
-    });
     const artifacts = await openInteractiveArtifactStoreForWrite(owner.lease);
     const childArtifacts = await artifacts.listTurnArtifacts(child.id, childRuns[0]!.turnId);
     assert.equal(childArtifacts.length, 1);
@@ -1591,7 +1723,6 @@ test('production Host publishes and retires an implementation child patch', asyn
   const context: ConnectionContext = {
     hostEpoch: 'child-agent-test-epoch',
     connectionId: 'child-agent-test-client',
-    surface: 'tui',
     principal: 'local_os_user',
     acquireResidency: () => ({ release() {} }),
   };
@@ -1661,7 +1792,6 @@ test('production Host publishes and retires an implementation child patch', asyn
     const execution = await openInteractiveExecutionStoresForWrite(owner.lease);
     const parent = await execution.sessionStore.create({
       cwd: project,
-      backend: 'ai-sdk',
       llmConnectionSlug: 'hosted-child-provider',
       model: MODEL_ID,
       permissionMode: 'bypass',
@@ -1861,6 +1991,81 @@ test('production Host publishes and retires an implementation child patch', asyn
   }
 });
 
+test('Host auxiliary calls preserve resolved DeepSeek reasoning settings', async () => {
+  const base = await mkdtemp(join(tmpdir(), 'maka-host-deepseek-auxiliary-'));
+  const provider = await startProvider();
+  const capability = await resolveStorageRoot({
+    path: join(base, 'interactive'),
+    kind: 'interactive',
+  });
+  const owner = await tryAcquireInteractiveRootOwner(capability);
+  assert.ok(owner);
+  if (!owner) return;
+
+  try {
+    const policy = await openInteractiveRuntimePolicyStoresForWrite(owner.lease);
+    const usage = await openInteractiveUsageStoresForWrite(owner.lease);
+    const execution = await openInteractiveExecutionStoresForWrite(owner.lease);
+    const created = await policy.connectionCatalog.create({
+      expectedCatalogRevision: 0,
+      connection: {
+        slug: 'deepseek-auxiliary',
+        name: 'DeepSeek auxiliary',
+        providerType: 'deepseek',
+        baseUrl: provider.baseUrl,
+        enabled: true,
+        enabledModelIds: ['deepseek-v4-flash'],
+      },
+    });
+    assert.equal(created.kind, 'committed');
+    if (created.kind !== 'committed') return;
+    const connection = created.snapshot.connections[0];
+    assert.ok(connection);
+    if (!connection) return;
+    const credential = await policy.credentialVault.set({
+      locator: {
+        scope: 'connection',
+        connectionId: connection.connectionId,
+        kind: 'api_key',
+      },
+      expected: null,
+      secret: API_KEY,
+    });
+    assert.equal(credential.kind, 'committed');
+    await publishConnectionModel(policy, connection.connectionId, 'deepseek-v4-flash');
+    const session = await execution.sessionStore.create({
+      cwd: capability.canonicalPath,
+      llmConnectionSlug: 'deepseek-auxiliary',
+      model: 'deepseek-v4-flash',
+      thinkingLevel: 'high',
+      permissionMode: 'ask',
+    });
+    const effects = createHostSessionEffectModel({
+      runtimePolicy: policy,
+      oauthCredentials: new HostOAuthExecutionAuthority(policy),
+      usage,
+      requestDrain: () => assert.fail('Auxiliary telemetry must not drain the Host'),
+      newId: () => 'deepseek-title-call',
+    });
+
+    await effects.generateTitle({
+      sessionId: session.id,
+      header: session,
+      sourceText: 'Explain the DeepSeek auxiliary reasoning seam',
+      abortSignal: new AbortController().signal,
+    });
+    const request = provider.requests.at(-1);
+    assert.ok(request);
+    assert.equal(request.url, '/v1/responses');
+    assert.equal(request.authorization, `Bearer ${API_KEY}`);
+    assert.deepEqual(request.body.reasoning, { effort: 'high' });
+  } finally {
+    await owner.close();
+    await provider.close();
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 test('Host auxiliary models meter provider usage and abort physical requests', {
   timeout: 20_000,
 }, async () => {
@@ -1907,7 +2112,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     await publishConnectionModel(policy, connection.connectionId, MODEL_ID);
     const session = await execution.sessionStore.create({
       cwd: capability.canonicalPath,
-      backend: 'ai-sdk',
       llmConnectionSlug: 'goal-evaluator-provider',
       model: MODEL_ID,
       permissionMode: 'ask',
@@ -1915,7 +2119,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const evaluatorInput = {
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('Goal evaluator telemetry must not drain the Host'),
       readSessionHeader: (sessionId: string) =>
@@ -1941,7 +2144,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const sessionEffects = createHostSessionEffectModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('Session effect telemetry must not drain the Host'),
       newId: () => 'effect-call-1',
@@ -1986,7 +2188,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const dailyReview = createHostDailyReviewModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('Daily Review telemetry must not drain the Host'),
       newId: () => 'daily-review-call-1',
@@ -2012,7 +2213,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const memoryModel = createHostMemoryExtractionModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('Memory extraction telemetry must not drain the Host'),
       newId: () => 'memory-call-1',
@@ -2087,7 +2287,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const failingPreflightEffects = createHostSessionEffectModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage: {
         pricing: {
           snapshot: async () => {
@@ -2161,7 +2360,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
           },
         }),
       } as unknown as HostOAuthExecutionAuthority,
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => {
         oauthDrainRequests += 1;
@@ -2194,7 +2392,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const accountingFailure = createHostSessionEffectModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage: {
         pricing: usage.pricing,
         telemetry: {
@@ -2231,7 +2428,6 @@ test('Host auxiliary models meter provider usage and abort physical requests', {
     const stalledEffect = createHostSessionEffectModel({
       runtimePolicy: policy,
       oauthCredentials: new HostOAuthExecutionAuthority(policy),
-      claudeDeviceId: capability.rootId,
       usage,
       requestDrain: () => assert.fail('A provider timeout must not drain the Host'),
       createFetchTransport: () => ({
@@ -2408,6 +2604,18 @@ test('one turn shares one canonical Skill inventory across prompt and lazy tools
   assert.match(nextPrompt ?? '', /NEW_DESCRIPTION/);
   assert.doesNotMatch(nextPrompt ?? '', /OLD_DESCRIPTION/);
   assert.equal(inventoryReads, 2);
+
+  for (const prompt of [firstPrompt, nextPrompt]) {
+    assert.match(prompt ?? '', /^## Response format$/mu);
+    assert.equal(prompt?.match(/Use GitHub-Flavored Markdown for responses\./gmu)?.length, 1);
+    assert.match(
+      prompt ?? '',
+      /Keep simple answers simple; do not add headings or lists to simple answers\./u,
+    );
+    assert.match(prompt ?? '', /Use short headings and flat lists to organize longer answers\./u);
+    assert.match(prompt ?? '', /inline commands/u);
+    assert.match(prompt ?? '', /descriptive link text/u);
+  }
 });
 
 test('one composer freezes Runtime Policy while each Run freezes its remaining prompt sources', async () => {
@@ -2493,6 +2701,205 @@ test('one composer freezes Runtime Policy while each Run freezes its remaining p
       { id: 'skill-catalog', revision: 'skills-4' },
     ],
   );
+});
+
+test('backend composition survives a moved saved Git Bash executable while Bash fails closed', async () => {
+  // A previously valid Git Bash path that was moved or uninstalled is a
+  // repairable optional-tool configuration error: it must not fail text-only
+  // backend composition. The turn plan carries the setup error, the tool
+  // description declares the outage, and the Bash boundary rethrows it
+  // instead of silently falling back to another shell.
+  const policy = {
+    ...createDefaultRuntimePolicy(),
+    shell: {
+      preference: 'git_bash' as const,
+      executable: 'C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe',
+    },
+  };
+  const fixture = backendCreationFixture({
+    abortSignal: new AbortController().signal,
+    resolveExecutionConnection: async () => readyExecutionConnection(),
+    readPricing: async () => ({ revision: 0, overrides: [] }),
+  });
+  let shellPolicyResolutions = 0;
+  const factory = createInteractiveRunComposerFactory({
+    skills: {
+      readCanonicalModelInventory: async () => ({
+        revision: 'skills-fixture',
+        projectRoot: '/workspace',
+        inventory: [],
+        diagnostics: [],
+        discoveryDiagnostics: [],
+      }),
+    } as unknown as HostSkillCatalogCoordinator,
+    memory: {
+      readPromptProjection: async () => ({
+        policy: { revision: 0, policy: createDefaultRuntimePolicy() },
+        bundleRevision: null,
+        memoryRevision: null,
+        body: '',
+      }),
+    } as unknown as HostMemoryCoordinator,
+    taskLedger: { list: async () => [] } as unknown as TaskLedgerStore,
+    clientCapabilities: {
+      snapshotForSession: () => undefined,
+    } as unknown as HostClientCapabilityCoordinator,
+    resolveTavilyWebSearchReadiness: async () => false,
+    builtinTools: {},
+    resolveTurnShellPlan: (settings) => {
+      shellPolicyResolutions += 1;
+      return resolveTurnShellPlan(settings, {
+        platform: 'win32',
+        fileExists: () => false,
+      });
+    },
+  });
+  const connection = readyExecutionConnection()
+    .connection as unknown as import('@maka/core/llm-connections').RuntimeExecutionConnection;
+
+  const composer = await factory({
+    backendContext: fixture.context,
+    connection,
+    modelId: MODEL_ID,
+    runtimePolicy: { revision: 0, policy },
+    contextWindow: null,
+  });
+
+  const bash = composer.tools.find((tool) => tool.name === 'Bash') as
+    | MakaTool<{ command: string }, unknown>
+    | undefined;
+  assert.ok(bash, 'expected the default tool surface to include Bash');
+  const unavailableShell = resolveTurnShellPlan(policy.shell, {
+    platform: 'win32',
+    fileExists: () => false,
+  });
+  assert.equal(unavailableShell.setupError?.code, 'executable_missing');
+  assert.match(bash.description, /unavailable this turn/);
+  assert.doesNotMatch(bash.description, /write PowerShell syntax/);
+  await assert.rejects(
+    async () => {
+      await bash.impl({ command: 'echo never-runs' }, {
+        sessionId: 'session',
+        turnId: 'turn-1',
+        cwd: '/workspace',
+        toolCallId: 'tool-call',
+        abortSignal: new AbortController().signal,
+        emitOutput: () => {},
+      } satisfies MakaToolContext);
+    },
+    (error: unknown) =>
+      error instanceof ShellPreferenceError && error.code === 'executable_missing',
+  );
+
+  // Text-only composition — prompts and the rest of the tool surface — is unaffected.
+  const prompt = await composer.resolveSystemPrompt({
+    sessionId: 'session',
+    turnId: 'turn-1',
+    cwd: '/workspace',
+    workspaceRoot: '/workspace',
+  });
+  assert.ok(prompt.sourceRevisions.length > 0);
+
+  const capturedChildShell = {
+    plan: {
+      kind: 'git-bash' as const,
+      displayName: 'captured child shell',
+      exe: 'C:\\captured\\bash.exe',
+    },
+  };
+  const capturedChildTools = createHostChildAgentToolComposition({
+    taskLedger: {} as TaskLedgerStore,
+    builtinTools: { shell: capturedChildShell },
+    hostTools: [],
+    worktreePatchWriteBackAvailable: true,
+  }).childTools;
+  const childComposer = await factory({
+    backendContext: {
+      ...fixture.context,
+      tools: capturedChildTools,
+      turnShellPlan: capturedChildShell,
+    },
+    connection,
+    modelId: MODEL_ID,
+    runtimePolicy: { revision: 1, policy },
+    contextWindow: null,
+  });
+  assert.equal(
+    shellPolicyResolutions,
+    1,
+    'a child activation must not re-read shell policy after Runtime captured its plan',
+  );
+  const capturedBash = childComposer.tools.find((tool) => tool.name === 'Bash');
+  assert.match(capturedBash?.description ?? '', /captured child shell/);
+  assert.doesNotMatch(capturedBash?.description ?? '', /unavailable this turn/);
+  const childContext = {
+    sessionId: 'session',
+    turnId: 'turn-child',
+    cwd: '/workspace',
+    workspaceRoot: '/workspace',
+  } as const;
+  const childTail = await childComposer.turnTailPrompt(childContext);
+  assert.match(childTail, /captured child shell/);
+});
+
+test('child execution Bash carries the configured shell guidance and spawn plan', async () => {
+  const calls: unknown[] = [];
+  const shell = {
+    plan: {
+      kind: 'git-bash' as const,
+      displayName: 'Git Bash',
+      exe: 'C:\\Program Files\\Git\\bin\\bash.exe',
+    },
+  };
+  const composition = createHostChildAgentToolComposition({
+    taskLedger: {} as TaskLedgerStore,
+    builtinTools: {
+      shell,
+      shellRuns: {
+        async runForegroundBash(input) {
+          calls.push(input);
+          return {
+            kind: 'terminal' as const,
+            cwd: input.cwd,
+            cmd: input.command,
+            status: 'completed' as const,
+            exitCode: 0,
+            output: {
+              mode: 'pipes' as const,
+              stdout: '',
+              stderr: '',
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              redacted: false,
+            },
+          };
+        },
+        async runBackgroundBash() {
+          throw new Error('background execution was not requested');
+        },
+      },
+    },
+    worktreePatchWriteBackAvailable: true,
+  });
+  const bash = composition.childTools.find((tool) => tool.name === 'Bash') as
+    | MakaTool<{ command: string }, unknown>
+    | undefined;
+  assert.ok(bash);
+  assert.match(bash.description, /Git Bash/);
+  assert.match(bash.description, /POSIX shell syntax/);
+
+  await bash.impl(
+    { command: 'printf child-shell' },
+    {
+      sessionId: 'child-session',
+      turnId: 'child-turn',
+      cwd: '/workspace',
+      toolCallId: 'child-bash',
+      abortSignal: new AbortController().signal,
+      emitOutput: () => {},
+    },
+  );
+  assert.deepEqual((calls[0] as { shell?: unknown }).shell, shell.plan);
 });
 
 test('a bound tool ceiling excludes dynamic Client Capability tools', () => {
@@ -2777,7 +3184,6 @@ function backendCreationFixture(input: {
   readPricing: () => Promise<unknown>;
   runtimePolicy?: RuntimePolicyStoresWriter;
   oauthCredentials?: HostOAuthExecutionAuthority;
-  claudeDeviceId?: string;
   tools?: readonly MakaTool[];
   modelId?: string;
   snapshotClientCapabilities?: () => unknown;
@@ -2786,6 +3192,8 @@ function backendCreationFixture(input: {
   recordRunTrace?: (event: RunTraceEvent) => unknown;
   runtimeCommitSink?: HostAiSdkBackendInput['runtimeCommitSink'];
   recordRunComposition?: BackendFactoryContext['recordRunComposition'];
+  recordHistoryCompactCheckpoint?: BackendFactoryContext['recordHistoryCompactCheckpoint'];
+  recordModelCallAttempt?: BackendFactoryContext['recordModelCallAttempt'];
   createFetchTransport?: HostAiSdkBackendInput['createFetchTransport'];
   createRunComposer?: HostAiSdkBackendInput['createRunComposer'];
 }): HostAiSdkBackendInput {
@@ -2826,6 +3234,7 @@ function backendCreationFixture(input: {
       clientCapabilities: {
         snapshotForSession: input.snapshotClientCapabilities ?? (() => undefined),
       } as unknown as HostClientCapabilityCoordinator,
+      resolveTavilyWebSearchReadiness: async () => false,
     });
   return {
     context: {
@@ -2844,6 +3253,12 @@ function backendCreationFixture(input: {
         : {}),
       ...(input.recordRunTrace ? { recordRunTrace: input.recordRunTrace } : {}),
       ...(input.recordRunComposition ? { recordRunComposition: input.recordRunComposition } : {}),
+      ...(input.recordHistoryCompactCheckpoint
+        ? { recordHistoryCompactCheckpoint: input.recordHistoryCompactCheckpoint }
+        : {}),
+      ...(input.recordModelCallAttempt
+        ? { recordModelCallAttempt: input.recordModelCallAttempt }
+        : {}),
       store: {
         appendMessage: async () => undefined,
         readExecutionBoundary: async () => input.executionBoundary,
@@ -2851,7 +3266,6 @@ function backendCreationFixture(input: {
     } as unknown as BackendFactoryContext,
     runtimePolicy,
     ...(input.oauthCredentials ? { oauthCredentials: input.oauthCredentials } : {}),
-    ...(input.claudeDeviceId ? { claudeDeviceId: input.claudeDeviceId } : {}),
     createRunComposer,
     artifacts: {},
     executionArtifacts: {
@@ -2869,6 +3283,13 @@ function backendCreationFixture(input: {
       telemetry: {
         recordLlmCall: async () => undefined,
         recordToolInvocation: async () => undefined,
+      },
+      modelCalls: {
+        catchUpModelCallProjection: async () => ({
+          changedSessionIds: [],
+          pendingRuns: 0,
+          unreadableEvents: 0,
+        }),
       },
     },
     requestDrain: () => undefined,
@@ -2910,6 +3331,27 @@ function readyExecutionConnection(
         ? { requestHeaders: { secret: JSON.stringify(customization.requestHeaders) } }
         : {}),
     },
+  };
+}
+
+function compactRuntimeTextEvent(
+  id: string,
+  turnId: string,
+  role: 'user' | 'model',
+  author: 'user' | 'agent',
+  text: string,
+): RuntimeEvent {
+  return {
+    id,
+    invocationId: 'compact-invocation',
+    runId: 'compact-source-run',
+    sessionId: 'backend-creation-session',
+    turnId,
+    ts: 1,
+    partial: false,
+    role,
+    author,
+    content: { kind: 'text', text },
   };
 }
 
@@ -2973,7 +3415,7 @@ function controlledOAuthTransports(): {
     let closed = false;
     return {
       fetch: async (url) => {
-        assert.equal(String(url), 'https://platform.claude.com/v1/oauth/token');
+        assert.equal(String(url), 'https://auth.openai.com/oauth/token');
         usedForRefresh = true;
         refreshCalls += 1;
         markRefreshStarted();
@@ -3017,7 +3459,7 @@ function controlledOAuthTransports(): {
           access_token: 'refreshed-oauth-access',
           refresh_token: 'rotated-oauth-refresh',
           expires_in: 3_600,
-          account: { uuid: 'oauth-account-v2' },
+          id_token: 'rotated-id-token',
         }),
       );
     },
@@ -3050,6 +3492,7 @@ function responsesToolNames(body: Record<string, unknown> | undefined): string[]
 }
 
 function responsesDeveloperPrompt(body: Record<string, unknown> | undefined): string | undefined {
+  if (typeof body?.instructions === 'string') return body.instructions;
   const input = Array.isArray(body?.input) ? body.input : [];
   const developer = input.find(
     (message): message is Record<string, unknown> =>
@@ -3213,9 +3656,11 @@ async function handleProviderRequest(
     return;
   }
   if (body.stream !== true) {
+    const serialized = JSON.stringify(body);
     const isMemoryExtraction = /Perform the first stage of long-term-memory extraction/.test(
-      JSON.stringify(body),
+      serialized,
     );
+    const isHistoryCompaction = /context summarization assistant/.test(serialized);
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(
       JSON.stringify({
@@ -3236,7 +3681,9 @@ async function handleProviderRequest(
                     requestedItems: [],
                     incidentalItems: [],
                   })
-                : SUMMARY_TEXT,
+                : isHistoryCompaction
+                  ? COMPACT_SUMMARY_TEXT
+                  : SUMMARY_TEXT,
             },
             finish_reason: 'stop',
           },
@@ -3287,25 +3734,7 @@ async function handleProviderRequest(
   }
   if (flow.kind === 'child_agent' && streamRequestIndex === 4) {
     assert.ok(toolNames(body).includes('agent_spawn'));
-    respondProviderToolCall(response, streamRequestIndex, 'agent_spawn', {
-      profile: 'web_research',
-      task: 'Find one current hosted web result.',
-      isolation: 'same_workspace',
-      write_back: 'summary',
-    });
-    return;
-  }
-  if (flow.kind === 'child_agent' && streamRequestIndex === 5) {
-    assert.deepEqual(toolNames(body), ['ArchiveRead', 'WebSearch']);
-    respondProviderToolCall(response, streamRequestIndex, 'WebSearch', {
-      query: 'latest hosted web result',
-      limit: 1,
-    });
-    return;
-  }
-  if (flow.kind === 'child_agent' && streamRequestIndex === 6) {
-    assert.deepEqual(toolNames(body), ['ArchiveRead', 'WebSearch']);
-    respondProviderText(response, WEB_RESEARCH_CHILD_RESULT_TEXT);
+    respondProviderText(response, RESPONSE_TEXT);
     return;
   }
   if (flow.kind === 'implementation_child_agent' && streamRequestIndex === 3) {

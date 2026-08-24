@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -18,7 +37,7 @@ import {
 } from './operational-state-store.js';
 import { DEFAULT_SESSION_NAME, normalizeUserSessionName } from '@maka/core/session-name';
 import {
-  decodeStoredMessage,
+  decodeCanonicalMessage,
   deriveTurnRecords,
   isSessionBlockedReason,
   isSessionConversationCopy,
@@ -30,7 +49,8 @@ import {
 } from '@maka/core/session';
 import { isCollaborationMode } from '@maka/core/collaboration';
 import { isOrchestrationMode } from '@maka/core/orchestration';
-import { isPermissionMode } from '@maka/core/permission';
+import { decodePersistedPermissionMode, isPermissionMode } from '@maka/core/permission';
+import type { PersistedValue } from '@maka/core/persisted-value';
 import { isSubagentWorkspaceBinding } from '@maka/core/subagent-workspace';
 import { WORKSPACE_AUTHORITY_SESSION_ID } from '@maka/core/workspace-version-authority';
 import type {
@@ -51,6 +71,7 @@ import type { CreateSessionInput, SessionListFilter } from '@maka/core/runtime-i
 import {
   isSessionToolProfile,
   type SessionHeader,
+  type SessionHeaderPatch,
   type SessionConversationCopy,
   type SessionExternalOrigin,
   type SessionSummary,
@@ -106,12 +127,22 @@ export type ProbeSessionRemovalResult =
   | { readonly kind: 'absent' };
 
 export interface SessionCatalogRecord extends SessionHeaderSnapshot {
+  readonly activityAt: number;
   readonly summary: SessionSummary;
 }
 
 export interface SessionCatalogPageCursor {
   readonly activityAt: number;
   readonly sessionId: string;
+}
+
+export const EXTERNAL_SESSION_IMPORT_LOOKUP_MAX_SOURCE_IDS = 256;
+export const EXTERNAL_SESSION_IMPORT_LOOKUP_MAX_RECENT_SESSION_IDS = 16;
+
+export interface ExternalSessionImportLookupResult {
+  readonly sourceSessionId: string;
+  readonly livePublishedImportCount: number;
+  readonly recentSessionIds: readonly string[];
 }
 
 export type SessionCatalogPageResult =
@@ -260,9 +291,7 @@ export interface SessionStore {
   listTurns(sessionId: string): Promise<TurnRecord[]>;
   appendMessage(sessionId: string, message: StoredMessage): Promise<void>;
   appendMessages(sessionId: string, messages: StoredMessage[]): Promise<void>;
-  updateHeader(sessionId: string, patch: Partial<SessionHeader>): Promise<SessionHeader>;
-  archive(sessionId: string): Promise<void>;
-  unarchive(sessionId: string): Promise<void>;
+  updateHeader(sessionId: string, patch: SessionHeaderPatch): Promise<SessionHeader>;
   setFlagged(sessionId: string, isFlagged: boolean): Promise<void>;
   rename(sessionId: string, name: string): Promise<void>;
   setGeneratedTitleIfAbsent(sessionId: string, title: string): Promise<SessionHeader | null>;
@@ -284,8 +313,14 @@ export interface SessionAuthorityStore extends SessionStore {
   createImportedSession(
     input: CreateSessionInput,
     messages: readonly StoredMessage[],
-    externalOrigin?: SessionExternalOrigin,
+    externalOrigin: SessionExternalOrigin,
   ): Promise<SessionHeader>;
+  /** Look up live published imports for a bounded page of source Sessions. */
+  lookupExternalSessionImports(
+    adapterId: string,
+    sourceSessionIds: readonly string[],
+    recentSessionIdLimit: number,
+  ): Promise<readonly ExternalSessionImportLookupResult[]>;
   createSubagent(
     input: CreateSessionInput,
     initialBoundary?: ExecutionBoundary,
@@ -337,7 +372,7 @@ export interface SessionAuthorityStore extends SessionStore {
   readCatalogRecord(sessionId: string): Promise<SessionCatalogRecord>;
   updateHeaderVersioned(
     sessionId: string,
-    patch: Partial<SessionHeader>,
+    patch: SessionHeaderPatch,
     expectedRevision: number,
   ): Promise<SessionHeaderSnapshot>;
   updateSessionConfiguration(
@@ -349,11 +384,14 @@ export interface SessionAuthorityStore extends SessionStore {
     messageId: string,
   ): Promise<SessionHeaderSnapshot>;
   probeSessionRemoval(sessionId: string): Promise<ProbeSessionRemovalResult>;
-  setSessionsLifecycleVersioned(
+  setSessionsArchivedVersioned(
     sessions: readonly VersionedSessionIdentity[],
-    state: 'active' | 'archived',
+    isArchived: boolean,
   ): Promise<SessionHeaderSnapshot[]>;
-  removeSessionsVersioned(sessions: readonly VersionedSessionIdentity[]): Promise<string[]>;
+  removeSessionsVersioned(
+    sessions: readonly VersionedSessionIdentity[],
+    archiveSessions?: readonly VersionedSessionIdentity[],
+  ): Promise<string[]>;
   reconcileOrphanedAgentGraphRetirements(): Promise<string[]>;
   listPendingSessionRetirementCleanupIds(sessionId?: string): Promise<string[]>;
   completeSessionRetirementCleanup(sessionId: string): Promise<void>;
@@ -403,7 +441,7 @@ class SqliteSessionStore implements SessionAuthorityStore {
   async createImportedSession(
     input: CreateSessionInput,
     messages: readonly StoredMessage[],
-    externalOrigin?: SessionExternalOrigin,
+    externalOrigin: SessionExternalOrigin,
   ): Promise<SessionHeader> {
     await this.ensureReady();
     assertNoConversationCopyMetadata(input);
@@ -411,11 +449,11 @@ class SqliteSessionStore implements SessionAuthorityStore {
       throw new Error('Subagent spawn metadata requires createSubagent()');
     }
     const canonicalMessages = messages.map((message) =>
-      decodeStoredMessage(JSON.parse(JSON.stringify(message)) as unknown),
+      decodeCanonicalMessage(JSON.parse(JSON.stringify(message)) as unknown),
     );
     const header: SessionHeader = {
       ...buildSessionHeader(this.workspaceRoot, input),
-      ...(externalOrigin !== undefined ? { externalOrigin } : {}),
+      externalOrigin,
       transcriptLedgerVersion: 0,
     };
     const outcome = await this.metadata.importSession(
@@ -427,6 +465,51 @@ class SqliteSessionStore implements SessionAuthorityStore {
       throw new Error(`Generated Session id already exists: ${header.id}`);
     }
     return (await this.metadata.read(header.id)).header;
+  }
+
+  async lookupExternalSessionImports(
+    adapterId: string,
+    sourceSessionIds: readonly string[],
+    recentSessionIdLimit: number,
+  ): Promise<readonly ExternalSessionImportLookupResult[]> {
+    await this.ensureReady();
+    if (typeof adapterId !== 'string' || adapterId.trim().length === 0) {
+      throw new Error('External Session import lookup adapter id must not be empty');
+    }
+    if (
+      !Array.isArray(sourceSessionIds) ||
+      sourceSessionIds.length > EXTERNAL_SESSION_IMPORT_LOOKUP_MAX_SOURCE_IDS
+    ) {
+      throw new Error(
+        `External Session import lookup accepts at most ${EXTERNAL_SESSION_IMPORT_LOOKUP_MAX_SOURCE_IDS} source ids`,
+      );
+    }
+    const uniqueSourceSessionIds: string[] = [];
+    const seen = new Set<string>();
+    for (const sourceSessionId of sourceSessionIds) {
+      if (typeof sourceSessionId !== 'string' || sourceSessionId.length === 0) {
+        throw new Error('External Session import lookup source id must not be empty');
+      }
+      if (!seen.has(sourceSessionId)) {
+        seen.add(sourceSessionId);
+        uniqueSourceSessionIds.push(sourceSessionId);
+      }
+    }
+    if (
+      !Number.isSafeInteger(recentSessionIdLimit) ||
+      recentSessionIdLimit < 1 ||
+      recentSessionIdLimit > EXTERNAL_SESSION_IMPORT_LOOKUP_MAX_RECENT_SESSION_IDS
+    ) {
+      throw new Error(
+        `External Session import lookup recent id limit must be between 1 and ${EXTERNAL_SESSION_IMPORT_LOOKUP_MAX_RECENT_SESSION_IDS}`,
+      );
+    }
+    if (uniqueSourceSessionIds.length === 0) return [];
+    return this.metadata.lookupExternalSessionImports(
+      adapterId,
+      uniqueSourceSessionIds,
+      recentSessionIdLimit,
+    );
   }
 
   async probeStableSessionCreate(
@@ -645,6 +728,7 @@ class SqliteSessionStore implements SessionAuthorityStore {
       revision,
       records: page.records.map((record) => ({
         ...projectHeaderSnapshot(record),
+        activityAt: record.activityAt,
         summary: toCatalogSummary(record.header, record.lastMessagePreview),
       })),
       hasMore: page.hasMore,
@@ -683,6 +767,7 @@ class SqliteSessionStore implements SessionAuthorityStore {
     const record = await this.metadata.readCatalogRecord(sessionId);
     return {
       ...projectHeaderSnapshot(record),
+      activityAt: record.activityAt,
       summary: toCatalogSummary(record.header, record.lastMessagePreview),
     };
   }
@@ -777,14 +862,14 @@ class SqliteSessionStore implements SessionAuthorityStore {
     return () => this.transcriptChangeListeners.delete(listener);
   }
 
-  async updateHeader(sessionId: string, patch: Partial<SessionHeader>): Promise<SessionHeader> {
+  async updateHeader(sessionId: string, patch: SessionHeaderPatch): Promise<SessionHeader> {
     await this.ensureReady();
     return (await this.metadata.update(sessionId, patch)).header;
   }
 
   async updateHeaderVersioned(
     sessionId: string,
-    patch: Partial<SessionHeader>,
+    patch: SessionHeaderPatch,
     expectedRevision: number,
   ): Promise<SessionHeaderSnapshot> {
     await this.ensureReady();
@@ -845,17 +930,22 @@ class SqliteSessionStore implements SessionAuthorityStore {
     return projectRemovalProbe(await this.metadata.probeRemoval(sessionId));
   }
 
-  async setSessionsLifecycleVersioned(
+  async setSessionsArchivedVersioned(
     sessions: readonly VersionedSessionIdentity[],
-    state: 'active' | 'archived',
+    isArchived: boolean,
   ): Promise<SessionHeaderSnapshot[]> {
     await this.ensureReady();
-    return (await this.metadata.setLifecycleVersioned(sessions, state)).map(projectHeaderSnapshot);
+    return (await this.metadata.setArchivedVersioned(sessions, isArchived)).map(
+      projectHeaderSnapshot,
+    );
   }
 
-  async removeSessionsVersioned(sessions: readonly VersionedSessionIdentity[]): Promise<string[]> {
+  async removeSessionsVersioned(
+    sessions: readonly VersionedSessionIdentity[],
+    archiveSessions: readonly VersionedSessionIdentity[] = [],
+  ): Promise<string[]> {
     await this.ensureReady();
-    return this.metadata.removeVersioned(sessions);
+    return this.metadata.removeVersioned(sessions, archiveSessions);
   }
 
   async reconcileOrphanedAgentGraphRetirements(): Promise<string[]> {
@@ -871,26 +961,6 @@ class SqliteSessionStore implements SessionAuthorityStore {
   async completeSessionRetirementCleanup(sessionId: string): Promise<void> {
     await this.ensureReady();
     await this.metadata.completeSessionRetirementCleanup(sessionId);
-  }
-
-  async archive(sessionId: string): Promise<void> {
-    const now = Date.now();
-    await this.updateHeader(sessionId, {
-      isArchived: true,
-      archivedAt: now,
-      status: 'archived',
-      statusUpdatedAt: now,
-    });
-  }
-
-  async unarchive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, {
-      isArchived: false,
-      archivedAt: undefined,
-      status: 'active',
-      blockedReason: undefined,
-      statusUpdatedAt: Date.now(),
-    });
   }
 
   async setFlagged(sessionId: string, isFlagged: boolean): Promise<void> {
@@ -965,7 +1035,6 @@ function buildSessionHeader(
     cwd: input.cwd,
     ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
     createdAt: now,
-    lastUsedAt: now,
     name,
     titleIsManual: false,
     isFlagged: false,
@@ -989,7 +1058,7 @@ function buildSessionHeader(
     ...(input.revisionIndex !== undefined ? { revisionIndex: input.revisionIndex } : {}),
     ...(input.revisionState ? { revisionState: input.revisionState } : {}),
     hasUnread: false,
-    backend: input.backend,
+    backend: 'ai-sdk',
     llmConnectionSlug: input.llmConnectionSlug,
     connectionLocked: false,
     model: input.model ?? 'default',
@@ -1023,7 +1092,6 @@ export function normalizeSessionHeader(
       header.projectId === null ||
       (typeof header.projectId === 'string' && header.projectId.length > 0)) &&
     isFiniteNumber(header.createdAt) &&
-    isFiniteNumber(header.lastUsedAt) &&
     (header.lastMessageAt === undefined || isFiniteNumber(header.lastMessageAt)) &&
     typeof header.name === 'string' &&
     typeof header.titleIsManual === 'boolean' &&
@@ -1031,7 +1099,7 @@ export function normalizeSessionHeader(
     Array.isArray(header.labels) &&
     header.labels.every((label) => typeof label === 'string') &&
     typeof header.isArchived === 'boolean' &&
-    (header.archivedAt === undefined || isFiniteNumber(header.archivedAt)) &&
+    !Object.prototype.hasOwnProperty.call(header, 'archivedAt') &&
     isSessionStatus(header.status) &&
     (header.blockedReason === undefined || isSessionBlockedReason(header.blockedReason)) &&
     (header.statusUpdatedAt === undefined || isFiniteNumber(header.statusUpdatedAt)) &&
@@ -1043,7 +1111,7 @@ export function normalizeSessionHeader(
     isValidSessionExternalOrigin(header.externalOrigin) &&
     (header.lastReadMessageId === undefined || typeof header.lastReadMessageId === 'string') &&
     typeof header.hasUnread === 'boolean' &&
-    isBackendKind(header.backend) &&
+    isPersistedBackendKind(header.backend) &&
     typeof header.llmConnectionSlug === 'string' &&
     typeof header.connectionLocked === 'boolean' &&
     typeof header.model === 'string' &&
@@ -1064,6 +1132,21 @@ export function normalizeSessionHeader(
     return { ...withoutBlockedReason, name: normalizedName };
   }
   return { ...header, name: normalizedName };
+}
+
+export function decodePersistedSessionHeader(
+  persisted: PersistedValue<SessionHeader>,
+  sessionId?: string,
+): SessionHeader {
+  const header = persisted as unknown as SessionHeader;
+  const permissionMode = decodePersistedPermissionMode(header.permissionMode);
+  if (permissionMode === undefined) {
+    return normalizeSessionHeader(header, sessionId ?? header.id);
+  }
+  return normalizeSessionHeader(
+    permissionMode === header.permissionMode ? header : { ...header, permissionMode },
+    sessionId ?? header.id,
+  );
 }
 
 function isValidSessionExternalOrigin(origin: SessionHeader['externalOrigin']): boolean {
@@ -1173,7 +1256,12 @@ function isValidSubagentSessionLineage(header: SessionHeader): boolean {
   );
 }
 
-function isBackendKind(value: unknown): value is SessionHeader['backend'] {
+/**
+ * Decode guard for a durable session header. `'fake'` stays accepted:
+ * narrowing it here would make every session written by a build that shipped
+ * FakeBackend fail `normalizeSessionHeader` and read back as malformed (#3211).
+ */
+function isPersistedBackendKind(value: unknown): value is SessionHeader['backend'] {
   return value === 'ai-sdk' || value === 'fake';
 }
 

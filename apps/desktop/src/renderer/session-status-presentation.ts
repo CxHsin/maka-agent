@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 /**
  * Renderer-side presentation rules that only Desktop has: which blocked reasons
  * are worth acting on, and what to offer after a turn fails.
@@ -41,17 +60,26 @@ export function isActionableBlocked(reason: SessionBlockedReason | undefined): b
 }
 
 /**
- * Normalize a SessionSummary as it enters renderer state: non-actionable
- * blocked sessions read as ordinary resumable sessions (`active`), so the
- * sidebar grouping, row icon, and chat-header badge all agree without
- * each consumer re-implementing the rule. Everything else passes through
- * unchanged.
+ * Normalize a SessionSummary as it enters renderer state. Authoritative
+ * known-empty live state clears a persisted `running` value that may have
+ * survived a crash, while an omitted live state keeps the legacy fallback.
+ * Non-actionable blocked sessions read as ordinary resumable sessions
+ * (`active`), so every display consumer agrees on the same projection.
  */
-export function normalizeSessionSummaryForDisplay(session: SessionSummary): SessionSummary {
-  if (session.status !== 'blocked' || isActionableBlocked(session.blockedReason)) return session;
-  const { blockedReason: _blockedReason, ...rest } = session;
+export function normalizeSessionSummaryForDisplay<T extends SessionSummary>(session: T): T {
+  const liveNormalized: T =
+    session.status === 'running' && session.runningTurnIds?.length === 0
+      ? ({ ...session, status: 'active' as const } as T)
+      : session;
+  if (
+    liveNormalized.status !== 'blocked' ||
+    isActionableBlocked(liveNormalized.blockedReason)
+  ) {
+    return liveNormalized;
+  }
+  const { blockedReason: _blockedReason, ...rest } = liveNormalized;
   void _blockedReason;
-  return { ...rest, status: 'active' };
+  return { ...rest, status: 'active' } as T;
 }
 
 /**
@@ -85,7 +113,12 @@ export function describeTurnErrorClass(errorClass: string | undefined, locale: U
   if (lower === 'network' || lower.includes('network') || lower.includes('fetch') || lower.includes('econn')) {
     return copy.network;
   }
-  if (lower === 'provider_unavailable' || /\b5\d\d\b/.test(lower)) return copy.provider;
+  if (
+    lower === 'provider_unavailable' ||
+    lower === 'server_error' ||
+    /\b5\d\d\b/.test(lower)
+  )
+    return copy.provider;
   if (lower === 'tool_step_cap_reached') return copy.stepCap;
   if (lower === 'tool_failed' || lower.includes('tool')) return copy.tool;
   if (lower === 'permission_required' || lower.includes('permission')) return copy.permission;
@@ -140,6 +173,12 @@ export function deriveFailedTurnRecovery(input: FailedTurnRecoveryInput, locale:
   }
   if (input.toolActivityCount > 0) {
     return { action: 'inspect_tool', label: copy.toolRecord };
+  }
+  if (lower === 'provider_capacity') {
+    return { action: 'retry', label: copy.capacity };
+  }
+  if (lower === 'context_overflow') {
+    return { action: 'continue', label: copy.contextOverflow };
   }
   return { action: 'retry', label: copy.retry };
 }

@@ -1,13 +1,56 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type { AgentRunEvent, AgentRunStore } from '@maka/core/agent-run';
 import {
   canReplaceHistoryCompactCheckpoint,
+  isTextHistoryCompactCheckpoint,
   validateHistoryCompactCheckpointShape,
   type HistoryCompactCheckpoint,
 } from './history-compact-checkpoint.js';
+import {
+  findCheckpointSummaryDefect,
+  findCheckpointSummaryTruncationDefect,
+} from './history-compact-summary-validation.js';
 
 interface LedgerCheckpointCandidate {
   checkpoint: HistoryCompactCheckpoint;
   event: AgentRunEvent;
+}
+
+/**
+ * Version-aware semantic admission at the load authority (#3029, #3041).
+ * A checkpoint stamped with the sectioned summary format is held to the
+ * complete shared predicate (minus the size floor, whose covered-span
+ * estimate is not durable), so a malformed summary that slipped through a
+ * direct recorder or copy seam never becomes authoritative again after
+ * restart. Unmarked legacy checkpoints predate the sectioned contract, so
+ * their summaries may omit `## Goal` etc. and remain usable; only a
+ * truncated fragment — which poisons every subsequent replay with a
+ * half-finished thought regardless of writer — is quarantined.
+ */
+function hasLoadableHistoryCompactSummary(checkpoint: HistoryCompactCheckpoint): boolean {
+  if (!isTextHistoryCompactCheckpoint(checkpoint)) return true;
+  if (checkpoint.summaryFormat !== undefined) {
+    return findCheckpointSummaryDefect(checkpoint.summary) === undefined;
+  }
+  return findCheckpointSummaryTruncationDefect(checkpoint.summary) === undefined;
 }
 
 export async function loadHistoryCompactCheckpointsFromRunLedger(
@@ -19,7 +62,10 @@ export async function loadHistoryCompactCheckpointsFromRunLedger(
     for (const event of await runStore.readEvents(sessionId, run.runId)) {
       if (event.type !== 'history_compact_checkpoint_recorded') continue;
       const checkpoint = event.data?.checkpoint;
-      if (validateHistoryCompactCheckpointShape(checkpoint, sessionId)) {
+      if (
+        validateHistoryCompactCheckpointShape(checkpoint, sessionId) &&
+        hasLoadableHistoryCompactSummary(checkpoint)
+      ) {
         checkpoints.set(checkpoint.checkpointId, checkpoint);
       }
     }
@@ -43,7 +89,12 @@ export async function loadLatestHistoryCompactCheckpointFromRunLedger(
       );
       if (projected === null) return undefined;
       const checkpoint = projected?.data?.checkpoint;
-      if (validateHistoryCompactCheckpointShape(checkpoint, sessionId)) return checkpoint;
+      if (
+        validateHistoryCompactCheckpointShape(checkpoint, sessionId) &&
+        hasLoadableHistoryCompactSummary(checkpoint)
+      ) {
+        return checkpoint;
+      }
       replaceEventId = projected?.id;
     } catch {
       // Recover the derived projection from the canonical ledger below.
@@ -58,7 +109,10 @@ export async function loadLatestHistoryCompactCheckpointFromRunLedger(
       const event = events[eventIndex]!;
       if (event.type !== 'history_compact_checkpoint_recorded') continue;
       const checkpoint = event.data?.checkpoint;
-      if (validateHistoryCompactCheckpointShape(checkpoint, sessionId)) {
+      if (
+        validateHistoryCompactCheckpointShape(checkpoint, sessionId) &&
+        hasLoadableHistoryCompactSummary(checkpoint)
+      ) {
         candidates.push({ checkpoint, event });
       }
     }

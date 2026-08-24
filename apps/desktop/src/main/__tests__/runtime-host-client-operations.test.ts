@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createDefaultRuntimePolicy } from '@maka/core/runtime-policy';
@@ -45,32 +64,30 @@ test('restarts a paginated catalog read instead of mixing revisions', async () =
   ]);
 
   assert.deepEqual(
-    (await client.listSessions({ isArchived: false })).map(({ id }) => id),
+    (await client.listSessions()).map(({ id }) => id),
     ['fresh-1', 'fresh-2'],
   );
   assert.deepEqual(requests, [
     {
       operation: 'session.catalog.query',
-      input: { kind: 'list_start', filter: { isArchived: false } },
+      input: { kind: 'list_start' },
     },
     {
       operation: 'session.catalog.query',
       input: {
         kind: 'list_continue',
-        filter: { isArchived: false },
         revision: revisionOne,
         cursor: 'stale-cursor',
       },
     },
     {
       operation: 'session.catalog.query',
-      input: { kind: 'list_start', filter: { isArchived: false } },
+      input: { kind: 'list_start' },
     },
     {
       operation: 'session.catalog.query',
       input: {
         kind: 'list_continue',
-        filter: { isArchived: false },
         revision: revisionTwo,
         cursor: 'fresh-cursor',
       },
@@ -161,16 +178,16 @@ test('merges a configuration patch into each fresh CAS projection', async () => 
       kind: 'committed',
       session: session('session-1', 12, {
         collaborationMode: 'plan',
-        permissionMode: 'execute',
+        permissionMode: 'ask',
       }),
     },
   ]);
 
   const updated = await client.updateSessionConfiguration('session-1', {
-    permissionMode: 'execute',
+    permissionMode: 'ask',
   });
 
-  assert.equal(updated.permissionMode, 'execute');
+  assert.equal(updated.permissionMode, 'ask');
   assert.equal(updated.collaborationMode, 'plan');
   assert.deepEqual(
     requests
@@ -187,7 +204,7 @@ test('merges a configuration patch into each fresh CAS projection', async () => 
             model: 'test-model',
           },
           thinkingLevel: null,
-          permissionMode: 'execute',
+          permissionMode: 'ask',
           collaborationMode: 'agent',
           orchestrationMode: 'default',
         },
@@ -202,7 +219,7 @@ test('merges a configuration patch into each fresh CAS projection', async () => 
             model: 'test-model',
           },
           thinkingLevel: null,
-          permissionMode: 'execute',
+          permissionMode: 'ask',
           collaborationMode: 'plan',
           orchestrationMode: 'default',
         },
@@ -238,6 +255,57 @@ test('retries a Session update through transient revision churn', async () => {
 
   assert.equal(updated.revision, 15);
   assert.equal(updated.collaborationMode, 'plan');
+});
+
+test('abandons a remove whose task was restored under it', async () => {
+  // A lifecycle write bumps the revision, so the conflict IS the restore: the
+  // premise the caller decided on ("this task is archived") no longer holds,
+  // and replaying the delete at the fresh revision destroys a task somebody
+  // just pulled back out of the archive.
+  const { client, requests } = clientWithResponses([
+    { kind: 'session', session: session('session-1', 4, { isArchived: true }) },
+    { kind: 'revision_conflict', expectedRevision: 4, actualRevision: 5 },
+    { kind: 'session', session: session('session-1', 5, { isArchived: false }) },
+    // Only a replayed delete reaches this, and reaching it is the defect.
+    { kind: 'removed' },
+  ]);
+
+  assert.equal(await client.removeSession('session-1', { requireArchived: true }), 'restored');
+  assert.deepEqual(
+    requests.map(({ operation }) => operation),
+    ['session.catalog.query', 'session.remove', 'session.catalog.query'],
+  );
+});
+
+test('retries a remove through revision churn that left the task archived', async () => {
+  // Not every conflict is a restore. A task still archived at the fresh
+  // revision was only written around, and the delete still means what it did.
+  const { client, requests } = clientWithResponses([
+    { kind: 'session', session: session('session-1', 4, { isArchived: true }) },
+    { kind: 'revision_conflict', expectedRevision: 4, actualRevision: 5 },
+    { kind: 'session', session: session('session-1', 5, { isArchived: true }) },
+    { kind: 'removed' },
+  ]);
+
+  assert.equal(await client.removeSession('session-1', { requireArchived: true }), 'removed');
+  assert.deepEqual(
+    requests.filter(({ operation }) => operation === 'session.remove').map(({ input }) => input),
+    [
+      { sessionId: 'session-1', expectedRevision: 4 },
+      { sessionId: 'session-1', expectedRevision: 5 },
+    ],
+  );
+});
+
+test('removes a task that was never archived when no premise was stated', async () => {
+  // Deleting an active task from the rail has no archived premise to lose, so
+  // the precondition is the caller's to ask for, not the client's to assume.
+  const { client } = clientWithResponses([
+    { kind: 'session', session: session('session-1', 4) },
+    { kind: 'removed' },
+  ]);
+
+  assert.equal(await client.removeSession('session-1'), 'removed');
 });
 
 test('rebuilds a Runtime Policy mutation from each fresh CAS projection', async () => {
@@ -325,7 +393,7 @@ test('treats empty configuration patches as read-only lookups', async () => {
 test('binds message controls to the current Host Epoch', async () => {
   const { client, requests } = clientWithResponses([
     { disposition: 'steering', queueRevision: 2 },
-    { queueRevision: 3, retracted: [] },
+    { queueRevision: 3 },
     {
       queueRevision: 4,
       retracted: [],
@@ -346,7 +414,11 @@ test('binds message controls to the current Host Epoch', async () => {
     content: { text: 'Steer it' },
     placement: 'current_turn',
   });
-  await client.retractQueue({ sessionId: 'session-1', retractId: 'retract-1' });
+  await client.retractQueueEntry({
+    sessionId: 'session-1',
+    entryId: 'entry-1',
+    retractId: 'retract-1',
+  });
   await client.interruptTurn({
     sessionId: 'session-1',
     interruptId: 'interrupt-1',
@@ -366,9 +438,10 @@ test('binds message controls to the current Host Epoch', async () => {
       },
     },
     {
-      operation: 'queue.retract',
+      operation: 'queue.entry.retract',
       input: {
         sessionId: 'session-1',
+        entryId: 'entry-1',
         retractId: 'retract-1',
         originHostEpoch: 'host-current',
       },
@@ -656,6 +729,101 @@ test('retries Goal clear only while the same Goal generation remains active', as
   );
 });
 
+test('controlGoalWithRetry applies pause/resume with the queried revision', async () => {
+  const active = goalProjection(1);
+  const paused = { ...goalProjection(2), status: 'paused' as const, pausedAt: 5 };
+  const { client, requests } = clientWithResponses([
+    { sessionId: 'session-1', goal: active }, // queryGoal
+    { sessionId: 'session-1', goal: paused }, // goal.control pause result
+    { sessionId: 'session-1', goal: paused }, // queryGoal for resume
+    { sessionId: 'session-1', goal: { ...goalProjection(3) } }, // goal.control resume result
+  ]);
+
+  await client.controlGoalWithRetry('session-1', 'pause');
+  await client.controlGoalWithRetry('session-1', 'resume');
+
+  assert.deepEqual(
+    requests.filter(({ operation }) => operation === 'goal.control').map(({ input }) => input),
+    [
+      { sessionId: 'session-1', goalId: 'goal-1', expectedRevision: 1, action: 'pause' },
+      { sessionId: 'session-1', goalId: 'goal-1', expectedRevision: 2, action: 'resume' },
+    ],
+  );
+});
+
+test('controlGoalWithRetry rethrows a status refusal instead of retrying it away', async () => {
+  // The host folds invalid transitions into operation_conflict. Every accepted
+  // transition bumps the revision, so a conflict at an unchanged revision is a
+  // status refusal — the reason must surface, not a retry-exhaustion error.
+  const paused = { ...goalProjection(2), status: 'paused' as const, pausedAt: 5 };
+  const refusal = new RuntimeHostOperationError(
+    'goal.control',
+    'operation_conflict',
+    'Goal cannot pause from status paused',
+  );
+  const { client, requests } = clientWithResponses([
+    { sessionId: 'session-1', goal: paused }, // queryGoal
+    refusal, // goal.control conflict
+    { sessionId: 'session-1', goal: paused }, // re-query: SAME revision
+  ]);
+
+  await assert.rejects(
+    () => client.controlGoalWithRetry('session-1', 'pause'),
+    /Goal cannot pause from status paused/,
+  );
+  // No futile retries: exactly one control attempt.
+  assert.equal(
+    requests.filter(({ operation }) => operation === 'goal.control').length,
+    1,
+  );
+});
+
+test('arms a Goal in one request and reports a conflicting Goal instead of retrying', async () => {
+  const armed = goalProjection(0);
+  const { client, requests } = clientWithResponses([
+    { sessionId: 'session-1', goal: armed },
+  ]);
+
+  const result = await client.armGoal({
+    sessionId: 'session-1',
+    condition: 'All tests pass',
+    maxIterations: 20,
+    tokenBudget: null,
+  });
+
+  assert.deepEqual(result, { sessionId: 'session-1', goal: armed });
+  assert.deepEqual(
+    requests.filter(({ operation }) => operation === 'goal.arm').map(({ input }) => input),
+    [
+      {
+        sessionId: 'session-1',
+        condition: 'All tests pass',
+        maxIterations: 20,
+        tokenBudget: null,
+      },
+    ],
+  );
+
+  // Arming names no revision, so a conflict is an answer for the user — the
+  // Session already has a Goal — not a stale read to refresh and re-send.
+  const conflicted = clientWithResponses([
+    new RuntimeHostOperationError('goal.arm', 'operation_conflict', 'Goal already set'),
+  ]);
+  await assert.rejects(
+    conflicted.client.armGoal({
+      sessionId: 'session-1',
+      condition: 'All tests pass',
+      maxIterations: null,
+      tokenBudget: null,
+    }),
+    /Goal already set/,
+  );
+  assert.equal(
+    conflicted.requests.filter(({ operation }) => operation === 'goal.arm').length,
+    1,
+  );
+});
+
 test('rejects an invalid sidecar continuation without misclassifying it as revision churn', async () => {
   const revision = catalogRevision('7');
   const { client, requests } = clientWithResponses([
@@ -744,7 +912,7 @@ function session(
       hostCwd: '/workspace',
     },
     createdAt: 1,
-    lastUsedAt: 1,
+    activityAt: 1,
     name: id,
     isFlagged: false,
     isArchived: false,

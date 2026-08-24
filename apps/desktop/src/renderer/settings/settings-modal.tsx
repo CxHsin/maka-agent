@@ -1,8 +1,27 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { useRef } from 'react';
 import { useHotkeys } from '@astryxdesign/core/hooks';
 import type { ChatDefaultPermissionMode, SettingsSection, ThemePalette, ThemePreference } from '@maka/core/settings';
-import type { LlmConnection, ProviderType } from '@maka/core/llm-connections';
-import type { SessionSummary } from '@maka/core/session';
+import type { ProviderType } from '@maka/core/llm-connections';
+import type { DesktopSessionSummary } from '../../preload/bridge-contract.js';
 import type { UiLocalePreference } from '@maka/core/ui-locale';
 import { useUiLocale } from '@maka/ui';
 import { getSettingsSharedCopy } from '../locales/settings-shared-copy';
@@ -14,9 +33,6 @@ export { SETTINGS_NAV } from './settings-nav';
 export type { SettingsNavGroup } from './settings-nav';
 
 export function SettingsModal(props: {
-  connections: LlmConnection[];
-  defaultSlug: string | null;
-  onRefresh(): Promise<void>;
   onClose(): void;
   themePref: ThemePreference;
   onThemeChange(pref: ThemePreference): void;
@@ -58,7 +74,9 @@ export function SettingsModal(props: {
   /** The shell's session catalog, for 已归档任务. See ArchivedTasksBridge. */
   archivedTasks: ArchivedTasksBridge;
   /** Receives the task 导入任务 just created, and opens it. */
-  onTaskImported(session: SessionSummary): void;
+  onTaskImported(session: DesktopSessionSummary): void;
+  onRemoteHostAdded(profileId: string): void;
+  onSelectedRuntimeHostProfileIdChange(profileId: string | undefined): void;
 }) {
   const locale = useUiLocale();
   const copy = getSettingsSharedCopy(locale);
@@ -93,9 +111,6 @@ export function SettingsModal(props: {
       data-agents-page
     >
       <SettingsSurface
-        connections={props.connections}
-        defaultSlug={props.defaultSlug}
-        onRefresh={props.onRefresh}
         onClose={props.onClose}
         themePref={props.themePref}
         onThemeChange={props.onThemeChange}
@@ -115,6 +130,8 @@ export function SettingsModal(props: {
         onOpenSession={props.onOpenSession}
         archivedTasks={props.archivedTasks}
         onTaskImported={props.onTaskImported}
+        onRemoteHostAdded={props.onRemoteHostAdded}
+        onSelectedRuntimeHostProfileIdChange={props.onSelectedRuntimeHostProfileIdChange}
       />
     </div>
   );

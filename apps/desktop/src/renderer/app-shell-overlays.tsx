@@ -1,9 +1,29 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { lazy, Suspense } from 'react';
 import type { ChatDefaultPermissionMode, SettingsSection, ThemePalette, ThemePreference } from '@maka/core/settings';
-import type { LlmConnection, ProviderType } from '@maka/core/llm-connections';
-import type { SessionSummary } from '@maka/core/session';
+import type { ProviderType } from '@maka/core/llm-connections';
+import type { DesktopSessionSummary } from '../preload/bridge-contract.js';
 import type { UiLocalePreference } from '@maka/core/ui-locale';
 import { Spinner } from '@astryxdesign/core/Spinner';
+import { useHotkeys } from '@astryxdesign/core/hooks';
 import { SearchModal, useUiLocale } from '@maka/ui';
 import { KeyboardHelpModal } from './keyboard-help';
 import { CommandPalette } from './command-palette';
@@ -35,9 +55,6 @@ function SettingsModalFallback() {
 
 export function AppShellOverlays(props: {
   settingsOpen: boolean;
-  connections: LlmConnection[];
-  defaultConnection: string | null;
-  refreshConnections(): Promise<void>;
   closeSettings(): void;
   themePref: ThemePreference;
   setThemePref(themePref: ThemePreference): void;
@@ -46,7 +63,13 @@ export function AppShellOverlays(props: {
   setUiLocalePreference: (preference: UiLocalePreference) => void;
   uiLocaleUpdateGate: UiLocaleUpdateGate;
   setUserLabel(userLabel: string): void;
-  setDefaultPermissionMode(mode: ChatDefaultPermissionMode): void;
+  /**
+   * Settings changed a chat default the composer also shows. The shell
+   * re-reads it from the Host rather than being handed the new value: the
+   * Host owns it, and a value passed along here would be a second copy that
+   * can disagree the moment anything else writes the setting.
+   */
+  refreshChatDefaults(): void;
   settingsRequestedSection: SettingsSection | undefined;
   settingsProviderCatalogOpen: boolean;
   settingsConnectionDetailSlug: string | undefined;
@@ -64,7 +87,9 @@ export function AppShellOverlays(props: {
   paletteOpen: boolean;
   closePalette(): void;
   commandOptions: AppShellCommandListOptions;
-  onExternalSessionImported(session: SessionSummary): void;
+  onExternalSessionImported(session: DesktopSessionSummary): void;
+  onRemoteHostAdded(profileId: string): void;
+  onSelectedRuntimeHostProfileIdChange(profileId: string | undefined): void;
 }) {
   const {
     closeHelp,
@@ -72,11 +97,8 @@ export function AppShellOverlays(props: {
     closeSearchModal,
     closeSettings,
     commandOptions,
-    connections,
-    defaultConnection,
     helpOpen,
     paletteOpen,
-    refreshConnections,
     searchModalDeps,
     searchModalOnNavigate,
     searchModalOpen,
@@ -90,7 +112,7 @@ export function AppShellOverlays(props: {
     setUiLocalePreference,
     uiLocaleUpdateGate,
     setUserLabel,
-    setDefaultPermissionMode,
+    refreshChatDefaults,
     themePalette,
     themePref,
     onExternalSessionImported,
@@ -99,14 +121,19 @@ export function AppShellOverlays(props: {
   // #1045: base commands freeze per open/close; session rows stay live on
   // visibleSessions/activeId. run() closures read latest options via ref.
   const commands = useAppShellCommands(paletteOpen, commandOptions);
+  const copyDiagnosticsCommand = commands.find((command) => command.id === 'diag:copy-diagnostics');
+  useHotkeys([
+    {
+      keys: 'mod+shift+d',
+      allowInInputs: true,
+      onPress: () => void copyDiagnosticsCommand?.run(),
+    },
+  ]);
   return (
     <>
       {settingsOpen && (
         <Suspense fallback={<SettingsModalFallback />}>
           <SettingsModal
-            connections={connections}
-            defaultSlug={defaultConnection}
-            onRefresh={refreshConnections}
             onClose={closeSettings}
             themePref={themePref}
             onThemeChange={setThemePref}
@@ -115,7 +142,7 @@ export function AppShellOverlays(props: {
             onUiLocalePreferenceChange={setUiLocalePreference}
             uiLocaleUpdateGate={uiLocaleUpdateGate}
             onUserLabelChange={setUserLabel}
-            onDefaultPermissionModeChange={setDefaultPermissionMode}
+            onDefaultPermissionModeChange={() => refreshChatDefaults()}
             requestedSection={settingsRequestedSection}
             openProviderCatalog={settingsProviderCatalogOpen}
             initialConnectionSlug={settingsConnectionDetailSlug}
@@ -125,6 +152,8 @@ export function AppShellOverlays(props: {
             onOpenSession={props.onOpenSettingsSession}
             archivedTasks={props.archivedTasks}
             onTaskImported={onExternalSessionImported}
+            onRemoteHostAdded={props.onRemoteHostAdded}
+            onSelectedRuntimeHostProfileIdChange={props.onSelectedRuntimeHostProfileIdChange}
           />
         </Suspense>
       )}

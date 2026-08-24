@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type {
   AgentRunEvent,
   AgentRunHeader,
@@ -7,8 +26,9 @@ import type {
 import type { RuntimeEvent } from '@maka/core/runtime-event';
 import type { RuntimeEventStore } from '@maka/core/runtime-event-store';
 import type { StorageRef, ToolResultContent } from '@maka/core/events';
+import { markPersisted } from '@maka/core/persisted-value';
 import type { StoredMessage } from '@maka/core/session';
-import { decodeCanonicalToolResultContent } from '@maka/core/tool-result-record-schema';
+import { decodePersistedToolResultContent } from '@maka/core/tool-result-record-schema';
 import { isEmittedAgentRunEventType, isSessionInlineRun } from '@maka/core/agent-run';
 import { TOOL_RECOVERY_DECISION_FACT_KIND } from '@maka/core/tool-recovery-fact';
 import {
@@ -16,7 +36,8 @@ import {
   matchHistoryCompactCheckpointPrefix,
   validateHistoryCompactCheckpointShape,
 } from './history-compact-checkpoint.js';
-import { isHistoryCompactContentEvent } from './history-compact.js';
+import { findCheckpointSummaryDefect } from './history-compact-summary-validation.js';
+import { isHistoryCompactContentEvent } from './history-compaction.js';
 import {
   classifyTerminalRuntimeLedger,
   commitTerminalRunWithRuntimeFact,
@@ -476,7 +497,7 @@ export function archivedToolResultContainsConversationOwnedReferences(
 
   let content: ToolResultContent;
   try {
-    content = decodeCanonicalToolResultContent(value);
+    content = decodePersistedToolResultContent(markPersisted<ToolResultContent>(value));
   } catch {
     return false;
   }
@@ -555,7 +576,9 @@ export function collectConversationCopyLinkedChildReferences(input: {
     if (isArchivedToolResultPlaceholder(value)) return;
     try {
       references.push(
-        ...conversationCopyLinkedChildReferences(decodeCanonicalToolResultContent(value)),
+        ...conversationCopyLinkedChildReferences(
+          decodePersistedToolResultContent(markPersisted<ToolResultContent>(value)),
+        ),
       );
     } catch {
       // Opaque tool results have no typed linked-child references.
@@ -621,6 +644,20 @@ function cloneAgentRunEvent(
     if (match.reason) {
       throw new Error(`Cannot copy unmatched history compact checkpoint ${event.id}`);
     }
+    // Copy is an admission seam for the sectioned summary contract: a marked
+    // checkpoint whose summary no longer satisfies the COMPLETE predicate —
+    // including the size floor, re-runnable here because the matched covered
+    // span is in hand — must not propagate into a fresh session. Unmarked
+    // legacy summaries stay copyable under the truncation-only load policy
+    // and keep their unmarked identity in the target.
+    if (
+      sourceCheckpoint.summaryFormat !== undefined &&
+      findCheckpointSummaryDefect(sourceCheckpoint.summary, {
+        coveredRuntimeEvents: match.coveredRuntimeEvents,
+      }) !== undefined
+    ) {
+      throw new Error(`Cannot copy invalid history compact checkpoint ${event.id}`);
+    }
     const coveredRuntimeEvents = match.coveredRuntimeEvents.map((sourceEvent) => {
       const cloned = clonedRuntimeEvents.get(sourceEvent.id);
       if (!cloned) {
@@ -643,6 +680,7 @@ function cloneAgentRunEvent(
       sessionId: references.targetSessionId,
       coveredRuntimeEvents,
       summary: sourceCheckpoint.summary,
+      summaryFormat: sourceCheckpoint.summaryFormat ?? 'legacy_freeform',
       highWaterName: sourceCheckpoint.highWaterName,
       highWaterSeq: sourceCheckpoint.highWaterSeq,
       now: sourceCheckpoint.createdAt,
@@ -826,16 +864,11 @@ function isCopiedAgentRunEvent(event: AgentRunEvent): event is EmittedAgentRunEv
   // into the target with source identities intact. The ledger's `type` is open, so such an event
   // may predate a retired writer or postdate this build entirely (#1942).
   if (!isEmittedAgentRunEventType(event.type)) return false;
-  // Active/semantic blocks hash the exact provider-visible source. Rewriting
-  // target-owned RuntimeEvent and Artifact references invalidates that
-  // evidence, so a copied Session starts without these derived diagnostics.
   return (
     event.type !== 'run_completed' &&
     event.type !== 'run_failed' &&
     event.type !== 'run_cancelled' &&
-    event.type !== 'event_corrupt' &&
-    event.type !== 'active_full_compact_block_recorded' &&
-    event.type !== 'semantic_compact_block_recorded'
+    event.type !== 'event_corrupt'
   );
 }
 
@@ -1154,7 +1187,7 @@ function rewriteRuntimeToolResult(
   }
   let content: ToolResultContent;
   try {
-    content = decodeCanonicalToolResultContent(value);
+    content = decodePersistedToolResultContent(markPersisted<ToolResultContent>(value));
   } catch {
     return value;
   }

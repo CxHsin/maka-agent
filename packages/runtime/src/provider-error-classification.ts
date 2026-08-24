@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { RetryError } from 'ai';
 import { truncateUtf8 } from '@maka/core/diagnostic-log';
 import { isAuthenticationErrorText, redactSecrets } from '@maka/core/redaction';
@@ -12,6 +31,18 @@ const CONTEXT_OVERFLOW_PROVIDER_CODES: ReadonlySet<string> = new Set([
   'model_context_window_exceeded', // z.ai: error.code
   'request_too_large', // Anthropic byte-size overflow (HTTP 413): error.type
 ]);
+
+const PROVIDER_UNAVAILABLE_PROVIDER_CODES: ReadonlySet<string> = new Set([
+  'server_error', // OpenAI-compatible stream errors can omit the HTTP status.
+]);
+
+/**
+ * xAI emits this code for transient model capacity failures, including when
+ * the same payload is relayed through an OpenAI-compatible gateway. Do not
+ * add the generic gRPC/Google `resource_exhausted` spelling here: that code
+ * represents quota exhaustion and needs different user guidance.
+ */
+const PROVIDER_CAPACITY_CODES: ReadonlySet<string> = new Set(['resource-exhausted']);
 
 /**
  * A provider failure normalized into classification evidence. classifyError's
@@ -46,6 +77,15 @@ interface ProviderErrorFacts {
 export interface ProviderRetryMetadata {
   retryable: boolean;
   retryAfterMs?: number;
+}
+
+/** Bounded, allowlisted provider failure facts safe for durable telemetry. */
+export interface ProviderFailureDiagnostic {
+  errorClass: string;
+  httpStatus?: number;
+  providerCode?: string;
+  providerRequestId?: string;
+  retryable: boolean;
 }
 
 interface ProviderFailureSummary {
@@ -109,15 +149,26 @@ export function providerRetryMetadata(error: unknown): ProviderRetryMetadata {
 
   const status = Number(evidence.statusCode || evidence.code);
   const errorClass = classifyProviderFacts(facts);
+  const retryAfterMs = parseRetryAfterMs(facts.responseHeaders ?? {});
+  if (errorClass === 'ProviderCapacity') {
+    // Capacity is transient even when the provider sends a malformed delay;
+    // fall back to the adapter's bounded local backoff in that case.
+    return {
+      retryable: true,
+      ...(retryAfterMs !== undefined && retryAfterMs !== null ? { retryAfterMs } : {}),
+    };
+  }
+  if (errorClass === 'RateLimit' || status === 429) {
+    if (retryAfterMs === undefined || retryAfterMs === null) return { retryable: false };
+    return { retryable: true, retryAfterMs };
+  }
   const retryable =
     errorClass === 'Network' ||
+    errorClass === 'ProviderUnavailable' ||
     status === 408 ||
     status === 409 ||
-    status === 429 ||
     (status >= 500 && status <= 599);
   if (!retryable) return { retryable: false };
-
-  const retryAfterMs = parseRetryAfterMs(facts.responseHeaders ?? {});
   if (retryAfterMs === null) return { retryable: false };
   return {
     retryable: true,
@@ -262,6 +313,89 @@ export function providerFailureSummary(error: unknown): ProviderFailureSummary |
     message: truncateUtf8(summary, PROVIDER_FAILURE_SUMMARY_MAX_BYTES, '…'),
     ...(code || statusCode ? { code: code ?? statusCode } : {}),
   };
+}
+
+const DURABLE_PROVIDER_ERROR_CLASSES: ReadonlySet<string> = new Set([
+  'Abort',
+  'Auth',
+  'ContextLength',
+  'Network',
+  'ProviderCapacity',
+  'ProviderBilling',
+  'ProviderUnavailable',
+  'RateLimit',
+  'Timeout',
+]);
+
+/**
+ * Projects provider errors into a small durable fingerprint. Unlike the
+ * presentation summary, this intentionally excludes provider messages and
+ * response bodies: even redacted free text can echo prompts or credentials.
+ */
+export function providerFailureDiagnostic(error: unknown): ProviderFailureDiagnostic {
+  const facts = providerFailureDiagnosticFacts(error);
+  if (!facts) return { errorClass: 'Other', retryable: false };
+  const sources = facts.summarySources;
+  const rawStatus =
+    facts.evidence.statusCode || firstProviderField(sources, ['statusCode', 'status']);
+  const numericStatus = Number(rawStatus);
+  const httpStatus =
+    Number.isInteger(numericStatus) && numericStatus >= 100 && numericStatus <= 599
+      ? numericStatus
+      : undefined;
+  const classified = classifyProviderFacts(facts);
+  const errorClass = durableProviderErrorClass(classified, httpStatus);
+  const providerCode =
+    firstProviderField(sources, ['code']) ?? firstProviderField(sources, ['type']);
+  const providerRequestId =
+    firstProviderField(sources, ['requestId', 'request_id']) ??
+    boundedProviderField(facts.responseHeaders?.['x-request-id']);
+  return {
+    errorClass,
+    ...(httpStatus !== undefined ? { httpStatus } : {}),
+    ...(providerCode !== undefined ? { providerCode } : {}),
+    ...(providerRequestId !== undefined ? { providerRequestId } : {}),
+    retryable: providerRetryMetadata(facts.target).retryable,
+  };
+}
+
+function durableProviderErrorClass(classified: string, httpStatus: number | undefined): string {
+  // Structured context-overflow and capacity evidence can legitimately arrive
+  // behind a generic 4xx/5xx proxy response and remains stronger than the wrapper code.
+  if (classified === 'ContextLength' || classified === 'ProviderCapacity') return classified;
+  if (httpStatus === 401 || httpStatus === 403) return 'Auth';
+  if (httpStatus === 402) return 'ProviderBilling';
+  if (httpStatus === 408) return 'Timeout';
+  if (httpStatus === 413) return 'ContextLength';
+  if (httpStatus === 429) return 'RateLimit';
+  if (httpStatus !== undefined && httpStatus >= 400 && httpStatus <= 499) {
+    return 'RequestRejected';
+  }
+  if (httpStatus !== undefined && httpStatus >= 500 && httpStatus <= 599) {
+    return 'ProviderUnavailable';
+  }
+  return DURABLE_PROVIDER_ERROR_CLASSES.has(classified) ? classified : 'Other';
+}
+
+function providerFailureDiagnosticFacts(error: unknown): ProviderErrorFacts | undefined {
+  let current = providerErrorTarget(error);
+  let fallback: ProviderErrorFacts | undefined;
+  let codedFallback: ProviderErrorFacts | undefined;
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 4 && current !== undefined && !seen.has(current); depth += 1) {
+    seen.add(current);
+    const facts = normalizeProviderError(current);
+    fallback ??= facts;
+    if (facts && (facts.evidence.statusCode || facts.evidence.structuredCodes.length > 0)) {
+      return facts;
+    }
+    if (facts?.evidence.code) codedFallback ??= facts;
+    current =
+      current && typeof current === 'object'
+        ? safeField(current as Record<string, unknown>, 'cause')
+        : undefined;
+  }
+  return codedFallback ?? fallback;
 }
 
 interface ProviderFailureSources {
@@ -470,14 +604,13 @@ export function isContextOverflowErrorText(text: string): boolean {
 
 /**
  * Classifies a provider error by DESCENDING evidence strength over the
- * normalized evidence (Error, string, or plain stream-error-part object):
- * abort → 402 → 429 → 401/403 (numeric fields, never substrings) → the
- * provider's structured overflow code → bare 413 (HTTP: request entity too
- * large — itself input-side evidence, Cerebras sends it with no body) →
- * vetoable free-text overflow relations → generic 5xx → weak word
- * heuristics. Specific overflow evidence outranks a generic 5xx because
- * proxies (LiteLLM) wrap provider overflows in 503s; the weak heuristics
- * rank last so "generate" can never become a rate limit.
+ * normalized evidence (Error, string, or plain stream-error-part object): an
+ * explicit RetryError abort → known transport codes → the provider's
+ * structured capacity and overflow codes → numeric HTTP fallbacks →
+ * vetoable free-text relations → generic 5xx → weak word heuristics. Exact
+ * provider evidence outranks generic HTTP/text evidence because gateways can
+ * wrap a provider failure in a misleading status or message; the weak
+ * heuristics rank last so "generate" can never become a rate limit.
  */
 export function classifyError(error: unknown): string {
   if (RetryError.isInstance(error) && error.reason === 'abort') return 'Abort';
@@ -488,18 +621,27 @@ export function classifyError(error: unknown): string {
 function classifyProviderFacts(facts: ProviderErrorFacts): string {
   const { target: classificationTarget, evidence } = facts;
   const { text, statusCode, code, structuredCodes } = evidence;
-  if (text.includes('abort')) return 'Abort';
+  const normalizedCode = code.toLowerCase();
   if (code === OPENAI_RESPONSES_WEBSOCKET_TRANSPORT_ERROR) return 'Network';
+  if (
+    PROVIDER_CAPACITY_CODES.has(normalizedCode) ||
+    structuredCodes.some((c) => PROVIDER_CAPACITY_CODES.has(c))
+  ) {
+    return 'ProviderCapacity';
+  }
+  // Structured provider evidence: the parsed error JSON's code/type is the
+  // only unconditional signal for a context overflow.
+  if (structuredCodes.some((c) => CONTEXT_OVERFLOW_PROVIDER_CODES.has(c))) return 'ContextLength';
+  if (text.includes('abort')) return 'Abort';
   if (statusCode === '402' || code === '402') return 'ProviderBilling';
   if (statusCode === '429' || code === '429') return 'RateLimit';
   if (statusCode === '401' || statusCode === '403' || code === '401' || code === '403')
     return 'Auth';
-  // Structured provider evidence: the parsed error JSON's code/type is the
-  // only unconditional signal for a context overflow.
-  if (structuredCodes.some((c) => CONTEXT_OVERFLOW_PROVIDER_CODES.has(c))) return 'ContextLength';
   if (statusCode === '413' || code === '413') return 'ContextLength';
   // Free-text overflow relations on the composite text, veto-first inside.
   if (isContextOverflowErrorText(text)) return 'ContextLength';
+  if (structuredCodes.some((c) => PROVIDER_UNAVAILABLE_PROVIDER_CODES.has(c)))
+    return 'ProviderUnavailable';
   if (/^5\d\d$/.test(statusCode) || /^5\d\d$/.test(code)) return 'ProviderUnavailable';
   // Weak word heuristics, last: they only catch errors that carried no
   // stronger evidence for any other class. `rate` must be word-shaped
@@ -530,6 +672,8 @@ export function errorPresentationFromClass(errorClass: string): {
       return { reason: 'auth', message: 'Authentication failed' };
     case 'ProviderBilling':
       return { reason: 'provider_billing', message: 'Provider billing required' };
+    case 'ProviderCapacity':
+      return { reason: 'provider_capacity', message: 'Model service is temporarily at capacity' };
     case 'ProviderUnavailable':
       return { reason: 'provider_unavailable', message: 'Provider returned an error' };
     case 'RateLimit':

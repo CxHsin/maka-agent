@@ -1,7 +1,27 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import type { DailyReviewArchive, DailyReviewSummary } from '@maka/core/daily-review';
 import type { ScheduledTask, ScheduledTaskRun } from '@maka/core/scheduled-task';
 import type { McpConfigFile, McpServerStatus } from '@maka/core/mcp';
+import { MCP_CONFIG_VERSION } from '@maka/core/mcp';
 import {
   ScheduledTasksPage,
   DailyReviewPage,
@@ -14,7 +34,7 @@ import {
   useUiLocale,
 } from '@maka/ui';
 import { type ComponentProps, type ReactNode, useState } from 'react';
-import { AppShellWorkspaceTopActions } from '../src/renderer/app-shell-chrome-actions';
+import { WorkbarTitlebarActions } from '../src/renderer/features/workbar';
 import { AppShellDetailPanel } from '../src/renderer/app-shell-detail-panel';
 import { McpPage } from '../src/renderer/mcp-page';
 import { withScopedMakaBridge } from './maka-bridge';
@@ -420,7 +440,7 @@ const DAILY_REVIEW_ARCHIVE: DailyReviewArchive = {
 type DailyReviewBridge = NonNullable<ComponentProps<typeof DailyReviewPage>['bridge']>;
 
 const configuredMcpConfig: McpConfigFile = {
-  version: 1,
+  version: MCP_CONFIG_VERSION,
   mcpServers: {
     filesystem: {
       enabled: true,
@@ -436,7 +456,7 @@ const configuredMcpConfig: McpConfigFile = {
 };
 
 const editorMcpConfig: McpConfigFile = {
-  version: 1,
+  version: MCP_CONFIG_VERSION,
   mcpServers: {
     slack: {
       enabled: false,
@@ -479,7 +499,7 @@ const configuredMcpStatuses: McpServerStatus[] = [
 ];
 
 const failedMcpConfig: McpConfigFile = {
-  version: 1,
+  version: MCP_CONFIG_VERSION,
   mcpServers: {
     'team-tools': {
       enabled: true,
@@ -502,7 +522,12 @@ const failedMcpStatuses: McpServerStatus[] = [
   },
 ];
 
+const storyRuntimeHostProfilesBridge = {
+  getDefaultHost: async () => ({ profileId: 'local', hostId: 'storybook-local-host' }),
+};
+
 const withConfiguredMcpBridge = withScopedMakaBridge({
+  runtimeHostProfiles: storyRuntimeHostProfilesBridge,
   mcp: {
     getConfig: async () => configuredMcpConfig,
     listStatuses: async () => configuredMcpStatuses,
@@ -512,12 +537,12 @@ const withConfiguredMcpBridge = withScopedMakaBridge({
     remove: async () => configuredMcpConfig,
     cancelInstall: async () => configuredMcpConfig,
     test: async () => ({ ok: true, status: configuredMcpStatuses[0], latencyMs: 42 }),
-    reconnect: async () => configuredMcpStatuses[0],
     subscribeChanges: () => () => {},
   },
 });
 
 const withEditorMcpBridge = withScopedMakaBridge({
+  runtimeHostProfiles: storyRuntimeHostProfilesBridge,
   mcp: {
     getConfig: async () => editorMcpConfig,
     listStatuses: async () => [editorMcpStatus],
@@ -527,27 +552,27 @@ const withEditorMcpBridge = withScopedMakaBridge({
     remove: async () => editorMcpConfig,
     cancelInstall: async () => editorMcpConfig,
     test: async () => ({ ok: false, status: editorMcpStatus, latencyMs: 0 }),
-    reconnect: async () => editorMcpStatus,
     subscribeChanges: () => () => {},
   },
 });
 
 const withEmptyMcpBridge = withScopedMakaBridge({
+  runtimeHostProfiles: storyRuntimeHostProfilesBridge,
   mcp: {
-    getConfig: async () => ({ version: 1, mcpServers: {} }),
+    getConfig: async () => ({ version: MCP_CONFIG_VERSION, mcpServers: {} }),
     listStatuses: async () => [],
-    setConfig: async () => ({ version: 1, mcpServers: {} }),
-    upsert: async () => ({ version: 1, mcpServers: {} }),
-    install: async () => ({ version: 1, mcpServers: {} }),
-    remove: async () => ({ version: 1, mcpServers: {} }),
-    cancelInstall: async () => ({ version: 1, mcpServers: {} }),
+    setConfig: async () => ({ version: MCP_CONFIG_VERSION, mcpServers: {} }),
+    upsert: async () => ({ version: MCP_CONFIG_VERSION, mcpServers: {} }),
+    install: async () => ({ version: MCP_CONFIG_VERSION, mcpServers: {} }),
+    remove: async () => ({ version: MCP_CONFIG_VERSION, mcpServers: {} }),
+    cancelInstall: async () => ({ version: MCP_CONFIG_VERSION, mcpServers: {} }),
     test: async () => ({ ok: true, status: configuredMcpStatuses[0], latencyMs: 42 }),
-    reconnect: async () => configuredMcpStatuses[0],
     subscribeChanges: () => () => {},
   },
 });
 
 const withFailedMcpBridge = withScopedMakaBridge({
+  runtimeHostProfiles: storyRuntimeHostProfilesBridge,
   mcp: {
     getConfig: async () => failedMcpConfig,
     listStatuses: async () => failedMcpStatuses,
@@ -557,7 +582,6 @@ const withFailedMcpBridge = withScopedMakaBridge({
     remove: async () => failedMcpConfig,
     cancelInstall: async () => failedMcpConfig,
     test: async () => ({ ok: false, status: failedMcpStatuses[0], latencyMs: 30_000 }),
-    reconnect: async () => failedMcpStatuses[0],
     subscribeChanges: () => () => {},
   },
 });
@@ -582,10 +606,10 @@ function ModuleSurface(props: {
       }}
     >
       <AppShellDetailPanel agentsView={props.agentsView}>
-        <AppShellWorkspaceTopActions
-          workbarAvailable={false}
-          workbarCollapsed
-          onToggleWorkbar={noop}
+        <WorkbarTitlebarActions
+          available={false}
+          collapsed
+          onToggle={noop}
         />
         <ToastProvider>{props.children}</ToastProvider>
       </AppShellDetailPanel>
@@ -934,6 +958,13 @@ export const ScheduledTasksInspector: Story = {
     row.click();
     await waitForStoryText(canvasElement, '立即触发');
   },
+};
+
+// Real path: narrow desktop → sidebar → 定时任务.
+// The inspector is intentionally hidden below the two-column breakpoint.
+export const ScheduledTasksNarrow: Story = {
+  render: () => <ScheduledTasksSurface tasks={CONFIGURED_TASKS} />,
+  parameters: { viewport: { defaultViewport: 'mobile2' } },
 };
 
 // Real path: sidebar → 定时任务 → 定时任务, with user-authored content at storage limits.

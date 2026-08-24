@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setTimeout as timerDelay } from 'node:timers/promises';
@@ -77,7 +96,7 @@ import {
   RuntimeKernel,
   type RuntimeKernelLike,
 } from '../runtime-kernel.js';
-import { FAKE_ASK_USER_QUESTION_PROMPT, FakeBackend } from '../fake-backend.js';
+import { FAKE_ASK_USER_QUESTION_PROMPT, FakeBackend } from '../test-only/fake-backend.js';
 import { RuntimeReadModel, RuntimeReadModelError } from '../runtime-read-model.js';
 import type { AgentBackend } from '@maka/core/backend-types';
 import type { MakaTool } from '../tool-runtime.js';
@@ -151,6 +170,62 @@ test('sendMessage rejects removed Automation as a live trigger', async () => {
  * before a turn starts and after it ends, and a crash between a turn's end and
  * its status write leaves `running` in storage forever.
  */
+test('listSessions preserves known-empty live run state', async () => {
+  const store = new MemorySessionStore();
+  let runningTurnIds: string[] = [];
+  const manager = new SessionManager({
+    store,
+    backends: new BackendRegistry(),
+    newId: nextId(),
+    now: nextNow(1),
+    runtimeKernel: {
+      runningTurnIds: () => [...runningTurnIds],
+    } as unknown as RuntimeKernelLike,
+  });
+  const session = await manager.createSession(makeInput());
+
+  assert.deepEqual((await manager.listSessions())[0]?.runningTurnIds, []);
+
+  runningTurnIds = ['turn-live'];
+  assert.deepEqual((await manager.listSessions())[0]?.runningTurnIds, ['turn-live']);
+  assert.equal((await store.readHeader(session.id)).status, 'active');
+});
+
+test('listChildSessions preserves known-empty live run state', async () => {
+  const store = new MemorySessionStore();
+  const runningTurnIdsBySession = new Map<string, string[]>();
+  const manager = new SessionManager({
+    store,
+    backends: new BackendRegistry(),
+    newId: nextId(),
+    now: nextNow(1),
+    runtimeKernel: {
+      runningTurnIds: (sessionId: string) => [...(runningTurnIdsBySession.get(sessionId) ?? [])],
+    } as unknown as RuntimeKernelLike,
+  });
+  const parent = await manager.createSession(makeInput({ name: 'Parent' }));
+  const child = await manager.createSession(
+    makeInput({
+      name: 'Child',
+      subagentParent: {
+        kind: 'subagent',
+        parentSessionId: parent.id,
+        spawnedBy: {
+          parentRunId: 'parent-run',
+          parentTurnId: 'parent-turn',
+          toolCallId: 'tool-call',
+        },
+        lifecycle: 'foreground',
+      },
+    }),
+  );
+
+  assert.deepEqual((await manager.listChildSessions(parent.id))[0]?.runningTurnIds, []);
+
+  runningTurnIdsBySession.set(child.id, ['turn-live']);
+  assert.deepEqual((await manager.listChildSessions(parent.id))[0]?.runningTurnIds, ['turn-live']);
+});
+
 describe('SessionManager Plan control boundaries', () => {
   test('an exact approval retry completes Session side effects after a partial failure', async () => {
     const store = new MemorySessionStore();
@@ -390,7 +465,7 @@ describe('SessionManager graph operator provisioning', () => {
     const runStore = new MemoryAgentRunStore();
     const parentGate = makeGate();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx, parentGate));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx, parentGate));
     const manager = new SessionManager({
       store,
       runStore,
@@ -847,7 +922,7 @@ describe('SessionManager graph operator provisioning', () => {
 
     expect(provisioned).toHaveLength(1);
     expect(result.header.projectId).toBe('project-1');
-    expect(result.header.permissionMode).toBe('execute');
+    expect(result.header.permissionMode).toBe('ask');
     expect(
       result.header.subagentRuntime
         ? 'permissionCeiling' in result.header.subagentRuntime
@@ -886,7 +961,7 @@ describe('SessionManager graph operator provisioning', () => {
     const { header: child } = await store.createSubagent(
       makeInput({
         cwd: binding.worktreePath,
-        permissionMode: 'execute',
+        permissionMode: 'ask',
         subagentParent: {
           kind: 'subagent',
           parentSessionId: parent.id,
@@ -926,7 +1001,7 @@ describe('SessionManager graph operator provisioning', () => {
         completedAt: 20,
         updatedAt: 20,
         cwd: binding.worktreePath,
-        permissionMode: 'execute',
+        permissionMode: 'ask',
         agentId: IMPLEMENTATION_AGENT_ID,
         agentName: IMPLEMENTATION_AGENT_DEFINITION.name,
       }),
@@ -1001,7 +1076,7 @@ describe('SessionManager graph operator provisioning', () => {
         completedAt: 60,
         updatedAt: 60,
         cwd: binding.worktreePath,
-        permissionMode: 'execute',
+        permissionMode: 'ask',
         agentId: IMPLEMENTATION_AGENT_ID,
         agentName: IMPLEMENTATION_AGENT_DEFINITION.name,
         resumedFromRunId: 'child-run',
@@ -1050,7 +1125,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backendBuilds = 0;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backendBuilds += 1;
       return new TestBackend(ctx);
     });
@@ -1082,7 +1157,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const executions: Parameters<RuntimeHostedRootAuthority['executeRoot']>[0][] = [];
     const authority = hostedRootAuthority();
     authority.executeRoot = async (input) => {
@@ -1176,7 +1251,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backendBuilds = 0;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backendBuilds += 1;
       return new TestBackend(ctx);
     });
@@ -1255,7 +1330,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const parent = await store.create(makeInput({ name: 'Supervisor' }));
     const child = await createGraphOperatorSession(store, parent.id);
     const claim = graphIntentClaim(
@@ -1327,7 +1402,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backendBuilds = 0;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backendBuilds += 1;
       return new TestBackend(ctx);
     });
@@ -1390,7 +1465,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const backends = new BackendRegistry();
     const backendGate = makeGate();
     const ready = makeGate();
-    backends.register('fake', (ctx) => new TestBackend(ctx, backendGate));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx, backendGate));
     const stoppedRoots: RuntimeMessageRunIdentity[] = [];
     let stoppedSessions = 0;
     const authority = hostedRootAuthority();
@@ -1506,7 +1581,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const backendsBySession = new Map<string, TestBackend>();
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(ctx);
       backendsBySession.set(ctx.sessionId, backend);
       return backend;
@@ -1574,7 +1649,7 @@ describe('SessionManager claimed graph intent execution', () => {
       ),
     ).toMatchObject({ text: 'summarize the routed records' });
 
-    await store.archive(child.id);
+    await store.updateHeader(child.id, { isArchived: true });
     const retry = await manager.runClaimedAgentGraphIntent({
       ...graphExecutionInput(claim, 'summarize the routed records'),
     });
@@ -1603,7 +1678,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const childGate = makeGate();
     const started = makeGate();
     let childBackend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       childBackend = new TestBackend(ctx, childGate);
       return childBackend;
     });
@@ -1687,7 +1762,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const firstGate = makeGate();
     const firstReady = makeGate();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx, firstGate);
       return backend;
     });
@@ -1745,7 +1820,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const admissionStarted = makeGate();
     const releaseAdmission = makeGate();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx);
       return backend;
     });
@@ -1857,7 +1932,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backendBuilds = 0;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backendBuilds += 1;
       return new TestBackend(ctx);
     });
@@ -1911,7 +1986,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx);
       return backend;
     });
@@ -1962,7 +2037,7 @@ describe('SessionManager claimed graph intent execution', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backendBuilds = 0;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backendBuilds += 1;
       return new TestBackend(ctx);
     });
@@ -2028,7 +2103,7 @@ describe('SessionManager claimed graph intent execution', () => {
     );
 
     const archivedChild = await createGraphOperatorSession(store, parent.id);
-    await store.archive(archivedChild.id);
+    await store.updateHeader(archivedChild.id, { isArchived: true });
     const archivedClaim = graphIntentClaim(
       {
         claimId: `graph_claim_${'3'.repeat(32)}`,
@@ -2077,7 +2152,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const contexts: BackendFactoryContext[] = [];
     const backendActivationSessions: string[] = [];
     const backendsBySession = new Map<string, TestBackend>();
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       contexts.push(ctx);
       const backend = new TestBackend(ctx, ctx.header.subagentRuntime ? undefined : parentGate);
       backendsBySession.set(ctx.sessionId, backend);
@@ -2135,7 +2210,6 @@ describe('SessionManager child-session runtime primitive', () => {
     expect(childHeader.cwd).toBe('/tmp/project');
     expect(childHeader.projectId).toBe('project-1');
     expect(childHeader.workspaceRoot).toBe((await store.readHeader(parent.id)).workspaceRoot);
-    expect(childHeader.backend).toBe('fake');
     expect(childHeader.llmConnectionSlug).toBe('connection-1');
     expect(childHeader.model).toBe('model-1');
     expect(childHeader.thinkingLevel).toBe('medium');
@@ -2205,8 +2279,8 @@ describe('SessionManager child-session runtime primitive', () => {
         (message) => message.type === 'user' && message.text === 'inspect the storage boundary',
       ),
     ).toBe(true);
-    await manager.setPermissionMode(result.childSessionId, 'execute');
-    expect((await store.readHeader(result.childSessionId)).permissionMode).toBe('execute');
+    await manager.setPermissionMode(result.childSessionId, 'bypass');
+    expect((await store.readHeader(result.childSessionId)).permissionMode).toBe('bypass');
     const projection = await manager.listChildAgents(parent.id);
     expect(projection.runs).toEqual([]);
     expect(projection.executions).toHaveLength(1);
@@ -2250,7 +2324,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const backends = new BackendRegistry();
     const parentGate = makeGate();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new TestBackend(ctx, ctx.header.subagentRuntime ? undefined : parentGate),
     );
     const manager = new SessionManager({
@@ -2335,7 +2409,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const backends = new BackendRegistry();
     const parentGate = makeGate();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new TestBackend(ctx, ctx.header.subagentRuntime ? undefined : parentGate),
     );
     const manager = new SessionManager({
@@ -2377,7 +2451,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const backends = new BackendRegistry();
     const parentGate = makeGate();
     const backendsBySession = new Map<string, TestBackend>();
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(ctx, ctx.header.subagentRuntime ? undefined : parentGate);
       backendsBySession.set(ctx.sessionId, backend);
       return backend;
@@ -2448,7 +2522,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const backends = new BackendRegistry();
     const parentGate = makeGate();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new TestBackend(ctx, ctx.header.subagentRuntime ? undefined : parentGate),
     );
     const manager = new SessionManager({
@@ -2500,7 +2574,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const childInputs: BackendSendInput[] = [];
     let childAttempts = 0;
     let failClaimOnce = true;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       if (!ctx.header.subagentRuntime) return new TestBackend(ctx, parentGate);
       return {
         kind: 'fake' as const,
@@ -2759,7 +2833,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const backends = new BackendRegistry();
     const parentGate = makeGate();
     const childInputs: BackendSendInput[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       if (!ctx.header.subagentRuntime) return new TestBackend(ctx, parentGate);
       return {
         kind: 'fake' as const,
@@ -2877,7 +2951,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const parentGate = makeGate();
     const childGate = makeGate();
     const backendsBySession = new Map<string, TestBackend>();
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(ctx, ctx.header.subagentRuntime ? childGate : parentGate);
       backendsBySession.set(ctx.sessionId, backend);
       return backend;
@@ -2955,7 +3029,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const backends = new BackendRegistry();
     const parentGate = makeGate();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new TestBackend(ctx, ctx.header.subagentRuntime ? undefined : parentGate),
     );
     const manager = new SessionManager({
@@ -3032,7 +3106,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const backends = new BackendRegistry();
     const parentGate = makeGate();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new TestBackend(ctx, ctx.header.subagentRuntime ? undefined : parentGate),
     );
     const manager = new SessionManager({
@@ -3098,7 +3172,6 @@ describe('SessionManager child-session runtime primitive', () => {
               systemPrompt: LOCAL_READ_AGENT_DEFINITION.systemPrompt,
               toolNames: [...LOCAL_READ_AGENT_DEFINITION.tools],
               categoryPolicy: {},
-              permissionCeiling: 'ask',
             },
             subagentSpawn: {
               schemaVersion: 1,
@@ -3171,7 +3244,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const backends = new BackendRegistry();
     const parentGate = makeGate();
     const contexts: BackendFactoryContext[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       contexts.push(ctx);
       return new TestBackend(ctx, ctx.header.subagentRuntime ? undefined : parentGate);
     });
@@ -3265,7 +3338,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const parentGate = makeGate();
     const compactCalls: Array<{ turnId: string; runtimeContextCount: number }> = [];
     const childBackends: LifecycleChildBackend[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       if (!ctx.header.subagentRuntime) return new TestBackend(ctx, parentGate);
       const backend = new LifecycleChildBackend(ctx, compactCalls);
       childBackends.push(backend);
@@ -3362,7 +3435,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const parentGate = makeGate();
-    backends.register('fake', (ctx) => new TestBackend(ctx, parentGate));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx, parentGate));
     const manager = new SessionManager({
       store,
       runStore,
@@ -3421,7 +3494,6 @@ describe('SessionManager child-session runtime primitive', () => {
           systemPrompt: LOCAL_READ_AGENT_DEFINITION.systemPrompt,
           toolNames: [...LOCAL_READ_AGENT_DEFINITION.tools],
           categoryPolicy: {},
-          permissionCeiling: 'ask',
         },
         subagentSpawn: {
           schemaVersion: 1,
@@ -3477,7 +3549,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -3513,7 +3585,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     let externalParent:
       | {
           sessionId: string;
@@ -3567,7 +3639,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const childGates = [makeGate(), makeGate()];
     let childGateIndex = 0;
     const backendsBySession = new Map<string, TestBackend>();
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const gate = ctx.header.subagentRuntime ? childGates[childGateIndex++] : parentGate;
       const backend = new TestBackend(ctx, gate);
       backendsBySession.set(ctx.sessionId, backend);
@@ -3653,7 +3725,7 @@ describe('SessionManager child-session runtime primitive', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -3694,7 +3766,6 @@ describe('SessionManager child-session runtime primitive', () => {
           systemPrompt: LOCAL_READ_AGENT_DEFINITION.systemPrompt,
           toolNames: ['Read', 'Glob', 'Grep'],
           categoryPolicy: { read: 'allow' },
-          permissionCeiling: 'ask',
         },
         subagentSpawn: {
           schemaVersion: 1,
@@ -3759,7 +3830,7 @@ describe('SessionManager automatic titles', () => {
   test('falls back once on generation failure', async () => {
     const store = new MemorySessionStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const changed = makeGate();
     let calls = 0;
     const manager = new SessionManager({
@@ -3788,7 +3859,7 @@ describe('SessionManager automatic titles', () => {
   test('does not overwrite or notify after a racing manual rename', async () => {
     const store = new MemorySessionStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const release = makeGate();
     const attempted = makeGate();
     store.generatedTitleAttempted = attempted;
@@ -3824,7 +3895,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const runStore = new OrderingAgentRunStore();
     const backends = new BackendRegistry();
     const compactCalls: Array<{ turnId: string; runtimeContextCount: number }> = [];
-    backends.register('fake', (ctx) => new CompactingTestBackend(ctx, compactCalls));
+    backends.register('ai-sdk', (ctx) => new CompactingTestBackend(ctx, compactCalls));
     const manager = new SessionManager({
       store,
       runStore,
@@ -3833,9 +3904,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
       newId: nextId(),
       now: nextNow(10_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     await drain(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'hello' }));
     runStore.operations = [];
@@ -3848,6 +3917,9 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const usage = events[0];
     if (usage?.type !== 'token_usage') throw new Error('expected token_usage');
     expect(usage.contextBudget?.compactionDecisions?.[0]?.decision).toBe('replaced');
+    const complete = events[1];
+    if (complete?.type !== 'complete') throw new Error('expected complete');
+    expect(complete.contextCompactionOutcome?.kind).toBe('compacted');
 
     const messages = await store.readMessages(session.id);
     expect(
@@ -3874,7 +3946,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     expect(runStore.operations).toEqual(['terminalRuntimeEvent', 'completedRunHeader']);
     expect(
       (await runStore.readRuntimeEvents(session.id, compactRun!.runId)).some(
-        (event) => event.actions?.tokenUsage?.contextBudget,
+        (event) => event.actions?.stateDelta?.contextCompactionOutcome,
       ),
     ).toBe(true);
     await manager.stopSession(session.id, { source: 'stop_button' });
@@ -3891,7 +3963,14 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const modelCalls: ModelCallAttempt[] = [];
     const summarizerModel = new MockLanguageModelV4({
       doGenerate: {
-        content: [{ type: 'text', text: 'MANUAL_COMPACT_SUMMARY' }],
+        content: [
+          {
+            type: 'text',
+            // Structured so it passes the summarizer's checkpoint validation
+            // (#3029) while keeping the sentinel greppable.
+            text: '## Goal\nMANUAL_COMPACT_SUMMARY\n\n## Progress\n- done\n\n## Next Steps\n1. continue\n\n## Critical Context\n- (none)',
+          },
+        ],
         finishReason: { unified: 'stop', raw: 'stop' },
         usage: {
           inputTokens: { total: 41, noCache: 41, cacheRead: 0, cacheWrite: 0 },
@@ -3901,7 +3980,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
         warnings: [],
       },
     });
-    backends.register('fake', (ctx) =>
+    backends.register('ai-sdk', (ctx) =>
       createTestAiSdkBackend({
         sessionId: ctx.sessionId,
         header: ctx.header,
@@ -3942,7 +4021,6 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
         contextBudget: {
           name: 'manual-compact-accounting',
           maxHistoryEstimatedTokens: 10_000,
-          minRecentTurns: 1,
           charsPerToken: 1,
         },
         summarizeHistoryCompact: buildLlmHistorySummarizer({
@@ -3962,9 +4040,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
       newId: nextId(),
       now: nextNow(13_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     await drain(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'first '.repeat(400) }));
     await drain(manager.sendMessage(session.id, { turnId: 'turn-2', text: 'second' }));
@@ -3993,7 +4069,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new FailOpenCompactingBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FailOpenCompactingBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -4002,9 +4078,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
       newId: nextId(),
       now: nextNow(12_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     await drain(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'hello' }));
     await drain(manager.compactSession(session.id, { turnId: 'turn-compact' }));
@@ -4032,7 +4106,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     });
     const backends = new BackendRegistry();
     const compactCalls: Array<{ turnId: string; runtimeContextCount: number }> = [];
-    backends.register('fake', (ctx) => new CompactingTestBackend(ctx, compactCalls));
+    backends.register('ai-sdk', (ctx) => new CompactingTestBackend(ctx, compactCalls));
     const manager = new SessionManager({
       store,
       runStore,
@@ -4041,9 +4115,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
       newId: nextId(),
       now: nextNow(15_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
     await drain(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'hello' }));
 
     blockPriorRead = true;
@@ -4078,7 +4150,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const backends = new BackendRegistry();
     const factoryStarts = new Map<string, ReturnType<typeof makeGate>>();
     const factoryModes = new Map<string, 'execution_cancellation' | 'abort_error'>();
-    backends.register('fake', async (ctx) => {
+    backends.register('ai-sdk', async (ctx) => {
       const started = factoryStarts.get(ctx.sessionId);
       const mode = factoryModes.get(ctx.sessionId);
       if (!started || !mode) throw new Error('cold compact factory was not configured');
@@ -4105,12 +4177,8 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
       newId: nextId(),
       now: nextNow(15_500),
     });
-    const cancelledSession = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
-    const abortErrorSession = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const cancelledSession = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
+    const abortErrorSession = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
     const cancelledStart = makeGate();
     const abortErrorStart = makeGate();
     factoryStarts.set(cancelledSession.id, cancelledStart);
@@ -4149,7 +4217,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const compactCalls: Array<{ turnId: string; runtimeContextCount: number }> = [];
-    backends.register('fake', (ctx) => new CompactingTestBackend(ctx, compactCalls));
+    backends.register('ai-sdk', (ctx) => new CompactingTestBackend(ctx, compactCalls));
     const manager = new SessionManager({
       store,
       runStore,
@@ -4158,9 +4226,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
       newId: nextId(),
       now: nextNow(17_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
     const readStarted = makeGate();
     const releaseRead = makeGate();
     store.nextReadHeaderGate = { started: readStarted, release: releaseRead };
@@ -4197,7 +4263,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     let compactingBackend: BlockingCompactBackend | undefined;
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new BlockingCompactBackend(ctx, {
           compactGate,
@@ -4215,9 +4281,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
       newId: nextId(),
       now: nextNow(20_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
     await drain(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'hello' }));
 
     const compactPromise = collectSessionEvents(
@@ -4244,7 +4308,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const compactCalls: Array<{ turnId: string; runtimeContextCount: number }> = [];
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new ActiveTurnBackend(ctx, { turnStarted, sendGate, compactCalls }),
     );
     const manager = new SessionManager({
@@ -4255,9 +4319,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
       newId: nextId(),
       now: nextNow(25_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     const sendPromise = (async () => {
       for await (const _event of manager.sendMessage(session.id, {
@@ -4423,7 +4485,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const readStarted = makeGate();
     const releaseRead = makeGate();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       backends,
@@ -4470,7 +4532,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const releaseUpdate = makeGate();
     const activatedModels: string[] = [];
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       activatedModels.push(ctx.header.model);
       return new TestBackend(ctx);
     });
@@ -4520,7 +4582,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const turnStarted = makeGate();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new (class extends ActiveTurnBackend {
           override async dispose(): Promise<void> {
@@ -4557,7 +4619,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     let disposeCalls = 0;
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new (class extends TestBackend {
           override async dispose(): Promise<void> {
@@ -4611,7 +4673,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     let disposeCalls = 0;
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new (class extends TestBackend {
           constructor() {
@@ -4689,7 +4751,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     let builds = 0;
     const disposed: number[] = [];
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const generation = ++builds;
       return new (class extends TestBackend {
         override async dispose(): Promise<void> {
@@ -4765,7 +4827,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     let builds = 0;
     const disposed: number[] = [];
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const generation = ++builds;
       return new (class extends TestBackend {
         override async dispose(): Promise<void> {
@@ -4835,7 +4897,7 @@ describe('SessionManager manual compaction and quiescent session changes', () =>
     const disposed: string[] = [];
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new (class extends TestBackend {
           override async dispose(): Promise<void> {
@@ -4901,7 +4963,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new AtomicBoundaryMemorySessionStore();
     const calls: string[] = [];
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       backends,
@@ -5015,7 +5077,7 @@ describe('SessionManager permission mode updates', () => {
     const firstGate = makeGate();
     const secondGate = makeGate();
     const gates = [firstGate, secondGate];
-    backends.register('fake', (ctx) => new TestBackend(ctx, gates.shift()));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx, gates.shift()));
     const manager = new SessionManager({
       store,
       runStore,
@@ -5043,7 +5105,7 @@ describe('SessionManager permission mode updates', () => {
     expect(afterFirstRuns.find((run) => run.turnId === 'turn-1')?.status).toBe('completed');
     expect(afterFirstRuns.find((run) => run.turnId === 'turn-2')?.status).toBe('running');
 
-    await expectRejects(manager.setPermissionMode(session.id, 'execute'), /当前任务正在运行/);
+    await expectRejects(manager.setPermissionMode(session.id, 'bypass'), /当前任务正在运行/);
 
     secondGate.release();
     await second.next();
@@ -5059,14 +5121,14 @@ describe('SessionManager permission mode updates', () => {
     expect(firstEvents.map((event) => event.type)).toContain('run_started');
     expect(firstEvents.map((event) => event.type)).toContain('run_completed');
 
-    const summary = await manager.setPermissionMode(session.id, 'execute');
-    expect(summary.permissionMode).toBe('execute');
+    const summary = await manager.setPermissionMode(session.id, 'bypass');
+    expect(summary.permissionMode).toBe('bypass');
   });
 
   test('leaving explore clears the deep research label so visible read-only copy stays truthful', async () => {
     const store = new MemorySessionStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({ store, backends, newId: nextId(), now: nextNow(6_000) });
     const session = await manager.createSession(
       makeInput({
@@ -5089,51 +5151,11 @@ describe('SessionManager permission mode updates', () => {
     expect(modeNote.data).toEqual({ from: 'explore', to: 'ask' });
   });
 
-  test('backend configuration updates rebuild an already-active backend', async () => {
-    const store = new MemorySessionStore();
-    const backends = new BackendRegistry();
-    const built: string[] = [];
-    backends.register('fake', (ctx) => {
-      built.push(
-        `${ctx.header.backend}:${ctx.header.llmConnectionSlug}:${ctx.header.model}:${ctx.header.cwd}`,
-      );
-      return new TestBackend(ctx);
-    });
-    backends.register('ai-sdk', (ctx) => {
-      built.push(
-        `${ctx.header.backend}:${ctx.header.llmConnectionSlug}:${ctx.header.model}:${ctx.header.cwd}`,
-      );
-      return new TestBackend(ctx);
-    });
-    const manager = new SessionManager({ store, backends, newId: nextId(), now: nextNow(5_000) });
-    const session = await manager.createSession(makeInput());
-
-    await drain(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'hello' }));
-    expect(built).toEqual(['fake:fake:fake-model:/tmp/cwd']);
-
-    const summary = await manager.updateSession(session.id, {
-      backend: 'ai-sdk',
-      llmConnectionSlug: 'zai-coding-plan',
-      model: 'glm-4.7',
-      cwd: '/tmp/worktree-cwd',
-    });
-    expect(summary.backend).toBe('ai-sdk');
-    expect(summary.llmConnectionSlug).toBe('zai-coding-plan');
-    expect(summary.cwd).toBe('/tmp/worktree-cwd');
-    expect(store.disposeCount).toBe(1);
-
-    await drain(manager.sendMessage(session.id, { turnId: 'turn-2', text: 'again' }));
-    expect(built).toEqual([
-      'fake:fake:fake-model:/tmp/cwd',
-      'ai-sdk:zai-coding-plan:glm-4.7:/tmp/worktree-cwd',
-    ]);
-  });
-
   test('starts a new turn without workspace identity when safety inspection fails', async () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new FinalTextTestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FinalTextTestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -5166,7 +5188,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let inspectionCalls = 0;
-    backends.register('fake', (ctx) => new FinalTextTestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FinalTextTestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -5198,39 +5220,6 @@ describe('SessionManager permission mode updates', () => {
     expect(run?.workspaceIdentity).toBeUndefined();
   });
 
-  test('does not declare the T1 protocol for a backend without the durable tool boundary', async () => {
-    const store = new MemorySessionStore();
-    const runStore = new MemoryAgentRunStore();
-    const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new CountingFinalTextBackend(ctx, () => {}));
-    const runtimeEventStore = Object.assign(runStore, {
-      toolBoundaryProtocol: 't1_after_preflight_v1' as const,
-    });
-    const manager = new SessionManager({
-      store,
-      runStore,
-      runtimeEventStore,
-      toolBoundaryProtocol: 't1_after_preflight_v1',
-      backends,
-      newId: nextId(),
-      now: nextNow(6_050),
-      runtimeSource: 'test',
-    });
-    const session = await manager.createSession(makeInput());
-
-    await collectSessionEvents(
-      manager.sendMessage(session.id, {
-        turnId: 'turn-no-tool-boundary',
-        text: 'hello',
-      }),
-    );
-
-    const [run] = await runStore.listSessionRuns(session.id);
-    if (!run) throw new Error('expected run');
-    const events = await runStore.readRuntimeEvents(session.id, run.runId);
-    expect(events[0]?.actions?.runtimeProtocol).toBeUndefined();
-  });
-
   test('declares the T1 protocol for an AiSdk run when the host wires the durable boundary', async () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
@@ -5246,7 +5235,7 @@ describe('SessionManager permission mode updates', () => {
       now: nextNow(6_060),
       runtimeSource: 'test',
     });
-    const session = await manager.createSession(makeInput({ backend: 'ai-sdk' }));
+    const session = await manager.createSession(makeInput());
 
     await collectSessionEvents(
       manager.sendMessage(session.id, {
@@ -5478,7 +5467,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     const observed: InvocationResult[] = [];
     let backend: FinalTextTestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new FinalTextTestBackend(ctx);
       return backend;
     });
@@ -5544,6 +5533,92 @@ describe('SessionManager permission mode updates', () => {
     expect(runtimeEvents[2]?.status).toBe('completed');
   });
 
+  test('RuntimeKernel preserves the per-turn step cap through RuntimeRunner', async () => {
+    const store = new MemorySessionStore();
+    const runStore = new MemoryAgentRunStore();
+    const backends = new BackendRegistry();
+    let providerSteps = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        providerSteps += 1;
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              {
+                type: 'tool-call',
+                toolCallId: `tool-${providerSteps}`,
+                toolName: 'Read',
+                input: JSON.stringify({ path: `notes-${providerSteps}.md` }),
+              },
+              {
+                type: 'finish',
+                finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
+                usage: {
+                  inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 1, text: 1, reasoning: 0 },
+                },
+              },
+            ] as LanguageModelV4StreamPart[],
+            initialDelayInMs: null,
+            chunkDelayInMs: null,
+          }),
+        };
+      },
+    });
+    backends.register('ai-sdk', (ctx) =>
+      createTestAiSdkBackend({
+        sessionId: ctx.sessionId,
+        header: ctx.header,
+        appendMessage: ctx.appendMessage ?? (async () => {}),
+        connection: {
+          slug: 'mock-main',
+          providerType: 'anthropic',
+          defaultModel: 'mock-model-id',
+        },
+        apiKey: 'sk-test',
+        modelId: 'mock-model-id',
+        modelFactory: () => model,
+        tools: [
+          {
+            name: 'Read',
+            description: 'Read a file',
+            parameters: z.object({ path: z.string() }),
+            impl: async () => ({ ok: true }),
+          },
+        ],
+        maxSteps: 3,
+        ...(ctx.loadTurnRuntimeEvents ? { loadTurnRuntimeEvents: ctx.loadTurnRuntimeEvents } : {}),
+        newId: nextId(),
+        now: nextNow(1),
+      }),
+    );
+    const manager = new SessionManager({
+      store,
+      runStore,
+      runtimeEventStore: runStore,
+      backends,
+      newId: nextId(),
+      now: nextNow(6_525),
+      runtimeSource: 'test',
+    });
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
+
+    const events = await collectSessionEvents(
+      manager.sendMessage(session.id, {
+        turnId: 'turn-step-cap',
+        text: 'Keep calling Read.',
+        maxSteps: 1,
+      }),
+    );
+
+    expect(providerSteps).toBe(1);
+    expect(
+      events.find((event) => event.type === 'token_usage' && event.runtimeSteps !== undefined),
+    ).toMatchObject({ type: 'token_usage', runtimeSteps: 1 });
+    expect(events.at(-1)).toMatchObject({ type: 'complete', stopReason: 'step_limit' });
+  });
+
   test('executes an approved continuation after a path move without another user message', async () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
@@ -5568,7 +5643,7 @@ describe('SessionManager permission mode updates', () => {
       now: nextNow(6_550),
       runtimeSource: 'test',
     });
-    const session = await manager.createSession(makeInput({ backend: 'ai-sdk' }));
+    const session = await manager.createSession(makeInput());
     const header = await store.readHeader(session.id);
     const sourceRunId = 'source-run';
     const sourceTurnId = 'source-turn';
@@ -5708,7 +5783,7 @@ describe('SessionManager permission mode updates', () => {
     const sendGate = makeGate();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new ActiveTurnBackend(ctx, {
           turnStarted,
@@ -5816,7 +5891,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new FinalTextTestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FinalTextTestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -5961,7 +6036,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new FinalTextTestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FinalTextTestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -6075,7 +6150,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     let backendCalls = 0;
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CountingFinalTextBackend(ctx, () => {
           backendCalls += 1;
@@ -6162,7 +6237,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     let backendCalls = 0;
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CountingFinalTextBackend(ctx, () => {
           backendCalls += 1;
@@ -6257,7 +6332,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     let backendCalls = 0;
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CountingFinalTextBackend(ctx, () => {
           backendCalls += 1;
@@ -6368,7 +6443,7 @@ describe('SessionManager permission mode updates', () => {
     const releaseContinuationCommit = makeGate();
     let backendCalls = 0;
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CountingFinalTextBackend(ctx, () => {
           backendCalls += 1;
@@ -6466,7 +6541,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     let backendCalls = 0;
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CountingFinalTextBackend(ctx, () => {
           backendCalls += 1;
@@ -6548,7 +6623,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     let backendCalls = 0;
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CountingFinalTextBackend(ctx, () => {
           backendCalls += 1;
@@ -6636,7 +6711,7 @@ describe('SessionManager permission mode updates', () => {
     let backendCalls = 0;
     let failOnce = true;
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CountingFinalTextBackend(ctx, () => {
           backendCalls += 1;
@@ -6780,7 +6855,7 @@ describe('SessionManager permission mode updates', () => {
     let workspaceIdentity = 'workspace-1';
     const lifecycleEvents: Array<{ type: string; errorClass?: string }> = [];
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CountingFinalTextBackend(ctx, () => {
           backendCalls += 1;
@@ -6884,7 +6959,7 @@ describe('SessionManager permission mode updates', () => {
       let backendCalls = 0;
       let availableToolNames: readonly string[] = scenario.planned;
       backends.register(
-        'fake',
+        'ai-sdk',
         (ctx) =>
           new CountingFinalTextBackend(ctx, () => {
             backendCalls += 1;
@@ -6972,7 +7047,7 @@ describe('SessionManager permission mode updates', () => {
     let backendCalls = 0;
     let availableToolNames: readonly string[] = ['Write'];
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CountingFinalTextBackend(ctx, () => {
           backendCalls += 1;
@@ -7080,7 +7155,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     let backendCalls = 0;
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CountingFinalTextBackend(ctx, () => {
           backendCalls += 1;
@@ -7158,7 +7233,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx);
       return backend;
     });
@@ -7268,7 +7343,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore({ failRuntimeEventAppendAfter: 3 });
     const backends = new BackendRegistry();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx);
       return backend;
     });
@@ -7395,7 +7470,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -7421,7 +7496,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx);
       return backend;
     });
@@ -7514,7 +7589,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx);
       return backend;
     });
@@ -8871,7 +8946,7 @@ describe('SessionManager permission mode updates', () => {
       id: 'legacy-note',
       ts: 104,
       kind: 'mode_change',
-      data: { from: 'ask', to: 'execute' },
+      data: { from: 'ask', to: 'bypass' },
     };
     await store.appendMessage(session.id, legacyNote);
 
@@ -9003,7 +9078,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new EventBackend(ctx, [{ type: 'complete', stopReason: 'end_turn' }]),
     );
     const manager = new SessionManager({
@@ -9053,7 +9128,7 @@ describe('SessionManager permission mode updates', () => {
     });
     const backends = new BackendRegistry();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx);
       return backend;
     });
@@ -9109,7 +9184,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new EventBackend(ctx, [{ type: 'complete', stopReason: 'end_turn' }]),
     );
     const manager = new SessionManager({
@@ -9222,7 +9297,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const backendInstances: TestBackend[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(ctx);
       backendInstances.push(backend);
       return backend;
@@ -9347,7 +9422,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const backendInstances: TestBackend[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(ctx);
       backendInstances.push(backend);
       return backend;
@@ -9517,7 +9592,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const backendInstances: TestBackend[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(ctx);
       backendInstances.push(backend);
       return backend;
@@ -9600,7 +9675,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore({ failUpdateRunStatusOnce: 'failed' });
     const backends = new BackendRegistry();
     let backend: TurnScriptBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TurnScriptBackend(ctx, [
         [{ type: 'complete', stopReason: 'error' }],
         [
@@ -9654,7 +9729,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const backendInstances: TestBackend[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(ctx);
       backendInstances.push(backend);
       return backend;
@@ -9743,7 +9818,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const backendInstances: TestBackend[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(ctx);
       backendInstances.push(backend);
       return backend;
@@ -9789,7 +9864,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const childBackends: TestBackend[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(ctx);
       if (ctx.systemPrompt) childBackends.push(backend);
       return backend;
@@ -9867,7 +9942,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -9936,8 +10011,9 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const sendInputs: BackendSendInput[] = [];
+    const contexts: BackendFactoryContext[] = [];
     let childAttempt = 0;
-    backends.register('fake', (ctx) => ({
+    const createBackend = (ctx: BackendFactoryContext) => ({
       kind: 'fake' as const,
       sessionId: ctx.sessionId,
       async *send(input: BackendSendInput): AsyncIterable<SessionEvent> {
@@ -9981,13 +10057,47 @@ describe('SessionManager permission mode updates', () => {
       async stop(): Promise<void> {},
       async respondToSandboxBoundary(): Promise<void> {},
       async dispose(): Promise<void> {},
-    }));
+    });
+    backends.register('ai-sdk', (ctx) => {
+      contexts.push(ctx);
+      return createBackend(ctx);
+    });
+    const retryResolutionStarted = makeGate();
+    const releaseRetryResolution = makeGate();
+    const policyGate = makeTestRuntimePolicyGate();
+    let activationDepth = 0;
+    let holdRetryActivation = false;
+    let shellRevision = 'A';
     const manager = new SessionManager({
       store,
       runStore,
       runtimeEventStore: runStore,
       backends,
-      childTools: [testTool('Read'), testTool('Glob'), testTool('Grep')],
+      resolveChildTools: async () => {
+        const capturedRevision = shellRevision;
+        if (holdRetryActivation && activationDepth > 0) {
+          retryResolutionStarted.release();
+          await releaseRetryResolution.promise;
+        }
+        return {
+          tools: ['Read', 'Glob', 'Grep'].map((name) => ({
+            ...testTool(name),
+            description: `${name} retry shell ${capturedRevision}`,
+          })),
+          shell: {
+            plan: { kind: 'posix', displayName: `retry shell ${capturedRevision}` },
+          },
+        };
+      },
+      runBackendActivation: (operation) =>
+        policyGate.runBackendActivation(async () => {
+          activationDepth += 1;
+          try {
+            return await operation();
+          } finally {
+            activationDepth -= 1;
+          }
+        }),
       inspectContinuationSafety: async () => ({
         workspaceIdentity: '/tmp/cwd',
         backgroundOperationsSettled: true,
@@ -10064,13 +10174,27 @@ describe('SessionManager permission mode updates', () => {
     expect(sendInputs).toHaveLength(2);
     expect(abortedRetryReady).toBe(0);
 
-    const retried = await manager.retryChildAgent(session.id, {
+    holdRetryActivation = true;
+    const retriedPromise = manager.retryChildAgent(session.id, {
       parentRunId: parentRun.runId,
       sourceRunId: second.runId,
     });
+    await retryResolutionStarted.promise;
+    let mutationApplied = false;
+    const mutation = policyGate.runMutation(async () => {
+      shellRevision = 'B';
+      mutationApplied = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(mutationApplied).toBe(false);
+    releaseRetryResolution.release();
+    const retried = await retriedPromise;
+    await mutation;
 
     expect(retried.status).toBe('completed');
     expect(retried.retriedFromRunId).toBe(second.runId);
+    expect(contexts.at(-1)?.turnShellPlan?.plan.displayName).toBe('retry shell A');
+    expect(contexts.at(-1)?.tools?.[0]?.description).toMatch(/retry shell A/);
     expect(sendInputs.map((input) => input.text)).toEqual([
       'inspect auth',
       'retry with additional guidance',
@@ -10102,6 +10226,128 @@ describe('SessionManager permission mode updates', () => {
     ).toEqual([]);
   });
 
+  test('retryChildAgent fails closed without a complete continuation composition', async () => {
+    const store = new MemorySessionStore();
+    const runStore = new MemoryAgentRunStore();
+    const backends = new BackendRegistry();
+    let providerDispatches = 0;
+    backends.register('ai-sdk', (ctx) => ({
+      kind: 'fake' as const,
+      sessionId: ctx.sessionId,
+      async *send(input: BackendSendInput): AsyncIterable<SessionEvent> {
+        providerDispatches += 1;
+        yield {
+          type: 'error',
+          id: `${input.turnId}-error`,
+          turnId: input.turnId,
+          ts: 1,
+          recoverable: true,
+          reason: 'RateLimit',
+          message: 'provider 429',
+        };
+        yield {
+          type: 'complete',
+          id: `${input.turnId}-complete`,
+          turnId: input.turnId,
+          ts: 2,
+          stopReason: 'error',
+        };
+      },
+      async stop(): Promise<void> {},
+      async respondToSandboxBoundary(): Promise<void> {},
+      async dispose(): Promise<void> {},
+    }));
+    const inspectContinuationSafety = async () => ({
+      workspaceIdentity: '/tmp/cwd',
+      backgroundOperationsSettled: true,
+      availableToolNames: [] as string[],
+    });
+    const composeManager = (options: {
+      runtimeEventStore?: RuntimeEventStore;
+      withSafetyInspector?: boolean;
+    }) =>
+      new SessionManager({
+        store,
+        runStore,
+        runtimeEventStore: options.runtimeEventStore ?? runStore,
+        backends,
+        childTools: [testTool('Read'), testTool('Glob'), testTool('Grep')],
+        ...(options.withSafetyInspector ? { inspectContinuationSafety } : {}),
+        newId: nextId(),
+        now: nextNow(6_845),
+        runtimeSource: 'test',
+      });
+    const eventStoreWithoutAuthority = new Proxy(runStore, {
+      get(target, property, receiver) {
+        if (property === 'continuationAuthorityCapability') return undefined;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const seeder = composeManager({});
+    const session = await seeder.createSession(makeInput({ permissionMode: 'ask' }));
+    const parentRun = makeRunHeader({
+      sessionId: session.id,
+      runId: 'parent-run',
+      turnId: 'parent-turn',
+      status: 'completed',
+      createdAt: 100,
+      updatedAt: 110,
+      completedAt: 110,
+    });
+    await seedRuntimeRun(runStore, parentRun, [
+      runtimeEvent({
+        id: 'parent-complete',
+        sessionId: session.id,
+        runId: parentRun.runId,
+        turnId: parentRun.turnId,
+        ts: 110,
+        status: 'completed',
+        actions: { endInvocation: true },
+      }),
+    ]);
+    const first = await seeder.spawnChildAgent(session.id, {
+      turnId: 'child-rate-limited',
+      parentRunId: parentRun.runId,
+      spec: { id: LOCAL_READ_AGENT_ID, name: 'Reader', systemPrompt: 'read only' },
+      prompt: 'inspect auth',
+    });
+    expect(first.status).toBe('failed');
+    expect(first.failureClass).toBe('RateLimit');
+    if (!first.runId) throw new Error('rate-limited child run id was not recorded');
+    const runsBeforeRetries = await runStore.listSessionRuns(session.id);
+
+    const incompleteCompositions = [
+      {
+        label: 'continuation authority and safety inspector are both missing',
+        runtimeEventStore: eventStoreWithoutAuthority,
+        withSafetyInspector: false,
+      },
+      {
+        label: 'continuation authority is missing its safety inspector',
+        runtimeEventStore: runStore,
+        withSafetyInspector: false,
+      },
+      {
+        label: 'safety inspector is missing its continuation authority',
+        runtimeEventStore: eventStoreWithoutAuthority,
+        withSafetyInspector: true,
+      },
+    ];
+    for (const composition of incompleteCompositions) {
+      const manager = composeManager(composition);
+      await expectRejects(
+        manager.retryChildAgent(session.id, {
+          parentRunId: parentRun.runId,
+          sourceRunId: first.runId,
+        }),
+        /composition is incomplete/,
+      );
+    }
+    expect(providerDispatches).toBe(1);
+    expect(await runStore.listSessionRuns(session.id)).toHaveLength(runsBeforeRetries.length);
+  });
+
   test('parent and child runs can read their ledger while only parents may compact session history', async () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
@@ -10127,7 +10373,7 @@ describe('SessionManager permission mode updates', () => {
         yield* super.send(input);
       }
     }
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       contexts.push(ctx);
       return new SeamProbeBackend(ctx);
     });
@@ -10172,11 +10418,119 @@ describe('SessionManager permission mode updates', () => {
     expect(capabilities[1]?.allowMidTurnHistoryCompaction).toBe(false);
   });
 
+  test('resolves the child execution toolset at activation time', async () => {
+    const store = new MemorySessionStore();
+    const runStore = new MemoryAgentRunStore();
+    const backends = new BackendRegistry();
+    const contexts: BackendFactoryContext[] = [];
+    backends.register('ai-sdk', (ctx) => {
+      contexts.push(ctx);
+      return new TestBackend(ctx);
+    });
+    let resolutions = 0;
+    const manager = new SessionManager({
+      store,
+      runStore,
+      runtimeEventStore: runStore,
+      backends,
+      resolveChildTools: async () => {
+        resolutions += 1;
+        return {
+          tools: ['Read', 'Glob', 'Grep'].map((name) => ({
+            ...testTool(name),
+            description: `${name} turn-scoped toolset ${resolutions}`,
+          })),
+        };
+      },
+      newId: nextId(),
+      now: nextNow(6_851),
+    });
+    const session = await manager.createSession(makeInput({ permissionMode: 'ask' }));
+    await drain(manager.sendMessage(session.id, { turnId: 'parent-turn', text: 'parent context' }));
+    const [parentRun] = await runStore.listSessionRuns(session.id);
+    if (!parentRun) throw new Error('parent run was not recorded');
+
+    await manager.spawnChildAgent(session.id, {
+      turnId: 'child-turn',
+      parentRunId: parentRun.runId,
+      spec: { id: LOCAL_READ_AGENT_ID, name: 'Reader', systemPrompt: 'read only' },
+      prompt: 'inspect',
+    });
+
+    assert.equal(resolutions, 1);
+    assert.match(contexts[1]?.tools?.[0]?.description ?? '', /turn-scoped toolset/);
+  });
+
+  test('captures child tools and shell plan inside one backend activation snapshot', async () => {
+    const store = new MemorySessionStore();
+    const runStore = new MemoryAgentRunStore();
+    const backends = new BackendRegistry();
+    const contexts: BackendFactoryContext[] = [];
+    backends.register('ai-sdk', (ctx) => {
+      contexts.push(ctx);
+      return new TestBackend(ctx);
+    });
+    const resolutionStarted = makeGate();
+    const releaseResolution = makeGate();
+    const { runBackendActivation, runMutation } = makeTestRuntimePolicyGate();
+    let shellRevision = 'A';
+    let mutationApplied = false;
+    const manager = new SessionManager({
+      store,
+      runStore,
+      runtimeEventStore: runStore,
+      backends,
+      resolveChildTools: async () => {
+        const capturedRevision = shellRevision;
+        resolutionStarted.release();
+        await releaseResolution.promise;
+        return {
+          tools: ['Read', 'Glob', 'Grep'].map((name) => ({
+            ...testTool(name),
+            description: `${name} shell snapshot ${capturedRevision}`,
+          })),
+          shell: {
+            plan: { kind: 'posix', displayName: `shell ${capturedRevision}` },
+          },
+        };
+      },
+      runBackendActivation,
+      newId: nextId(),
+      now: nextNow(6_852),
+    });
+    const session = await manager.createSession(makeInput({ permissionMode: 'ask' }));
+    await drain(manager.sendMessage(session.id, { turnId: 'parent-turn', text: 'parent context' }));
+    const [parentRun] = await runStore.listSessionRuns(session.id);
+    if (!parentRun) throw new Error('parent run was not recorded');
+
+    const childTurn = manager.spawnChildAgent(session.id, {
+      turnId: 'child-turn',
+      parentRunId: parentRun.runId,
+      spec: { id: LOCAL_READ_AGENT_ID, name: 'Reader', systemPrompt: 'read only' },
+      prompt: 'inspect',
+    });
+    await resolutionStarted.promise;
+    const mutation = runMutation(async () => {
+      shellRevision = 'B';
+      mutationApplied = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(mutationApplied).toBe(false);
+
+    releaseResolution.release();
+    await childTurn;
+    await mutation;
+
+    expect(contexts[1]?.turnShellPlan?.plan.displayName).toBe('shell A');
+    expect(contexts[1]?.tools?.[0]?.description).toMatch(/shell snapshot A/);
+    expect(shellRevision).toBe('B');
+  });
+
   test('spawnChildAgent returns the terminal RuntimeEvent status when the child header commit fails', async () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore({ failUpdateRunStatusOnce: 'completed' });
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -10231,7 +10585,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new EventBackend(ctx, [{ type: 'complete', stopReason: 'step_limit' }]),
     );
     const manager = new SessionManager({
@@ -10259,7 +10613,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new HighVolumeDeltaBackend(ctx, 512));
+    backends.register('ai-sdk', (ctx) => new HighVolumeDeltaBackend(ctx, 512));
     const manager = new SessionManager({
       store,
       runStore,
@@ -10301,7 +10655,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     const childGate = makeGate();
     const backendInstances: TestBackend[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(
         ctx,
         ctx.header.permissionMode === 'explore' ? childGate : undefined,
@@ -10347,8 +10701,8 @@ describe('SessionManager permission mode updates', () => {
     if (!childRun) throw new Error('child run was not recorded');
     expect(childRun.status).toBe('cancelled');
     expect(store.disposeCount).toBe(1);
-    await manager.setPermissionMode(session.id, 'execute');
-    expect((await store.readHeader(session.id)).permissionMode).toBe('execute');
+    await manager.setPermissionMode(session.id, 'bypass');
+    expect((await store.readHeader(session.id)).permissionMode).toBe('bypass');
   });
 
   test('stopSession waits for a child start blocked before Run reservation', async () => {
@@ -10356,7 +10710,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let childBackend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       childBackend = new TestBackend(ctx);
       return childBackend;
     });
@@ -10409,7 +10763,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     const activeGate = makeGate();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx, activeGate);
       return backend;
     });
@@ -10464,7 +10818,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx);
       return backend;
     });
@@ -10517,7 +10871,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     const buildStarted = makeGate();
     const releaseBuild = makeGate();
-    backends.register('fake', async () => {
+    backends.register('ai-sdk', async () => {
       buildStarted.release();
       await releaseBuild.promise;
       const error = new Error('backend activation timed out');
@@ -10569,7 +10923,7 @@ describe('SessionManager permission mode updates', () => {
     const buildStarted = makeGate();
     let factorySignal: AbortSignal | undefined;
     let dispatches = 0;
-    backends.register('fake', async (ctx) => {
+    backends.register('ai-sdk', async (ctx) => {
       factorySignal = ctx.abortSignal;
       if (!factorySignal) throw new Error('backend factory did not receive an abort signal');
       buildStarted.release();
@@ -10614,7 +10968,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const buildStarted = makeGate();
-    backends.register('fake', async (ctx) => {
+    backends.register('ai-sdk', async (ctx) => {
       if (!ctx.abortSignal) throw new Error('backend factory did not receive an abort signal');
       buildStarted.release();
       await timerDelay(60_000, undefined, { signal: ctx.abortSignal });
@@ -10656,7 +11010,7 @@ describe('SessionManager permission mode updates', () => {
     let builds = 0;
     let firstDisposeCalls = 0;
     let firstDispatches = 0;
-    backends.register('fake', async (ctx) => {
+    backends.register('ai-sdk', async (ctx) => {
       builds += 1;
       if (builds === 1) {
         buildStarted.release();
@@ -10723,7 +11077,7 @@ describe('SessionManager permission mode updates', () => {
     const releaseBuild = makeGate();
     let builds = 0;
     let disposeCalls = 0;
-    backends.register('fake', async (ctx) => {
+    backends.register('ai-sdk', async (ctx) => {
       builds += 1;
       buildStarted.release();
       await releaseBuild.promise;
@@ -10797,7 +11151,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     const childGate = makeGate();
     let childBackend: RetryStopBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       if (ctx.header.permissionMode !== 'explore') return new TestBackend(ctx);
       childBackend = new RetryStopBackend(ctx, childGate);
       return childBackend;
@@ -10850,7 +11204,7 @@ describe('SessionManager permission mode updates', () => {
     const stopStarted = makeGate();
     const releaseStop = makeGate();
     let backend: ConcurrentStopBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new ConcurrentStopBackend(ctx, stopStarted, releaseStop);
       return backend;
     });
@@ -10902,7 +11256,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx);
       return backend;
     });
@@ -10960,7 +11314,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: TestBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new TestBackend(ctx);
       return backend;
     });
@@ -11010,7 +11364,7 @@ describe('SessionManager permission mode updates', () => {
     const releaseSend = makeGate();
     let builds = 0;
     let backend: PermissionBroadcastBackend | undefined;
-    backends.register('fake', async (ctx) => {
+    backends.register('ai-sdk', async (ctx) => {
       builds += 1;
       buildStarted.release();
       await releaseBuild.promise;
@@ -11066,7 +11420,7 @@ describe('SessionManager permission mode updates', () => {
     const childGate = makeGate();
     let parentBackend: SandboxBoundaryWaitBackend | undefined;
     let childBackend: PermissionBroadcastBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       if (ctx.header.permissionMode === 'explore') {
         childBackend = new PermissionBroadcastBackend(ctx, childGate);
         return childBackend;
@@ -11120,7 +11474,7 @@ describe('SessionManager permission mode updates', () => {
     const childGate = makeGate();
     let parentBackend: CountingStopBackend | undefined;
     let childBackend: RetryStopBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       if (ctx.header.permissionMode === 'explore') {
         childBackend = new RetryStopBackend(ctx, childGate);
         return childBackend;
@@ -11178,7 +11532,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     const sendGate = makeGate();
     let backend: CountingStopBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new CountingStopBackend(ctx, sendGate);
       return backend;
     });
@@ -11228,7 +11582,7 @@ describe('SessionManager permission mode updates', () => {
     const backends = new BackendRegistry();
     const sendGate = makeGate();
     let backend: CountingStopBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new CountingStopBackend(ctx, sendGate);
       return backend;
     });
@@ -11278,7 +11632,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const backendInstances: TestBackend[] = [];
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       const backend = new TestBackend(ctx);
       backendInstances.push(backend);
       return backend;
@@ -11293,7 +11647,7 @@ describe('SessionManager permission mode updates', () => {
       now: nextNow(6_847),
       runtimeSource: 'test',
     });
-    const session = await manager.createSession(makeInput({ permissionMode: 'execute' }));
+    const session = await manager.createSession(makeInput({ permissionMode: 'ask' }));
     await drain(manager.sendMessage(session.id, { turnId: 'parent-turn', text: 'parent context' }));
     const [parentRun] = await runStore.listSessionRuns(session.id);
     if (!parentRun) throw new Error('parent run was not recorded');
@@ -11340,7 +11694,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -11367,7 +11721,7 @@ describe('SessionManager permission mode updates', () => {
       now: nextNow(6_848),
       runtimeSource: 'test',
     });
-    const session = await manager.createSession(makeInput({ permissionMode: 'execute' }));
+    const session = await manager.createSession(makeInput({ permissionMode: 'ask' }));
     await seedRuntimeRun(
       runStore,
       makeRunHeader({
@@ -11542,7 +11896,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -11553,7 +11907,7 @@ describe('SessionManager permission mode updates', () => {
       now: nextNow(6_900),
       runtimeSource: 'test',
     });
-    const session = await manager.createSession(makeInput({ permissionMode: 'execute' }));
+    const session = await manager.createSession(makeInput({ permissionMode: 'ask' }));
     await seedRuntimeRun(
       runStore,
       makeRunHeader({
@@ -11630,7 +11984,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -11717,7 +12071,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -11790,42 +12144,11 @@ describe('SessionManager permission mode updates', () => {
     expect(output.budget.projectedBytes <= output.budget.maxBytes).toBe(true);
   });
 
-  test('rejects backend configuration updates while a turn is actively streaming', async () => {
-    const store = new MemorySessionStore();
-    const backends = new BackendRegistry();
-    const gate = makeGate();
-    backends.register('fake', (ctx) => new TestBackend(ctx, gate));
-    const manager = new SessionManager({ store, backends, newId: nextId(), now: nextNow(7_000) });
-    const session = await manager.createSession(makeInput());
-
-    const iterator = manager
-      .sendMessage(session.id, { turnId: 'turn-1', text: 'hello' })
-      [Symbol.asyncIterator]();
-    await iterator.next();
-
-    await expectRejects(
-      manager.updateSession(session.id, {
-        backend: 'ai-sdk',
-        llmConnectionSlug: 'zai-coding-plan',
-        model: 'glm-4.7',
-        cwd: '/tmp/worktree-cwd',
-      }),
-      /Cannot change backend configuration while a turn is running/,
-    );
-    const header = await store.readHeader(session.id);
-    expect(header.backend).toBe('fake');
-    expect(header.llmConnectionSlug).toBe('fake');
-
-    gate.release();
-    await iterator.next();
-    await iterator.next();
-  });
-
   test('backend build failure after user append writes a failed terminal run fact', async () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', () => {
+    backends.register('ai-sdk', () => {
       throw new Error('backend init failed');
     });
     const manager = new SessionManager({
@@ -11874,7 +12197,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: SandboxBoundaryWaitBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new SandboxBoundaryWaitBackend(ctx);
       return backend;
     });
@@ -11921,7 +12244,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new FakeBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FakeBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -11930,7 +12253,7 @@ describe('SessionManager permission mode updates', () => {
       newId: nextId(),
       now: nextNow(9_000),
     });
-    const session = await manager.createSession(makeInput({ backend: 'fake' }));
+    const session = await manager.createSession(makeInput());
 
     const iterator = manager
       .sendMessage(session.id, { turnId: 'turn-1', text: FAKE_ASK_USER_QUESTION_PROMPT })
@@ -11977,7 +12300,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new FakeBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FakeBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -11986,7 +12309,7 @@ describe('SessionManager permission mode updates', () => {
       newId: nextId(),
       now: nextNow(9_000),
     });
-    const session = await manager.createSession(makeInput({ backend: 'fake' }));
+    const session = await manager.createSession(makeInput());
 
     const iterator = manager
       .sendMessage(session.id, { turnId: 'turn-1', text: FAKE_ASK_USER_QUESTION_PROMPT })
@@ -12011,7 +12334,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new SandboxBoundaryWaitBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new SandboxBoundaryWaitBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -12046,7 +12369,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new UnmappedSessionEventBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new UnmappedSessionEventBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -12088,7 +12411,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new UnmappedSessionEventBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new UnmappedSessionEventBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -12139,7 +12462,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new EventBackend(ctx, [{ type: 'complete', stopReason: 'error' }]),
     );
     const manager = new SessionManager({
@@ -12166,7 +12489,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new EventBackend(ctx, [{ type: 'complete', stopReason: 'step_limit' }]),
     );
     const manager = new SessionManager({
@@ -12202,7 +12525,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new EventBackend(ctx, [
           { type: 'error', recoverable: false, reason: 'tool_failed', message: 'Tool failed' },
@@ -12230,7 +12553,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const backends = new BackendRegistry();
     const gate = makeGate();
-    backends.register('fake', (ctx) => new TestBackend(ctx, gate));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx, gate));
     const manager = new SessionManager({ store, backends, newId: nextId(), now: nextNow(12_500) });
     const session = await manager.createSession(makeInput());
 
@@ -12256,7 +12579,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: StopControlledAbortBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new StopControlledAbortBackend(ctx);
       return backend;
     });
@@ -12308,7 +12631,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new EventBackend(ctx, [
           { type: 'text_delta', messageId: 'm1', text: 'before' },
@@ -12361,7 +12684,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new ThrowAfterTerminalBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new ThrowAfterTerminalBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -12404,7 +12727,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const gate = makeGate();
-    backends.register('fake', (ctx) => new LateErrorBackend(ctx, gate));
+    backends.register('ai-sdk', (ctx) => new LateErrorBackend(ctx, gate));
     const manager = new SessionManager({
       store,
       runStore,
@@ -12442,7 +12765,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TraceBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TraceBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -12456,7 +12779,7 @@ describe('SessionManager permission mode updates', () => {
     await drain(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'hello' }));
 
     const [run] = await runStore.listSessionRuns(session.id);
-    expect(run?.backendKind).toBe('fake');
+    expect(run?.backendKind).toBe('ai-sdk');
     expect(run?.llmConnectionSlug).toBe('fake');
     expect(run?.modelId).toBe('fake-model');
     expect(run?.permissionMode).toBe('ask');
@@ -12484,7 +12807,7 @@ describe('SessionManager permission mode updates', () => {
     });
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new ProviderCaptureAfterAttemptFailureBackend(
           ctx,
@@ -12535,7 +12858,7 @@ describe('SessionManager permission mode updates', () => {
       },
     });
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new ProviderRequestTraceBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new ProviderRequestTraceBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -12571,7 +12894,7 @@ describe('SessionManager permission mode updates', () => {
     });
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new ProviderCaptureGateBackend(ctx, () => (providerDispatches += 1)),
     );
     const manager = new SessionManager({
@@ -12600,7 +12923,7 @@ describe('SessionManager permission mode updates', () => {
     const cleanupCalled = makeGate();
     let observedEventIds: string[] = [];
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new HistoryCompactCheckpointBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new HistoryCompactCheckpointBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -12737,7 +13060,7 @@ describe('SessionManager permission mode updates', () => {
     const observedCheckpointIds: Array<string | undefined> = [];
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new HistoryCompactCheckpointCacheProbeBackend(ctx, observedCheckpointIds),
     );
     const manager = new SessionManager({
@@ -12783,7 +13106,7 @@ describe('SessionManager permission mode updates', () => {
     const observedCoverage: Array<number | undefined> = [];
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new HistoryCompactCheckpointMonotonicProbeBackend(ctx, observedCoverage),
     );
     const manager = new SessionManager({
@@ -12838,7 +13161,7 @@ describe('SessionManager permission mode updates', () => {
     const writeOutcomes: string[] = [];
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new SameCoverageCheckpointReplacementProbeBackend(ctx, writeOutcomes),
     );
     const manager = new SessionManager({
@@ -12895,7 +13218,7 @@ describe('SessionManager permission mode updates', () => {
     });
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new SerializedCheckpointProbeBackend(ctx, childRecorderCalled, recorderReturnedPromises),
     );
@@ -12963,7 +13286,7 @@ describe('SessionManager permission mode updates', () => {
     });
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new RecoveringCheckpointWriteProbeBackend(
           ctx,
@@ -13036,7 +13359,7 @@ describe('SessionManager permission mode updates', () => {
     });
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CheckpointRecorderContractProbeBackend(
           ctx,
@@ -13079,7 +13402,7 @@ describe('SessionManager permission mode updates', () => {
     });
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new CheckpointRecorderContractProbeBackend(
           ctx,
@@ -13147,7 +13470,7 @@ describe('SessionManager permission mode updates', () => {
     });
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) =>
         new InitialCheckpointLoadRaceProbeBackend(
           ctx,
@@ -13184,6 +13507,7 @@ describe('SessionManager permission mode updates', () => {
         }),
       ),
       summary: 'durable checkpoint',
+      summaryFormat: 'legacy_freeform',
     });
     await seedRun(
       runStore,
@@ -13250,7 +13574,7 @@ describe('SessionManager permission mode updates', () => {
     const writeOutcomes: string[] = [];
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new CheckpointRecorderContractProbeBackend(ctx, async () => {}, writeOutcomes),
     );
     const manager = new SessionManager({
@@ -13280,6 +13604,7 @@ describe('SessionManager permission mode updates', () => {
         }),
       ),
       summary: 'durable checkpoint before projection loss',
+      summaryFormat: 'legacy_freeform',
     });
     const durableEvent = makeRunEvent({
       sessionId: session.id,
@@ -13325,7 +13650,7 @@ describe('SessionManager permission mode updates', () => {
   test('startup recovery marks persisted running turns as failed instead of leaving them stuck', async () => {
     const store = new MemorySessionStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({ store, backends, newId: nextId(), now: nextNow(12_800) });
     const running = await manager.createSession(makeInput({ status: 'running' }));
     const waiting = await manager.createSession(makeInput({ status: 'waiting_for_user' }));
@@ -13456,7 +13781,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     let sessionId = '';
     let outcomeCommitFailuresRemaining = 3;
     let outcomeCommitAttempts = 0;
@@ -13589,7 +13914,7 @@ describe('SessionManager permission mode updates', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new TestBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -13709,7 +14034,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new EventBackend(ctx, [{ type: 'complete', stopReason: 'end_turn' }]),
     );
     const manager = new SessionManager({
@@ -13742,7 +14067,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new EventBackend(ctx, [{ type: 'complete', stopReason: 'end_turn' }]),
     );
     const manager = new SessionManager({
@@ -14288,7 +14613,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new EventBackend(ctx, [{ type: 'complete', stopReason: 'end_turn' }]),
     );
     const manager = new SessionManager({
@@ -14361,7 +14686,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new EventBackend(ctx, [{ type: 'complete', stopReason: 'end_turn' }]),
     );
     const manager = new SessionManager({
@@ -14400,7 +14725,7 @@ describe('SessionManager permission mode updates', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     backends.register(
-      'fake',
+      'ai-sdk',
       (ctx) => new EventBackend(ctx, [{ type: 'complete', stopReason: 'end_turn' }]),
     );
     const manager = new SessionManager({
@@ -14431,7 +14756,7 @@ describe('SessionManager steering and followup queues', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new FakeBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FakeBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -14468,7 +14793,7 @@ describe('SessionManager steering and followup queues', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new FakeBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FakeBackend(ctx));
     const identities: RuntimeMessageRunIdentity[] = [];
     const acked: string[] = [];
     const nacked: string[] = [];
@@ -14506,9 +14831,7 @@ describe('SessionManager steering and followup queues', () => {
         },
       },
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     const events = await drainAll(
       manager.sendMessage(session.id, { turnId: 'turn-host-message', text: 'start' }),
@@ -14549,7 +14872,7 @@ describe('SessionManager steering and followup queues', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new FakeBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FakeBackend(ctx));
     const identities: RuntimeInteractionRunIdentity[] = [];
     const lifecycle: string[] = [];
     const manager = new SessionManager({
@@ -14575,9 +14898,7 @@ describe('SessionManager steering and followup queues', () => {
       },
       canonicalPermissionOutcomes: noCanonicalPermissionOutcomes,
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     await drainAll(
       manager.sendMessage(session.id, { turnId: 'turn-host-interaction', text: 'go' }),
@@ -14593,7 +14914,7 @@ describe('SessionManager steering and followup queues', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new FakeBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new FakeBackend(ctx));
     const lifecycle: string[] = [];
     let question: RuntimeUserQuestionContinuation | undefined;
     const manager = new SessionManager({
@@ -14620,9 +14941,7 @@ describe('SessionManager steering and followup queues', () => {
       },
       canonicalPermissionOutcomes: noCanonicalPermissionOutcomes,
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'ask' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'ask' }));
     const iterator = manager
       .sendMessage(session.id, {
         turnId: 'turn-host-question-abandoned',
@@ -14647,7 +14966,7 @@ describe('SessionManager steering and followup queues', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new UnadmittedQuestionBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new UnadmittedQuestionBackend(ctx));
     let releases = 0;
     const manager = new SessionManager({
       store,
@@ -14669,9 +14988,7 @@ describe('SessionManager steering and followup queues', () => {
       },
       canonicalPermissionOutcomes: noCanonicalPermissionOutcomes,
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'ask' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'ask' }));
 
     let failure: unknown;
     try {
@@ -14687,7 +15004,7 @@ describe('SessionManager steering and followup queues', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new ThrowBeforeTerminalBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new ThrowBeforeTerminalBackend(ctx));
     let releases = 0;
     const manager = new SessionManager({
       store,
@@ -14708,9 +15025,7 @@ describe('SessionManager steering and followup queues', () => {
         }),
       },
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     let failure: unknown;
     try {
@@ -14729,7 +15044,7 @@ describe('SessionManager steering and followup queues', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let failBuilds = 1;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       if (failBuilds > 0) {
         failBuilds -= 1;
         throw new Error('backend build failed');
@@ -14744,9 +15059,7 @@ describe('SessionManager steering and followup queues', () => {
       newId: nextId(),
       now: nextNow(1_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     let failed: unknown;
     try {
@@ -14784,7 +15097,7 @@ describe('SessionManager steering and followup queues', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: GatedSteeringBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new GatedSteeringBackend(ctx);
       return backend;
     });
@@ -14796,9 +15109,7 @@ describe('SessionManager steering and followup queues', () => {
       newId: nextId(),
       now: nextNow(1_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     const first = drainAll(manager.sendMessage(session.id, { turnId: 'turn-a', text: 'first' }));
     await waitUntil(() => backend?.gates.has('turn-a') === true);
@@ -15033,7 +15344,7 @@ describe('SessionManager steering and followup queues', () => {
     const store = new MemorySessionStore();
     const backends = new BackendRegistry();
     let backend: GatedSteeringBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new GatedSteeringBackend(ctx);
       return backend;
     });
@@ -15043,9 +15354,7 @@ describe('SessionManager steering and followup queues', () => {
       newId: nextId(),
       now: nextNow(1_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     const turn = drainAll(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'go' }));
     await waitUntil(() => backend?.gates.has('turn-1') === true);
@@ -15195,7 +15504,7 @@ describe('SessionManager steering and followup queues', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new ForgingQueueBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new ForgingQueueBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -15204,9 +15513,7 @@ describe('SessionManager steering and followup queues', () => {
       newId: nextId(),
       now: nextNow(1_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     const events = await drainAll(
       manager.sendMessage(session.id, { turnId: 'turn-1', text: 'go' }),
@@ -15231,7 +15538,7 @@ describe('SessionManager steering and followup queues', () => {
     const store = new MemorySessionStore();
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
-    backends.register('fake', (ctx) => new ProviderRetryProgressBackend(ctx));
+    backends.register('ai-sdk', (ctx) => new ProviderRetryProgressBackend(ctx));
     const manager = new SessionManager({
       store,
       runStore,
@@ -15240,9 +15547,7 @@ describe('SessionManager steering and followup queues', () => {
       newId: nextId(),
       now: nextNow(1_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     const events = await drainAll(
       manager.sendMessage(session.id, { turnId: 'turn-1', text: 'go' }),
@@ -15328,7 +15633,7 @@ describe('SessionManager steering and followup queues', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     let backend: GatedSteeringBackend | undefined;
-    backends.register('fake', (ctx) => {
+    backends.register('ai-sdk', (ctx) => {
       backend = new GatedSteeringBackend(ctx);
       return backend;
     });
@@ -15340,9 +15645,7 @@ describe('SessionManager steering and followup queues', () => {
       newId: nextId(),
       now: nextNow(1_000),
     });
-    const session = await manager.createSession(
-      makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-    );
+    const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
 
     const turn = drainAll(manager.sendMessage(session.id, { turnId: 'turn-1', text: 'go' }));
     await waitUntil(() => backend?.gates.has('turn-1') === true);
@@ -15431,7 +15734,7 @@ async function steeringDeliverySession(
   const backends = new BackendRegistry();
   let manager!: SessionManager;
   let sessionId = '';
-  backends.register('fake', (ctx) =>
+  backends.register('ai-sdk', (ctx) =>
     createTestAiSdkBackend({
       sessionId: ctx.sessionId,
       header: ctx.header,
@@ -15470,9 +15773,7 @@ async function steeringDeliverySession(
     now: nextNow(1_000),
   };
   manager = new SessionManager(managerDeps);
-  const session = await manager.createSession(
-    makeInput({ backend: 'fake', permissionMode: 'bypass' }),
-  );
+  const session = await manager.createSession(makeInput({ permissionMode: 'bypass' }));
   sessionId = session.id;
   return { manager, session, store };
 }
@@ -15484,7 +15785,7 @@ async function steeringDeliverySession(
  * land after the final step boundary (stranded steering).
  */
 class GatedSteeringBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
   readonly gates = new Map<string, Gate>();
   readonly pullDone = new Map<string, Gate>();
@@ -15682,7 +15983,7 @@ class DelegatingRuntimeKernel implements RuntimeKernelLike {
 }
 
 class UnadmittedQuestionBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(ctx: BackendFactoryContext) {
@@ -15714,7 +16015,7 @@ class UnadmittedQuestionBackend implements AgentBackend {
 }
 
 class TestBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
   readonly sendInputs: BackendSendInput[] = [];
   stopCalls = 0;
@@ -15958,6 +16259,7 @@ class ActiveTurnBackend extends TestBackend {
 
 function compactHistoryResult() {
   return {
+    outcome: { kind: 'compacted' as const, checkpointId: 'checkpoint-1' },
     contextBudget: {
       enabled: true,
       policyName: 'unit-budget',
@@ -15982,6 +16284,7 @@ function compactHistoryResult() {
 
 function compactHistoryFailOpenResult() {
   return {
+    outcome: { kind: 'failed' as const, reason: 'write_failed' },
     contextBudget: {
       enabled: true,
       policyName: 'unit-budget',
@@ -15991,7 +16294,6 @@ function compactHistoryFailOpenResult() {
       droppedTurns: 1,
       keptEvents: 1,
       droppedEvents: 1,
-      historyCompactWriteFailures: 1,
       compactionDecisions: [
         {
           stage: 'priorReplay' as const,
@@ -16006,7 +16308,7 @@ function compactHistoryFailOpenResult() {
 }
 
 class HighVolumeDeltaBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16043,7 +16345,7 @@ class HighVolumeDeltaBackend implements AgentBackend {
 }
 
 class LateErrorBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16084,7 +16386,7 @@ class LateErrorBackend implements AgentBackend {
 }
 
 class StopControlledAbortBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
   private releaseAbort: () => void = () => {};
   private releaseStop: () => void = () => {};
@@ -16146,7 +16448,7 @@ type PartialEvent =
   | Omit<Extract<SessionEvent, { type: 'abort' }>, 'id' | 'turnId' | 'ts'>;
 
 class TurnScriptBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
   readonly sendInputs: BackendSendInput[] = [];
 
@@ -16181,7 +16483,7 @@ class TurnScriptBackend implements AgentBackend {
 }
 
 class EventBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16210,7 +16512,7 @@ class EventBackend implements AgentBackend {
 }
 
 class SandboxBoundaryWaitBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
   readonly responses: SandboxBoundaryResponse[] = [];
   private readonly responseGate = makeGate();
@@ -16275,7 +16577,7 @@ class SandboxBoundaryWaitBackend implements AgentBackend {
  * it into a control-only RuntimeEvent, and the ledger keeps it.
  */
 class UnmappedSessionEventBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(ctx: BackendFactoryContext) {
@@ -16314,7 +16616,7 @@ class UnmappedSessionEventBackend implements AgentBackend {
 }
 
 class ThrowAfterTerminalBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(ctx: BackendFactoryContext) {
@@ -16346,7 +16648,7 @@ class ThrowAfterTerminalBackend implements AgentBackend {
 }
 
 class ThrowBeforeTerminalBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(ctx: BackendFactoryContext) {
@@ -16371,7 +16673,7 @@ class ThrowBeforeTerminalBackend implements AgentBackend {
 }
 
 class TraceBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(private readonly ctx: BackendFactoryContext) {
@@ -16425,7 +16727,7 @@ class TraceBackend implements AgentBackend {
 }
 
 class ProviderRequestTraceBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(private readonly ctx: BackendFactoryContext) {
@@ -16487,7 +16789,7 @@ class ProviderRequestTraceBackend implements AgentBackend {
 }
 
 class ProviderCaptureGateBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16528,7 +16830,7 @@ class ProviderCaptureGateBackend implements AgentBackend {
 }
 
 class ProviderCaptureAfterAttemptFailureBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16611,7 +16913,7 @@ class ProviderCaptureAfterAttemptFailureBackend implements AgentBackend {
 }
 
 class HistoryCompactCheckpointBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(private readonly ctx: BackendFactoryContext) {
@@ -16636,6 +16938,7 @@ class HistoryCompactCheckpointBackend implements AgentBackend {
         },
       ],
       summary: 'persist the bounded checkpoint',
+      summaryFormat: 'legacy_freeform',
     });
     this.ctx.recordHistoryCompactCheckpoint?.(
       { ...checkpoint, checkpointId: 'hcheckpoint-test' },
@@ -16656,7 +16959,7 @@ class HistoryCompactCheckpointBackend implements AgentBackend {
 }
 
 class HistoryCompactCheckpointCacheProbeBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16687,6 +16990,7 @@ class HistoryCompactCheckpointCacheProbeBackend implements AgentBackend {
           },
         ],
         summary: 'share this checkpoint across session backends',
+        summaryFormat: 'legacy_freeform',
       });
       this.ctx.recordHistoryCompactCheckpoint?.(
         { ...checkpoint, checkpointId: 'hcheckpoint-shared' },
@@ -16708,7 +17012,7 @@ class HistoryCompactCheckpointCacheProbeBackend implements AgentBackend {
 }
 
 class HistoryCompactCheckpointMonotonicProbeBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16745,6 +17049,7 @@ class HistoryCompactCheckpointMonotonicProbeBackend implements AgentBackend {
             sessionId: this.sessionId,
             coveredRuntimeEvents,
             summary: `${input.turnId} checkpoint`,
+            summaryFormat: 'legacy_freeform',
           }),
           input.turnId,
         )
@@ -16765,7 +17070,7 @@ class HistoryCompactCheckpointMonotonicProbeBackend implements AgentBackend {
 }
 
 class SameCoverageCheckpointReplacementProbeBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16797,6 +17102,7 @@ class SameCoverageCheckpointReplacementProbeBackend implements AgentBackend {
           sessionId: this.sessionId,
           coveredRuntimeEvents,
           summary: `${input.turnId} summary`,
+          summaryFormat: 'legacy_freeform',
           ...(current ? { previousCheckpointId: current.checkpointId } : {}),
         }),
         input.turnId,
@@ -16820,7 +17126,7 @@ class SameCoverageCheckpointReplacementProbeBackend implements AgentBackend {
 }
 
 class SerializedCheckpointProbeBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16853,6 +17159,7 @@ class SerializedCheckpointProbeBackend implements AgentBackend {
         sessionId: this.sessionId,
         coveredRuntimeEvents,
         summary: `${input.turnId} checkpoint`,
+        summaryFormat: 'legacy_freeform',
       }),
       input.turnId,
     );
@@ -16878,7 +17185,7 @@ class SerializedCheckpointProbeBackend implements AgentBackend {
 }
 
 class RecoveringCheckpointWriteProbeBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16915,6 +17222,7 @@ class RecoveringCheckpointWriteProbeBackend implements AgentBackend {
           sessionId: this.sessionId,
           coveredRuntimeEvents,
           summary: `${input.turnId} checkpoint`,
+          summaryFormat: 'legacy_freeform',
         }),
         input.turnId,
       );
@@ -16941,7 +17249,7 @@ class RecoveringCheckpointWriteProbeBackend implements AgentBackend {
 }
 
 class CheckpointRecorderContractProbeBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -16976,6 +17284,7 @@ class CheckpointRecorderContractProbeBackend implements AgentBackend {
           sessionId: this.sessionId,
           coveredRuntimeEvents,
           summary: `${input.turnId} checkpoint`,
+          summaryFormat: 'legacy_freeform',
         }),
         input.turnId,
       );
@@ -16998,7 +17307,7 @@ class CheckpointRecorderContractProbeBackend implements AgentBackend {
 }
 
 class InitialCheckpointLoadRaceProbeBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(
@@ -17035,6 +17344,7 @@ class InitialCheckpointLoadRaceProbeBackend implements AgentBackend {
           sessionId: this.sessionId,
           coveredRuntimeEvents,
           summary: 'stale checkpoint during initial load',
+          summaryFormat: 'legacy_freeform',
         }),
         input.turnId,
       );
@@ -17142,7 +17452,6 @@ class MemorySessionStore implements SessionStore {
       cwd: input.cwd,
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
       createdAt: 1,
-      lastUsedAt: 1,
       name: input.name ?? 'New Chat',
       titleIsManual: false,
       isFlagged: false,
@@ -17167,7 +17476,7 @@ class MemorySessionStore implements SessionStore {
       ...(input.revisionIndex !== undefined ? { revisionIndex: input.revisionIndex } : {}),
       ...(input.revisionState ? { revisionState: input.revisionState } : {}),
       hasUnread: false,
-      backend: input.backend,
+      backend: 'ai-sdk',
       llmConnectionSlug: input.llmConnectionSlug,
       connectionLocked: false,
       model: input.model ?? 'fake-model',
@@ -17328,23 +17637,6 @@ class MemorySessionStore implements SessionStore {
     const next = { ...current, ...patch };
     this.headers.set(sessionId, next);
     return next;
-  }
-
-  async archive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, {
-      isArchived: true,
-      status: 'archived',
-      statusUpdatedAt: 1,
-    });
-  }
-
-  async unarchive(sessionId: string): Promise<void> {
-    await this.updateHeader(sessionId, {
-      isArchived: false,
-      status: 'active',
-      blockedReason: undefined,
-      statusUpdatedAt: 1,
-    });
   }
 
   async setFlagged(sessionId: string, isFlagged: boolean): Promise<void> {
@@ -17870,7 +18162,7 @@ class ContinuationClaimBarrierRunStore extends MemoryAgentRunStore {
 
 /** Yields a forged queue_update before completing — round-6 R3's attacker. */
 class ForgingQueueBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(ctx: BackendFactoryContext) {
@@ -17911,7 +18203,7 @@ class ForgingQueueBackend implements AgentBackend {
 }
 
 class ProviderRetryProgressBackend implements AgentBackend {
-  readonly kind = 'fake' as const;
+  readonly kind = 'ai-sdk' as const;
   readonly sessionId: string;
 
   constructor(ctx: BackendFactoryContext) {
@@ -18132,7 +18424,6 @@ function hostedRootAuthority(): RuntimeHostedRootAuthority {
 function makeInput(overrides: Partial<CreateSessionInput> = {}): CreateSessionInput {
   return {
     cwd: '/tmp/cwd',
-    backend: 'fake',
     llmConnectionSlug: 'fake',
     model: 'fake-model',
     permissionMode: 'ask',
@@ -18171,7 +18462,6 @@ function createGraphOperatorSession(
         systemPrompt: LOCAL_READ_AGENT_DEFINITION.systemPrompt,
         toolNames: [...LOCAL_READ_AGENT_DEFINITION.tools],
         categoryPolicy: {},
-        permissionCeiling: 'ask',
       },
     }),
   );
@@ -18256,7 +18546,7 @@ async function createQueuedGraphScenario(firstAbortSignal?: AbortSignal) {
   const firstReady = makeGate();
   const stopStarted = makeGate();
   let backend!: TestBackend;
-  backends.register('fake', (ctx) => {
+  backends.register('ai-sdk', (ctx) => {
     backend = new (class extends TestBackend {
       override async stop(
         reason: 'user_stop' | 'redirect',
@@ -18351,7 +18641,7 @@ function makeRunHeader(overrides: Partial<AgentRunHeader> = {}): AgentRunHeader 
     sessionId: 'session-1',
     turnId: 'turn-1',
     status: 'running',
-    backendKind: 'fake',
+    backendKind: 'ai-sdk',
     llmConnectionSlug: 'fake',
     modelId: 'fake-model',
     cwd: '/tmp/cwd',
@@ -18379,7 +18669,7 @@ function makeManagerForReadCutover(
   runStore: AgentRunStore & RuntimeEventStore,
 ): SessionManager {
   const backends = new BackendRegistry();
-  backends.register('fake', (ctx) => new TestBackend(ctx));
+  backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
   return new SessionManager({
     store,
     runStore,
@@ -18765,7 +19055,7 @@ async function seedBoundaryRestartSession(input: {
   const store = new MemorySessionStore();
   const runStore = new MemoryAgentRunStore();
   const backends = new BackendRegistry();
-  backends.register('fake', (ctx) => new TestBackend(ctx));
+  backends.register('ai-sdk', (ctx) => new TestBackend(ctx));
   const managerDeps = {
     store,
     runStore,

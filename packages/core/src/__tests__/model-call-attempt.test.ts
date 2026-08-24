@@ -1,7 +1,27 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  MODEL_CALL_DIAGNOSTIC_FIELD_MAX_LENGTH,
   MODEL_CALL_ATTEMPT_SCHEMA_VERSION,
   decodeModelCallAttempt,
   groupModelCallAttempts,
@@ -39,6 +59,41 @@ function attempt(overrides: Partial<ModelCallAttempt> = {}): ModelCallAttempt {
 }
 
 describe('ModelCallAttempt codec', () => {
+  test('accepts bounded provider failure diagnostics on history compaction calls', () => {
+    const decoded = decodeModelCallAttempt(
+      attempt({
+        callKind: 'history_compact',
+        historyCompactRoute: 'provider_native',
+        status: 'failed',
+        errorClass: 'RateLimit',
+        httpStatus: 429,
+        providerCode: 'rate_limit_exceeded',
+        providerRequestId: 'req-123',
+        retryable: true,
+      }),
+    );
+
+    assert.equal(decoded.historyCompactRoute, 'provider_native');
+    assert.equal(decoded.httpStatus, 429);
+    assert.equal(decoded.providerRequestId, 'req-123');
+  });
+
+  test('rejects invalid or unbounded provider failure diagnostics', () => {
+    assert.throws(() => decodeModelCallAttempt(attempt({ httpStatus: 99, status: 'failed' })));
+    assert.throws(() =>
+      decodeModelCallAttempt(
+        attempt({
+          status: 'failed',
+          providerCode: 'x'.repeat(MODEL_CALL_DIAGNOSTIC_FIELD_MAX_LENGTH + 1),
+        }),
+      ),
+    );
+    assert.throws(
+      () => decodeModelCallAttempt(attempt({ historyCompactRoute: 'text_summary' })),
+      /non-compaction call carries historyCompactRoute/,
+    );
+  });
+
   test('rejects an unpriced attempt that carries a cost', () => {
     assert.throws(
       () => decodeModelCallAttempt(attempt({ costBasis: 'unpriced', costUsd: 0 })),

@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -7,9 +26,35 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { parseMakaCliArgs, runMakaCli } from '../cli.js';
+import { parseMakaCliArgs, runMakaCli } from '../cli-core.js';
 
 describe('Maka CLI args', () => {
+  test('declares a bin-only package surface', async () => {
+    const manifest = JSON.parse(
+      await readFile(new URL('../../package.json', import.meta.url), 'utf8'),
+    ) as Record<string, unknown>;
+    assert.deepEqual(manifest.bin, {
+      maka: './dist/cli.js',
+    });
+    assert.deepEqual(manifest.exports, {});
+    assert.equal(Object.hasOwn(manifest, 'main'), false);
+    assert.equal(Object.hasOwn(manifest, 'types'), false);
+    await assert.rejects(access(new URL('../index.js', import.meta.url)), { code: 'ENOENT' });
+  });
+
+  test('publishes the supported release command surface', () => {
+    const help = parseMakaCliArgs(['--help'], '0.1.0');
+    assert.equal(help.kind, 'help');
+    if (help.kind !== 'help') return;
+    assert.match(help.text, /^  maka              Start the TUI$/m);
+    assert.doesNotMatch(help.text, /maka-agent/);
+    assert.match(help.text, /^  maka run /m);
+    assert.match(help.text, /^  maka activate /m);
+    assert.match(help.text, /^  maka eval /m);
+    assert.match(help.text, /^  maka runtime-host serve /m);
+    assert.doesNotMatch(help.text, /cli:dev/);
+  });
+
   test('selects a Runtime Host and Project for TUI startup', () => {
     assert.deepEqual(parseMakaCliArgs(['--host', 'office', '--project', 'project-1'], '0.1.0'), {
       kind: 'tui',
@@ -46,8 +91,16 @@ describe('Maka CLI args', () => {
     );
   });
 
+  test('does not add a discoverable global locale flag', () => {
+    assert.deepEqual(parseMakaCliArgs(['--locale', 'zh'], '0.1.0'), {
+      kind: 'error',
+      message: 'Unexpected argument: --locale',
+      exitCode: 2,
+    });
+  });
+
   test('establishes the fatal exit before reporting can throw', async () => {
-    const cliUrl = new URL('../cli.js', import.meta.url).href;
+    const cliUrl = new URL('../cli-core.js', import.meta.url).href;
     const childSource = `
       import { handleMakaCliProcessExit } from ${JSON.stringify(cliUrl)};
       try {

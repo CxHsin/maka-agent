@@ -1,3 +1,23 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { isDeepStrictEqual } from 'node:util';
 import type { ActiveInteractionRequestEvent, SessionEvent } from '@maka/core/events';
 import type { StoredMessage, TurnRecord } from '@maka/core/session';
 import type {
@@ -8,6 +28,7 @@ import type {
   SessionMessageQueueProjection,
   SteeringMessageSnapshot,
   SubscriptionFrame,
+  LiveTurnSnapshot,
   TurnSnapshot,
 } from '../protocol/index.js';
 
@@ -122,9 +143,11 @@ export class RuntimeHostSessionProjector {
     const root = this.#snapshot.rootTurn;
     if (!root || isRuntimeHostTerminalTurn(root)) return [];
     const events: SessionEvent[] = [];
+    let seededAssistantText = false;
     if (includeAssistantText) {
       for (const accumulator of this.#accumulators.values()) {
         if (accumulator.complete) continue;
+        seededAssistantText = true;
         events.push({
           type: accumulator.kind === 'text' ? 'text_delta' : 'thinking_delta',
           id: `host-seed:${root.runId}:${accumulator.kind}:${accumulator.messageId}`,
@@ -135,6 +158,9 @@ export class RuntimeHostSessionProjector {
           text: accumulator.text,
         });
       }
+    }
+    if (root.providerRetry && !seededAssistantText) {
+      events.push(providerRetryEvent(root, this.#now()));
     }
     for (const interaction of this.#snapshot.interactions.pending) {
       events.push(...projectRuntimeHostInteractionRequest(interaction, this.#now()));
@@ -313,8 +339,7 @@ export class RuntimeHostSessionProjector {
       return emptyUpdate(events);
     }
     if (frame.kind === 'subscription.session_event') {
-      const event = projectToolEvent(frame);
-      if (event) events.push(event);
+      events.push(projectToolEvent(frame));
       return emptyUpdate(events);
     }
     if (frame.kind !== 'subscription.session_projection') return emptyUpdate(events);
@@ -348,6 +373,8 @@ export class RuntimeHostSessionProjector {
     const startedTurn =
       root && (!previousRoot || root.runId !== previousRoot.runId) ? root : undefined;
     if (startedTurn) this.#accumulators.clear();
+    const retry = liveProviderRetryEvent(previousRoot, root, this.#now());
+    if (retry) events.push(retry);
     const terminalTurn =
       root && isRuntimeHostTerminalTurn(root) && !sameRuntimeHostTerminalTurn(previousRoot, root)
         ? root
@@ -451,7 +478,7 @@ export function projectRuntimeHostInteractionRequest(
 
 function projectToolEvent(
   frame: Extract<SubscriptionFrame, { kind: 'subscription.session_event' }>,
-): SessionEvent | undefined {
+): SessionEvent {
   const event = frame.event;
   const base = {
     id: event.id,
@@ -469,6 +496,7 @@ function projectToolEvent(
       ...(event.activityKind ? { activityKind: event.activityKind } : {}),
       ...(event.displayName ? { displayName: event.displayName } : {}),
       ...(event.stepId ? { stepId: event.stepId } : {}),
+      ...(event.shellRunRef ? { shellRunRef: event.shellRunRef } : {}),
     };
   }
   if (event.type === 'tool_output_delta') {
@@ -496,8 +524,15 @@ function projectToolEvent(
   return {
     type: 'tool_result',
     ...base,
+    contentOmitted: true,
     isError: event.status === 'errored',
-    content: { kind: 'text', text: '' },
+    content: {
+      kind: 'text',
+      text: '',
+      ...(event.sandboxFailureReason
+        ? { sandboxFailure: { reason: event.sandboxFailureReason } }
+        : {}),
+    },
     ...(event.operationId ? { operationId: event.operationId } : {}),
     ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
   };
@@ -582,8 +617,23 @@ function projectQueueUpdate(
     id: `host-queue:${queue.hostEpoch}:${queue.queueRevision}`,
     turnId,
     ts: now,
+    queueRevision: queue.queueRevision,
     steering: queue.steering.map((entry) => entry.content.text),
     followup: queue.followup.map((entry) => entry.content.text),
+    steeringEntries: queue.steering.map((entry) => ({
+      entryId: entry.entryId,
+      messageId: entry.messageId,
+      content: structuredClone(entry.content),
+      placement: entry.placement,
+      state: entry.state,
+    })),
+    followupEntries: queue.followup.map((entry) => ({
+      entryId: entry.entryId,
+      messageId: entry.messageId,
+      content: structuredClone(entry.content),
+      placement: entry.placement,
+      state: entry.state,
+    })),
   };
 }
 
@@ -610,6 +660,36 @@ export function sameRuntimeHostTerminalTurn(
     previous.runId === next.runId &&
     previous.terminalEventId === next.terminalEventId
   );
+}
+
+function liveProviderRetryEvent(
+  previous: TurnSnapshot | null | undefined,
+  next: TurnSnapshot | null | undefined,
+  ts: number,
+): Extract<SessionEvent, { type: 'provider_retry' }> | undefined {
+  if (!next || isRuntimeHostTerminalTurn(next) || !next.providerRetry) return undefined;
+  const previousRetry =
+    previous && !isRuntimeHostTerminalTurn(previous) ? previous.providerRetry : undefined;
+  if (previous?.runId === next.runId && isDeepStrictEqual(previousRetry, next.providerRetry)) {
+    return undefined;
+  }
+  return providerRetryEvent(next, ts);
+}
+
+function providerRetryEvent(
+  root: LiveTurnSnapshot,
+  ts: number,
+): Extract<SessionEvent, { type: 'provider_retry' }> {
+  if (!root.providerRetry) {
+    throw new Error('Non-terminal Turn snapshot has no provider retry');
+  }
+  return {
+    type: 'provider_retry',
+    id: `host-seed:${root.runId}:provider_retry`,
+    turnId: root.turnId,
+    ts,
+    ...root.providerRetry,
+  };
 }
 
 function abortReason(source: string): Extract<SessionEvent, { type: 'abort' }>['reason'] {

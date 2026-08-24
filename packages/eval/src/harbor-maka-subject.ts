@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { runHostedExecution } from '@maka/runtime-host/client';
@@ -70,4 +89,8 @@ const framedResult =
       }
     : result;
 writeRelayResult(resultToken, framedResult);
-if (result.kind === 'indeterminate') process.exitCode = 1;
+// Same projection as every other wrapper: the exit code reports what this
+// process did, so whatever can read only the exit code reads the status the
+// frame carries. Nothing decides the subject's fate from it while the frame is
+// readable, but the two must not be able to say different things.
+process.exitCode = result.kind === 'settled' && result.status === 'completed' ? 0 : 1;

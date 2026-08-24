@@ -1,7 +1,27 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { NO_REAL_CONNECTION_CODE } from '@maka/core/connection-error-copy';
 import type { ConnectionCatalogEntry, ConnectionCatalogSnapshot } from '@maka/core/runtime-policy';
+import type { ChatDefaultPermissionMode } from '@maka/core/settings';
 import {
   connectOrSpawnRuntimeHost,
   connectRemoteRuntimeHostProfile,
@@ -21,16 +41,41 @@ import {
   INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
   RUNTIME_HOST_COMPATIBILITY_EPOCH,
   RUNTIME_HOST_PROTOCOL_VERSION,
-  type ClientSurface,
+  type HostRegistration,
   type HostIncompatible,
 } from '@maka/runtime-host/protocol';
 import { resolveMakaClientDataRoot } from '@maka/storage';
 
+/**
+ * The mode a new Session starts in belongs to the Host: `session.create`
+ * falls back to `chatDefaults.permissionMode` in the Runtime Policy whenever a
+ * client omits the field, so that policy value is the single authority.
+ *
+ * The CLI reads it rather than assuming Auto, because its pickers and its
+ * status indicator name the mode a new Session will *actually* get. Assuming
+ * Auto against a Host configured for full access would understate the
+ * boundary, which is the one direction that must never happen.
+ *
+ * A failed query throws rather than resolving to `ask`. Understating the
+ * boundary is not the safe direction it looks like: creation omits the field
+ * either way, so a Host configured for Bypass would run the first prompt with
+ * full access while the CLI displayed Auto. If the Host's own policy cannot be
+ * read, the CLI has nothing true to show and should not start.
+ */
+export async function readHostChatDefaultPermissionMode(
+  connection: Pick<RuntimeHostConnection, 'request'>,
+): Promise<ChatDefaultPermissionMode> {
+  return (await connection.request('runtime.policy.query', {})).policy.chatDefaults.permissionMode;
+}
+
 export class RuntimeHostCliConflictError extends RuntimeHostPermanentReconnectError {
   readonly code = 'RUNTIME_HOST_RESTART_REQUIRED';
 
-  constructor(readonly handshake: HostIncompatible) {
-    super(formatRuntimeHostCliConflict(handshake));
+  constructor(
+    readonly handshake: HostIncompatible,
+    registration: HostRegistration,
+  ) {
+    super(formatRuntimeHostCliConflict(handshake, registration));
     this.name = 'RuntimeHostCliConflictError';
   }
 }
@@ -59,9 +104,9 @@ interface RuntimeHostCliContextDeps {
 export async function connectRuntimeHostCli(
   input: {
     readonly rootPath: string;
-    readonly surface: ClientSurface;
     readonly profileId?: string;
     readonly clientDataRoot?: string;
+    readonly interactiveSsh?: boolean;
   },
   overrides: Partial<RuntimeHostCliContextDeps> = {},
 ): Promise<RuntimeHostCliConnectionContext> {
@@ -85,7 +130,6 @@ export async function connectRuntimeHostCli(
         );
   const connectInput = {
     rootPath: input.rootPath,
-    surface: input.surface,
     protocol: { min: RUNTIME_HOST_PROTOCOL_VERSION, max: RUNTIME_HOST_PROTOCOL_VERSION },
     clientInstanceId,
     compositionId: INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
@@ -99,7 +143,6 @@ export async function connectRuntimeHostCli(
       return deps.connectRemoteProfile({
         profile,
         credential: resolvedProfile.credential!,
-        surface: input.surface,
         clientInstanceId,
         sshInteraction,
         ...(signal ? { signal } : {}),
@@ -110,7 +153,7 @@ export async function connectRuntimeHostCli(
       ...(signal ? { signal } : {}),
     });
     if (connected.kind === 'incompatible') {
-      throw new RuntimeHostCliConflictError(connected.handshake);
+      throw new RuntimeHostCliConflictError(connected.handshake, connected.registration);
     }
     if (connected.kind === 'upgrade_required') {
       throw new RuntimeHostPermanentReconnectError(
@@ -118,13 +161,13 @@ export async function connectRuntimeHostCli(
       );
     }
     if (connected.kind === 'failed') {
-      throw runtimeHostStartupError(connected.reason);
+      throw runtimeHostStartupError(connected.reason, connected.diagnostic);
     }
     return connected.connection;
   };
   const initialConnection = await connect(
     undefined,
-    input.surface === 'tui' && process.stdin.isTTY && process.stdout.isTTY ? 'inherit' : 'batch',
+    input.interactiveSsh && process.stdin.isTTY && process.stdout.isTTY ? 'inherit' : 'batch',
   );
   const connection = await createRuntimeHostReconnectingConnection({
     initialConnection,
@@ -155,13 +198,28 @@ async function resolveHostProfile(
   return catalog.resolve(input.profileId);
 }
 
-function formatRuntimeHostCliConflict(handshake: HostIncompatible): string {
+function formatRuntimeHostCliConflict(
+  handshake: HostIncompatible,
+  registration: HostRegistration,
+): string {
   const lines = [
     'RUNTIME_HOST_RESTART_REQUIRED: An older Runtime Host is still running and cannot accept this client.',
+    `Local Runtime Host: PID ${registration.pid}; lifecycle ${registration.lifecycleMode ?? 'unknown'}; compatibility epoch ${registration.compatibilityEpoch}.`,
   ];
+  if (registration.lifecycleMode === 'ephemeral') {
+    lines.push('The ephemeral Host is not currently idle and cannot be replaced by this Client.');
+  } else if (registration.lifecycleMode === 'service') {
+    lines.push(
+      'This service Host is managed by its operator and cannot be replaced by this Client.',
+    );
+  } else {
+    lines.push('This Host cannot be replaced by this Client.');
+  }
   if (handshake.compatibilityEpoch < RUNTIME_HOST_COMPATIBILITY_EPOCH) {
     lines.push(
-      'Stop the previous Maka Desktop or CLI process, or wait for it to exit, then try again.',
+      registration.lifecycleMode === 'service'
+        ? 'Use the service operator to inspect or upgrade the Host.'
+        : 'Use a previous compatible Maka build to inspect the Host and finish or clear any retained work. Stop the Host only after deciding that interruption is safe.',
     );
   } else {
     lines.push(
@@ -169,6 +227,11 @@ function formatRuntimeHostCliConflict(handshake: HostIncompatible): string {
     );
   }
   return lines.join('\n');
+}
+
+export function shouldRetryRuntimeHostConflict(answer: string): boolean {
+  const normalized = answer.trim().toLowerCase();
+  return normalized === 'w' || normalized === 'wait';
 }
 
 export function resolveRuntimeHostCliTarget(

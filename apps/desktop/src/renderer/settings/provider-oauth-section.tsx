@@ -1,6 +1,26 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import { Banner, HStack, Text, VStack } from '@astryxdesign/core';
 import { type ProviderType } from '@maka/core/llm-connections';
+import type { DesktopRuntimeHostRef } from '../../preload/bridge-contract.js';
 import {
   Badge,
   Button,
@@ -8,7 +28,6 @@ import {
   useUiLocale,
 } from '@maka/ui';
 import { getProviderSettingsCopy, type ProviderSettingsCopy } from '../locales/settings-provider-copy';
-import { ClaudeSubscriptionCard } from './claude-subscription-card';
 import {
   useOAuthLoginFlow,
   subscriptionActionErrorMessage,
@@ -16,8 +35,10 @@ import {
   type OAuthLoginFlowBridge,
   type SubscriptionSnapshot,
 } from './use-oauth-login-flow';
+import { useRuntimeHostSettingsTarget } from './runtime-host-settings-target.js';
+import { runtimeHostOAuthLoginBridge } from './runtime-host-settings-bridge.js';
 
-export type OAuthCardId = 'claude' | 'codex' | 'github-copilot' | 'xai';
+export type OAuthCardId = 'codex' | 'github-copilot' | 'xai';
 
 export interface OAuthCard {
   id: OAuthCardId;
@@ -44,10 +65,10 @@ export interface OAuthCard {
  * and it is why nothing here has to be pushed across a level boundary.
  */
 export function useOAuthCards(props: { query?: string }) {
+  const host = useRuntimeHostSettingsTarget();
   const locale = useUiLocale();
   const copy = getProviderSettingsCopy(locale).oauthSection;
   const cards = modelOAuthCards(copy);
-  const [claudeCatalogEnabled, setClaudeCatalogEnabled] = useState<boolean | null>(null);
   const mountedRef = useMountedRef();
   const refreshTicketRef = useRef(0);
   // PR-OAUTH-CARD-LIVE-STATE-0 (WAWQAQ msg d79fd115 follow-up): before this
@@ -57,7 +78,6 @@ export function useOAuthCards(props: { query?: string }) {
   // re-fetched whenever a login step closes (success OR
   // cancel — the user may have signed out from inside it).
   const [cardStates, setCardStates] = useState<Record<OAuthCardId, SubscriptionSnapshot | null>>({
-    claude: null,
     codex: null,
     'github-copilot': null,
     xai: null,
@@ -74,24 +94,10 @@ export function useOAuthCards(props: { query?: string }) {
   async function refreshAllCards() {
     const ticket = refreshTicketRef.current + 1;
     refreshTicketRef.current = ticket;
-    const claudeGate = await window.maka.claudeSubscription
-      .isExperimentalEnabled()
-      .then((enabled) => ({ enabled } as const))
-      .catch((error: unknown) => ({ error } as const));
-    const claudeEnabledForRefresh = 'enabled' in claudeGate
-      ? claudeGate.enabled
-      : claudeCatalogEnabled === true;
-    // Every card the gate allows, not just the ones the current search shows.
-    // The catalog keeps its query across navigation now, so filtering here left
-    // the cards that were hidden at mount with a null state: clearing the
-    // search then revealed signed-in accounts rendering as "可用".
-    const cardsToRefresh = cards.filter(
-      (card) => card.id !== 'claude' || claudeEnabledForRefresh,
-    );
     const results = await Promise.all(
-      cardsToRefresh.map(async (card) => {
+      cards.map(async (card) => {
         try {
-          const snapshot = await getSubscriptionSnapshot(card.id);
+          const snapshot = await getSubscriptionSnapshot(card.id, host);
           return { id: card.id, snapshot } as const;
         } catch (error) {
           return { id: card.id, error } as const;
@@ -99,7 +105,6 @@ export function useOAuthCards(props: { query?: string }) {
       }),
     );
     if (!mountedRef.current || refreshTicketRef.current !== ticket) return false;
-    if ('enabled' in claudeGate) setClaudeCatalogEnabled(claudeGate.enabled);
     const failures = results.filter((result) => 'error' in result);
     setCardStates((prev) => {
       const next = { ...prev };
@@ -108,13 +113,9 @@ export function useOAuthCards(props: { query?: string }) {
       }
       return next;
     });
-    if ('error' in claudeGate || failures.length > 0) {
+    if (failures.length > 0) {
       const firstFailure = failures[0];
-      const error = 'error' in claudeGate
-        ? claudeGate.error
-        : firstFailure && 'error' in firstFailure
-          ? firstFailure.error
-          : undefined;
+      const error = firstFailure && 'error' in firstFailure ? firstFailure.error : undefined;
       const message = error
         ? subscriptionActionErrorMessage(error, locale)
         : copy.serviceUnavailable;
@@ -136,7 +137,6 @@ export function useOAuthCards(props: { query?: string }) {
   }, []);
 
   const visibleCards: OAuthCard[] = cards
-    .filter((card) => card.id !== 'claude' || claudeCatalogEnabled === true)
     .filter(matchesQuery)
     .map((card) => {
       const snapshot = cardStates[card.id];
@@ -165,14 +165,14 @@ export function useOAuthCards(props: { query?: string }) {
  * level, the same ones the catalog and the connection detail use.
  */
 export function OAuthLoginPanel(props: { cardId: OAuthCardId; onLoginSuccess(): void | Promise<void> }) {
-  if (props.cardId === 'claude') return <ClaudeSubscriptionCard />;
-  if (props.cardId === 'github-copilot') return <GitHubCopilotLoginPanel />;
+  if (props.cardId === 'github-copilot') {
+    return <GitHubCopilotLoginPanel onLoginSuccess={props.onLoginSuccess} />;
+  }
   return <SubscriptionLoginPanel service={props.cardId} onLoginSuccess={props.onLoginSuccess} />;
 }
 
 /** The subtitle the setup level's header shows above each login panel. */
 export function oauthPanelSubtitle(cardId: OAuthCardId, copy: ProviderSettingsCopy['oauthSection']): string {
-  if (cardId === 'claude') return copy.claudeSubtitle;
   if (cardId === 'github-copilot') return copy.copilotSubtitle;
   if (cardId === 'xai') return copy.xaiDetail;
   return copy.codexDetail;
@@ -185,7 +185,6 @@ function modelOAuthCards(copy: ProviderSettingsCopy['oauthSection']): ReadonlyAr
   description: string;
 }> {
   return [
-    { id: 'claude', providerType: 'claude-subscription', name: 'Claude Code', description: copy.claudeDescription },
     { id: 'codex', providerType: 'openai-codex', name: 'OpenAI Codex', description: copy.codexDescription },
     { id: 'github-copilot', providerType: 'github-copilot', name: 'GitHub Copilot', description: copy.copilotDescription },
     { id: 'xai', providerType: 'xai-oauth', name: 'xAI Grok', description: copy.xaiDescription },
@@ -196,6 +195,7 @@ function SubscriptionLoginPanel(props: {
   service: 'codex' | 'xai';
   onLoginSuccess(): void | Promise<void>;
 }) {
+  const host = useRuntimeHostSettingsTarget();
   const locale = useUiLocale();
   const copy = getProviderSettingsCopy(locale).oauthSection;
   const isXai = props.service === 'xai';
@@ -208,7 +208,10 @@ function SubscriptionLoginPanel(props: {
   // localized toast copy) lives in useOAuthLoginFlow so the connection detail
   // page can drive the exact same flow behind its relogin button.
   const flow = useOAuthLoginFlow({
-    bridge: (isXai ? window.maka.xaiOAuth : window.maka.openAiCodex) as unknown as OAuthLoginFlowBridge,
+    bridge: runtimeHostOAuthLoginBridge(
+      isXai ? window.maka.xaiOAuth : window.maka.openAiCodex,
+      host,
+    ),
     display: { name: display.name, shortName: display.shortName },
     onLoginSuccess: props.onLoginSuccess,
   });
@@ -245,7 +248,8 @@ function SubscriptionLoginPanel(props: {
   );
 }
 
-function GitHubCopilotLoginPanel() {
+function GitHubCopilotLoginPanel(props: { onLoginSuccess(): void | Promise<void> }) {
+  const host = useRuntimeHostSettingsTarget();
   const copy = getProviderSettingsCopy(useUiLocale()).oauthSection;
   // The shared login-flow controller owns the snapshot refresh, the
   // synchronous one-shot pending guard, and the unmount safety; Copilot
@@ -253,11 +257,15 @@ function GitHubCopilotLoginPanel() {
   // no browser handoff, no logout confirm) instead of owning a separate
   // pending-action state machine here (#1042).
   const flow = useOAuthLoginFlow({
-    bridge: window.maka.githubCopilotSubscription as unknown as OAuthLoginFlowBridge,
+    bridge: {
+      getAccountState: () => window.maka.githubCopilotSubscription.getAccountState(host),
+      logout: () => window.maka.githubCopilotSubscription.logout(host),
+    } as OAuthLoginFlowBridge,
     display: { name: 'GitHub Copilot', shortName: 'GitHub Copilot' },
+    onLoginSuccess: props.onLoginSuccess,
     direct: {
-      login: () => window.maka.githubCopilotSubscription.connectExistingLogin(),
-      refreshTokens: () => window.maka.githubCopilotSubscription.refreshTokens(),
+      login: () => window.maka.githubCopilotSubscription.connectExistingLogin(host),
+      refreshTokens: () => window.maka.githubCopilotSubscription.refreshTokens(host),
     },
   });
   const refreshTokens = flow.refreshTokens;
@@ -284,22 +292,17 @@ function GitHubCopilotLoginPanel() {
   );
 }
 
-async function getSubscriptionSnapshot(serviceId: OAuthCardId): Promise<SubscriptionSnapshot> {
-  if (serviceId === 'claude') {
-    const state = await window.maka.claudeSubscription.getAccountState();
-    return {
-      runtimeState: state.runtimeState,
-      email: state.profile?.email,
-      errorMessage: state.errorMessage,
-    };
-  }
+async function getSubscriptionSnapshot(
+  serviceId: OAuthCardId,
+  host: DesktopRuntimeHostRef,
+): Promise<SubscriptionSnapshot> {
   if (serviceId === 'github-copilot') {
-    return window.maka.githubCopilotSubscription.getAccountState();
+    return window.maka.githubCopilotSubscription.getAccountState(host);
   }
   if (serviceId === 'xai') {
-    return window.maka.xaiOAuth.getAccountState();
+    return window.maka.xaiOAuth.getAccountState(host);
   }
-  return (await window.maka.openAiCodex.getAccountState()) as SubscriptionSnapshot;
+  return (await window.maka.openAiCodex.getAccountState(host)) as SubscriptionSnapshot;
 }
 
 interface SubscriptionDisplay {

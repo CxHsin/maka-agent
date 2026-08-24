@@ -1,4 +1,23 @@
-import { Markdown } from '@earendil-works/pi-tui';
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { Markdown, visibleWidth } from '@earendil-works/pi-tui';
 import type {
   ProviderRetryEvent,
   SandboxBoundaryRequestEvent,
@@ -8,34 +27,39 @@ import type {
   ToolResultContent,
 } from '@maka/core/events';
 import {
+  deriveTurnRecords,
   STEP_LIMIT_NOTICE_TEXT,
   type StoredMessage,
   type SystemNoteMessage,
 } from '@maka/core/session';
 import type { ContextBudgetDiagnostic } from '@maka/core/usage-stats/types';
 import type { ThinkingLevel } from '@maka/core/model-thinking';
+import type { UiLocale } from '@maka/core/ui-locale';
 import { isActiveShellRunStatus } from '@maka/core/shell-run';
 import { mergeShellRunStateWithDiagnostics } from '@maka/core/shell-run-result';
 import { projectToolActivityArgs } from '@maka/core/tool-activity-args';
+import {
+  type ToolActivityStatus,
+  toolResultActivityStatus,
+  unfinishedToolActivityStatus,
+} from '@maka/core/tool-result-status';
 import { type ShellRunUpdate } from '@maka/core/events';
 import { homedir } from 'node:os';
-import {
-  materializeSession,
-  type ChatItem,
-  type ToolActivityItem,
-} from '@maka/runtime/materializer';
 import type { MakaSessionDriver } from './session-driver.js';
 import { BoundedChunkBuffer } from './bounded-chunk-buffer.js';
 import { ansi } from './tui-ansi.js';
 import {
   fitLine,
-  formatToolResultContent,
+  formatTokenCount,
   formatUnknown,
   limitText,
   markdownTheme,
   renderIndented,
 } from './pi-transcript-format.js';
+import { goalStatusLineText, isLiveGoalStatus } from './pi-goal.js';
 import { renderToolBlock } from './pi-transcript-tools.js';
+import { getTuiPrimaryGuidance } from './tui-primary-guidance.js';
+import type { GoalProjection } from '@maka/runtime-host/protocol';
 
 export interface MakaPiUsageSummary {
   /** Cumulative cost in USD across the session. */
@@ -71,14 +95,6 @@ export interface MakaPiTranscriptState {
    * entryInLiveViewport.
    */
   renderGeometry: MakaPiRenderGeometry;
-  /**
-   * Ref polls folded at `tool_start`, childToolUseId → card facts. A Read /
-   * StopBackgroundTask aimed at a ref a visible Bash card owns is internal
-   * polling: it never renders a row, and its result folds straight into the
-   * parent. The facts survive only so an errored poll can surface as a normal
-   * card instead of being swallowed.
-   */
-  pendingShellRunPolls: Map<string, MakaPiPendingShellRunPoll>;
   /** Aggregated token usage for statusline display; reset on session switch. */
   usage: MakaPiUsageSummary;
   /**
@@ -120,13 +136,6 @@ export interface MakaPiRenderGeometry {
   viewportTop: number;
 }
 
-/** Facts kept from a folded poll's `tool_start` so an errored result can still materialize a proper card. */
-export interface MakaPiPendingShellRunPoll {
-  toolName: string;
-  title?: string;
-  input: unknown;
-}
-
 /** A single live output chunk from a `tool_output_delta` event. */
 export interface MakaPiToolOutputDelta {
   seq: number;
@@ -141,35 +150,32 @@ const LIVE_TOOL_BUFFER_MAX_CHUNKS = 512;
 export type MakaPiTranscriptEntry =
   | { kind: 'user'; text: string }
   | { kind: 'legacy_automation'; text: string }
+  | { kind: 'goal_continuation'; text: string }
   | { kind: 'assistant'; messageId: string; text: string }
   | { kind: 'thinking'; messageId: string; text: string; expanded: boolean }
   | {
       kind: 'tool';
-      /** Present for live events so terminal reconciliation is turn-scoped. */
+      /** Present for live events so durable hydration is turn-scoped. */
       turnId?: string;
       toolUseId: string;
       toolName: string;
       title?: string;
       input: unknown;
-      /** Structured result; preferred over `output` when present. */
+      /** Structured result returned by the tool. */
       result?: ToolResultContent;
-      /** Flattened result text, kept as a fallback for text/json/unknown kinds. */
-      output?: string;
       /** In-memory revision for render-cache invalidation when a result is replaced. */
       resultVersion: number;
       progress: BoundedChunkBuffer<string>;
       outputDeltas: BoundedChunkBuffer<MakaPiToolOutputDelta>;
       durationMs?: number;
-      status: 'running' | 'done' | 'error' | 'failed' | 'aborted' | 'detached' | 'unavailable';
+      /** Invocation lifecycle. Resource liveness remains authoritative in `result`. */
+      callStatus: ToolActivityStatus;
+      /** Ownership of an active ShellRun; absent means locally owned. */
+      shellRunSource?: 'source_owned' | 'unavailable';
       /** Expanded card view; stamped from expandAllTools, retargeted by Ctrl+O. */
       expanded: boolean;
-      /**
-       * Set when a successful shell-run poll is folded into its parent while
-       * off-screen: the entry cannot be spliced (that would shift line numbers
-       * and clear scrollback), but it must not render as an independent card
-       * on a future full redraw. A hidden entry contributes zero lines.
-       */
-      hidden?: boolean;
+      /** An internal shell-run poll retained for correlation but not displayed. */
+      suppressed?: boolean;
     }
   | { kind: 'notice'; level: 'info' | 'error'; text: string };
 
@@ -190,6 +196,14 @@ export interface MakaPiTranscriptMetadata {
   /** Elapsed milliseconds of the running agent turn, for the activity strip. */
   turnElapsedMs?: number;
   providerRetry?: ProviderRetryEvent;
+  /** Resolved locale for primary TUI guidance. Defaults to English for direct embeddings. */
+  uiLocale?: UiLocale;
+  /**
+   * Latest known goal projection for the session, or null when no goal is
+   * set. The status line shows live goals only (active/waiting/paused);
+   * terminal goals leave no segment, matching the desktop chip.
+   */
+  goal?: GoalProjection | null;
 }
 
 export function createMakaPiTranscriptState(): MakaPiTranscriptState {
@@ -199,7 +213,6 @@ export function createMakaPiTranscriptState(): MakaPiTranscriptState {
     expandAllTools: false,
     expandAllThinking: false,
     renderGeometry: { entryFirstLine: undefined, viewportTop: 0 },
-    pendingShellRunPolls: new Map(),
     usage: { costUsd: 0, cacheHitInput: 0, cacheMissInput: 0 },
     steering: [],
     followup: [],
@@ -247,7 +260,11 @@ export function refreshRunningShellRunElapsed(
 ): boolean {
   let found = false;
   for (const entry of state.entries) {
-    if (entry.kind !== 'tool' || entry.status !== 'running' || entry.result?.kind !== 'shell_run')
+    if (
+      entry.kind !== 'tool' ||
+      entry.result?.kind !== 'shell_run' ||
+      makaPiToolPresentationStatus(entry) !== 'running'
+    )
       continue;
     entry.durationMs = Math.max(0, now - entry.result.startedAt);
     found = true;
@@ -280,17 +297,18 @@ export function applyShellRunViewUpdateToTranscript(
     tool.toolName !== 'Bash' ||
     tool.result?.kind !== 'shell_run' ||
     tool.result.ref !== update.result.ref ||
+    tool.result.revision !== update.result.revision ||
     !isActiveShellRunStatus(tool.result.status)
   )
     return applied;
-  const status =
+  const shellRunSource =
     update.ownership.kind === 'local'
-      ? 'running'
+      ? undefined
       : update.ownership.kind === 'source_owned'
-        ? 'detached'
+        ? 'source_owned'
         : 'unavailable';
-  if (tool.status === status) return applied;
-  tool.status = status;
+  if (tool.shellRunSource === shellRunSource) return applied;
+  tool.shellRunSource = shellRunSource;
   return true;
 }
 
@@ -309,10 +327,8 @@ export function replaceTranscriptWithStoredMessages(
   state: MakaPiTranscriptState,
   messages: readonly StoredMessage[],
 ): void {
-  const view = materializeSession(messages);
-  state.entries = foldStoredShellRunChildren(view.items.flatMap(chatItemToTranscriptEntries));
+  state.entries = foldStoredShellRunChildren(storedMessagesToTranscriptEntries(messages));
   clearPendingInteractions(state);
-  state.pendingShellRunPolls.clear();
   state.expandAllTools = false;
   state.expandAllThinking = false;
   // The old entries are gone; no position is known until the next render, and
@@ -337,51 +353,51 @@ export function replaceTranscriptWithStoredMessages(
  * Fill durable tool details that are intentionally absent from Runtime Host
  * live events without applying session-switch reset semantics.
  */
-export function reconcileToolsWithStoredMessages(
+export function hydrateToolsWithStoredMessages(
   state: MakaPiTranscriptState,
   turnId: string,
   messages: readonly StoredMessage[],
 ): boolean {
   const turnMessages = messages.filter((message) => message.turnId === turnId);
   const durableTools = new Map(
-    foldStoredShellRunChildren(
-      materializeSession(turnMessages).items.flatMap(chatItemToTranscriptEntries),
-    )
+    foldStoredShellRunChildren(storedMessagesToTranscriptEntries(turnMessages))
       .filter(
         (entry): entry is Extract<MakaPiTranscriptEntry, { kind: 'tool' }> => entry.kind === 'tool',
       )
       .map((entry) => [entry.toolUseId, entry]),
   );
   let changed = false;
-  const reconciled: MakaPiTranscriptEntry[] = [];
   for (const entry of state.entries) {
-    if (entry.kind !== 'tool' || entry.turnId !== turnId) {
-      reconciled.push(entry);
-      continue;
-    }
+    if (entry.kind !== 'tool' || entry.turnId !== turnId) continue;
     const durable = durableTools.get(entry.toolUseId);
-    if (!durable) {
-      if (!entryInLiveViewport(state, entry)) {
-        entry.hidden = true;
-        reconciled.push(entry);
-      }
-      changed = true;
-      continue;
-    }
+    if (!durable) continue;
     entry.toolName = durable.toolName;
     entry.title = durable.title;
     entry.input = structuredClone(durable.input);
-    entry.result = durable.result ? structuredClone(durable.result) : undefined;
-    entry.output = durable.output;
-    entry.durationMs = durable.durationMs;
-    entry.status = durable.status;
-    entry.hidden = durable.hidden;
-    entry.resultVersion += 1;
+    entry.callStatus = mergeToolCallStatus(entry.callStatus, durable.callStatus);
+    if (
+      durable.result?.kind === 'shell_run' &&
+      durable.callStatus !== 'errored' &&
+      entry.toolName === 'Bash'
+    ) {
+      applyShellRunResult(entry, structuredClone(durable.result));
+    } else if (durable.result !== undefined && entry.result === undefined) {
+      entry.result = structuredClone(durable.result);
+      entry.resultVersion += 1;
+      if (durable.durationMs !== undefined) entry.durationMs = durable.durationMs;
+    } else if (durable.durationMs !== undefined && entry.durationMs === undefined) {
+      entry.durationMs = durable.durationMs;
+    }
     changed = true;
-    reconciled.push(entry);
   }
-  state.entries = reconciled;
   return changed;
+}
+
+function mergeToolCallStatus(
+  current: ToolActivityStatus,
+  durable: ToolActivityStatus,
+): ToolActivityStatus {
+  return current === 'running' ? durable : current;
 }
 
 /**
@@ -476,21 +492,24 @@ export async function submitCompactToTranscript(input: {
   driver: Pick<MakaSessionDriver, 'compactSession'>;
   onChange?: () => void;
 }): Promise<void> {
-  let completed = false;
-  let sawCompactionNotice = false;
+  let outcome: Extract<SessionEvent, { type: 'complete' }>['contextCompactionOutcome'];
   try {
     for await (const event of input.driver.compactSession()) {
-      if (event.type === 'token_usage' && contextBudgetOutcomeNotice(event.contextBudget))
-        sawCompactionNotice = true;
-      if (event.type === 'complete' && event.stopReason === 'end_turn') completed = true;
-      applyMakaSessionEventToTranscript(input.state, event);
+      if (event.type === 'complete') outcome = event.contextCompactionOutcome;
+      if (event.type === 'token_usage') accumulateUsage(input.state.usage, event);
+      else applyMakaSessionEventToTranscript(input.state, event);
       input.onChange?.();
     }
-    if (completed && !sawCompactionNotice) {
+    if (outcome) {
       input.state.entries.push({
         kind: 'notice',
-        level: 'info',
-        text: 'Nothing to compact.',
+        level: outcome.kind === 'failed' ? 'error' : 'info',
+        text:
+          outcome.kind === 'compacted'
+            ? 'Context compacted.'
+            : outcome.kind === 'unchanged'
+              ? 'Nothing to compact.'
+              : `Context compaction failed: ${outcome.reason}.`,
       });
       input.onChange?.();
     }
@@ -546,17 +565,11 @@ export function applyMakaSessionEventToTranscript(
       // folds into the parent at tool_result. A poll is folded only when its
       // parent card already carries the run's shell_run result — otherwise it
       // renders normally and the tool_result fold below still applies.
-      if (event.toolName === 'Read' || event.toolName === 'StopBackgroundTask') {
-        const ref = readArgsRef(event.args);
-        if (ref && findShellRunParent(state, ref, event.toolUseId)) {
-          state.pendingShellRunPolls.set(event.toolUseId, {
-            toolName: event.toolName,
-            ...(event.displayName ? { title: event.displayName } : {}),
-            input: projectToolActivityArgs(event.toolName, event.args),
-          });
-          break;
-        }
-      }
+      const ref = event.shellRunRef ?? readArgsRef(event.args);
+      const suppressed =
+        (event.toolName === 'Read' || event.toolName === 'StopBackgroundTask') &&
+        !!ref &&
+        !!findShellRunParent(state, ref, event.toolUseId);
       state.entries.push({
         kind: 'tool',
         turnId: event.turnId,
@@ -567,49 +580,19 @@ export function applyMakaSessionEventToTranscript(
         resultVersion: 0,
         progress: createProgressBuffer(),
         outputDeltas: createOutputBuffer(),
-        status: 'running',
+        callStatus: 'running',
         expanded: state.expandAllTools,
+        ...(suppressed ? { suppressed: true } : {}),
       });
       break;
     }
 
     case 'tool_result': {
-      const foldedPoll = state.pendingShellRunPolls.get(event.toolUseId);
-      if (foldedPoll) {
-        state.pendingShellRunPolls.delete(event.toolUseId);
-        const shellRun = event.content.kind === 'shell_run' ? event.content : undefined;
-        const parent = shellRun
-          ? findShellRunParent(state, shellRun.ref, event.toolUseId)
-          : undefined;
-        // isError is the call-level authoritative status: a failed call never
-        // folds, even when it carries a well-formed shell_run payload.
-        if (parent && shellRun && !event.isError) {
-          applyLiveShellRunResultToParent(state, parent, shellRun);
-          break;
-        }
-        // The poll failed (or lost its parent): surface a normal card so the
-        // failure is never swallowed by the fold.
-        const entry: MakaPiToolEntry = {
-          kind: 'tool',
-          turnId: event.turnId,
-          toolUseId: event.toolUseId,
-          toolName: foldedPoll.toolName,
-          ...(foldedPoll.title ? { title: foldedPoll.title } : {}),
-          input: foldedPoll.input,
-          progress: createProgressBuffer(),
-          outputDeltas: createOutputBuffer(),
-          result: event.content,
-          output: formatToolResultContent(event.content),
-          resultVersion: 1,
-          durationMs: event.durationMs,
-          status: event.isError ? 'error' : 'done',
-          expanded: state.expandAllTools,
-        };
-        if (shellRun && !event.isError) applyOwnShellRunResult(entry, shellRun, event.durationMs);
-        state.entries.push(entry);
+      const tool = findToolEntry(state, event.toolUseId);
+      if (tool?.suppressed && event.contentOmitted && !event.isError) {
+        state.entries.splice(state.entries.indexOf(tool), 1);
         break;
       }
-      const tool = findToolEntry(state, event.toolUseId);
       const shellRun = event.content.kind === 'shell_run' ? event.content : undefined;
       const parent = shellRun
         ? findShellRunParent(state, shellRun.ref, event.toolUseId)
@@ -617,39 +600,29 @@ export function applyMakaSessionEventToTranscript(
       if (tool && parent && shellRun && !event.isError) {
         applyLiveShellRunResultToParent(state, parent, shellRun);
         if (tool.toolName === 'Read' || tool.toolName === 'StopBackgroundTask') {
-          // Splicing an off-screen entry shifts subsequent entries' line
-          // numbers, which changes the composed buffer above the viewport and
-          // forces a scrollback-clearing full redraw (#1135). Leave it in
-          // place but mark it hidden so it contributes zero lines: a future
-          // full redraw (width change, session switch) will not render it as
-          // a duplicate card. The stale entry is fully cleaned on the next
-          // session switch / replaceTranscriptWithStoredMessages.
-          if (entryInLiveViewport(state, tool)) {
-            state.entries.splice(state.entries.indexOf(tool), 1);
-          } else {
-            tool.hidden = true;
-          }
+          state.entries.splice(state.entries.indexOf(tool), 1);
         } else {
           applyOwnShellRunResult(tool, shellRun, event.durationMs);
         }
         break;
       }
       if (tool) {
+        if (tool.suppressed) unsuppressToolAtTail(state, tool);
+        tool.callStatus = toolResultActivityStatus(event.isError, event.content);
         if (shellRun) {
           if (tool.toolName === 'Bash') {
             applyShellRunResult(tool, shellRun);
           } else {
             applyOwnShellRunResult(tool, shellRun, event.durationMs);
           }
-          // isError is the call-level authoritative status: a failed call shows
-          // error even when its payload is a well-formed (still running) run.
-          if (event.isError) tool.status = 'error';
         } else {
-          tool.status = toolResultTranscriptStatus(event.content, event.isError);
-          tool.result = event.content;
-          tool.output = formatToolResultContent(event.content);
-          tool.durationMs = event.durationMs;
-          tool.resultVersion += 1;
+          if (!(event.contentOmitted && tool.result?.kind === 'shell_run')) {
+            tool.durationMs = event.durationMs;
+          }
+          if (!event.contentOmitted) {
+            tool.result = event.content;
+            tool.resultVersion += 1;
+          }
         }
       } else {
         state.entries.push({
@@ -660,11 +633,10 @@ export function applyMakaSessionEventToTranscript(
           input: undefined,
           progress: createProgressBuffer(),
           outputDeltas: createOutputBuffer(),
-          result: event.content,
-          output: formatToolResultContent(event.content),
-          resultVersion: 1,
+          ...(!event.contentOmitted ? { result: event.content } : {}),
+          resultVersion: event.contentOmitted ? 0 : 1,
           durationMs: event.durationMs,
-          status: toolResultTranscriptStatus(event.content, event.isError),
+          callStatus: toolResultActivityStatus(event.isError, event.content),
           expanded: state.expandAllTools,
         });
       }
@@ -765,7 +737,7 @@ export function applyMakaSessionEventToTranscript(
 
     case 'error':
       clearPendingInteractions(state);
-      state.pendingShellRunPolls.clear();
+      dropSuppressedTools(state);
       state.entries.push({
         kind: 'notice',
         level: 'error',
@@ -775,7 +747,7 @@ export function applyMakaSessionEventToTranscript(
 
     case 'abort':
       clearPendingInteractions(state);
-      state.pendingShellRunPolls.clear();
+      dropSuppressedTools(state);
       state.entries.push({
         kind: 'notice',
         level: 'info',
@@ -786,6 +758,7 @@ export function applyMakaSessionEventToTranscript(
     case 'complete':
       // The turn is over; any unresolved interaction is no longer actionable.
       clearPendingInteractions(state);
+      dropSuppressedTools(state);
       if (event.stopReason === 'max_tokens') {
         state.entries.push({
           kind: 'notice',
@@ -800,72 +773,101 @@ export function applyMakaSessionEventToTranscript(
   }
 }
 
-function chatItemToTranscriptEntries(item: ChatItem): MakaPiTranscriptEntry[] {
-  switch (item.kind) {
-    case 'user':
-      return [
-        {
-          kind: item.message.origin?.kind === 'legacy_automation' ? 'legacy_automation' : 'user',
-          text: item.message.displayText ?? item.message.text,
-        },
-      ];
-    case 'assistant': {
-      const entries: MakaPiTranscriptEntry[] = [];
-      // Stored thinking happened before the reply text, so it resumes above it.
-      const thinking = item.message.thinking?.text;
-      if (thinking?.trim()) {
-        // Replay resets the expansion defaults to collapsed, so replayed
-        // entries start collapsed too.
+function storedMessagesToTranscriptEntries(
+  messages: readonly StoredMessage[],
+): MakaPiTranscriptEntry[] {
+  const entries: MakaPiTranscriptEntry[] = [];
+  const resultsByToolUseId = new Map(
+    messages
+      .filter(
+        (message): message is Extract<StoredMessage, { type: 'tool_result' }> =>
+          message.type === 'tool_result',
+      )
+      .map((message) => [message.toolUseId, message]),
+  );
+  const turnStatusById = new Map(
+    deriveTurnRecords(messages).map((turn) => [turn.turnId, turn.status]),
+  );
+
+  for (const message of messages) {
+    switch (message.type) {
+      case 'user':
         entries.push({
-          kind: 'thinking',
-          messageId: item.message.id,
-          text: thinking,
-          expanded: false,
+          kind:
+            message.origin?.kind === 'legacy_automation'
+              ? 'legacy_automation'
+              : message.origin?.kind === 'goal'
+                ? 'goal_continuation'
+                : 'user',
+          text: message.displayText ?? message.text,
         });
+        break;
+      case 'assistant': {
+        // Stored thinking happened before the reply text, so it resumes above it.
+        const thinking = message.thinking?.text;
+        if (thinking?.trim()) {
+          entries.push({
+            kind: 'thinking',
+            messageId: message.id,
+            text: thinking,
+            expanded: false,
+          });
+        }
+        entries.push({ kind: 'assistant', messageId: message.id, text: message.text });
+        break;
       }
-      entries.push({ kind: 'assistant', messageId: item.message.id, text: item.message.text });
-      return entries;
-    }
-    case 'tool':
-      return [toolActivityToTranscriptEntry(item.item)];
-    case 'system_note': {
-      const entry = systemNoteToTranscriptEntry(item.message);
-      return entry ? [entry] : [];
+      case 'tool_call':
+        entries.push(
+          storedToolToTranscriptEntry(
+            message,
+            resultsByToolUseId.get(message.id),
+            turnStatusById.get(message.turnId),
+          ),
+        );
+        break;
+      case 'system_note': {
+        const entry = systemNoteToTranscriptEntry(message);
+        if (entry) entries.push(entry);
+        break;
+      }
+      case 'tool_result':
+      case 'permission_decision':
+      case 'token_usage':
+      case 'turn_state':
+        break;
     }
   }
+  return entries;
 }
 
-function toolActivityToTranscriptEntry(item: ToolActivityItem): MakaPiToolEntry {
-  const output = item.result
-    ? formatToolResultContent(item.result)
-    : item.status === 'interrupted'
-      ? 'Interrupted before the tool returned a result.'
-      : undefined;
+function storedToolToTranscriptEntry(
+  call: Extract<StoredMessage, { type: 'tool_call' }>,
+  result: Extract<StoredMessage, { type: 'tool_result' }> | undefined,
+  turnStatus: ReturnType<typeof deriveTurnRecords>[number]['status'] | undefined,
+): MakaPiToolEntry {
   const entry: MakaPiToolEntry = {
     kind: 'tool',
-    toolUseId: item.toolUseId,
-    toolName: item.toolName,
-    ...(item.displayName ? { title: item.displayName } : {}),
-    input: item.args,
+    toolUseId: call.id,
+    toolName: call.toolName,
+    ...(call.displayName ? { title: call.displayName } : {}),
+    input: projectToolActivityArgs(call.toolName, call.args),
     progress: createProgressBuffer(),
     outputDeltas: createOutputBuffer(),
-    ...(item.result ? { result: item.result } : {}),
-    ...(output ? { output } : {}),
-    resultVersion: item.result ? 1 : 0,
-    ...(item.durationMs !== undefined ? { durationMs: item.durationMs } : {}),
-    status: transcriptToolStatus(item.status),
+    ...(result ? { result: result.content } : {}),
+    resultVersion: result ? 1 : 0,
+    ...(result?.durationMs !== undefined ? { durationMs: result.durationMs } : {}),
+    callStatus: result
+      ? toolResultActivityStatus(result.isError, result.content)
+      : unfinishedToolActivityStatus(turnStatus),
     expanded: false,
   };
-  if (item.result?.kind === 'subagent') {
-    entry.status = subagentTranscriptStatus(item.result.status);
-  }
   // A failed call keeps its error status and raw payload: applying the shell_run
   // as the card's own result would let a still-running or settled payload
   // overwrite the error and swallow the failure on replay. This mirrors the live
   // tool_result path, which forces `error` for any errored shell_run result, and
   // is what lets the stored fold below recognize an errored poll by its status.
-  if (item.result?.kind === 'shell_run' && !item.isError)
-    applyOwnShellRunResult(entry, item.result);
+  if (result?.content.kind === 'shell_run' && !result.isError)
+    applyOwnShellRunResult(entry, result.content);
   return entry;
 }
 
@@ -875,7 +877,11 @@ function foldStoredShellRunChildren(entries: MakaPiTranscriptEntry[]): MakaPiTra
     // An errored poll never folds: its failed payload must not mutate the parent
     // and its error card must survive replay, mirroring the live path's "failure
     // is never swallowed" invariant.
-    if (entry.kind === 'tool' && entry.result?.kind === 'shell_run' && entry.status !== 'error') {
+    if (
+      entry.kind === 'tool' &&
+      entry.result?.kind === 'shell_run' &&
+      entry.callStatus !== 'errored'
+    ) {
       const shellRun = entry.result;
       const parent = [...folded]
         .reverse()
@@ -896,63 +902,66 @@ function foldStoredShellRunChildren(entries: MakaPiTranscriptEntry[]): MakaPiTra
   return folded;
 }
 
-function transcriptToolStatus(status: ToolActivityItem['status']): MakaPiToolEntry['status'] {
-  switch (status) {
-    case 'completed':
-      return 'done';
-    case 'errored':
-    case 'interrupted':
-      return 'error';
-    case 'pending':
-    case 'running':
-      return 'running';
+export type MakaPiToolPresentationStatus =
+  | 'running'
+  | 'done'
+  | 'error'
+  | 'failed'
+  | 'aborted'
+  | 'detached'
+  | 'unavailable';
+
+export function makaPiToolPresentationStatus(entry: MakaPiToolEntry): MakaPiToolPresentationStatus {
+  if (entry.result?.kind === 'subagent') return SUBAGENT_PRESENTATION_STATUS[entry.result.status];
+  if (entry.result?.kind === 'shell_run') {
+    if (entry.callStatus === 'errored') return 'error';
+    if (entry.toolName === 'WriteStdin') {
+      return entry.result.operation?.kind === 'pty_control' && entry.result.operation.failed
+        ? 'error'
+        : 'done';
+    }
+    if (isActiveShellRunStatus(entry.result.status)) {
+      return entry.shellRunSource === 'source_owned'
+        ? 'detached'
+        : entry.shellRunSource === 'unavailable'
+          ? 'unavailable'
+          : 'running';
+    }
+    return SHELL_RUN_PRESENTATION_STATUS[entry.result.status];
   }
+  return CALL_PRESENTATION_STATUS[entry.callStatus];
 }
 
-function toolResultTranscriptStatus(
-  result: ToolResultContent,
-  isError: boolean,
-): MakaPiToolEntry['status'] {
-  return result.kind === 'subagent'
-    ? subagentTranscriptStatus(result.status)
-    : isError
-      ? 'error'
-      : 'done';
-}
+const CALL_PRESENTATION_STATUS = {
+  running: 'running',
+  completed: 'done',
+  errored: 'error',
+  interrupted: 'aborted',
+} as const satisfies Record<ToolActivityStatus, MakaPiToolPresentationStatus>;
 
-function subagentTranscriptStatus(
-  status: Extract<ToolResultContent, { kind: 'subagent' }>['status'],
-): MakaPiToolEntry['status'] {
-  switch (status) {
-    case 'completed':
-      return 'done';
-    case 'failed':
-      return 'failed';
-    case 'cancelled':
-      return 'aborted';
-    case 'running':
-    case 'waiting_for_user':
-      return 'running';
-  }
-}
+const SUBAGENT_PRESENTATION_STATUS = {
+  completed: 'done',
+  failed: 'failed',
+  cancelled: 'aborted',
+  running: 'running',
+  waiting_for_user: 'running',
+} as const satisfies Record<
+  Extract<ToolResultContent, { kind: 'subagent' }>['status'],
+  MakaPiToolPresentationStatus
+>;
 
-function shellRunTranscriptStatus(
-  status: Extract<ToolResultContent, { kind: 'shell_run' }>['status'],
-): MakaPiToolEntry['status'] {
-  switch (status) {
-    case 'starting':
-    case 'running':
-      return 'running';
-    case 'completed':
-      return 'done';
-    case 'cancelled':
-      return 'aborted';
-    case 'failed':
-    case 'timed_out':
-    case 'orphaned':
-      return 'failed';
-  }
-}
+const SHELL_RUN_PRESENTATION_STATUS = {
+  starting: 'running',
+  running: 'running',
+  completed: 'done',
+  cancelled: 'aborted',
+  failed: 'failed',
+  timed_out: 'failed',
+  orphaned: 'failed',
+} as const satisfies Record<
+  Extract<ToolResultContent, { kind: 'shell_run' }>['status'],
+  MakaPiToolPresentationStatus
+>;
 
 function applyShellRunResult(
   entry: MakaPiToolEntry,
@@ -961,9 +970,7 @@ function applyShellRunResult(
   const current = entry.result?.kind === 'shell_run' ? entry.result : undefined;
   const merged = mergeShellRunStateWithDiagnostics(current, result, 'cli.transcript');
   if (!merged.changed) return false;
-  entry.status = shellRunTranscriptStatus(merged.result.status);
   entry.result = merged.result;
-  entry.output = formatToolResultContent(merged.result);
   entry.durationMs = Math.max(
     0,
     (merged.result.completedAt ?? merged.result.updatedAt) - merged.result.startedAt,
@@ -977,14 +984,7 @@ function applyOwnShellRunResult(
   result: Extract<ToolResultContent, { kind: 'shell_run' }>,
   operationDurationMs = entry.durationMs,
 ): void {
-  entry.status =
-    entry.toolName === 'WriteStdin'
-      ? result.operation?.kind === 'pty_control' && result.operation.failed
-        ? 'error'
-        : 'done'
-      : shellRunTranscriptStatus(result.status);
   entry.result = result;
-  entry.output = formatToolResultContent(result);
   if (entry.toolName === 'WriteStdin') {
     entry.durationMs = operationDurationMs;
   } else {
@@ -1022,15 +1022,11 @@ function contextBudgetNoticeText(
     (candidate) => candidate.decision === 'replaced',
   );
   if (!contextBudget || !decision) return undefined;
-  const kind = decision.boundaryKind ?? contextBudget.highWaterReason ?? 'context';
-  const coveredTurns = decision.coveredTurns ?? contextBudget.historyCompactedTurns;
-  const coveredEvents = decision.coveredRuntimeEvents ?? contextBudget.historyCompactedEvents;
+  const kind = decision.boundaryKind ?? 'context';
+  const coveredTurns = decision.coveredTurns;
+  const coveredEvents = decision.coveredRuntimeEvents;
   const savedTokens =
     decision.estimatedTokensSaved ??
-    tokenDelta(
-      contextBudget.historyCompactedEstimatedTokensBefore,
-      contextBudget.historyCompactedEstimatedTokensAfter,
-    ) ??
     tokenDelta(contextBudget.estimatedTokensBefore, contextBudget.estimatedTokensAfter);
   const parts = [`Context compacted: ${kind}`];
   if (coveredTurns !== undefined || coveredEvents !== undefined) {
@@ -1091,24 +1087,24 @@ export function renderMakaPiTranscript(
   // first screen greets and orients instead of showing an empty pane. Once the
   // first prompt lands, entries take over and it never renders again.
   if (state.entries.length === 0 && !state.pendingInteraction) {
-    return renderWelcomeBlock(safeWidth);
+    return renderWelcomeBlock(safeWidth, metadata.uiLocale ?? 'en');
   }
 
   const entryFirstLine = new Map<MakaPiTranscriptEntry, number>();
   const viewportTop = state.renderGeometry.viewportTop;
+  let previousVisibleEntry: MakaPiTranscriptEntry | undefined;
   for (let i = 0; i < state.entries.length; i += 1) {
     const entry = state.entries[i]!;
-    if (entry.kind === 'tool' && entry.hidden) {
+    if (entry.kind === 'tool' && entry.suppressed) {
       entryFirstLine.set(entry, lines.length);
       continue;
     }
-    const prev = state.entries[i - 1];
     // A blank gap separates human-facing boundaries (user/assistant/thinking/
     // notice) and the edges of a tool stack; only consecutive tool entries (the
     // agent-work stack) have no blank line between them. Thinking reads as
     // model output, so it gets the same blank-line breathing room as assistant
     // text rather than packing against the tool rows.
-    const continuesStack = entry.kind === 'tool' && prev?.kind === 'tool';
+    const continuesStack = entry.kind === 'tool' && previousVisibleEntry?.kind === 'tool';
     if (!continuesStack) lines.push('');
     entryFirstLine.set(entry, lines.length);
     // An entry that sits entirely above the live viewport is in terminal
@@ -1125,6 +1121,7 @@ export function renderMakaPiTranscript(
       lines.length < viewportTop &&
       (entryHeight === 0 || lines.length + entryHeight <= viewportTop);
     lines.push(...renderTranscriptEntryMemoized(entry, safeWidth, fullyOffScreen));
+    previousVisibleEntry = entry;
   }
   state.renderGeometry.entryFirstLine = entryFirstLine;
 
@@ -1188,6 +1185,10 @@ function clearPendingInteractions(state: MakaPiTranscriptState): void {
   state.queuedInteractions = [];
 }
 
+function dropSuppressedTools(state: MakaPiTranscriptState): void {
+  state.entries = state.entries.filter((entry) => entry.kind !== 'tool' || !entry.suppressed);
+}
+
 /**
  * Per-entry render cache. The transcript re-renders on every keystroke and
  * stream delta, but only the tail entry actually changes; caching the rendered
@@ -1234,20 +1235,42 @@ function renderTranscriptEntryMemoized(
 }
 
 function renderTranscriptEntryBlock(entry: MakaPiTranscriptEntry, width: number): string[] {
-  switch (entry.kind) {
-    case 'user':
-      return renderUserBlock(entry.text, width);
-    case 'legacy_automation':
-      return renderLegacyAutomationBlock(entry.text, width);
-    case 'assistant':
-      return renderAssistantBlock(entry.text, width);
-    case 'thinking':
-      return renderThinkingBlock(entry, width, entry.expanded);
-    case 'tool':
-      return renderToolBlock(entry, width, entry.expanded);
-    case 'notice':
-      return renderNotice(entry, width);
-  }
+  // Keep the conversation stream inside a one-cell gutter. The editor owns
+  // the full terminal width, so this makes the two surfaces align without
+  // changing any of the individual block renderers' internal prefixes.
+  const contentWidth = Math.max(1, width - 2);
+  const lines = (() => {
+    switch (entry.kind) {
+      case 'user':
+        return renderUserBlock(entry.text, contentWidth);
+      case 'legacy_automation':
+        return renderLegacyAutomationBlock(entry.text, contentWidth);
+      case 'goal_continuation':
+        return renderGoalContinuationBlock(entry.text, contentWidth);
+      case 'assistant':
+        return renderAssistantBlock(entry.text, contentWidth);
+      case 'thinking':
+        return renderThinkingBlock(entry, contentWidth, entry.expanded);
+      case 'tool':
+        return renderToolBlock(entry, contentWidth, entry.expanded);
+      case 'notice':
+        return renderNotice(entry, contentWidth);
+    }
+  })();
+
+  // Markdown preserves a final blank paragraph. It should not become part of
+  // the block's vertical footprint because renderMakaPiTranscript already
+  // inserts the single separator row between entries.
+  let end = lines.length;
+  while (end > 0 && isBlankTranscriptLine(lines[end - 1]!)) end -= 1;
+  return lines.slice(0, end).map((line) => {
+    if (isBlankTranscriptLine(line)) return '';
+    return fitLine(` ${line}`, width);
+  });
+}
+
+function isBlankTranscriptLine(line: string): boolean {
+  return line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').trim().length === 0;
 }
 
 function transcriptEntrySignature(entry: MakaPiTranscriptEntry, width: number): string {
@@ -1257,6 +1280,8 @@ function transcriptEntrySignature(entry: MakaPiTranscriptEntry, width: number): 
       return `user|${width}|${entry.text.length}`;
     case 'legacy_automation':
       return `legacy_automation|${width}|${entry.text}`;
+    case 'goal_continuation':
+      return `goal_continuation|${width}|${entry.text}`;
     case 'assistant':
       // text_complete authoritatively replaces streamed text, including with a
       // same-length final, so the full value must participate in the cache key.
@@ -1269,17 +1294,15 @@ function transcriptEntrySignature(entry: MakaPiTranscriptEntry, width: number): 
     case 'notice':
       return `notice|${width}|${entry.level}|${entry.text.length}`;
     case 'tool':
-      // A tool entry mutates in place as it runs: status/duration flip,
-      // progress/output deltas append, and resultVersion advances whenever a
-      // result is accepted. Count those revisions instead of duplicating the
-      // result's rendering contract in this cache key. `input` and
-      // `toolName` are omitted deliberately: both are set once at `tool_start`,
-      // before the first render, and never change, so they can't go stale.
+      // A tool entry mutates in place as it runs: its derived presentation and
+      // duration change, progress/output deltas append, and resultVersion
+      // advances whenever durable detail or a resource revision is accepted.
+      // Count those facts instead of duplicating the result rendering contract.
       return [
         'tool',
         width,
         entry.expanded ? 1 : 0,
-        entry.status,
+        makaPiToolPresentationStatus(entry),
         entry.durationMs ?? '',
         entry.title ?? entry.toolName,
         entry.progress.version,
@@ -1320,23 +1343,45 @@ export function renderMakaPiStatusLine(metadata: MakaPiTranscriptMetadata, width
   } else if (metadata.orchestrationMode === 'graph') {
     parts.push(ansi.accent('graph'));
   }
+  // An autonomous goal burns tokens between prompts; it must never be
+  // invisible. Terminal goals show nothing (the desktop chip hides them too).
+  if (metadata.goal && isLiveGoalStatus(metadata.goal.status)) {
+    const text = goalStatusLineText(metadata.goal, Date.now());
+    // paused gets warning salience: the loop stopped burning but stays armed
+    // and resumable, which the user must not miss. waiting is a normal
+    // transient between turns, so it stays dim like the other chrome.
+    parts.push(
+      metadata.goal.status === 'active'
+        ? ansi.accent(text)
+        : metadata.goal.status === 'paused'
+          ? ansi.yellow(text)
+          : ansi.dim(text),
+    );
+  }
   const usage = metadata.usage;
+  // ctx segment: only show "used" when contextRemaining is available, since
+  // token_usage.input is a billing-cumulative sum across tool-loop steps,
+  // not the last request's context size. Using it as a proxy for "used"
+  // would produce misleading percentages (potentially >100%).
+  const contextRemaining = usage?.contextRemaining;
+  if (metadata.modelContextWindow !== undefined && contextRemaining !== undefined) {
+    const used = Math.max(0, metadata.modelContextWindow - contextRemaining);
+    const pct = Math.round((used / metadata.modelContextWindow) * 100);
+    // #1064: color warning — yellow >80%, red >95%, dim otherwise.
+    const ctxColor = pct > 95 ? ansi.red : pct > 80 ? ansi.yellow : ansi.dim;
+    parts.push(
+      ctxColor(
+        `ctx ${formatTokenCount(used)}/${formatTokenCount(metadata.modelContextWindow)} ${pct}%`,
+      ),
+    );
+  } else if (metadata.modelContextWindow !== undefined) {
+    // #3371: the window is known but no usage has arrived yet (fresh session,
+    // or the provider doesn't report per-step input tokens). Degrade
+    // explicitly, pi-style, instead of hiding the segment silently — the user
+    // can then tell "not measured yet" apart from "window unknown".
+    parts.push(ansi.dim(`ctx ?/${formatTokenCount(metadata.modelContextWindow)}`));
+  }
   if (usage) {
-    // ctx segment: only show when contextRemaining is available, since
-    // token_usage.input is a billing-cumulative sum across tool-loop steps,
-    // not the last request's context size. Using it as a proxy for "used"
-    // would produce misleading percentages (potentially >100%).
-    if (metadata.modelContextWindow !== undefined && usage.contextRemaining !== undefined) {
-      const used = Math.max(0, metadata.modelContextWindow - usage.contextRemaining);
-      const pct = Math.round((used / metadata.modelContextWindow) * 100);
-      // #1064: color warning — yellow >80%, red >95%, dim otherwise.
-      const ctxColor = pct > 95 ? ansi.red : pct > 80 ? ansi.yellow : ansi.dim;
-      parts.push(
-        ctxColor(
-          `ctx ${formatTokenCount(used)}/${formatTokenCount(metadata.modelContextWindow)} ${pct}%`,
-        ),
-      );
-    }
     if (usage.costUsd > 0) {
       parts.push(ansi.dim(`$${formatCost(usage.costUsd)}`));
     }
@@ -1458,12 +1503,6 @@ function shortenCwd(cwd: string, homeDir?: string): string {
   return cwd;
 }
 
-function formatTokenCount(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
-  return String(tokens);
-}
-
 function formatCost(costUsd: number): string {
   if (costUsd < 0.01) return '<0.01';
   return costUsd.toFixed(2);
@@ -1540,6 +1579,14 @@ function findToolEntry(
     .find(
       (entry): entry is MakaPiToolEntry => entry.kind === 'tool' && entry.toolUseId === toolUseId,
     );
+}
+
+function unsuppressToolAtTail(state: MakaPiTranscriptState, tool: MakaPiToolEntry): void {
+  tool.suppressed = undefined;
+  const index = state.entries.indexOf(tool);
+  if (index < 0 || index === state.entries.length - 1) return;
+  state.entries.splice(index, 1);
+  state.entries.push(tool);
 }
 
 function createProgressBuffer(): BoundedChunkBuffer<string> {
@@ -1659,12 +1706,27 @@ function renderUserBlock(text: string, width: number): string[] {
   return renderIndented(text, width, 2).map((line) => fitLine(`${prefix} ${line.slice(2)}`, width));
 }
 
-function renderLegacyAutomationBlock(text: string, width: number): string[] {
+/** Provenance header + indented body for non-human-authored prompts. */
+function renderProvenanceBlock(
+  label: string,
+  accent: boolean,
+  text: string,
+  width: number,
+): string[] {
   if (!text.trim()) return [];
+  const styled = accent ? ansi.accent(label) : ansi.dim(label);
   return [
-    fitLine(ansi.dim('Legacy Automation (history only)'), width),
+    fitLine(styled, width),
     ...renderIndented(text, width, 2).map((line) => fitLine(line, width)),
   ];
+}
+
+function renderLegacyAutomationBlock(text: string, width: number): string[] {
+  return renderProvenanceBlock('Legacy Automation (history only)', false, text, width);
+}
+
+function renderGoalContinuationBlock(text: string, width: number): string[] {
+  return renderProvenanceBlock('Goal continuation (autonomous)', true, text, width);
 }
 
 /** An assistant turn: bare markdown prose, no speaker label or indent. */
@@ -1695,16 +1757,17 @@ const MAKA_WORDMARK_LINES = [
 ];
 const MAKA_WORDMARK_WIDTH = Math.max(...MAKA_WORDMARK_LINES.map((line) => line.length));
 
-function renderWelcomeBlock(width: number): string[] {
-  // The branded home greets with the maka wordmark, a short Chinese-first
-  // tagline, and the command-center entry points (direct input, /session,
+function renderWelcomeBlock(width: number, locale: UiLocale): string[] {
+  // The branded home greets with the maka wordmark, a short localized tagline,
+  // and the command-center entry points (direct input, /session,
   // /model, /setup) so a fresh session shows the main actions without typing
   // `/`. The active model and connection live in the statusline, so the
   // welcome does not repeat them.
+  const copy = getTuiPrimaryGuidance(locale).welcome;
   const hints: [string, string][] = [
-    ['/session', '切换或恢复任务'],
-    ['/model', '切换模型'],
-    ['/setup', '配置模型提供商'],
+    ['/session', copy.session],
+    ['/model', copy.model],
+    ['/setup', copy.setup],
   ];
   const keyWidth = Math.max(...hints.map(([key]) => key.length));
   const lines: string[] = [];
@@ -1716,9 +1779,9 @@ function renderWelcomeBlock(width: number): string[] {
     }
   }
   lines.push('');
-  lines.push(fitLine(ansi.dim('陪你把事做完'), width));
+  lines.push(fitLine(ansi.dim(copy.tagline), width));
   lines.push('');
-  lines.push(fitLine('  输入消息开始对话', width));
+  lines.push(fitLine(`  ${copy.start}`, width));
   for (const [key, description] of hints) {
     lines.push(fitLine(ansi.dim(`  ${key.padEnd(keyWidth)}  ${description}`), width));
   }

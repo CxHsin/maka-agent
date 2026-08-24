@@ -1,4 +1,24 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { useRef } from 'react';
+import type { MessageQueueEntryProjection } from '@maka/core/events';
 import type { SessionEventStreamSnapshot } from '@maka/core/session-event-health';
 import { confirmLiveTurn, type InteractionQueues, type LiveTurnProjection } from '@maka/ui';
 import type { ShellRunUpdatesBySession } from './shell-run-update-state.js';
@@ -12,9 +32,14 @@ export interface AppShellSessionUiState {
   liveTurnBySession: Record<string, LiveTurnProjection>;
   shellRunUpdatesBySession: ShellRunUpdatesBySession;
   interactionBySession: InteractionQueues;
+  messageQueueBySession: Record<string, MessageQueueUiState>;
   pendingPermissionModeBySession: Record<string, boolean>;
   pendingSessionModelBySession: Record<string, boolean>;
 }
+
+// The pending plate mirrors the Host's follow-up queue only: steering entries
+// are already handed to the active Turn, and queueRevision is not rendered.
+export type MessageQueueUiState = MessageQueueEntryProjection[];
 
 type AppShellSessionUiStateMapKey = keyof AppShellSessionUiState;
 
@@ -25,6 +50,7 @@ const SESSION_UI_MAP_KEYS = [
   'liveTurnBySession',
   'shellRunUpdatesBySession',
   'interactionBySession',
+  'messageQueueBySession',
   'pendingPermissionModeBySession',
   'pendingSessionModelBySession',
 ] as const satisfies readonly AppShellSessionUiStateMapKey[];
@@ -33,7 +59,7 @@ type MissingSessionUiMapKey = Exclude<AppShellSessionUiStateMapKey, typeof SESSI
 const allSessionUiMapsAreListed: Record<MissingSessionUiMapKey, never> = {};
 void allSessionUiMapsAreListed;
 
-// `useSettledSessionTransientReconcile` heals a session whose turn ended while
+// An authoritative session-list refresh heals a session whose turn ended while
 // its SessionEvent stream wasn't being followed, and must drop only the live
 // projection. The independently-scoped maps (message load error / retry, pending
 // permission-mode / model toggles, the permission queue, stop-pending) each have
@@ -151,6 +177,7 @@ export function createAppShellSessionUiStateController(
     setLiveTurnBySession: createMapSetter('liveTurnBySession'),
     setShellRunUpdatesBySession: createMapSetter('shellRunUpdatesBySession'),
     setInteractionBySession: createMapSetter('interactionBySession'),
+    setMessageQueueBySession: createMapSetter('messageQueueBySession'),
     setSessionEventHealthBySession: ((updater) => {
       sessionEventHealthBySessionRef.current = updater(sessionEventHealthBySessionRef.current);
     }) satisfies StateUpdater<Record<string, SessionEventStreamSnapshot>>,
@@ -177,11 +204,11 @@ export function createAppShellSessionUiStateController(
       );
       replaceState(clearAppShellSessionUiStateForSession(currentState, sessionId));
     },
-    clearAllSessionUiState: () => {
-      sessionEventHealthBySessionRef.current = {};
-      replaceState(createInitialAppShellSessionUiState());
-    },
-    clearTurnTransientState: (sessionId: string) => {
+    clearTurnTransientStateIfCurrent: (
+      sessionId: string,
+      expected: LiveTurnProjection | undefined,
+    ) => {
+      if (currentState.liveTurnBySession[sessionId] !== expected) return;
       replaceState(clearAppShellTurnTransientForSession(currentState, sessionId));
     },
   };
@@ -214,12 +241,12 @@ export function useAppShellSessionUiState() {
     setLiveTurnBySession: controller.setLiveTurnBySession,
     setShellRunUpdatesBySession: controller.setShellRunUpdatesBySession,
     setInteractionBySession: controller.setInteractionBySession,
+    setMessageQueueBySession: controller.setMessageQueueBySession,
     setSessionEventHealthBySession: controller.setSessionEventHealthBySession,
     setPendingPermissionModeBySession: controller.setPendingPermissionModeBySession,
     setPendingSessionModelBySession: controller.setPendingSessionModelBySession,
     confirmLiveTurn: controller.confirmLiveTurn,
     clearSessionUiState: controller.clearSessionUiState,
-    clearAllSessionUiState: controller.clearAllSessionUiState,
-    clearTurnTransientState: controller.clearTurnTransientState,
+    clearTurnTransientStateIfCurrent: controller.clearTurnTransientStateIfCurrent,
   };
 }

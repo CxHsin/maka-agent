@@ -1,3 +1,23 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { RuntimeHostProtocolError } from '../protocol/errors.js';
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
@@ -6,7 +26,7 @@ import {
   decodeProjectCatalogQueryResult,
   HOST_OPERATION_SPECS,
   PROJECT_CATALOG_PAGE_MAX_ITEMS,
-  RuntimeHostProtocolError,
+  REMOTE_OWNER_OPERATION_GRANTS,
 } from '../protocol/index.js';
 
 const projectPath = process.platform === 'win32' ? 'C:\\workspace' : '/workspace';
@@ -138,6 +158,65 @@ describe('Project catalog protocol', () => {
           operation: 'project.catalog.mutate',
           ok: true,
           result: { kind: 'project', projectId: 'project-1' },
+        }),
+      isProtocolError,
+    );
+  });
+
+  test('remote directory selection carries opaque path segments instead of Host paths', () => {
+    assert.equal(REMOTE_OWNER_OPERATION_GRANTS.includes('project.catalog.query'), true);
+    assert.equal(REMOTE_OWNER_OPERATION_GRANTS.includes('project.catalog.mutate'), true);
+    assert.equal(
+      HOST_OPERATION_SPECS['project.catalog.query'].usesHostPaths?.({ kind: 'directory_roots' }),
+      false,
+    );
+    assert.deepEqual(
+      decodeProjectCatalogQueryResult({
+        kind: 'directory_roots',
+        roots: [
+          { id: 'root-a', label: 'Projects' },
+          { id: 'root-b', label: 'Shared data' },
+        ],
+      }),
+      {
+        kind: 'directory_roots',
+        roots: [
+          { id: 'root-a', label: 'Projects' },
+          { id: 'root-b', label: 'Shared data' },
+        ],
+      },
+    );
+    assert.throws(
+      () =>
+        decodeProjectCatalogQueryResult({
+          kind: 'directory_roots',
+          roots: [{ id: 'root-a' }],
+        }),
+      isProtocolError,
+    );
+    assert.equal(
+      HOST_OPERATION_SPECS['project.catalog.mutate'].usesHostPaths?.({
+        kind: 'register_directory',
+        rootId: 'home',
+        segments: ['work'],
+      }),
+      false,
+    );
+    assert.throws(
+      () =>
+        decodeClientFrame({
+          requestId: 'directory-traversal',
+          operation: 'project.catalog.mutate',
+          input: { kind: 'register_directory', rootId: 'home', segments: ['..'] },
+        }),
+      isProtocolError,
+    );
+    assert.throws(
+      () =>
+        decodeClientFrame({
+          requestId: 'directory-separator',
+          operation: 'project.catalog.query',
+          input: { kind: 'directory_list_start', rootId: 'home', segments: ['work/project'] },
         }),
       isProtocolError,
     );

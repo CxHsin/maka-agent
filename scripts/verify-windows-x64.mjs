@@ -1,9 +1,31 @@
-import { access, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { createHash } from 'node:crypto';
+import { access, mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readProductManifestIdentity } from './product-release-identity.mjs';
 import {
   assertMissing,
+  assertPackagedDependencyClosure,
   assertPackagedResources,
   isolatedUserEnv,
   makePtyProbe,
@@ -13,14 +35,12 @@ import {
 } from './verify-packaged-app.mjs';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const desktopRoot = join(repoRoot, 'apps', 'desktop');
 const executableName = 'Maka.exe';
 const amd64Machine = 0x8664;
 const temporaryCleanupRetries = 20;
 const temporaryCleanupRetryDelayMs = 250;
 // conpty echoes the command and terminates lines with CRLF, so the probe keeps
 // matching on a substring rather than the whole output.
-const ptyProbe = makePtyProbe(process.env.ComSpec || 'cmd.exe', ['/c', 'echo', 'maka-node-pty-ok']);
 
 function runCommandFromRepo(command, args, options = {}) {
   return runCommand(command, args, { cwd: repoRoot, ...options });
@@ -88,17 +108,32 @@ export async function verifyPackagedWindowsApp(
     smokeRenderer = smokePackagedRenderer,
     workingDirectory = appDirectory,
     expectedVersion,
+    artifactContract = 'current',
   } = {},
 ) {
-  const desktopManifest = JSON.parse(await readFile(join(desktopRoot, 'package.json'), 'utf8'));
+  if (artifactContract !== 'current' && artifactContract !== 'legacy-baseline') {
+    throw new Error(`Unknown packaged Windows artifact contract: ${artifactContract}`);
+  }
+  const requiresCurrentContract = artifactContract === 'current';
+  const product = await readProductManifestIdentity();
   const resources = join(appDirectory, 'resources');
   const executable = join(appDirectory, executableName);
   const appAsar = join(resources, 'app.asar');
+  const sandboxExecutable = join(resources, 'windows-sandbox', 'maka-windows-sandbox.exe');
 
   step('checking packaged resources');
   await requirePath(executable);
-  await assertPackagedResources(resources, { requirePath, forbidPath });
-  await requirePath(join(resources, 'git', 'cmd', 'git.exe'));
+  await assertPackagedResources(resources, {
+    requirePath,
+    forbidPath,
+    requireWindowsSandbox: requiresCurrentContract,
+    requireDisclaimer: requiresCurrentContract,
+    bundledGitContract: requiresCurrentContract ? 'forbidden' : 'legacy-required',
+    requireCanonicalIcon: requiresCurrentContract,
+    requireAppIconCatalog: requiresCurrentContract,
+  });
+  if (requiresCurrentContract) await assertPackagedDependencyClosure(resources);
+  else await requirePath(join(resources, 'git', 'cmd', 'git.exe'));
 
   step('reading the executable architecture');
   const machine = await readMachine(executable);
@@ -106,14 +141,91 @@ export async function verifyPackagedWindowsApp(
     throw new Error(`${executableName} must be x64, found PE machine 0x${machine.toString(16)}.`);
   }
 
+  if (requiresCurrentContract) {
+    step('smoking the packaged Windows sandbox');
+    const sandboxMachine = await readMachine(sandboxExecutable);
+    if (sandboxMachine !== amd64Machine) {
+      throw new Error(
+        `maka-windows-sandbox.exe must be x64, found PE machine 0x${sandboxMachine.toString(16)}.`,
+      );
+    }
+    const sandboxLaunch = {
+      version: 1,
+      requestId: 'packaged-sandbox-launch',
+      executable: sandboxExecutable,
+      arguments: ['--self-probe'],
+      cwd: dirname(sandboxExecutable),
+      readRoots: [],
+      writeRoots: [],
+      exactReadRoots: [],
+      exactWriteRoots: [],
+      network: 'restricted',
+      environment: {},
+    };
+    const sandboxManifest = join(workingDirectory, 'packaged-sandbox-manifest.json');
+    await writeFile(
+      sandboxManifest,
+      JSON.stringify({
+        version: 1,
+        requestId: 'packaged-sandbox',
+        clientPid: 0,
+        clientNonce: '0123456789abcdef0123456789abcdef',
+        profileDigest: createHash('sha256').update(JSON.stringify(sandboxLaunch)).digest('hex'),
+        launch: sandboxLaunch,
+      }),
+      'utf8',
+    );
+    const sandboxProbe = await run(sandboxExecutable, ['--broker-local', sandboxManifest]);
+    // The broker relays the child's stdout as the worker response channel and
+    // keeps its own boundary diagnostics on stderr, so the channel split itself
+    // is part of what this probe verifies: the child's --self-probe JSON must
+    // arrive on stdout and the broker's atomic-job diagnostic on stderr.
+    if (
+      !sandboxProbe.stdout.includes('"appContainer":true') ||
+      !sandboxProbe.stdout.includes('"inJob":true')
+    ) {
+      throw new Error(
+        `Packaged Windows sandbox child probe did not reach stdout: ${sandboxProbe.stdout}`,
+      );
+    }
+    if (!sandboxProbe.stderr.includes('"atomicJob":true')) {
+      throw new Error(
+        `Packaged Windows sandbox broker diagnostic did not reach stderr: ${sandboxProbe.stderr}`,
+      );
+    }
+    await assertMissing(sandboxManifest);
+
+    step('relaying command stdio through the packaged sandbox');
+    await run('pwsh', [
+      '-NoProfile',
+      '-File',
+      join(repoRoot, 'experiments', 'windows-sandbox', 'stdio-relay-smoke.ps1'),
+      '-LauncherPath',
+      sandboxExecutable,
+    ]);
+
+    step('running real filesystem-worker operations through the packaged app');
+    // The evidence executes the packaged artifacts themselves: the packaged
+    // broker, the packaged Electron executable as the worker runtime and the
+    // packaged worker bundle under resources — not the repository dist worker
+    // on a copied node.exe.
+    const { verifyWindowsSandboxWorkerE2E } = await import('./verify-windows-sandbox-e2e.mjs');
+    await verifyWindowsSandboxWorkerE2E(appDirectory);
+  }
+
   step('reading the product version resource');
   const { stdout } = await runPowerShell(
     run,
     `(Get-Item -LiteralPath ${powerShellLiteral(executable)}).VersionInfo.ProductVersion`,
   );
-  assertWindowsProductVersion(stdout, expectedVersion ?? desktopManifest.version);
+  assertWindowsProductVersion(stdout, expectedVersion ?? product.version);
 
   step('smoking node-pty through conpty');
+  const ptyProbe = makePtyProbe(
+    process.env.ComSpec || 'cmd.exe',
+    ['/c', 'echo', 'maka-node-pty-ok'],
+    requiresCurrentContract ? product.runtimeHostSetupPackage : undefined,
+  );
   await run(executable, ['-e', ptyProbe, join(appAsar, 'package.json')], {
     env: {
       ELECTRON_RUN_AS_NODE: '1',
@@ -122,15 +234,11 @@ export async function verifyPackagedWindowsApp(
     timeoutMs: 60_000,
   });
 
-  // No filesystem worker smoke here, unlike macOS. The worker exists to enforce
-  // a sandbox profile, and `isBuiltinFilesystemWorkerSandboxAvailable` is false
-  // on Windows (packages/runtime/src/sandbox/default-sandbox-manager.ts), so the
-  // app never launches it — file tools run through the workspace executor
-  // instead. Driving the worker by hand would only prove that a POSIX-only
-  // boundary check rejects Windows paths, which no Windows user can reach.
-
   step('smoking the packaged renderer');
-  await smokeRenderer(executable, { workingDirectory });
+  await smokeRenderer(executable, {
+    workingDirectory,
+    verifyMaximizeRestore: requiresCurrentContract,
+  });
 
   step('packaged app verified');
 }

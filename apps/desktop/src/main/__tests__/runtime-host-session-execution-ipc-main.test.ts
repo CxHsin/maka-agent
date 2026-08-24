@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from "node:assert/strict";
 import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -7,7 +26,11 @@ import test from "node:test";
 import type { IpcMain } from "electron";
 import { SIDE_CONVERSATION_SESSION_LABEL } from '@maka/core/side-conversation';
 import { type AttachmentRef } from '@maka/core/events';
-import type { SessionCatalogProjection } from "@maka/runtime-host/protocol";
+import {
+  SESSION_CONTINUITY_SCHEMA_VERSION,
+  type SessionCatalogProjection,
+} from "@maka/runtime-host/protocol";
+import { RuntimeHostOperationError } from '@maka/runtime-host/client';
 import { createAttachmentApprovalRegistry } from "../attachment-approval.js";
 import type { DesktopRuntimeHostSession } from "../runtime-host-client.js";
 import {
@@ -493,6 +516,322 @@ test("forwards explicit Skill invocation to the Host-owned Turn admission", asyn
   });
 });
 
+test("queues a mid-turn send as steering when the Host reports the session busy", async () => {
+  const submits: unknown[] = [];
+  const changes: unknown[] = [];
+  const ipc = ipcHarness();
+  registerExecutionIpc(
+    {
+      client: executionClient({
+        getSession: async () => session(),
+        startTurn: async () => {
+          throw new RuntimeHostOperationError(
+            "turn.start",
+            "session_busy",
+            "Session already has an active root Turn",
+          );
+        },
+        submitMessage: async (input) => {
+          submits.push(input);
+          return { disposition: "steering", queueRevision: 1 };
+        },
+      }),
+      observer: unusedObserver(),
+      attachmentApprovals: createAttachmentApprovalRegistry(),
+      emitSessionsChanged: (reason, sessionId, extra) =>
+        changes.push({ reason, sessionId, ...extra }),
+      stat: async () => ({ size: 0 }),
+      resizeImage: async (bytes) => bytes,
+      beforeStop() {},
+      newId: () => "id-1",
+    },
+    ipc,
+  );
+
+  const result = await ipc.invoke("sessions:send", "session-1", {
+    type: "send",
+    turnId: "turn-1",
+    text: "also check the tests",
+  });
+
+  assert.deepEqual(submits, [
+    {
+      sessionId: "session-1",
+      messageId: "id-1",
+      content: { text: "also check the tests", inlineReferences: [] },
+      placement: "current_turn",
+    },
+  ]);
+  assert.deepEqual(result, {
+    ok: true,
+    steered: true,
+    turnId: "turn-1",
+    attachments: [],
+    inlineReferences: [],
+    skillInvocation: { loaded: [], failed: [], receipts: [] },
+  });
+  assert.deepEqual(changes, [
+    { reason: "status-change", sessionId: "session-1" },
+  ]);
+});
+
+test("starts the turn from the queued message when the busy race resolves idle", async () => {
+  const changes: unknown[] = [];
+  const ipc = ipcHarness();
+  registerExecutionIpc(
+    {
+      client: executionClient({
+        getSession: async () => session(),
+        startTurn: async () => {
+          throw new RuntimeHostOperationError(
+            "turn.start",
+            "session_busy",
+            "Session already has an active root Turn",
+          );
+        },
+        submitMessage: async () => ({
+          disposition: "turn_started",
+          turnId: "turn-9",
+        }),
+      }),
+      observer: unusedObserver(),
+      attachmentApprovals: createAttachmentApprovalRegistry(),
+      emitSessionsChanged: (reason, sessionId, extra) =>
+        changes.push({ reason, sessionId, ...extra }),
+      stat: async () => ({ size: 0 }),
+      resizeImage: async (bytes) => bytes,
+      beforeStop() {},
+      newId: () => "id-1",
+    },
+    ipc,
+  );
+
+  const result = await ipc.invoke("sessions:send", "session-1", {
+    type: "send",
+    turnId: "turn-1",
+    text: "also check the tests",
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    turnId: "turn-9",
+    attachments: [],
+    inlineReferences: [],
+    skillInvocation: { loaded: [], failed: [], receipts: [] },
+  });
+  assert.deepEqual(changes, [
+    { reason: "status-change", sessionId: "session-1", turnId: "turn-9" },
+  ]);
+});
+
+test("keeps the busy failure for a Skill send instead of degrading it to steering", async () => {
+  const submits: unknown[] = [];
+  const ipc = ipcHarness();
+  registerExecutionIpc(
+    {
+      client: executionClient({
+        getSession: async () => session(),
+        startTurn: async () => {
+          throw new RuntimeHostOperationError(
+            "turn.start",
+            "session_busy",
+            "Session already has an active root Turn",
+          );
+        },
+        submitMessage: async (input) => {
+          submits.push(input);
+          return { disposition: "steering", queueRevision: 1 };
+        },
+      }),
+      observer: unusedObserver(),
+      attachmentApprovals: createAttachmentApprovalRegistry(),
+      emitSessionsChanged() {},
+      stat: async () => ({ size: 0 }),
+      resizeImage: async (bytes) => bytes,
+      beforeStop() {},
+      newId: () => "id-1",
+    },
+    ipc,
+  );
+
+  // The Desktop composer carries Skills as canonical /skill: tokens in the
+  // text; explicit skillIds is the protocol-level variant.
+  await assert.rejects(
+    ipc.invoke("sessions:send", "session-1", {
+      type: "send",
+      turnId: "turn-1",
+      text: "/skill:review explain the tests",
+    }),
+    (error: unknown) =>
+      error instanceof RuntimeHostOperationError && error.code === "session_busy",
+  );
+  await assert.rejects(
+    ipc.invoke("sessions:send", "session-1", {
+      type: "send",
+      turnId: "turn-1",
+      text: "",
+      displayText: "/skill:review",
+      skillIds: ["review"],
+    }),
+    (error: unknown) =>
+      error instanceof RuntimeHostOperationError && error.code === "session_busy",
+  );
+  assert.deepEqual(submits, []);
+});
+
+test("queues explicit Desktop follow-ups", async () => {
+  const submits: unknown[] = [];
+  let sequence = 0;
+  const ipc = ipcHarness();
+  registerExecutionIpc(
+    {
+      client: executionClient({
+        getSession: async () => session(),
+        submitMessage: async (input) => {
+          submits.push(input);
+          return { disposition: "followup", queueRevision: 4 };
+        },
+      }),
+      observer: unusedObserver(),
+      attachmentApprovals: createAttachmentApprovalRegistry(),
+      emitSessionsChanged() {},
+      stat: async () => ({ size: 0 }),
+      resizeImage: async (bytes) => bytes,
+      beforeStop() {},
+      newId: () => `id-${++sequence}`,
+    },
+    ipc,
+  );
+
+  assert.deepEqual(
+    await ipc.invoke("sessions:enqueue", "session-1", "next_turn", {
+      text: "do this next",
+      quotes: [{ text: "quoted context" }],
+      retainedAttachments: [
+        {
+          kind: "other",
+          name: "notes.txt",
+          mimeType: "text/plain",
+          bytes: 5,
+          ref: {
+            kind: "session_file",
+            sessionId: "session-1",
+            relativePath: "attachments/notes.txt",
+          },
+        },
+      ],
+    }),
+    {
+      kind: "queued",
+      attachments: [
+        {
+          kind: "other",
+          name: "notes.txt",
+          mimeType: "text/plain",
+          bytes: 5,
+          ref: {
+            kind: "session_file",
+            sessionId: "session-1",
+            relativePath: "attachments/notes.txt",
+          },
+        },
+      ],
+      inlineReferences: [],
+    },
+  );
+  assert.deepEqual(submits, [
+    {
+      sessionId: "session-1",
+      messageId: "id-2",
+      content: {
+        text: "do this next",
+        attachments: [
+          {
+            kind: "other",
+            name: "notes.txt",
+            mimeType: "text/plain",
+            bytes: 5,
+            ref: {
+              kind: "session_file",
+              sessionId: "session-1",
+              relativePath: "attachments/notes.txt",
+            },
+          },
+        ],
+        quotes: [{ text: "quoted context" }],
+        inlineReferences: [],
+      },
+      placement: "next_turn",
+    },
+  ]);
+});
+
+test("routes per-entry queue mutations to the Runtime Host", async () => {
+  const calls: unknown[] = [];
+  let sequence = 0;
+  const ipc = ipcHarness();
+  registerExecutionIpc(
+    {
+      client: executionClient({
+        retractQueueEntry: async (input) => {
+          calls.push({ operation: "retract", ...input });
+          return { queueRevision: 3 };
+        },
+        promoteQueueEntry: async (input) => {
+          calls.push({ operation: "promote", ...input });
+          return { queueRevision: 4 };
+        },
+        reorderQueueEntries: async (input) => {
+          calls.push({ operation: "reorder", ...input });
+          return { queueRevision: 5 };
+        },
+      }),
+      observer: unusedObserver(),
+      attachmentApprovals: createAttachmentApprovalRegistry(),
+      emitSessionsChanged() {},
+      stat: async () => ({ size: 0 }),
+      resizeImage: async (bytes) => bytes,
+      beforeStop() {},
+      newId: () => `id-${++sequence}`,
+    },
+    ipc,
+  );
+
+  assert.equal(await ipc.invoke("sessions:retractQueueEntry", "session-1", "entry-1"), undefined);
+  await ipc.invoke("sessions:promoteQueueEntry", "session-1", "entry-2");
+  await ipc.invoke("sessions:reorderQueueEntries", "session-1", ["entry-3", "entry-2"]);
+
+  assert.deepEqual(calls, [
+    {
+      operation: "retract",
+      sessionId: "session-1",
+      entryId: "entry-1",
+      retractId: "id-1",
+    },
+    {
+      operation: "promote",
+      sessionId: "session-1",
+      entryId: "entry-2",
+      promoteId: "id-2",
+    },
+    {
+      operation: "reorder",
+      sessionId: "session-1",
+      reorderId: "id-3",
+      entryIds: ["entry-3", "entry-2"],
+    },
+  ]);
+
+  await assert.rejects(
+    () => ipc.invoke("sessions:promoteQueueEntry", "session-1", 42),
+    /Invalid queue entry identity/,
+  );
+  await assert.rejects(
+    () => ipc.invoke("sessions:reorderQueueEntries", "session-1", ["entry-1", 42]),
+    /Invalid queue entry order/,
+  );
+});
+
 test("binds steer and stop to Host-owned queue and active Turn identities", async () => {
   const submits: unknown[] = [];
   const interrupts: unknown[] = [];
@@ -544,7 +883,15 @@ test("binds steer and stop to Host-owned queue and active Turn identities", asyn
       kind: "queued",
     },
   );
-  await ipc.invoke("sessions:stop", "session-1");
+  await ipc.invoke("sessions:stop", "session-1", {
+    source: "stop_button",
+    expectedTurnId: "turn-unrelated",
+  });
+  assert.deepEqual(stopLifecycle, []);
+  await ipc.invoke("sessions:stop", "session-1", {
+    source: "stop_button",
+    expectedTurnId: "turn-1",
+  });
   assert.deepEqual(stopLifecycle, ["teardown", "interrupt"]);
 
   assert.deepEqual(submits, [
@@ -584,6 +931,9 @@ function executionClient(overrides: Partial<ExecutionClient>): ExecutionClient {
     queryTurnResume: unavailable,
     readExecutionBoundary: unavailable,
     regenerateTurn: unavailable,
+    retractQueueEntry: unavailable,
+    promoteQueueEntry: unavailable,
+    reorderQueueEntries: unavailable,
     setSessionReadMarker: unavailable,
     startTurn: unavailable,
     startTurnResume: unavailable,
@@ -620,13 +970,12 @@ function observerWithTranscript(
     client: {
       openSession: async () => runtimeHostSessionFixture({
         snapshot: {
-          schemaVersion: 3,
+          schemaVersion: SESSION_CONTINUITY_SCHEMA_VERSION,
           session: {
             sessionId: "session-1",
             metadataRevision: 1,
             status: "running",
             createdAt: 1,
-            lastUsedAt: 1,
             isArchived: false,
           },
           projectionRevision: 1,
@@ -734,7 +1083,7 @@ function session(cwd = "/workspace"): SessionCatalogProjection {
       hostCwd: cwd,
     },
     createdAt: 1,
-    lastUsedAt: 1,
+    activityAt: 1,
     name: "Session",
     isFlagged: false,
     isArchived: false,

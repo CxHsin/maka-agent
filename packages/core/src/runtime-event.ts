@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 /**
  * Canonical Runtime v2 event contract.
  *
@@ -22,7 +41,7 @@ import {
 } from './events.js';
 import { INTERACTION_ID_MAX_BYTES, INTERACTION_TOOL_NAME_MAX_BYTES } from './interaction.js';
 import type { PermissionRequestPayload, PermissionResponse } from './permission.js';
-import type { TurnOrigin } from './runtime-inputs.js';
+import { decodeTurnOrigin, type TurnOrigin } from './turn-origin.js';
 import type { UserQuestionRequest } from './user-question.js';
 import {
   defineObjectShape,
@@ -694,37 +713,6 @@ function isRuntimeEventContent(value: unknown): value is RuntimeEventContent {
 
 function isTurnOrigin(value: unknown): value is TurnOrigin {
   return decodeTurnOrigin(value) !== undefined;
-}
-
-function decodeTurnOrigin(value: unknown): TurnOrigin | undefined {
-  if (!isRecord(value)) return undefined;
-  if (value.kind === 'scheduled_task') {
-    return Object.keys(value).length === 2 && typeof value.scheduledTaskId === 'string'
-      ? { kind: 'scheduled_task', scheduledTaskId: value.scheduledTaskId }
-      : undefined;
-  }
-  if (value.kind === 'automation' || value.kind === 'legacy_automation') {
-    return Object.keys(value).length === 2 && typeof value.automationId === 'string'
-      ? { kind: 'legacy_automation', automationId: value.automationId }
-      : undefined;
-  }
-  if (value.kind === 'goal') {
-    return Object.keys(value).length === 2 && typeof value.goalId === 'string'
-      ? { kind: 'goal', goalId: value.goalId }
-      : undefined;
-  }
-  return value.kind === 'agent_graph' &&
-    Object.keys(value).length === 4 &&
-    typeof value.graphId === 'string' &&
-    typeof value.wakeId === 'string' &&
-    typeof value.attemptId === 'string'
-    ? {
-        kind: 'agent_graph',
-        graphId: value.graphId,
-        wakeId: value.wakeId,
-        attemptId: value.attemptId,
-      }
-    : undefined;
 }
 
 function isRuntimeEventActions(value: unknown): value is RuntimeEventActions {

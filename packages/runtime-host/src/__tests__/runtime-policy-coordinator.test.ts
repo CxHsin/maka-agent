@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
@@ -10,7 +29,7 @@ import type {
   CredentialLocator,
 } from '@maka/core/runtime-policy';
 import { REQUEST_BODY_OVERLAY_MAX_BYTES } from '@maka/core/runtime-policy';
-import { FAKE_ASK_USER_QUESTION_PROMPT, FakeBackend } from '@maka/runtime/fake-backend';
+import { FAKE_ASK_USER_QUESTION_PROMPT, FakeBackend } from '@maka/runtime/test-only/fake-backend';
 import { type MakaToolContext } from '@maka/runtime/tool-runtime';
 import { openInteractiveExecutionStoresForWrite } from '@maka/storage/execution-stores';
 import { openInteractiveRuntimePolicyStoresForWrite } from '@maka/storage/runtime-policy-stores';
@@ -29,7 +48,6 @@ import { HostRuntimePolicyCoordinator } from '../server/runtime-policy-coordinat
 const context: ConnectionContext = {
   hostEpoch: 'runtime-policy-test-epoch',
   connectionId: 'runtime-policy-test-connection',
-  surface: 'desktop',
   principal: 'local_os_user',
   acquireResidency: () => ({ release: () => undefined }),
 };
@@ -105,19 +123,22 @@ test('production composition shares one gate across mutation and backend activat
     const setupStores = await openInteractiveExecutionStoresForWrite(owner.lease);
     const session = await setupStores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
     });
 
-    composition = await createExecutionRuntimeHostComposition({
-      owner,
-      hostEpoch: context.hostEpoch,
-      acquireResidency: context.acquireResidency,
-      retainUntilProcessExit: () => undefined,
-      requestDrain: () => undefined,
-    });
+    composition = await createExecutionRuntimeHostComposition(
+      {
+        owner,
+        hostEpoch: context.hostEpoch,
+        acquireResidency: context.acquireResidency,
+        retainUntilProcessExit: () => undefined,
+        requestDrain: () => undefined,
+      },
+      {},
+      { primaryBackendFactory: (backendContext) => new FakeBackend(backendContext) },
+    );
     await composition.recover();
 
     const initial = await composition.handlers['runtime.policy.query']({}, context);
@@ -205,18 +226,21 @@ test('production mutation releases the gate before active-turn backend disposal 
     const setupStores = await openInteractiveExecutionStoresForWrite(owner.lease);
     const session = await setupStores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
     });
-    composition = await createExecutionRuntimeHostComposition({
-      owner,
-      hostEpoch: context.hostEpoch,
-      acquireResidency: context.acquireResidency,
-      retainUntilProcessExit: () => undefined,
-      requestDrain: () => undefined,
-    });
+    composition = await createExecutionRuntimeHostComposition(
+      {
+        owner,
+        hostEpoch: context.hostEpoch,
+        acquireResidency: context.acquireResidency,
+        retainUntilProcessExit: () => undefined,
+        requestDrain: () => undefined,
+      },
+      {},
+      { primaryBackendFactory: (backendContext) => new FakeBackend(backendContext) },
+    );
     await composition.recover();
 
     const initial = await composition.handlers['runtime.policy.query']({}, context);
@@ -302,21 +326,24 @@ test('production policy mutation drains and poisons activation when cached backe
     const setupStores = await openInteractiveExecutionStoresForWrite(owner.lease);
     const session = await setupStores.sessionStore.create({
       cwd: root,
-      backend: 'fake',
       llmConnectionSlug: 'fake',
       model: 'fake-model',
       permissionMode: 'ask',
     });
 
-    composition = await createExecutionRuntimeHostComposition({
-      owner,
-      hostEpoch: context.hostEpoch,
-      acquireResidency: context.acquireResidency,
-      retainUntilProcessExit: () => undefined,
-      requestDrain: () => {
-        drainRequests += 1;
+    composition = await createExecutionRuntimeHostComposition(
+      {
+        owner,
+        hostEpoch: context.hostEpoch,
+        acquireResidency: context.acquireResidency,
+        retainUntilProcessExit: () => undefined,
+        requestDrain: () => {
+          drainRequests += 1;
+        },
       },
-    });
+      {},
+      { primaryBackendFactory: (backendContext) => new FakeBackend(backendContext) },
+    );
     await composition.recover();
 
     const firstTurnId = randomUUID();
@@ -431,6 +458,43 @@ test('projects runtime policy CAS results without returning the committed snapsh
       result: { kind: 'revision_conflict', expectedRevision: 0, actualRevision: 1 },
     });
     assert.equal(invalidations, 1);
+  });
+});
+
+test('rejects a Host-invalid shell preference before it reaches durable policy', async () => {
+  await withCoordinator(async ({ stores }) => {
+    const coordinator = new HostRuntimePolicyCoordinator(
+      stores,
+      new RuntimePolicyActivationGate(),
+      async () => {},
+      async (input) => {
+        if (input.operation.kind === 'set_shell') throw new Error('not GNU Bash');
+      },
+    );
+    const result = await coordinator.handlers['runtime.policy.mutate'](
+      {
+        expectedRevision: 0,
+        operation: {
+          kind: 'set_shell',
+          value: {
+            preference: 'git_bash',
+            executable: 'C:\\tools\\bash.exe',
+          },
+        },
+      },
+      context,
+    );
+    assert.deepEqual(result, {
+      ok: false,
+      error: {
+        code: 'invalid_request',
+        message: 'Runtime policy mutation is invalid for the current state',
+      },
+    });
+    assert.deepEqual((await stores.runtimePolicy.getSnapshot()).policy.shell, {
+      preference: 'auto',
+      executable: '',
+    });
   });
 });
 

@@ -1,22 +1,84 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import {
-  createFileRuntimeHostProfileCatalog,
-  createRuntimeHostProfileCredentialStore,
+  createClientRuntimeHostCredentialStore,
+  createClientRuntimeHostProfileCatalog,
+  LOCAL_RUNTIME_HOST_PROFILE,
+  RuntimeHostPermanentReconnectError,
+  RuntimeHostRemoteCompatibilityError,
   type ResolvedRuntimeHostProfile,
-  type RuntimeHostProfileCatalog,
 } from "@maka/runtime-host/client";
-import { createFileCredentialStore } from "@maka/storage";
+import {
+  INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
+  RUNTIME_HOST_COMPATIBILITY_EPOCH,
+  RUNTIME_HOST_PROTOCOL_VERSION,
+} from "@maka/runtime-host/protocol";
+import {
+  RuntimeHostPairingFinalizationInterruptedError,
+  type RuntimeHostDesktopTargetState,
+} from "../runtime-host-desktop-manager.js";
+import { createDesktopRuntimeHostManagedServiceStore } from "../runtime-host-managed-services.js";
+import {
+  createDesktopRuntimeHostPairingIntent,
+  writeDesktopRuntimeHostPairingIntents,
+} from "../runtime-host-pairing-journal.js";
 import {
   createDesktopRuntimeHostProfileService,
-  type DesktopRuntimeHostActivationResult,
-  resolveSelectedDesktopRuntimeHostProfile,
+  resolveDesktopRuntimeHostStartup,
 } from "../runtime-host-profile-service.js";
 
 const ROOT_ID = "a".repeat(64);
+const PROFILE = {
+  id: "office",
+  name: "Office",
+  kind: "remote" as const,
+  transport: { kind: "tls" as const, url: "wss://runtime.example.com" },
+  rootId: ROOT_ID,
+};
+const MANAGED_PROFILE = {
+  ...PROFILE,
+  id: "managed-office",
+  transport: {
+    kind: "ssh" as const,
+    destination: "operator@example.com",
+    remotePort: 7443,
+    websocketPath: "/runtime-host",
+  },
+};
+const MANAGED_SERVICE = {
+  id: "c".repeat(64),
+  rootPath: "/srv/maka",
+  operatorPath: "/home/operator/.local/share/maka/operator",
+};
+const READY_PROFILE = {
+  id: "backup",
+  name: "Backup",
+  kind: "remote" as const,
+  transport: { kind: "tls" as const, url: "wss://backup.example.com" },
+  rootId: "b".repeat(64),
+};
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -25,439 +87,1042 @@ afterEach(async () => {
   );
 });
 
-test("defaults Desktop to Local and keeps remote credentials outside profiles", async () => {
+test("migrates the former selected Host into enabled and default preferences", async () => {
   const root = await clientRoot();
-  const activations: string[] = [];
-  assert.deepEqual(await resolveSelectedDesktopRuntimeHostProfile(root), {
-    kind: "ready",
-    selectedProfileId: "local",
-    target: { profile: { id: "local", name: "Local", kind: "local" } },
+  await createClientRuntimeHostProfileCatalog(root).create(PROFILE, "token");
+  await writeFile(
+    join(root, "runtime-host-profile-selection.json"),
+    `${JSON.stringify({ schemaVersion: 1, profileId: PROFILE.id })}\n`,
+  );
+
+  const startup = await resolveDesktopRuntimeHostStartup(root);
+
+  assert.equal(startup.preferences.defaultProfileId, PROFILE.id);
+  assert.deepEqual(startup.preferences.enabledRemoteProfileIds, [PROFILE.id]);
+  assert.equal(startup.remotes[0]?.profile.id, PROFILE.id);
+  assert.equal(
+    JSON.parse(await readFile(join(root, "runtime-host-profile-selection.json"), "utf8"))
+      .schemaVersion,
+    2,
+  );
+});
+
+test("starts Local and preserves remote preferences when the profile catalog is unreadable", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  await catalog.create(PROFILE, "token");
+  const preferencesPath = join(root, "runtime-host-profile-selection.json");
+  await writeFile(
+    preferencesPath,
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: PROFILE.id,
+      enabledRemoteProfileIds: [PROFILE.id],
+    })}\n`,
+  );
+  const read = catalog.read.bind(catalog);
+  let firstRead = true;
+  catalog.read = async () => {
+    if (firstRead) {
+      firstRead = false;
+      throw new Error("profile catalog is unreadable");
+    }
+    return read();
+  };
+
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+
+  assert.deepEqual(startup.preferences, {
+    schemaVersion: 2,
+    defaultProfileId: PROFILE.id,
+    enabledRemoteProfileIds: [PROFILE.id],
+  });
+  assert.deepEqual(startup.remotes, []);
+  assert.match(startup.unavailable.get(PROFILE.id)?.message ?? "", /unreadable/);
+
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
+  });
+  await service.setEnabled(PROFILE.id, true);
+  assert.equal(
+    JSON.parse(await readFile(preferencesPath, "utf8")).defaultProfileId,
+    PROFILE.id,
+  );
+});
+
+test("does not overwrite Runtime Host preferences that were unreadable at startup", async () => {
+  const root = await clientRoot();
+  const preferencesPath = join(root, "runtime-host-profile-selection.json");
+  const savedPreferences = `${JSON.stringify({
+    schemaVersion: 2,
+    defaultProfileId: PROFILE.id,
+    enabledRemoteProfileIds: [PROFILE.id],
+  })}\n`;
+  await writeFile(preferencesPath, savedPreferences);
+  const startup = await resolveDesktopRuntimeHostStartup(root, {
+    readPreferences: async () => {
+      throw Object.assign(new Error("preferences are temporarily unavailable"), {
+        code: "EACCES",
+      });
+    },
+  });
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    states: () => [connectingLocal()],
+    enable: async () => assert.fail("an unreadable preference authority must not mutate"),
+    disable: async () => assert.fail("an unreadable preference authority must not mutate"),
+    setDefault: () => assert.fail("an unreadable preference authority must not mutate"),
+    finalizePairing: async () => assert.fail("an unreadable preference authority must not mutate"),
   });
 
-  const service = createProfileService(root, {
-    activate: async (target) => {
-      activations.push(target.profile.id);
-      return { ok: true, activeTarget: target };
+  await assert.rejects(
+    () => service.setDefault(LOCAL_RUNTIME_HOST_PROFILE.id),
+    /restart Maka before changing/,
+  );
+  assert.equal(await readFile(preferencesPath, "utf8"), savedPreferences);
+});
+
+test("keeps Local enabled while a new remote Host connects", async () => {
+  const root = await clientRoot();
+  const enabled: string[] = [];
+  const states: RuntimeHostDesktopTargetState[] = [connectingLocal()];
+  const startup = await resolveDesktopRuntimeHostStartup(root);
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    states: () => states,
+    enable: async (target) => {
+      enabled.push(target.profile.id);
+      states.push(connecting(target));
     },
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
   });
-  const added = await service.addAndSelect({
-    profile: {
-      id: "office",
-      name: "Office",
-      kind: "remote",
-      transport: { kind: "tls", url: "wss://runtime.example.com" },
-      rootId: ROOT_ID,
-    },
-    credential: "opaque-token",
-  });
-  assert.equal(added.kind, "connected");
-  assert.deepEqual(added.snapshot.profiles.map(({ id }) => id), ["local", "office"]);
+
+  const result = await service.addAndEnable({ profile: PROFILE, credential: "opaque-token" });
+
+  assert.equal(result.kind, "connected");
+  assert.deepEqual(enabled, [PROFILE.id]);
+  assert.equal(result.snapshot.defaultProfileId, LOCAL_RUNTIME_HOST_PROFILE.id);
+  assert.deepEqual(
+    result.snapshot.entries.map((entry) => [entry.profile.id, entry.enabled]),
+    [["local", true], [PROFILE.id, true]],
+  );
   assert.equal(
     (await readFile(join(root, "runtime-host-profiles.json"), "utf8")).includes(
       "opaque-token",
     ),
     false,
   );
+});
 
-  assert.deepEqual(activations, ["office"]);
-  assert.equal((await service.getSnapshot()).activeProfileId, "office");
-  assert.deepEqual(await resolveSelectedDesktopRuntimeHostProfile(root), {
-    kind: "ready",
-    selectedProfileId: "office",
-    target: {
-      profile: {
-        id: "office",
-        name: "Office",
-        kind: "remote",
-        transport: { kind: "tls", url: "wss://runtime.example.com/" },
-        rootId: ROOT_ID,
+test("reconnects an enabled remote Host with interactive SSH", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  await catalog.create(MANAGED_PROFILE, "opaque-token");
+  const calls: string[] = [];
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup: {
+      preferences: {
+        schemaVersion: 2,
+        defaultProfileId: LOCAL_RUNTIME_HOST_PROFILE.id,
+        enabledRemoteProfileIds: [MANAGED_PROFILE.id],
       },
-      credential: "opaque-token",
+      pairingIntents: [],
+      remotes: [{ profile: MANAGED_PROFILE, credential: "opaque-token" }],
+      unavailable: new Map(),
     },
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async (target, interaction) => {
+      calls.push(`enable:${target.profile.id}:${interaction}`);
+    },
+    disable: async (profileId) => {
+      calls.push(`disable:${profileId}`);
+    },
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
   });
-  await assert.rejects(
-    () =>
-      service.addAndSelect({
-        profile: {
-          id: "office",
-          name: "Changed while active",
-          kind: "remote",
-          transport: { kind: "tls", url: "wss://other.example.com" },
-          rootId: ROOT_ID,
-        },
-      }),
-    /Switch away from an active Runtime Host profile/,
-  );
-});
 
-test("requires a credential before selection and protects the active profile", async () => {
-  const root = await clientRoot();
-  const service = createProfileService(root, {
-    activate: async (activeTarget) => ({ ok: true, activeTarget }),
-  });
-  await assert.rejects(
-    () =>
-      service.addAndSelect({
-        profile: {
-          id: "office",
-          name: "Office",
-          kind: "remote",
-          transport: { kind: "tls", url: "wss://runtime.example.com" },
-          rootId: ROOT_ID,
-        },
-      }),
-    /credential is required/,
-  );
-  assert.throws(
-    () =>
-      service.addAndSelect({
-        profile: {
-          id: "oversized",
-          name: "Oversized",
-          kind: "remote",
-          transport: { kind: "tls", url: "wss://runtime.example.com" },
-          rootId: ROOT_ID,
-        },
-        credential: "x".repeat(8 * 1024 + 1),
-      }),
-    /credential input is invalid/,
-  );
-  await assert.rejects(() => service.remove("local"), /active.*cannot be removed/i);
-});
+  await service.reconnect(MANAGED_PROFILE.id, MANAGED_PROFILE.rootId);
 
-test("rolls back a failed new remote profile without changing the active Host", async () => {
-  const root = await clientRoot();
-  const service = createProfileService(root, {
-    activate: async () => ({
-      ok: false,
-      activeTarget: { profile: { id: "local", name: "Local", kind: "local" } },
-      error: new Error("remote unavailable"),
-    }),
-  });
-  const result = await service.addAndSelect({
-    profile: {
-      id: "office",
-      name: "Office",
-      kind: "remote",
-      transport: { kind: "tls", url: "wss://runtime.example.com" },
-      rootId: ROOT_ID,
-    },
-    credential: "opaque-token",
-  });
-  assert.deepEqual(result, {
-    kind: "unavailable",
-    snapshot: {
-      profiles: [{ id: "local", name: "Local", kind: "local" }],
-      selectedProfileId: "local",
-      runtimeHostReadiness: "ready",
-      activeProfile: { id: "local", name: "Local", kind: "local" },
-      activeProfileId: "local",
-    },
-    message: "remote unavailable",
-  });
-  const startup = await resolveSelectedDesktopRuntimeHostProfile(root);
-  assert.deepEqual(startup, {
-    kind: "ready",
-    selectedProfileId: "local",
-    target: { profile: { id: "local", name: "Local", kind: "local" } },
-  });
-});
-
-test("does not roll back a profile changed by another process while connecting", async () => {
-  const root = await clientRoot();
-  const gate = deferredGate();
-  const service = createProfileService(root, {
-    activate: async () => {
-      gate.enter();
-      await gate.released;
-      return { ok: false, error: new Error("remote unavailable") };
-    },
-  });
-  const adding = service.addAndSelect({
-    profile: {
-      id: "office",
-      name: "Office",
-      kind: "remote",
-      transport: { kind: "tls", url: "wss://runtime.example.com" },
-      rootId: ROOT_ID,
-    },
-    credential: "desktop-token",
-  });
-  await gate.entered;
-  const externalCatalog = profileCatalog(root);
-  await externalCatalog.save(
-    {
-      id: "office",
-      name: "Rotated externally",
-      kind: "remote",
-      transport: { kind: "tls", url: "wss://runtime.example.com" },
-      rootId: ROOT_ID,
-    },
-    "external-token",
-  );
-  gate.release();
-
-  const result = await adding;
-  assert.equal(result.kind, "unavailable");
-  assert.deepEqual(result.snapshot.profiles.map((profile) => profile.id), [
-    "local",
-    "office",
+  assert.deepEqual(calls, [
+    `disable:${MANAGED_PROFILE.id}`,
+    `enable:${MANAGED_PROFILE.id}:terminal`,
   ]);
-  assert.equal((await externalCatalog.resolve("office")).credential, "external-token");
 });
 
-test("does not persist a selection removed by another process while connecting", async () => {
+test("does not enable the same State Root twice", async () => {
   const root = await clientRoot();
-  const gate = deferredGate();
-  const service = createProfileService(root, {
-    activate: async (activeTarget) => {
-      gate.enter();
-      await gate.released;
-      return { ok: true, activeTarget };
-    },
+  const startup = await resolveDesktopRuntimeHostStartup(root);
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    states: () => [{
+      epoch: "epoch-local",
+      target: { profile: LOCAL_RUNTIME_HOST_PROFILE },
+      readiness: "reconnecting",
+      hostId: ROOT_ID,
+    }],
+    enable: async () => assert.fail("duplicate root must not connect"),
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
   });
-  const adding = service.addAndSelect({
-    profile: {
-      id: "office",
-      name: "Office",
-      kind: "remote",
-      transport: { kind: "tls", url: "wss://runtime.example.com" },
-      rootId: ROOT_ID,
-    },
-    credential: "desktop-token",
-  });
-  await gate.entered;
-  await profileCatalog(root).remove("office");
-  gate.release();
 
-  const result = await adding;
-  assert.equal(result.kind, "connected");
-  if (result.kind !== "connected") assert.fail("Expected a connected result");
-  assert.match(result.warning ?? "", /profile changed while connecting/u);
-  assert.equal(result.snapshot.selectedProfileId, "local");
-  assert.deepEqual(result.snapshot.profiles.map((profile) => profile.id), ["local"]);
-  assert.equal(result.snapshot.activeProfile?.id, "office");
-  assert.equal(result.snapshot.activeProfileId, undefined);
-  assert.deepEqual(await resolveSelectedDesktopRuntimeHostProfile(root), {
-    kind: "ready",
-    selectedProfileId: "local",
-    target: LOCAL_TARGET,
-  });
-});
-
-test("serializes removal behind an in-flight Host switch", async () => {
-  const root = await clientRoot();
-  await profileCatalog(root).save(
-    {
-      id: "office",
-      name: "Office",
-      kind: "remote",
-      transport: { kind: "tls", url: "wss://runtime.example.com" },
-      rootId: ROOT_ID,
-    },
-    "opaque-token",
+  await assert.rejects(
+    () => service.addAndEnable({ profile: PROFILE, credential: "token" }),
+    /profile "Local".*disable/u,
   );
-  let releaseActivation!: () => void;
-  const activationStarted = new Promise<void>((resolve) => {
-    releaseActivation = resolve;
-  });
-  let markActivationStarted!: () => void;
-  const enteredActivation = new Promise<void>((resolve) => {
-    markActivationStarted = resolve;
-  });
-  const service = createProfileService(root, {
-    activate: async (activeTarget) => {
-      markActivationStarted();
-      await activationStarted;
-      return { ok: true, activeTarget };
+  assert.equal(
+    (await service.getSnapshot()).entries.some((entry) => entry.profile.id === PROFILE.id),
+    false,
+  );
+});
+
+test("preserves an enabled remote profile when that Host is unavailable", async () => {
+  const root = await clientRoot();
+  const startup = await resolveDesktopRuntimeHostStartup(root);
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    states: () => [connectingLocal()],
+    enable: async () => {
+      throw new Error("connection refused");
     },
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
   });
-  const selecting = service.select("office");
-  await enteredActivation;
-  const removing = service.remove("office");
-  releaseActivation();
-  await selecting;
-  await assert.rejects(removing, /active.*cannot be removed/i);
+
+  const result = await service.addAndEnable({ profile: PROFILE, credential: "token" });
+
+  assert.equal(result.kind, "unavailable");
+  assert.equal(result.snapshot.entries.find((entry) => entry.profile.id === PROFILE.id)?.enabled, true);
+  assert.match(
+    result.snapshot.entries.find((entry) => entry.profile.id === PROFILE.id)?.message ?? "",
+    /connection refused/,
+  );
+  assert.equal(result.snapshot.entries.find((entry) => entry.profile.id === "local")?.enabled, true);
+});
+
+test("projects a shared compatibility error through an unavailable enabled remote profile", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  await catalog.create(PROFILE, "office-token");
+  await catalog.create(READY_PROFILE, "backup-token");
+  const compatibilityError = new RuntimeHostRemoteCompatibilityError("office", {
+    kind: "incompatible",
+    hostEpoch: "host-epoch",
+    protocolMin: RUNTIME_HOST_PROTOCOL_VERSION + 1,
+    protocolMax: RUNTIME_HOST_PROTOCOL_VERSION + 2,
+    compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH - 1,
+    compositionId: INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
+    compositionRevision: "host-revision",
+    state: "ready",
+    replacement: "blocked_by_residency",
+  });
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup: {
+      preferences: {
+        schemaVersion: 2,
+        defaultProfileId: LOCAL_RUNTIME_HOST_PROFILE.id,
+        enabledRemoteProfileIds: [PROFILE.id, READY_PROFILE.id],
+      },
+      pairingIntents: [],
+      remotes: [
+        { profile: PROFILE, credential: "office-token" },
+        { profile: READY_PROFILE, credential: "backup-token" },
+      ],
+      unavailable: new Map(),
+    },
+    states: () => [
+      connectingLocal(),
+      unavailable({ profile: PROFILE, credential: "office-token" }, compatibilityError),
+      ready({ profile: READY_PROFILE, credential: "backup-token" }),
+    ],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    finalizePairing: async () => undefined,
+    setDefault: () => undefined,
+    catalog,
+  });
 
   const snapshot = await service.getSnapshot();
-  assert.equal(snapshot.activeProfileId, "office");
-  assert.deepEqual(snapshot.profiles.map((profile) => profile.id), ["local", "office"]);
+  const office = snapshot.entries.find((entry) => entry.profile.id === PROFILE.id);
+  const backup = snapshot.entries.find((entry) => entry.profile.id === READY_PROFILE.id);
+  const local = snapshot.entries.find((entry) => entry.profile.id === LOCAL_RUNTIME_HOST_PROFILE.id);
+
+  assert.equal(office?.enabled, true);
+  assert.equal(office?.readiness, "unavailable");
+  assert.equal(office?.message, compatibilityError.message);
+  assert.equal(local?.enabled, true);
+  assert.equal(local?.readiness, "connecting");
+  assert.equal(backup?.enabled, true);
+  assert.equal(backup?.readiness, "ready");
+  assert.equal(backup?.message, undefined);
 });
 
-test("serializes a snapshot with a Host selection that starts while it is reading", async () => {
+test("removes a managed profile when its verified connection cannot be established", async () => {
   const root = await clientRoot();
-  const stored = profileCatalog(root);
-  await stored.save(
-    {
-      id: "office",
-      name: "Office",
-      kind: "remote",
-      transport: { kind: "tls", url: "wss://runtime.example.com" },
-      rootId: ROOT_ID,
+  const disabled: string[] = [];
+  const startup = await resolveDesktopRuntimeHostStartup(root);
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    states: () => [connectingLocal()],
+    enable: async () => {
+      throw new Error("connection refused");
     },
-    "opaque-token",
-  );
-  const gate = deferredGate();
-  let gateNextRead = true;
-  const catalog: RuntimeHostProfileCatalog = {
-    read: async () => {
-      if (gateNextRead) {
-        gateNextRead = false;
-        gate.enter();
-        await gate.released;
-      }
-      return stored.read();
+    disable: async (profileId) => {
+      disabled.push(profileId);
     },
-    resolve: (profileId) => stored.resolve(profileId),
-    create: (profile, credential) => stored.create(profile, credential),
-    save: (profile, credential) => stored.save(profile, credential),
-    remove: (profileId) => stored.remove(profileId),
-    removeIfCurrent: (target) => stored.removeIfCurrent(target),
-  };
-  const activations: string[] = [];
-  const service = createProfileService(root, {
-    catalog,
-    activate: async (target) => {
-      activations.push(target.profile.id);
-      return { ok: true };
-    },
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
   });
 
-  const reading = service.getSnapshot();
-  await gate.entered;
-  const selecting = service.select("office");
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.deepEqual(activations, []);
-
-  gate.release();
-  const beforeSelection = await reading;
-  assert.equal(beforeSelection.selectedProfileId, "local");
-  assert.equal(beforeSelection.activeProfileId, "local");
-  const afterSelection = await selecting;
-  assert.equal(afterSelection.selectedProfileId, "office");
-  assert.equal(afterSelection.activeProfileId, "office");
-});
-
-test("preserves a dangling Desktop selection as unavailable", async () => {
-  const root = await clientRoot();
-  const service = createProfileService(root, {
-    activate: async (activeTarget) => ({ ok: true, activeTarget }),
-  });
-  await service.addAndSelect({
-    profile: {
-      id: "office",
-      name: "Office",
-      kind: "remote",
-      transport: { kind: "tls", url: "wss://runtime.example.com" },
-      rootId: ROOT_ID,
-    },
-    credential: "opaque-token",
-  });
-  const catalog = profileCatalog(root);
-  await catalog.remove("office");
-
-  const recovered = await resolveSelectedDesktopRuntimeHostProfile(root);
-  assert.equal(recovered.kind, "unavailable");
-  if (recovered.kind !== "unavailable") assert.fail("Expected an unavailable selection");
-  assert.equal(recovered.selectedProfileId, "office");
-  assert.match(recovered.error.message, /Unknown Runtime Host profile/);
-  assert.match(
-    await readFile(join(root, "runtime-host-profile-selection.json"), "utf8"),
-    /"profileId": "office"/,
-  );
-});
-
-test("does not synthesize Local when the selection authority cannot be read", async () => {
-  const root = await clientRoot();
-  const selection = await resolveSelectedDesktopRuntimeHostProfile(root, {
-    readSelection: async () => {
-      throw Object.assign(new Error("permission denied"), { code: "EACCES" });
-    },
-  });
-
-  assert.equal(selection.kind, "unavailable");
-  if (selection.kind !== "unavailable") assert.fail("Expected an unavailable selection");
-  assert.equal(selection.selectedProfileId, undefined);
-  assert.match(selection.error.message, /permission denied/);
-  assert.equal("target" in selection, false);
-});
-
-test("reconnects when another process rotates the active profile credential", async () => {
-  const root = await clientRoot();
-  const activations: string[] = [];
-  const service = createProfileService(root, {
-    activate: async (target) => {
-      activations.push(
-        target.profile.kind === "remote"
-          ? `${target.profile.transport.kind === "ssh" ? target.profile.transport.destination : target.profile.transport.url}|${target.credential}`
-          : "local",
-      );
-      return { ok: true, activeTarget: target };
-    },
-  });
-  const profileA = {
-    id: "office",
-    name: "Office A",
-    kind: "remote" as const,
-    transport: { kind: "tls" as const, url: "wss://a.example.com" },
-    rootId: "a".repeat(64),
-  };
-  await service.addAndSelect({ profile: profileA, credential: "token-a" });
-
-  const externalCatalog = createFileRuntimeHostProfileCatalog(
-    join(root, "runtime-host-profiles.json"),
-    createRuntimeHostProfileCredentialStore(
-      createFileCredentialStore(join(root, "runtime-host-client")),
-    ),
-  );
-  await externalCatalog.save(
-    {
-      ...profileA,
-      name: "Office B",
-    },
-    "token-b",
+  await assert.rejects(
+    () => service.addAndEnableVerified({ profile: PROFILE, credential: "token" }),
+    /connection refused/,
   );
 
-  const beforeSwitch = await service.getSnapshot();
+  assert.deepEqual(disabled, [PROFILE.id]);
   assert.equal(
-    beforeSwitch.profiles.find((profile) => profile.id === "office")?.name,
-    "Office B",
+    (await service.getSnapshot()).entries.some((entry) => entry.profile.id === PROFILE.id),
+    false,
   );
-  assert.equal(beforeSwitch.activeProfileId, undefined);
-  assert.equal(beforeSwitch.activeProfile?.name, "Office A");
-  await service.select("office");
-  assert.deepEqual(activations, [
-    "wss://a.example.com/|token-a",
-    "wss://a.example.com/|token-b",
+});
+
+test("refreshes the existing profile when managed setup pairs the same Host again", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  const conflictingProfile = {
+    ...PROFILE,
+    id: "legacy-office",
+    transport: { kind: "tls" as const, url: "wss://old-runtime.example.com" },
+  };
+  await catalog.create(conflictingProfile, "legacy-token");
+  await catalog.create(PROFILE, "old-token");
+  await writeFile(
+    join(root, "runtime-host-profile-selection.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: "local",
+      enabledRemoteProfileIds: [PROFILE.id],
+    })}\n`,
+  );
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  const connected: ResolvedRuntimeHostProfile[] = [];
+  const finalized: string[] = [];
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async (target) => {
+      connected.push(target);
+    },
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async (profileId) => {
+      finalized.push(profileId);
+    },
+  });
+
+  const result = await service.addAndEnableVerified({
+    profile: {
+      ...PROFILE,
+      id: "replacement",
+      name: "Renamed office",
+    },
+    credential: "new-token",
+  });
+
+  assert.deepEqual(result, { profileId: PROFILE.id });
+  assert.equal(connected[0]?.profile.id, PROFILE.id);
+  const connectedProfile = connected[0]?.profile;
+  assert.equal(connectedProfile?.kind, "remote");
+  assert.deepEqual(connectedProfile?.kind === "remote" ? connectedProfile.transport : undefined, {
+    kind: "tls",
+    url: "wss://runtime.example.com/",
+  });
+  assert.equal(connected[0]?.credential, "new-token");
+  assert.equal((await catalog.resolve(PROFILE.id)).credential, "new-token");
+  assert.deepEqual(finalized, [PROFILE.id]);
+  assert.deepEqual((await catalog.read()).profiles.map((profile) => profile.id), [
+    conflictingProfile.id,
+    PROFILE.id,
   ]);
 });
 
-test("keeps the prior selection when the active Host selection cannot be persisted", async () => {
+test("keeps a separate profile when the same Host is paired through another connection", async () => {
   const root = await clientRoot();
-  const activations: string[] = [];
-  const service = createProfileService(root, {
-    activate: async (target) => {
-      activations.push(target.profile.id);
-      return { ok: true, activeTarget: target };
-    },
-    selectionFailure: new Error("selection disk unavailable"),
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  await catalog.create(PROFILE, "old-token");
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
   });
-  const result = await service.addAndSelect({
+
+  await service.addAndEnableVerified({
     profile: {
-      id: "office",
-      name: "Office",
-      kind: "remote",
-      transport: { kind: "tls", url: "wss://runtime.example.com" },
-      rootId: ROOT_ID,
+      ...PROFILE,
+      id: "replacement",
+      transport: { kind: "tls", url: "wss://new-runtime.example.com" },
     },
-    credential: "opaque-token",
+    credential: "new-token",
   });
-  assert.equal(result.kind, "connected");
-  if (result.kind !== "connected") assert.fail("Expected a connected result");
-  assert.match(result.warning ?? "", /selection could not be saved/);
-  assert.deepEqual(activations, ["office"]);
-  assert.equal(result.snapshot.selectedProfileId, "local");
-  assert.equal(result.snapshot.activeProfileId, "office");
+  assert.equal((await catalog.resolve(PROFILE.id)).credential, "old-token");
+  assert.equal((await catalog.resolve("replacement")).credential, "new-token");
+});
+
+test("finishes a persisted pairing after Desktop restarts before finalization", async () => {
+  const root = await clientRoot();
+  const catalog = await stageInterruptedPairing(root);
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  assert.equal(startup.pairingIntents.length, 1);
+  const finalized: string[] = [];
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async (profileId) => {
+      finalized.push(profileId);
+    },
+  });
+
+  await service.startEnabledProfiles();
+
+  assert.deepEqual(finalized, [PROFILE.id]);
+  assert.equal((await catalog.resolve(PROFILE.id)).credential, "new-token");
+  assert.deepEqual(
+    (await resolveDesktopRuntimeHostStartup(root, { catalog })).pairingIntents,
+    [],
+  );
+});
+
+test("recovers interrupted managed credential rotation after restart", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  await catalog.create(MANAGED_PROFILE, "old-token");
+  await createDesktopRuntimeHostManagedServiceStore(root).save(MANAGED_PROFILE, MANAGED_SERVICE);
+  await writeFile(
+    join(root, "runtime-host-profile-selection.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: LOCAL_RUNTIME_HOST_PROFILE.id,
+      enabledRemoteProfileIds: [MANAGED_PROFILE.id],
+    })}\n`,
+  );
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => {
+      throw new RuntimeHostPairingFinalizationInterruptedError();
+    },
+  });
+
+  const managedAccess = await service.resolveManagedAccess(MANAGED_PROFILE.id);
+  assert.ok(managedAccess);
+  await assert.rejects(
+    () => service.rotateManagedCredential(managedAccess, "new-token"),
+    RuntimeHostPairingFinalizationInterruptedError,
+  );
+  assert.equal((await catalog.resolve(MANAGED_PROFILE.id)).credential, "new-token");
+  const managed = await service.resolveManagedService(MANAGED_PROFILE.id);
+  assert.ok(managed);
+  await assert.rejects(
+    service.markManagedServiceUninstalling(managed),
+    /unfinished pairing/u,
+  );
+
+  const recoveredStartup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  assert.equal(recoveredStartup.pairingIntents.length, 1);
+  const resolve = catalog.resolve.bind(catalog);
+  let catalogReadable = false;
+  catalog.resolve = async (profileId) => {
+    if (!catalogReadable) throw new Error("profile catalog is temporarily unavailable");
+    return resolve(profileId);
+  };
+  const recovered = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup: recoveredStartup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
+  });
+  await assert.rejects(
+    recovered.resolveManagedAccess(MANAGED_PROFILE.id),
+    /unfinished pairing/u,
+  );
+  await recovered.startEnabledProfiles();
+  assert.equal(
+    (await resolveDesktopRuntimeHostStartup(root)).pairingIntents.length,
+    1,
+  );
+
+  catalogReadable = true;
+  await recovered.startEnabledProfiles();
+
+  assert.ok(await recovered.resolveManagedAccess(MANAGED_PROFILE.id));
+  assert.equal(
+    (await recovered.getSnapshot()).entries.find(
+      (entry) => entry.profile.id === MANAGED_PROFILE.id,
+    )?.managedService,
+    true,
+  );
+  assert.deepEqual(
+    (await resolveDesktopRuntimeHostStartup(root, { catalog })).pairingIntents,
+    [],
+  );
+});
+
+test("does not rotate a managed credential after its profile target changes", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  const managedServices = createDesktopRuntimeHostManagedServiceStore(root);
+  await catalog.create(MANAGED_PROFILE, "old-token");
+  await managedServices.save(MANAGED_PROFILE, MANAGED_SERVICE);
+  await writeFile(
+    join(root, "runtime-host-profile-selection.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: LOCAL_RUNTIME_HOST_PROFILE.id,
+      enabledRemoteProfileIds: [MANAGED_PROFILE.id],
+    })}\n`,
+  );
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  let finalized = false;
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    managedServices,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => {
+      finalized = true;
+    },
+  });
+  const managedAccess = await service.resolveManagedAccess(MANAGED_PROFILE.id);
+  assert.ok(managedAccess);
+
+  const replacementProfile = {
+    ...MANAGED_PROFILE,
+    rootId: "d".repeat(64),
+    transport: {
+      ...MANAGED_PROFILE.transport,
+      destination: "other@example.com",
+    },
+  };
+  const replacementService = {
+    ...MANAGED_SERVICE,
+    id: "e".repeat(64),
+    rootPath: "/srv/other-maka",
+  };
+  await catalog.remove(MANAGED_PROFILE.id);
+  await catalog.create(replacementProfile, "other-token");
+  await managedServices.save(replacementProfile, replacementService);
+
+  await assert.rejects(
+    service.rotateManagedCredential(managedAccess, "prepared-for-original-host"),
+    /profile changed/u,
+  );
+  assert.equal((await catalog.resolve(MANAGED_PROFILE.id)).credential, "other-token");
+  assert.equal(finalized, false);
+  assert.deepEqual(
+    (await resolveDesktopRuntimeHostStartup(root, { catalog })).pairingIntents,
+    [],
+  );
+});
+
+test("reactivates the previous credential after a pre-rebind rotation crash", async () => {
+  const root = await clientRoot();
+  const credentialStore = createClientRuntimeHostCredentialStore(root);
+  const catalog = createClientRuntimeHostProfileCatalog(root, credentialStore);
+  await catalog.create(MANAGED_PROFILE, "old-token");
+  await createDesktopRuntimeHostManagedServiceStore(root).save(
+    MANAGED_PROFILE,
+    MANAGED_SERVICE,
+  );
+  await writeFile(
+    join(root, "runtime-host-profile-selection.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: LOCAL_RUNTIME_HOST_PROFILE.id,
+      enabledRemoteProfileIds: [MANAGED_PROFILE.id],
+    })}\n`,
+  );
+  await writeDesktopRuntimeHostPairingIntents(credentialStore, [
+    createDesktopRuntimeHostPairingIntent({
+      target: { profile: MANAGED_PROFILE, credential: "new-token" },
+      previous: { profile: MANAGED_PROFILE, credential: "old-token" },
+      wasEnabled: true,
+    }),
+  ]);
+  const startup = await resolveDesktopRuntimeHostStartup(root, {
+    catalog,
+    credentialStore,
+  });
+  const enabled: ResolvedRuntimeHostProfile[] = [];
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    credentialStore,
+    states: () => [connectingLocal()],
+    enable: async (target) => {
+      enabled.push(target);
+    },
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => assert.fail("an unapplied credential cannot be finalized"),
+  });
+
+  await service.startEnabledProfiles();
+
+  assert.deepEqual(enabled.map((target) => target.credential), ["old-token"]);
+  assert.deepEqual(
+    (await resolveDesktopRuntimeHostStartup(root, { catalog })).pairingIntents,
+    [],
+  );
+});
+
+test("does not let unfinished pairing recovery override a later disable", async () => {
+  const root = await clientRoot();
+  const credentials = createClientRuntimeHostCredentialStore(root);
+  const credentialStore = {
+    getSecret: credentials.getSecret.bind(credentials),
+    setSecret: credentials.setSecret.bind(credentials),
+    deleteSecret: async () => {
+      throw new Error("credential cleanup failed");
+    },
+  };
+  const catalog = createClientRuntimeHostProfileCatalog(root, credentialStore);
+  await catalog.create(MANAGED_PROFILE, "old-token");
+  await createDesktopRuntimeHostManagedServiceStore(root).save(
+    MANAGED_PROFILE,
+    MANAGED_SERVICE,
+  );
+  await writeFile(
+    join(root, "runtime-host-profile-selection.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: LOCAL_RUNTIME_HOST_PROFILE.id,
+      enabledRemoteProfileIds: [MANAGED_PROFILE.id],
+    })}\n`,
+  );
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog, credentialStore });
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    credentialStore,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
+  });
+  const access = await service.resolveManagedAccess(MANAGED_PROFILE.id);
+  assert.ok(access);
+
+  await service.rotateManagedCredential(access, "new-token");
+
+  assert.equal((await service.getSnapshot()).pairingRecoveryPending, true);
+  await assert.rejects(
+    () => service.setEnabled(MANAGED_PROFILE.id, false),
+    /unfinished pairing/u,
+  );
+});
+
+test("keeps managed service recovery when a failed pairing profile cannot be removed", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  const removeIfCurrent = catalog.removeIfCurrent.bind(catalog);
+  catalog.removeIfCurrent = async () => {
+    throw new Error("profile catalog is temporarily unavailable");
+  };
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => {
+      throw new Error("finalization failed");
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      service.addAndEnableVerified({
+        profile: MANAGED_PROFILE,
+        credential: "new-token",
+        managedService: MANAGED_SERVICE,
+      }),
+    /previous profile could not be restored/u,
+  );
+
+  catalog.removeIfCurrent = removeIfCurrent;
+  const recoveredStartup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  const recovered = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup: recoveredStartup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
+  });
+  await recovered.startEnabledProfiles();
+
+  assert.equal(
+    (await recovered.getSnapshot()).entries.find(
+      (entry) => entry.profile.id === MANAGED_PROFILE.id,
+    )?.managedService,
+    true,
+  );
+  assert.deepEqual(
+    (await resolveDesktopRuntimeHostStartup(root, { catalog })).pairingIntents,
+    [],
+  );
+});
+
+test("keeps an offline pairing recoverable without blocking another Host", async () => {
+  const root = await clientRoot();
+  const catalog = await stageInterruptedPairing(root);
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  const finalized: string[] = [];
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async (target) => {
+      if (target.profile.id === PROFILE.id) throw new Error("Host is offline");
+    },
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async (profileId) => {
+      finalized.push(profileId);
+    },
+  });
+
+  await service.startEnabledProfiles();
+  assert.equal((await service.getSnapshot()).pairingRecoveryPending, true);
+
+  await service.addAndEnableVerified({ profile: READY_PROFILE, credential: "backup-token" });
+
+  assert.deepEqual(finalized, [READY_PROFILE.id]);
+  assert.equal((await catalog.resolve(READY_PROFILE.id)).credential, "backup-token");
+  assert.equal((await service.getSnapshot()).pairingRecoveryPending, true);
+});
+
+test("restores the previous credential when an interrupted pairing can no longer authenticate", async () => {
+  const root = await clientRoot();
+  const catalog = await stageInterruptedPairing(root);
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async (target) => {
+      if (target.credential === "new-token") {
+        throw new RuntimeHostPermanentReconnectError("pairing credential expired");
+      }
+    },
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => assert.fail("an expired credential cannot be finalized"),
+  });
+
+  await service.startEnabledProfiles();
+
+  assert.equal((await catalog.resolve(PROFILE.id)).credential, "old-token");
+  assert.deepEqual(
+    (await resolveDesktopRuntimeHostStartup(root, { catalog })).pairingIntents,
+    [],
+  );
+});
+
+test("restores an existing profile when replacement finalization fails", async () => {
+    const root = await clientRoot();
+    const catalog = createClientRuntimeHostProfileCatalog(root);
+    await catalog.create(PROFILE, "old-token");
+    await writeFile(
+      join(root, "runtime-host-profile-selection.json"),
+      `${JSON.stringify({
+        schemaVersion: 2,
+        defaultProfileId: "local",
+        enabledRemoteProfileIds: [PROFILE.id],
+      })}\n`,
+    );
+    const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+    const enabled: ResolvedRuntimeHostProfile[] = [];
+    const service = createDesktopRuntimeHostProfileService({
+      clientDataRoot: root,
+      startup,
+      catalog,
+      states: () => [connectingLocal()],
+      enable: async (target) => {
+        enabled.push(target);
+      },
+      disable: async () => undefined,
+      setDefault: () => undefined,
+      finalizePairing: async () => {
+        throw new Error("replacement finalization failed");
+      },
+    });
+
+    await assert.rejects(
+      () =>
+        service.addAndEnableVerified({
+          profile: {
+            ...PROFILE,
+            id: "replacement",
+          },
+          credential: "new-token",
+        }),
+      /finalization failed/u,
+    );
+
+    assert.deepEqual(await catalog.resolve(PROFILE.id), {
+      profile: {
+        ...PROFILE,
+        transport: { kind: "tls", url: "wss://runtime.example.com/" },
+      },
+      credential: "old-token",
+    });
+    assert.equal(enabled.at(-1)?.credential, "old-token");
+});
+
+test("keeps existing Hosts available while corrupt pairing recovery awaits resolution", async () => {
+  const root = await clientRoot();
+  const credentialStore = createClientRuntimeHostCredentialStore(root);
+  const catalog = createClientRuntimeHostProfileCatalog(root, credentialStore);
+  await catalog.create(PROFILE, "token");
+  await writeFile(
+    join(root, "runtime-host-profile-selection.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: "local",
+      enabledRemoteProfileIds: [PROFILE.id],
+    })}\n`,
+  );
+  await credentialStore.setSecret(
+    "runtime-host-pairing-recovery",
+    "runtime_host_access",
+    "not-json",
+  );
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog, credentialStore });
+  assert.deepEqual(startup.remotes.map((target) => target.profile.id), [PROFILE.id]);
+  const enabled: string[] = [];
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    credentialStore,
+    states: () => [connectingLocal()],
+    enable: async (target) => {
+      enabled.push(target.profile.id);
+    },
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
+  });
+
+  await service.startEnabledProfiles();
+  assert.deepEqual(enabled, [PROFILE.id]);
+  assert.equal((await service.getSnapshot()).pairingRecoveryBlocked, true);
+  await assert.rejects(
+    () => service.setEnabled(PROFILE.id, false),
+    /Resolve the unreadable/u,
+  );
+  assert.equal((await service.resolvePairingRecovery()).pairingRecoveryBlocked, undefined);
+  assert.equal((await service.setEnabled(PROFILE.id, false)).entries[1]?.enabled, false);
+});
+
+test("retries pairing recovery before discarding it", async () => {
+  const root = await clientRoot();
+  const catalog = await stageInterruptedPairing(root);
+  const credentials = createClientRuntimeHostCredentialStore(root);
+  let firstRead = true;
+  const credentialStore = {
+    getSecret: async (...args: Parameters<typeof credentials.getSecret>) => {
+      if (firstRead) {
+        firstRead = false;
+        throw new Error("credential store is temporarily unavailable");
+      }
+      return credentials.getSecret(...args);
+    },
+    setSecret: credentials.setSecret.bind(credentials),
+    deleteSecret: credentials.deleteSecret.bind(credentials),
+    ...(credentials.compareAndSetSecret
+      ? { compareAndSetSecret: credentials.compareAndSetSecret.bind(credentials) }
+      : {}),
+  };
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog, credentialStore });
+  const finalized: string[] = [];
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    credentialStore,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async (profileId) => {
+      finalized.push(profileId);
+    },
+  });
+
+  assert.equal((await service.getSnapshot()).pairingRecoveryBlocked, true);
+  assert.equal((await service.resolvePairingRecovery()).pairingRecoveryBlocked, undefined);
+  assert.deepEqual(finalized, [PROFILE.id]);
+  assert.equal((await catalog.resolve(PROFILE.id)).credential, "new-token");
+});
+
+test("does not recover pairing through unreadable saved preferences", async () => {
+  const root = await clientRoot();
+  const catalog = await stageInterruptedPairing(root);
+  const preferencesPath = join(root, "runtime-host-profile-selection.json");
+  const savedPreferences = await readFile(preferencesPath, "utf8");
+  const startup = await resolveDesktopRuntimeHostStartup(root, {
+    catalog,
+    readPreferences: async () => {
+      throw new Error("preferences are temporarily unavailable");
+    },
+  });
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async () => assert.fail("pairing recovery must not connect"),
+    disable: async () => assert.fail("pairing recovery must not disconnect"),
+    setDefault: () => assert.fail("pairing recovery must not change the default"),
+    finalizePairing: async () => assert.fail("pairing recovery must not finalize"),
+  });
+
+  await assert.rejects(() => service.resolvePairingRecovery(), /restart Maka before changing/u);
+  assert.equal(await readFile(preferencesPath, "utf8"), savedPreferences);
+});
+
+test("does not retain a startup connection after its profile is disabled", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  await catalog.create(PROFILE, "token");
+  await writeFile(
+    join(root, "runtime-host-profile-selection.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: "local",
+      enabledRemoteProfileIds: [PROFILE.id],
+    })}\n`,
+  );
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  let finishEnable!: () => void;
+  const enableReady = new Promise<void>((resolve) => {
+    finishEnable = resolve;
+  });
+  let connected = false;
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async () => {
+      await enableReady;
+      connected = true;
+    },
+    disable: async () => {
+      connected = false;
+    },
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
+  });
+
+  const startupTask = service.startEnabledProfiles();
+  await service.setEnabled(PROFILE.id, false);
+  finishEnable();
+  await startupTask;
+
+  assert.equal(connected, false);
+  assert.equal(
+    (await service.getSnapshot()).entries.find((entry) => entry.profile.id === PROFILE.id)?.enabled,
+    false,
+  );
+});
+
+test("keeps enablement, default selection, and removal as separate states", async () => {
+  const root = await clientRoot();
+  await createClientRuntimeHostProfileCatalog(root).create(PROFILE, "token");
+  const startup = await resolveDesktopRuntimeHostStartup(root);
+  const defaults: string[] = [];
+  const disabled: string[] = [];
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    states: () => [connectingLocal(), connecting({ profile: PROFILE, credential: "token" })],
+    enable: async () => undefined,
+    disable: async (profileId) => {
+      disabled.push(profileId);
+    },
+    setDefault: (profileId) => defaults.push(profileId),
+    finalizePairing: async () => undefined,
+  });
+
+  await service.setEnabled(PROFILE.id, true);
+  assert.equal((await service.setDefault(PROFILE.id)).defaultProfileId, PROFILE.id);
+  await assert.rejects(() => service.setEnabled(PROFILE.id, false), /another default/);
+  await service.setDefault("local");
+  const snapshot = await service.setEnabled(PROFILE.id, false);
+
+  assert.deepEqual(defaults, [PROFILE.id, "local"]);
+  assert.deepEqual(disabled, [PROFILE.id]);
+  assert.equal(snapshot.entries.find((entry) => entry.profile.id === PROFILE.id)?.enabled, false);
+  await service.remove(PROFILE.id);
+  assert.deepEqual((await service.getSnapshot()).entries.map((entry) => entry.profile.id), ["local"]);
 });
 
 async function clientRoot(): Promise<string> {
@@ -466,65 +1131,74 @@ async function clientRoot(): Promise<string> {
   return root;
 }
 
-function profileCatalog(root: string) {
-  return createFileRuntimeHostProfileCatalog(
-    join(root, "runtime-host-profiles.json"),
-    createRuntimeHostProfileCredentialStore(
-      createFileCredentialStore(join(root, "runtime-host-client")),
-    ),
+async function stageInterruptedPairing(root: string) {
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  await catalog.create(PROFILE, "old-token");
+  await writeFile(
+    join(root, "runtime-host-profile-selection.json"),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: "local",
+      enabledRemoteProfileIds: [PROFILE.id],
+    })}\n`,
   );
-}
-
-function deferredGate() {
-  let enter!: () => void;
-  let release!: () => void;
-  const entered = new Promise<void>((resolve) => {
-    enter = resolve;
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  let finalizationStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    finalizationStarted = resolve;
   });
-  const released = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { entered, released, enter, release };
-}
-
-const LOCAL_TARGET = {
-  profile: { id: "local", name: "Local", kind: "local" },
-} as const satisfies ResolvedRuntimeHostProfile;
-
-function createProfileService(
-  clientDataRoot: string,
-  options: {
-    readonly activeTarget?: ResolvedRuntimeHostProfile;
-    readonly selectedProfileId?: string;
-    readonly activate?: (
-      target: ResolvedRuntimeHostProfile,
-    ) => Promise<DesktopRuntimeHostActivationResult>;
-    readonly catalog?: RuntimeHostProfileCatalog;
-    readonly selectionFailure?: Error;
-  } = {},
-) {
-  let activeTarget = options.activeTarget ?? LOCAL_TARGET;
-  return createDesktopRuntimeHostProfileService({
-    clientDataRoot,
-    selectedProfileId: options.selectedProfileId ?? activeTarget.profile.id,
-    getActiveTarget: () => activeTarget,
-    getRuntimeHostReadiness: () => "ready",
-    activate: async (target) => {
-      const result = options.activate
-        ? await options.activate(target)
-        : { ok: true as const };
-      if (result.ok) activeTarget = target;
-      return result;
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async () => undefined,
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => {
+      finalizationStarted();
+      await new Promise<never>(() => undefined);
     },
-    ...(options.catalog ? { catalog: options.catalog } : {}),
-    ...(options.selectionFailure
-      ? {
-          selectionAuthority: {
-            selectIfCurrentTarget: async () => {
-              throw options.selectionFailure;
-            },
-          },
-        }
-      : {}),
   });
+  void service.addAndEnableVerified({
+    profile: { ...PROFILE, name: "Updated office" },
+    credential: "new-token",
+  });
+  await started;
+  return catalog;
+}
+
+function connectingLocal(): RuntimeHostDesktopTargetState {
+  return connecting({ profile: LOCAL_RUNTIME_HOST_PROFILE });
+}
+
+function connecting(target: ResolvedRuntimeHostProfile): RuntimeHostDesktopTargetState {
+  return {
+    epoch: `epoch-${target.profile.id}`,
+    target,
+    readiness: "connecting",
+  };
+}
+
+function ready(target: ResolvedRuntimeHostProfile): RuntimeHostDesktopTargetState {
+  return {
+    epoch: `epoch-${target.profile.id}`,
+    target,
+    readiness: "ready",
+    candidate: {
+      client: { hostId: target.profile.kind === "remote" ? target.profile.rootId : ROOT_ID },
+    } as never,
+  };
+}
+
+function unavailable(
+  target: ResolvedRuntimeHostProfile,
+  error: Error,
+): RuntimeHostDesktopTargetState {
+  return {
+    epoch: `epoch-${target.profile.id}`,
+    target,
+    readiness: "unavailable",
+    error,
+  };
 }

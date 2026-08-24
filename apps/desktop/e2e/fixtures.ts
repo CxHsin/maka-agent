@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { _electron as electron, test as base, expect } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 import { execFile } from 'node:child_process';
@@ -7,6 +26,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import {
   createProjectCatalog,
+  createSessionStore,
   createSettingsStore,
 } from '@maka/storage';
 import {
@@ -31,6 +51,10 @@ const execFileAsync = promisify(execFile);
  * backend echo and its display form on the sent message.
  */
 export const COMPOSER_INPUT = '.maka-composer-editor [contenteditable="true"]';
+export const PARENT_REMOVAL_PARENT_NAME = '待删除的父任务';
+export const PARENT_REMOVAL_CHILD_NAME = '应归档的子任务';
+/** Directory basename, and so the Project name the workspace picker lists. */
+export const NEW_TASK_PROJECT_NAME = 'new-task-project';
 
 /**
  * Wait for Runtime's authoritative Skill projection, not merely for the
@@ -126,6 +150,57 @@ async function seedE2eLocale(userDataDir: string, locale: 'zh' | 'en'): Promise<
   });
 }
 
+async function seedParentRemovalSessions(userDataDir: string): Promise<void> {
+  const workspaceRoot = path.join(userDataDir, 'workspaces', 'default');
+  const store = createSessionStore(workspaceRoot);
+  try {
+    const parent = await store.create({
+      cwd: path.join(userDataDir, 'project'),
+      llmConnectionSlug: 'e2e',
+      model: 'claude-sonnet-4-5-20250929',
+      permissionMode: 'ask',
+      name: PARENT_REMOVAL_PARENT_NAME,
+      labels: [],
+    });
+    await store.createSubagent({
+      cwd: path.join(userDataDir, 'project'),
+      llmConnectionSlug: 'e2e',
+      model: 'claude-sonnet-4-5-20250929',
+      permissionMode: 'ask',
+      name: PARENT_REMOVAL_CHILD_NAME,
+      labels: [],
+      subagentParent: {
+        kind: 'subagent',
+        parentSessionId: parent.id,
+        spawnedBy: {
+          parentRunId: 'e2e-parent-run',
+          parentTurnId: 'e2e-parent-turn',
+          toolCallId: 'e2e-spawn-call',
+        },
+        lifecycle: 'foreground',
+      },
+      subagentRuntime: {
+        schemaVersion: 1,
+        definitionVersion: 1,
+        agentId: 'implementation',
+        agentName: 'Implementation',
+        profile: 'implementation',
+        systemPrompt: 'Implement the assigned task.',
+        toolNames: ['Read', 'Write'],
+        categoryPolicy: {},
+      },
+      subagentSpawn: {
+        schemaVersion: 1,
+        requestFingerprint: 'a'.repeat(64),
+        initialTurnId: 'e2e-child-turn',
+        initialRunId: 'e2e-child-run',
+      },
+    });
+  } finally {
+    await store.close?.();
+  }
+}
+
 async function seedE2eInvocableSkills(userDataDir: string): Promise<void> {
   const workspaceRoot = path.join(userDataDir, 'workspaces', 'default');
   const projectRoot = path.join(userDataDir, 'project');
@@ -216,6 +291,20 @@ async function seedE2eGitReviewProject(
   await seedCurrentProject(workspaceRoot, projectRoot);
 }
 
+/**
+ * One registered Project and nothing else, so the workspace picker under the
+ * new-task composer offers two selectable targets: this Project and the Host's
+ * implicit "no project". The new-task draft slot is keyed by (profile, host,
+ * project), so moving between them is what re-keys it (#3408). The directory is
+ * plain — its basename becomes the Project name the picker menu shows.
+ */
+async function seedE2eNewTaskProject(userDataDir: string): Promise<void> {
+  const workspaceRoot = path.join(userDataDir, 'workspaces', 'default');
+  const projectRoot = path.join(userDataDir, NEW_TASK_PROJECT_NAME);
+  await mkdir(projectRoot, { recursive: true });
+  await seedCurrentProject(workspaceRoot, projectRoot);
+}
+
 async function seedCurrentProject(workspaceRoot: string, projectRoot: string): Promise<void> {
   const storageRoot = await resolveStorageRoot({ path: workspaceRoot, kind: 'interactive' });
   const catalog = createProjectCatalog(workspaceRoot);
@@ -249,6 +338,8 @@ async function withE2eWindow(
     scrollMotion,
     invocableSkills,
     gitReviewExtraFiles,
+    parentRemovalSessions,
+    newTaskProject,
   }: {
     seed: boolean;
     readinessSelector: string;
@@ -262,6 +353,8 @@ async function withE2eWindow(
     showWindow?: boolean;
     invocableSkills?: boolean;
     gitReviewExtraFiles?: number;
+    parentRemovalSessions?: boolean;
+    newTaskProject?: boolean;
   },
   use: (page: Page, context: { userDataDir: string }) => Promise<void>,
 ): Promise<void> {
@@ -275,10 +368,12 @@ async function withE2eWindow(
   const rendererLogs: string[] = [];
   try {
     if (seed) await seedE2eConnection(userDataDir);
+    if (parentRemovalSessions) await seedParentRemovalSessions(userDataDir);
     if (invocableSkills) await seedE2eInvocableSkills(userDataDir);
     if (gitReviewExtraFiles !== undefined) {
       await seedE2eGitReviewProject(userDataDir, gitReviewExtraFiles);
     }
+    if (newTaskProject) await seedE2eNewTaskProject(userDataDir);
     // Legacy E2E specs assert Chinese labels and should not inherit the CI
     // host locale. E2e-fixture workspaces use the explicit renderer override.
     if (locale && !e2eFixtureScenario) await seedE2eLocale(userDataDir, locale);
@@ -339,16 +434,28 @@ async function withE2eWindow(
 
 export const test = base.extend<{
   window: Page;
+  onboardingWindow: Page;
   gitReviewWindow: { page: Page; projectRoot: string };
   invocableSkillsWindow: Page;
   linkColorWindow: Page;
   projectSidebarWindow: Page;
+  parentRemovalWindow: Page;
   promptRailWindow: Page;
   promptRailMotionWindow: Page;
+  requestHeaderRowWindow: Page;
+  newTaskTargetWindow: Page;
 }>({
   // Seeded: a pre-staged connection clears onboarding so the composer is ready.
   window: async ({}, use) => {
     await withE2eWindow({ seed: true, readinessSelector: COMPOSER_INPUT, locale: 'zh' }, use);
+  },
+  onboardingWindow: async ({}, use) => {
+    await withE2eWindow({
+      seed: false,
+      readinessSelector: '[data-maka-contract="onboarding-card"]',
+      locale: 'zh',
+      showWindow: true,
+    }, use);
   },
   gitReviewWindow: async ({}, use) => {
     await withE2eWindow(
@@ -384,14 +491,36 @@ export const test = base.extend<{
   },
   // A real project with several sessions. Shown because the contract under
   // test is native focus order across independently interactive row controls.
+  // Seeded connection so the composer is ready, plus one registered Project so
+  // the workspace picker under it has a second target to move to.
+  newTaskTargetWindow: async ({}, use) => {
+    await withE2eWindow({
+      seed: true,
+      readinessSelector: COMPOSER_INPUT,
+      locale: 'zh',
+      newTaskProject: true,
+      showWindow: true,
+    }, use);
+  },
   projectSidebarWindow: async ({}, use) => {
     await withE2eWindow({
       seed: false,
-      readinessSelector: '[data-maka-contract="search-modal"]',
+      readinessSelector: '[data-maka-contract="search-modal"][open]',
       e2eFixtureScenario: 'sidebar-search-modal-open',
       locale: 'zh',
       showWindow: true,
     }, use);
+  },
+  parentRemovalWindow: async ({}, use) => {
+    await withE2eWindow(
+      {
+        seed: true,
+        readinessSelector: COMPOSER_INPUT,
+        locale: 'zh',
+        parentRemovalSessions: true,
+      },
+      use,
+    );
   },
   // A multi-prompt transcript for the prompt anchor rail. Shown, because every
   // assertion in prompt-rail.spec.ts is geometry the compositor has to settle.
@@ -418,6 +547,19 @@ export const test = base.extend<{
       e2eFixtureScenario: 'chat-prompt-rail',
       showWindow: true,
       scrollMotion: 'smooth',
+    }, use);
+  },
+  // Settings → 模型, where `no-models` is the seeded openai-compatible relay —
+  // the connection type whose detail page owns the custom request headers
+  // editor. Shown, because what this window is for is a rendered box
+  // measurement and a throttled compositor is not a layout the user has.
+  requestHeaderRowWindow: async ({}, use) => {
+    await withE2eWindow({
+      seed: false,
+      readinessSelector: '.settingsSurface',
+      e2eFixtureScenario: 'settings-models',
+      locale: 'zh',
+      showWindow: true,
     }, use);
   },
 });

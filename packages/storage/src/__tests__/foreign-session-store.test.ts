@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
@@ -551,7 +570,7 @@ describe('foreign session store — digest', () => {
     assert.ok(!flat.includes('rm -rf'), flat);
   });
 
-  it('refuses a transcript path replaced by an out-of-root symlink', async () => {
+  it('refuses a transcript path replaced by an out-of-root symlink', async (t) => {
     const home = await tempHome();
     const path = await seedClaudeSession(home, { id: 'sym', cwd: '/repo' });
     const store = createForeignSessionStore({ homeDir: home, env: {} });
@@ -562,7 +581,15 @@ describe('foreign session store — digest', () => {
     await writeFile(secret, 'not yours', 'utf8');
     const { rm } = await import('node:fs/promises');
     await rm(path);
-    await symlink(secret, path);
+    try {
+      await symlink(secret, path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+        t.skip('symlink creation is not permitted in this Windows test environment');
+        return;
+      }
+      throw error;
+    }
     await assert.rejects(() => store.readDigest(session as ForeignSessionSummary), /escaped/);
   });
 });

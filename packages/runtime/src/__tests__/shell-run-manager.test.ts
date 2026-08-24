@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import childProcess, {
   type ExecFileException,
@@ -24,10 +43,12 @@ import {
   type ShellRunProcessManagerInput,
 } from '../shell-run-contract.js';
 import { defaultShellPlan, type ShellPlan } from '../shell-detect.js';
+import { PtyProcessDriver } from '../pty-process-driver.js';
 import { PTY_PROTOCOL_REPLY_MAX_BYTES } from '../pty-screen-collector.js';
 
 const NO_ABORT = new AbortController().signal;
 const TEMPORARY_WORKSPACES = new Set<string>();
+const REAL_WINDOWS_GIT_BASH = windowsGitBashPlan();
 
 after(async () => {
   await Promise.all(
@@ -114,6 +135,58 @@ describe('ShellRunProcessManager', () => {
     if (result.output.mode !== 'pipes') throw new Error('expected pipes output');
     assert.match(result.output.stdout, /中文文件名\.txt/u);
     assert.doesNotMatch(result.output.stdout, /\uFFFD/u);
+  });
+
+  test('preserves the requested cwd through a real Git Bash login PTY', {
+    skip:
+      process.platform !== 'win32'
+        ? 'Git Bash PTY regression'
+        : REAL_WINDOWS_GIT_BASH
+          ? false
+          : 'Git Bash is not installed on this Windows runner',
+  }, async () => {
+    const shell = REAL_WINDOWS_GIT_BASH;
+    assert.ok(shell, 'the test skip requires a discovered Git Bash plan');
+    const cwd = await workspace();
+    await writeFile(join(cwd, 'maka-cwd-marker'), 'expected workspace', 'utf8');
+    const manager = await createTestManager();
+    const initial = await manager.runBackgroundBash(
+      shellInput({
+        cwd,
+        command: 'exec "$SHELL" -l',
+        env: {
+          ...process.env,
+          SHELL: shell.exe,
+          CHERE_INVOKING: '1',
+          DISABLE_AUTO_UPDATE: 'true',
+          DISABLE_UPDATE_PROMPT: 'true',
+        },
+        shell,
+        pty: true,
+        timeoutMs: 10_000,
+      }),
+    );
+    assert.equal(initial.kind, 'shell_run');
+
+    await manager.writeStdin({
+      sessionId: 'session-1',
+      ref: initial.ref,
+      input: "test -f maka-cwd-marker && printf 'MAKA_CWD_OK\\n'\r",
+      abortSignal: NO_ABORT,
+    });
+    const observed = await waitForPtyText(manager, initial.ref, /MAKA_CWD_OK/u, 10_000);
+    assert.equal(observed.output?.mode, 'pty');
+    if (observed.output?.mode !== 'pty') throw new Error('expected pty output');
+    assert.match(terminalText(observed.output), /MAKA_CWD_OK/u);
+
+    await manager.writeStdin({
+      sessionId: 'session-1',
+      ref: initial.ref,
+      input: 'exit\r',
+      abortSignal: NO_ABORT,
+    });
+    const completed = await waitForTerminalShellRun(manager, initial.ref, 10_000);
+    assert.equal(completed.status, 'completed');
   });
 
   test('uses the shared explicit PowerShell pipe plan', async () => {
@@ -1804,25 +1877,126 @@ describe('ShellRunProcessManager', () => {
       const control = await pending;
 
       assert.equal(await readFile(sizeBeforeExit, 'utf8'), '80x24');
+      const terminal =
+        control.status === 'starting' || control.status === 'running'
+          ? await waitForTerminalShellRun(manager, initial.ref, 15_000)
+          : control;
+      assertShellRunSnapshot(terminal);
+      assert.equal(terminal.status, 'completed');
+      assert.equal(terminal.exitCode, 0);
+      assert.deepEqual(control.operation, {
+        kind: 'pty_control',
+        failed: false,
+        resize: { cols: 81, rows: 25, applied: false, changed: false },
+      });
+      assert.equal(terminal.output.mode, 'pty');
+      if (terminal.output.mode !== 'pty') throw new Error('expected pty output');
+      assert.deepEqual([terminal.output.cols, terminal.output.rows], [80, 24]);
+
+      const durable = await store.readShellRun('session-1', 'shell-run-1');
+      assert.equal(durable.status, 'completed');
+      assert.equal(durable.revision, terminal.revision);
+      assert.equal(manager.liveCount(), 0);
+    } finally {
+      if (manager.liveCount() > 0) {
+        await manager.stopBackgroundTask('session-1', initial.ref, NO_ABORT);
+      }
+    }
+  });
+
+  test('writeStdin itself returns terminal status when persist is held through finalization', async () => {
+    const cwd = await workspace();
+    const exitGate = join(cwd, 'exit-gate');
+    const backingStore = createSqliteShellRunStore(await workspace());
+    const persistHeld = deferred<void>();
+    const releasePersist = deferred<void>();
+    let holdNextObservation = false;
+    let persistIsHeld = false;
+    const store: ShellRunStore = {
+      createShellRun: (...args) => backingStore.createShellRun(...args),
+      async updateShellRun(sessionId, shellRunId, patch) {
+        if (holdNextObservation && patch.status === undefined) {
+          holdNextObservation = false;
+          persistIsHeld = true;
+          persistHeld.resolve();
+          await releasePersist.promise;
+        }
+        return backingStore.updateShellRun(sessionId, shellRunId, patch);
+      },
+      readShellRun: (...args) => backingStore.readShellRun(...args),
+      listSessionShellRuns: (...args) => backingStore.listSessionShellRuns(...args),
+    };
+    const flushes = manualFlushScheduler();
+    const manager = createManager(store, undefined, {
+      flushIntervalMs: 60_000,
+      scheduleFlush: flushes.schedule,
+    });
+    const originalDispose = PtyProcessDriver.prototype.dispose;
+    let driverDisposed = false;
+    PtyProcessDriver.prototype.dispose = function dispose(this: PtyProcessDriver) {
+      driverDisposed = true;
+      return originalDispose.call(this);
+    };
+    let ref: string | undefined;
+
+    try {
+      const initial = await manager.runBackgroundBash(
+        shellInput({
+          cwd,
+          command: nodeCommand(`
+            const { readFileSync } = require('node:fs');
+            process.stdout.write('READY\\n');
+            const wait = () => {
+              try {
+                readFileSync(${JSON.stringify(exitGate)});
+              } catch (error) {
+                if (error.code !== 'ENOENT') throw error;
+                setImmediate(wait);
+                return;
+              }
+              process.exit(0);
+            };
+            wait();
+          `),
+          pty: true,
+          timeoutMs: 120_000,
+        }),
+      );
+      assert.equal(initial.kind, 'shell_run');
+      ref = initial.ref;
+      await waitForPtyText(manager, initial.ref, /READY/);
+
+      holdNextObservation = true;
+      const pending = manager.writeStdin({
+        sessionId: 'session-1',
+        ref: initial.ref,
+        size: { cols: 81, rows: 25 },
+        abortSignal: NO_ABORT,
+      });
+      await waitUntil(() => persistIsHeld, 15_000);
+      await persistHeld.promise;
+      await writeFile(exitGate, 'exit');
+      await waitUntil(() => driverDisposed, 15_000);
+      releasePersist.resolve();
+
+      const control = await pending;
       assertShellRunSnapshot(control);
       assert.equal(control.status, 'completed');
       assert.equal(control.exitCode, 0);
       assert.deepEqual(control.operation, {
         kind: 'pty_control',
         failed: false,
-        resize: { cols: 81, rows: 25, applied: false, changed: false },
+        resize: { cols: 81, rows: 25, applied: true, changed: true },
       });
       assert.equal(control.output.mode, 'pty');
       if (control.output.mode !== 'pty') throw new Error('expected pty output');
-      assert.deepEqual([control.output.cols, control.output.rows], [80, 24]);
-
-      const durable = await store.readShellRun('session-1', 'shell-run-1');
-      assert.equal(durable.status, 'completed');
-      assert.equal(durable.revision, control.revision);
+      assert.deepEqual([control.output.cols, control.output.rows], [81, 25]);
       assert.equal(manager.liveCount(), 0);
     } finally {
-      if (manager.liveCount() > 0) {
-        await manager.stopBackgroundTask('session-1', initial.ref, NO_ABORT);
+      PtyProcessDriver.prototype.dispose = originalDispose;
+      releasePersist.resolve();
+      if (ref && manager.liveCount() > 0) {
+        await manager.stopBackgroundTask('session-1', ref, NO_ABORT).catch(() => undefined);
       }
     }
   });
@@ -2172,28 +2346,44 @@ describe('ShellRunProcessManager', () => {
   });
 
   test('fails closed before terminal protocol replies can form an unbounded native write queue', async () => {
-    const manager = await createTestManager();
-    const queries = Math.floor(PTY_PROTOCOL_REPLY_MAX_BYTES / 4) + 1;
-    const initial = await manager.runBackgroundBash(
-      shellInput({
-        cwd: await workspace(),
-        command: nodeCommand(`
-        process.stdin.setRawMode?.(true);
-        process.stdin.pause();
-        const query = '\\u001b[5n'.repeat(${queries});
-        process.stdout.write(query);
-        setInterval(() => {}, 1000);
-      `),
-        pty: true,
-        timeoutMs: 10_000,
-      }),
-    );
-    const result = await waitForTerminalShellRun(manager, initial.ref, 10_000);
-    assertShellRunSnapshot(result);
-    assert.equal(result.status, 'failed');
-    assert.match(result.failureMessage ?? '', /protocol replies exceeded/);
-    assert.equal(manager.liveCount(), 0);
-    assert.equal(manager.livePtyCount(), 0);
+    const originalConsoleError = console.error;
+    console.error = (...args: unknown[]) => {
+      const error = args[1] as NodeJS.ErrnoException | undefined;
+      if (
+        args[0] === 'Unhandled pty write error' &&
+        (error?.code === 'EBADF' || error?.code === 'EIO')
+      ) {
+        return;
+      }
+      originalConsoleError(...args);
+    };
+    try {
+      const manager = await createTestManager();
+      const queries = Math.floor(PTY_PROTOCOL_REPLY_MAX_BYTES / 4) + 1;
+      const initial = await manager.runBackgroundBash(
+        shellInput({
+          cwd: await workspace(),
+          command: nodeCommand(`
+          process.stdin.setRawMode?.(true);
+          process.stdin.pause();
+          const query = '\\u001b[5n'.repeat(${queries});
+          process.stdout.write(query);
+          setInterval(() => {}, 1000);
+        `),
+          pty: true,
+          timeoutMs: 10_000,
+        }),
+      );
+      const result = await waitForTerminalShellRun(manager, initial.ref, 10_000);
+      assertShellRunSnapshot(result);
+      assert.equal(result.status, 'failed');
+      assert.match(result.failureMessage ?? '', /protocol replies exceeded/);
+      assert.equal(manager.liveCount(), 0);
+      assert.equal(manager.livePtyCount(), 0);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    } finally {
+      console.error = originalConsoleError;
+    }
   });
 
   test('redacts a secret across a soft wrap and the scrollback/screen boundary', async () => {
@@ -2666,6 +2856,18 @@ function windowsPowerShellPlan(): ShellPlan | undefined {
   );
   if (!existsSync(executable)) return undefined;
   return { kind: 'powershell', displayName: 'Windows PowerShell 5.1', exe: executable };
+}
+
+function windowsGitBashPlan(): ShellPlan | undefined {
+  if (process.platform !== 'win32') return undefined;
+  const executable = join(
+    process.env.ProgramFiles ?? 'C:\\Program Files',
+    'Git',
+    'bin',
+    'bash.exe',
+  );
+  if (!existsSync(executable)) return undefined;
+  return { kind: 'git-bash', displayName: 'Git Bash', exe: executable };
 }
 
 function record(input: { shellRunId: string; status: ShellRunRecord['status'] }): ShellRunRecord {

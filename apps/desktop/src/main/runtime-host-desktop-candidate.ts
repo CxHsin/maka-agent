@@ -1,6 +1,26 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { randomUUID } from "node:crypto";
 import type { IpcMain } from "electron";
 import type { ActiveInteractionRequestEvent } from '@maka/core/events';
+import { redactSecrets } from '@maka/core/redaction';
 import type { CreateSessionRequestInput } from '@maka/core/runtime-inputs';
 import type { SessionChangedEvent, SessionChangedReason } from '@maka/core/session';
 import type { BotRegistry } from '@maka/runtime/bots';
@@ -13,6 +33,8 @@ import {
   type ConnectOrSpawnRuntimeHostInput,
   type ConnectOrSpawnRuntimeHostResult,
   type RuntimeHostConnection,
+  type RuntimeHostCandidateLaunchBarrier,
+  type RuntimeHostSpawnedProcess,
   type RemoteRuntimeHostProfile,
 } from "@maka/runtime-host/client";
 import {
@@ -50,13 +72,18 @@ import {
 } from "./runtime-host-session-execution-ipc-main.js";
 import { RuntimeHostSessionObservationRegistry } from "./runtime-host-session-observation-registry.js";
 import { RuntimeHostSessionObserver } from "./runtime-host-session-observer.js";
-import type { IpcHandler, ReconnectableReadIpcMain } from "./ipc-reconnect-policy.js";
+import type {
+  IpcHandler,
+  ReconciledControlHandlers,
+  ReconnectableReadIpcMain,
+} from "./ipc-reconnect-policy.js";
 import type { RuntimeHostTargetIpcMain } from "./runtime-host-reconnecting-ipc-main.js";
+import { runtimeHostProcessLogBuffer } from './main-process-diagnostics.js';
 import {
   desktopSessionResourceKey,
-  requireDesktopHostRef,
-  type DesktopHostRef,
-} from "../preload/runtime-host-identity.js";
+  requireDesktopTargetScope,
+  type DesktopTargetScope,
+} from "../shared/runtime-host-identity.js";
 
 type CandidateIpcMain = ReconnectableReadIpcMain & Pick<IpcMain, "removeHandler">;
 
@@ -76,17 +103,17 @@ export interface DesktopRuntimeHostCandidateDeps {
     target: DesktopRuntimeHostTargetPolicy,
   ) => Promise<WorkspaceTarget>;
   readonly emitSessionsChanged: (
-    scope: DesktopHostRef,
+    scope: DesktopTargetScope,
     reason: SessionChangedReason,
     sessionId?: string,
-    extra?: Pick<SessionChangedEvent, "connectionSlug" | "modelId" | "turnId">,
+    extra?: Pick<SessionChangedEvent, "modelId" | "turnId">,
   ) => void;
   readonly completeComputerUseTurn: (
     sessionId: string,
   ) => void | Promise<void>;
   readonly e2eInteractions?: RuntimeHostSessionExecutionIpcDeps["e2eInteractions"];
   readonly renderer?: {
-    send(channel: string, scope: DesktopHostRef, payload: unknown): void;
+    send(channel: string, scope: DesktopTargetScope, payload: unknown): void;
   };
   readonly onError?: RuntimeHostSessionDomainsIpcDeps["onError"];
   readonly isTargetActive?: () => boolean;
@@ -110,7 +137,7 @@ export interface DesktopRuntimeHostCandidateDeps {
     ipcMain: ReconnectableReadIpcMain,
     controls: DesktopRuntimeHostCandidateControls,
     target: DesktopRuntimeHostTargetPolicy,
-    scope: DesktopHostRef,
+    scope: DesktopTargetScope,
     isTargetActive: () => boolean,
   ) => void | (() => void | Promise<void>);
 }
@@ -138,6 +165,7 @@ export interface DesktopRuntimeHostCandidateStartInput
   readonly generation?: string;
   readonly takeoverHostEpoch?: string;
   readonly signal?: AbortSignal;
+  readonly candidateLaunchBarrier?: RuntimeHostCandidateLaunchBarrier;
   readonly remote?: {
     readonly profile: RemoteRuntimeHostProfile;
     readonly credential: string;
@@ -259,8 +287,11 @@ export async function startDesktopRuntimeHostCandidate(
       ipcMain,
     );
   }
-  const connection = await connectOrSpawnRuntimeHost(connectInput(input));
+  const connection = input.candidateLaunchBarrier
+    ? await input.candidateLaunchBarrier.connect(connectInput(input))
+    : await connectOrSpawnRuntimeHost(connectInput(input));
   if (connection.kind !== "connected") return connection;
+  observeLocalRuntimeHostProcess(connection.spawnedProcess);
   try {
     return {
       kind: "ready",
@@ -278,6 +309,52 @@ export async function startDesktopRuntimeHostCandidate(
   }
 }
 
+function observeLocalRuntimeHostProcess(spawnedProcess: RuntimeHostSpawnedProcess | undefined): void {
+  if (!spawnedProcess) return;
+  void spawnedProcess.exited.then(
+    (exit) =>
+      logLocalRuntimeHostProcessDiagnostic(
+        formatLocalRuntimeHostProcessExitDiagnostic(spawnedProcess.pid, exit),
+      ),
+    () =>
+      logLocalRuntimeHostProcessDiagnostic(
+        `[runtime-host] local Host child exit could not be observed: pid=${spawnedProcess.pid}`,
+      ),
+  );
+}
+
+function logLocalRuntimeHostProcessDiagnostic(diagnostic: string): void {
+  runtimeHostProcessLogBuffer.append('error', diagnostic);
+  console.error(diagnostic);
+}
+
+export function formatLocalRuntimeHostProcessExitDiagnostic(
+  pid: number,
+  exit: Awaited<RuntimeHostSpawnedProcess['exited']>,
+): string {
+  const status = `pid=${pid} code=${exit.code ?? 'null'} signal=${exit.signal ?? 'none'}`;
+  const stderr = redactRuntimeHostStderr(
+    exit.stderrTruncated ? discardLeadingPartialStderrRecord(exit.stderr) : exit.stderr,
+  );
+  if (!stderr) return `[runtime-host] local Host child exited: ${status}`;
+  const truncation = exit.stderrTruncated
+    ? '\n<stderr truncated; showing final 4096 bytes>'
+    : '';
+  return `[runtime-host] local Host child exited: ${status}\nstderr:\n${stderr}${truncation}`;
+}
+
+function discardLeadingPartialStderrRecord(stderr: string): string {
+  const separator = stderr.search(/[\r\n]/u);
+  return separator === -1 ? '' : stderr.slice(separator + 1);
+}
+
+function redactRuntimeHostStderr(stderr: string): string {
+  const redacted = redactSecrets(stderr.trim());
+  // The full stderr blob normally takes text redaction. Rechecking each
+  // compact token also applies structured JSON redaction to embedded payloads.
+  return redacted.replace(/\S+/gu, (token) => redactSecrets(token));
+}
+
 async function startRemoteDesktopRuntimeHostCandidate(
   input: DesktopRuntimeHostCandidateStartInput,
   remote: NonNullable<DesktopRuntimeHostCandidateStartInput["remote"]>,
@@ -287,7 +364,6 @@ async function startRemoteDesktopRuntimeHostCandidate(
   const connection = await connectRemoteRuntimeHostProfile({
     profile: remote.profile,
     credential: remote.credential,
-    surface: "desktop",
     clientInstanceId: input.clientInstanceId ?? randomUUID(),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.connectTimeoutMs === undefined
@@ -340,7 +416,7 @@ export async function createDesktopRuntimeHostCandidate(
   const emitSessionsChanged = (
     reason: SessionChangedReason,
     sessionId?: string,
-    extra?: Pick<SessionChangedEvent, "connectionSlug" | "modelId" | "turnId">,
+    extra?: Pick<SessionChangedEvent, "modelId" | "turnId">,
   ): void => {
     if (isTargetActive()) deps.emitSessionsChanged(scope, reason, sessionId, extra);
   };
@@ -518,6 +594,7 @@ export async function createDesktopRuntimeHostCandidate(
           hostPathAccess: target.kind === "local" ? "cwd" : "none",
           ...(target.kind === "remote" ? { clientCwd: deps.workspaceRoot } : {}),
           releaseResourcesOnClose: false,
+          targetScope: scope,
           nativeSessionId: (sessionId) =>
             desktopSessionResourceKey({ ...scope, sessionId }),
           onSessionUsed: (sessionId) => nativeSessionIds.add(sessionId),
@@ -585,6 +662,7 @@ export async function createDesktopRuntimeHostCandidate(
     registerRuntimeHostSessionCatalogIpc(
       {
         client,
+        runningTurnIds: (sessionId) => sessionObserver.observedRunningTurnIds(sessionId),
         resolveCreateProject: (input) => deps.resolveSessionCreateProject(input, target),
         emitSessionsChanged,
         releaseSessionResources: releaseNativeSession,
@@ -670,7 +748,6 @@ function connectInput(
 ): ConnectOrSpawnRuntimeHostInput {
   return {
     rootPath: input.rootPath,
-    surface: "desktop",
     protocol: {
       min: RUNTIME_HOST_PROTOCOL_VERSION,
       max: RUNTIME_HOST_PROTOCOL_VERSION,
@@ -716,7 +793,7 @@ class ScopedIpcMain implements ReconnectableReadIpcMain {
 
   constructor(
     ipcMain: CandidateIpcMain,
-    private readonly scope: DesktopHostRef,
+    private readonly scope: DesktopTargetScope,
   ) {
     this.#ipcMain = ipcMain;
   }
@@ -729,6 +806,45 @@ class ScopedIpcMain implements ReconnectableReadIpcMain {
     this.#handle(channel, listener, true);
   }
 
+  handleReconciledControl<Context, Result>(
+    channel: string,
+    handlers: ReconciledControlHandlers<Context, Result>,
+  ): void {
+    if (this.#closed)
+      throw new Error("Desktop Runtime Host candidate IPC is closed");
+    if (this.#channels.has(channel)) {
+      throw new Error(
+        `Desktop Runtime Host candidate registered duplicate IPC: ${channel}`,
+      );
+    }
+    const scopedHandlers: ReconciledControlHandlers<Context, Result> = {
+      dispatch: (event, scope, ...args) => {
+        requireDesktopTargetScope(scope, this.scope);
+        return handlers.dispatch(event, ...args);
+      },
+      reconcile: (context, event, scope, ...args) => {
+        requireDesktopTargetScope(scope, this.scope);
+        return handlers.reconcile(context, event, ...args);
+      },
+      reconciliationUnavailable: (context, event, scope, ...args) => {
+        requireDesktopTargetScope(scope, this.scope);
+        return handlers.reconciliationUnavailable(context, event, ...args);
+      },
+    };
+    if (this.#ipcMain.handleReconciledControl) {
+      this.#ipcMain.handleReconciledControl(channel, scopedHandlers);
+    } else {
+      this.#ipcMain.handle(channel, async (event, scope, ...args) => {
+        requireDesktopTargetScope(scope, this.scope);
+        const step = await handlers.dispatch(event, ...args);
+        return step.kind === "completed"
+          ? step.value
+          : handlers.reconcile(step.context, event, ...args);
+      });
+    }
+    this.#channels.add(channel);
+  }
+
   #handle(channel: string, listener: IpcHandler, reconnectableRead: boolean): void {
     if (this.#closed)
       throw new Error("Desktop Runtime Host candidate IPC is closed");
@@ -738,7 +854,7 @@ class ScopedIpcMain implements ReconnectableReadIpcMain {
       );
     }
     const hostScopedListener: IpcHandler = (event, scope, ...args) => {
-      requireDesktopHostRef(scope, this.scope);
+      requireDesktopTargetScope(scope, this.scope);
       return listener(event, ...args);
     };
     if (reconnectableRead && this.#ipcMain.handleReconnectableRead) {

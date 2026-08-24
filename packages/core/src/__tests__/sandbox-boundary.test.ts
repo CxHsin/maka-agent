@@ -1,6 +1,25 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { expect } from '../test-helpers.js';
+import { expect } from './test-helpers.js';
 import {
   applySandboxBoundaryExpansion,
   assessSandboxBoundaryExpansion,
@@ -96,6 +115,55 @@ describe('SandboxBoundaryExpansion', () => {
         network: { enabled: true },
       },
     });
+  });
+
+  test('accepts normalized Windows drive paths and compares them case-insensitively', () => {
+    const result = validateSandboxBoundaryExpansion({
+      filesystem: {
+        entries: [
+          { path: 'D:\\Outside\\Tree\\file.txt', access: 'read', scope: 'exact' },
+          { path: 'd:\\outside\\tree', access: 'read', scope: 'subtree' },
+        ],
+      },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      expansion: {
+        filesystem: {
+          entries: [{ path: 'd:\\outside\\tree', access: 'read', scope: 'subtree' }],
+        },
+      },
+    });
+
+    const widened = applySandboxBoundaryExpansion(createReadOnlyPermissionProfile(), {
+      filesystem: {
+        entries: [{ path: 'D:\\Outside\\Tree', access: 'read', scope: 'subtree' }],
+      },
+    });
+    expect(canReadPath(widened, 'd:\\outside\\tree\\file.txt')).toBe(true);
+    expect(canReadPath(widened, 'D:\\Outside\\Sibling\\file.txt')).toBe(false);
+
+    expect(
+      validateSandboxBoundaryExpansion({
+        filesystem: { entries: [{ path: 'C:\\', access: 'read', scope: 'subtree' }] },
+      }).ok,
+    ).toBe(true);
+  });
+
+  test('rejects non-normalized Windows boundary paths', () => {
+    for (const path of [
+      'D:\\outside\\..\\secret.txt',
+      'D:/outside/secret.txt',
+      '\\\\server\\share\\secret.txt',
+      'D:\\outside\\',
+    ]) {
+      expect(
+        validateSandboxBoundaryExpansion({
+          filesystem: { entries: [{ path, access: 'read', scope: 'exact' }] },
+        }).ok,
+      ).toBe(false);
+    }
   });
 
   test('rejects empty, relative, deny, policy-shaped, and legacy expansions', () => {

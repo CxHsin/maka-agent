@@ -1,15 +1,34 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type { SessionSummary } from '@maka/core/session';
 import { projectRevisionLinkedSessionTree } from '@maka/core/session-revisions';
 
-export type SessionRailProjection = {
-  sessions: SessionSummary[];
+export type SessionRailProjection<T extends SessionSummary = SessionSummary> = {
+  sessions: T[];
   activeRowId: string | undefined;
   /**
    * Immediate linked parent of the active session, as the revision-aware tree
    * sees it (physical parent id aliased to the family representative). Titlebar
    * crumbs share this row with the rail so rename/revise cannot disagree.
    */
-  activeParentSession: SessionSummary | undefined;
+  activeParentSession: T | undefined;
 };
 
 /**
@@ -24,25 +43,31 @@ export type SessionRailProjection = {
  * highlight the ancestor that appears as a rail row and surface the immediate
  * parent representative for breadcrumbs.
  */
-export function deriveSessionRail(
-  sessions: readonly SessionSummary[],
+export function deriveSessionRail<T extends SessionSummary>(
+  sessions: readonly T[],
   activeId: string | undefined,
-  include: (session: SessionSummary) => boolean,
-): SessionRailProjection {
+  include: (session: T) => boolean,
+): SessionRailProjection<T> {
   const tree = projectRevisionLinkedSessionTree(sessions, activeId);
+  const sourceById = new Map(sessions.map((session) => [session.id, session]));
   const parentByChildId = new Map<string, string>();
-  const sessionsById = new Map<string, SessionSummary>();
+  const sessionsById = new Map<string, T>();
   for (const root of tree.roots) {
-    sessionsById.set(root.id, root);
+    const source = sourceById.get(root.id);
+    if (source) sessionsById.set(root.id, source);
   }
   for (const [parentId, children] of tree.childrenByParentId) {
     for (const child of children) {
       parentByChildId.set(child.id, parentId);
-      sessionsById.set(child.id, child);
+      const source = sourceById.get(child.id);
+      if (source) sessionsById.set(child.id, source);
     }
   }
 
-  const railSessions = tree.roots.filter(include);
+  const railSessions = tree.roots.flatMap((session) => {
+    const source = sourceById.get(session.id);
+    return source && include(source) ? [source] : [];
+  });
   const activeParentId = activeId ? parentByChildId.get(activeId) : undefined;
   return {
     sessions: railSessions,

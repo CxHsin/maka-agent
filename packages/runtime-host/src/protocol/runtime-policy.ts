@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import {
   CONNECTION_CATALOG_MAX_CONNECTIONS,
   CONNECTION_CATALOG_MAX_ENABLED_MODEL_IDS,
@@ -152,10 +171,7 @@ export type CreateCatalogConnectionResult =
   | CatalogConnectionCommitted
   | RevisionConflict
   | { readonly kind: 'connection_exists'; readonly slug: string };
-export type UpdateCatalogConnectionResult =
-  | CatalogConnectionCommitted
-  | ConnectionStale
-  | { readonly kind: 'invalid_default_target'; readonly target: ConnectionTarget };
+export type UpdateCatalogConnectionResult = CatalogConnectionCommitted | ConnectionStale;
 export type RemoveCatalogConnectionResult = CatalogCommitted | ConnectionStale;
 export type SetDefaultConnectionTargetResult =
   | CatalogCommitted
@@ -713,9 +729,7 @@ function decodeCreateConnectionResult(value: unknown): CreateCatalogConnectionRe
 
 function decodeUpdateConnectionResult(value: unknown): UpdateCatalogConnectionResult {
   const item = requireRecord(value, 'update connection result');
-  if (item.kind === 'committed') return catalogConnectionCommitted(item);
-  if (item.kind === 'connection_stale') return connectionStale(item);
-  return invalidDefaultTarget(item, 'update connection result');
+  return item.kind === 'committed' ? catalogConnectionCommitted(item) : connectionStale(item);
 }
 
 function decodeRemoveConnectionResult(value: unknown): RemoveCatalogConnectionResult {

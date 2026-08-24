@@ -1,8 +1,26 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import type { IncomingMessage } from 'node:http';
 import { after, describe, test } from 'node:test';
 import { PROVIDER_DEFAULTS, type LlmConnection } from '@maka/core/llm-connections';
-import { openai } from '@ai-sdk/openai';
 import { anthropic } from '@ai-sdk/anthropic';
 import { generateText, isStepCount, streamText, tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
@@ -430,13 +448,23 @@ describe('models.dev provider conformance', () => {
     assert.equal(result.ok, false);
   });
 
-  test('connection probe does not revive fallback ids from an authoritative empty inventory', async () => {
+  test('connection probe tests the selected model even when the last inventory came back empty', async () => {
+    const requestedModels: string[] = [];
+    const server = await startJsonServer(async (request, response) => {
+      const body = JSON.parse(await readBody(request)) as { model: string };
+      requestedModels.push(body.model);
+      respondJson(response, 200, {});
+    });
+    // An empty response is the single most likely shape for a provider whose
+    // list endpoint is misconfigured, scoped, or simply unhelpful. Refusing to
+    // probe on that basis withholds the one check that would tell the user
+    // whether their model actually works (#1584).
     const result = await testConnection(
       {
         slug: 'openai-empty',
         name: 'OpenAI Empty',
         providerType: 'openai',
-        baseUrl: 'http://127.0.0.1:1/v1',
+        baseUrl: `${server.url}/v1`,
         defaultModel: 'gpt-5.5',
         enabled: false,
         models: [],
@@ -446,7 +474,8 @@ describe('models.dev provider conformance', () => {
       },
       'unused',
     );
-    assert.deepEqual(result, { ok: false, errorMessage: 'No model to test' });
+    assert.equal(result.ok, true);
+    assert.deepEqual(requestedModels, ['gpt-5.5']);
   });
 
   test('connection probe skips a stale default when a live inventory is available', async () => {
@@ -466,6 +495,10 @@ describe('models.dev provider conformance', () => {
       defaultModel: 'moonshot-v1-8k',
       enabledModelIds: ['moonshot-v1-8k', 'kimi-k2.6'],
       models: [{ id: 'kimi-k2.5' }, { id: 'kimi-k2.6' }],
+      // A non-empty catalog always carries its source — the canonical decoder
+      // rejects a row without one — and only `'fetched'` on a provider with a
+      // model-list endpoint makes this list an allowlist.
+      modelSource: 'fetched',
       enabled: true,
       createdAt: 1,
       updatedAt: 1,
@@ -515,7 +548,7 @@ describe('models.dev provider conformance', () => {
     );
   });
 
-  test('connection probe bounds a fallback snapshot to its non-empty inventory', async () => {
+  test('connection probe tests the model the user chose, not the snapshot beside it', async () => {
     const requestedModels: string[] = [];
     const server = await startJsonServer(async (request, response) => {
       assert.equal(request.method, 'POST');
@@ -541,8 +574,13 @@ describe('models.dev provider conformance', () => {
       'moonshot-key',
     );
 
-    assert.equal(result.modelTested, 'kimi-k2.6');
-    assert.deepEqual(requestedModels, ['kimi-k2.6']);
+    // The catalog here is the array this build shipped, not something the
+    // provider said about this account, so it cannot redirect the test onto one
+    // of its own ids. Doing so returned a verdict about a model the user never
+    // asked about — and on a provider with no model-list endpoint at all, that
+    // was the only verdict they could ever get (#1584).
+    assert.equal(result.modelTested, 'custom-moonshot-preview');
+    assert.deepEqual(requestedModels, ['custom-moonshot-preview']);
   });
 
   test('OpenAI routes gpt-5* through the Responses wire and other models through Chat Completions by declaration', async () => {
@@ -615,42 +653,19 @@ describe('models.dev provider conformance', () => {
     assert.equal(gpt4o.text, 'Chat wire.');
   });
 
-  test('DeepSeek V4 Flash uses Responses and accepts provider-native web search', async () => {
+  test('DeepSeek V4 Flash uses standard Responses function tools', async () => {
     let requestBody: Record<string, unknown> | undefined;
     let requestUrl: string | undefined;
-    let authorization: string | undefined;
     const server = await startJsonServer(async (request, response) => {
       requestUrl = request.url;
-      authorization = request.headers.authorization;
       requestBody = JSON.parse(await readBody(request)) as Record<string, unknown>;
       respondJson(response, 200, {
-        id: 'resp_deepseek_search',
+        id: 'resp_deepseek_tool',
         object: 'response',
         created_at: 1,
         status: 'completed',
         model: 'deepseek-v4-flash',
-        output: [
-          {
-            type: 'web_search_call',
-            id: 'search_deepseek',
-            status: 'completed',
-            action: { type: 'search', queries: ['latest Maka'] },
-          },
-          {
-            type: 'message',
-            id: 'msg_deepseek',
-            status: 'completed',
-            role: 'assistant',
-            content: [
-              {
-                type: 'output_text',
-                text: 'Search complete.',
-                annotations: [],
-                logprobs: [],
-              },
-            ],
-          },
-        ],
+        output: [],
         usage: { input_tokens: 8, output_tokens: 3, total_tokens: 11 },
       });
     });
@@ -671,103 +686,28 @@ describe('models.dev provider conformance', () => {
         apiKey: 'deepseek-test-key',
         modelId: connection.defaultModel,
       }),
-      prompt: 'Search.',
-      tools: { WebSearch: openai.tools.webSearch() },
+      prompt: 'Read a file.',
+      tools: {
+        Read: tool({ description: 'Read', inputSchema: z.object({ path: z.string() }) }),
+      },
       maxRetries: 0,
     });
 
     assert.equal(requestUrl, '/responses');
-    assert.equal(authorization, 'Bearer deepseek-test-key');
-    assert.deepEqual(requestBody?.tools, [{ type: 'web_search' }]);
-  });
-
-  test('DeepSeek Responses replays hosted web search as an item reference, not an orphan output', async () => {
-    let requestBody: Record<string, unknown> | undefined;
-    const server = await startJsonServer(async (request, response) => {
-      requestBody = JSON.parse(await readBody(request)) as Record<string, unknown>;
-      respondJson(response, 200, {
-        id: 'resp_deepseek_search_replay',
-        object: 'response',
-        created_at: 2,
-        status: 'completed',
-        model: 'deepseek-v4-flash',
-        output: [
-          {
-            type: 'message',
-            id: 'msg_deepseek_replay',
-            status: 'completed',
-            role: 'assistant',
-            content: [
-              {
-                type: 'output_text',
-                text: 'Replay complete.',
-                annotations: [],
-                logprobs: [],
-              },
-            ],
-          },
-        ],
-        usage: { input_tokens: 8, output_tokens: 3, total_tokens: 11 },
-      });
-    });
-    const connection: LlmConnection = {
-      slug: 'deepseek-search-replay',
-      name: 'DeepSeek Search Replay',
-      providerType: 'deepseek',
-      baseUrl: server.url,
-      defaultModel: 'deepseek-v4-flash',
-      enabled: true,
-      createdAt: 1,
-      updatedAt: 1,
-    };
-    const messages: ModelMessage[] = [
-      { role: 'user', content: 'Search.' },
+    assert.deepEqual(requestBody?.tools, [
       {
-        role: 'assistant',
-        content: [
-          {
-            type: 'tool-call',
-            toolCallId: 'search_deepseek',
-            toolName: 'WebSearch',
-            input: {},
-            providerExecuted: true,
-          },
-          {
-            type: 'tool-result',
-            toolCallId: 'search_deepseek',
-            toolName: 'WebSearch',
-            output: {
-              type: 'json',
-              value: { action: { type: 'search', queries: ['latest Maka'] } },
-            },
-          },
-        ],
+        type: 'function',
+        name: 'Read',
+        description: 'Read',
+        parameters: {
+          $schema: 'http://json-schema.org/draft-07/schema#',
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+          additionalProperties: false,
+        },
       },
-      { role: 'user', content: 'Continue without searching.' },
-    ];
-
-    await generateText({
-      model: getAIModel({
-        connection,
-        apiKey: 'deepseek-test-key',
-        modelId: connection.defaultModel,
-      }),
-      messages,
-      tools: { WebSearch: openai.tools.webSearch() },
-      maxRetries: 0,
-    });
-
-    const input = requestBody?.input as Array<Record<string, unknown>> | undefined;
-    assert.equal(
-      input?.some((item) => item.type === 'function_call_output'),
-      false,
-      JSON.stringify(input),
-    );
-    assert.equal(
-      input?.some((item) => item.type === 'item_reference' && item.id === 'search_deepseek'),
-      true,
-      JSON.stringify(input),
-    );
+    ]);
   });
 
   test('OpenCode Zen routes GPT through Responses and preserves tool results across both stages', async () => {
@@ -930,6 +870,46 @@ describe('models.dev provider conformance', () => {
     assert.equal(body?.store, false);
   });
 
+  test('an Ark plan probe tests the model the plan serves, not the shipped snapshot', async () => {
+    // The end-to-end shape of #1584. `volcengine-agent-plan` cannot enumerate
+    // an account — its discovery is a control-plane API the plan key does not
+    // reach — so its run replays `fallbackModels` and honestly records
+    // `modelSource: 'fetched'`. Reading that flag alone made every gate treat
+    // a release snapshot as provider evidence, and a user whose plan serves
+    // `deepseek-v4-pro-beta` could only ever get a verdict about a doubao
+    // model they never chose.
+    let probedModel: string | undefined;
+    const server = await startJsonServer(async (request, response) => {
+      assert.equal(request.url, '/api/plan/v3/responses');
+      probedModel = (JSON.parse(await readBody(request)) as { model: string }).model;
+      respondJson(response, 200, {});
+    });
+    const result = await testConnection(
+      {
+        slug: 'volcengine-agent-plan',
+        name: 'Volcengine Ark Agent Plan (China)',
+        providerType: 'volcengine-agent-plan',
+        baseUrl: `${server.url}/api/plan/v3`,
+        defaultModel: 'deepseek-v4-pro-beta',
+        enabledModelIds: ['deepseek-v4-pro-beta'],
+        models: PROVIDER_DEFAULTS['volcengine-agent-plan'].fallbackModels.map((id) => ({ id })),
+        modelSource: 'fetched',
+        enabled: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      'ark-plan-token',
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.modelTested, 'deepseek-v4-pro-beta');
+    assert.equal(probedModel, 'deepseek-v4-pro-beta');
+    assert.ok(
+      !PROVIDER_DEFAULTS['volcengine-agent-plan'].fallbackModels.includes('deepseek-v4-pro-beta'),
+      'the fixture stops proving anything once the snapshot ships this id',
+    );
+  });
+
   test('DeepSeek V4 Pro connection probes use its default Responses wire', async () => {
     let body: Record<string, unknown> | undefined;
     const server = await startJsonServer(async (request, response) => {
@@ -952,6 +932,28 @@ describe('models.dev provider conformance', () => {
     assert.equal((await testConnection(connection, 'deepseek-token')).ok, true);
     assert.equal(body?.model, 'deepseek-v4-pro');
     assert.equal(body?.store, false);
+  });
+
+  test('an Open Responses probe normalizes a base URL that already names the endpoint', async () => {
+    let probedPath: string | undefined;
+    const server = await startJsonServer(async (request, response) => {
+      assert.equal(request.method, 'POST');
+      probedPath = request.url;
+      respondJson(response, 200, {});
+    });
+    const connection: LlmConnection = {
+      slug: 'deepseek',
+      name: 'DeepSeek',
+      providerType: 'deepseek',
+      baseUrl: `${server.url}/v1/responses`,
+      defaultModel: 'deepseek-v4-pro',
+      enabled: true,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    assert.equal((await testConnection(connection, 'deepseek-token')).ok, true);
+    assert.equal(probedPath, '/v1/responses');
   });
 
   test('Ollama Cloud requests usage in streamed chat completions', async () => {

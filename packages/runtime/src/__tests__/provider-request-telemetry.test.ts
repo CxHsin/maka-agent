@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type { ModelCallCommit } from '@maka/core/agent-run';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -916,6 +935,8 @@ describe('canonical model-call accounting', () => {
     /** Models a deployment with request capture switched off. */
     withoutCapture?: boolean;
     recordAttempt?: (attempt: telemetry.ProviderRequestAttemptRecord) => void;
+    callKind?: ModelCallAttempt['callKind'];
+    historyCompactRoute?: ModelCallAttempt['historyCompactRoute'];
   }): telemetry.ProviderRequestTracker {
     let n = 0;
     return new telemetry.ProviderRequestTracker({
@@ -930,7 +951,10 @@ describe('canonical model-call accounting', () => {
       accounting: {
         sessionId: 'session-1',
         resolveRunId: overrides.resolveRunId ?? (() => 'run-1'),
-        callKind: 'main',
+        callKind: overrides.callKind ?? 'main',
+        ...(overrides.historyCompactRoute
+          ? { historyCompactRoute: overrides.historyCompactRoute }
+          : {}),
         record: overrides.record,
         ...(overrides.resolveCost ? { resolveCost: overrides.resolveCost } : {}),
         ...(overrides.assertReady ? { assertReady: overrides.assertReady } : {}),
@@ -967,6 +991,58 @@ describe('canonical model-call accounting', () => {
     assert.equal(attempt.pricingRevision, 4);
     // Retries count from zero on the canonical record.
     assert.equal(attempt.attempt, 0);
+  });
+
+  test('persists a structured failure fingerprint and the selected compaction route', async () => {
+    const recorded: ModelCallAttempt[] = [];
+    const diagnosticAttempts: telemetry.ProviderRequestAttemptRecord[] = [];
+    const tracker = accountingTracker({
+      callKind: 'history_compact',
+      historyCompactRoute: 'provider_native',
+      record: ({ attempt }) => {
+        recorded.push(attempt);
+      },
+      recordAttempt: (attempt) => {
+        diagnosticAttempts.push(attempt);
+      },
+    });
+    const providerError = Object.assign(new Error('provider payload must not persist'), {
+      name: 'AI_APICallError',
+      statusCode: 429,
+      data: {
+        error: { code: 'rate_limit_exceeded', message: 'private response body' },
+      },
+      responseHeaders: { 'x-request-id': 'req-compact-1' },
+      requestBodyValues: { input: 'private request body' },
+    });
+
+    await assert.rejects(
+      tracker.trackGenerate({
+        providerId: 'openai.responses',
+        modelId: 'gpt-codex-test',
+        params: preparedParams('private prompt'),
+        doGenerate: async () => {
+          throw providerError;
+        },
+      }),
+      (error) => error === providerError,
+    );
+
+    const attempt = decodeModelCallAttempt(recorded[0]);
+    assert.equal(attempt.historyCompactRoute, 'provider_native');
+    assert.equal(attempt.errorClass, 'RateLimit');
+    assert.equal(attempt.httpStatus, 429);
+    assert.equal(attempt.providerCode, 'rate_limit_exceeded');
+    assert.equal(attempt.providerRequestId, 'req-compact-1');
+    assert.equal(attempt.retryable, false);
+    assert.deepEqual(diagnosticAttempts[0]?.failure, {
+      errorClass: 'RateLimit',
+      httpStatus: 429,
+      providerCode: 'rate_limit_exceeded',
+      providerRequestId: 'req-compact-1',
+      retryable: false,
+    });
+    assert.doesNotMatch(JSON.stringify(attempt), /private|prompt|response body/i);
   });
 
   test('a call the provider reported no usage for records usageBasis missing', async () => {

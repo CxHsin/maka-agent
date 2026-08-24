@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 const SENSITIVE_KEY_SUFFIXES = new Set([
   'auth',
   'authorization',
@@ -156,7 +175,12 @@ function redactUrlQuerySecrets(value: string): string {
   });
 }
 
-function isSensitiveKey(key: string): boolean {
+/** Whether a key NAME marks its value as credential material (TOKEN,
+ * API_KEY, clientSecret, …). Exported for callers that must decide whether
+ * a keyed value is a secret — e.g. which MCP stdio env values are masked at
+ * the IPC boundary — so the heuristic cannot drift from the one redaction
+ * itself applies. */
+export function isSensitiveKey(key: string): boolean {
   const segments = sensitiveKeySegments(key);
   const suffix = segments.at(-1);
   if (!suffix) return false;

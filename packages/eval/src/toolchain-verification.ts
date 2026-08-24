@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
@@ -10,7 +29,8 @@ export type ExternalProfile =
   | 'opencode'
   | 'kimi-code'
   | 'zcode'
-  | 'pi';
+  | 'pi'
+  | 'deepseek-harness';
 
 export interface ToolchainIdentity {
   readonly root: string;
@@ -56,21 +76,38 @@ export const TOOLCHAIN_IDENTITIES: Readonly<Record<ExternalProfile, ToolchainIde
     version: '0.84.1',
     fingerprint: 'sha256:995a47ce9e2a5cd38865d22c932775b86484396d61889968310246cf7e82e3ec',
   },
+  'deepseek-harness': {
+    root: '/opt/maka-deepseek-harness-toolchain',
+    version: '0.1.0-rc.6',
+    fingerprint: 'sha256:a0882b448718ddfb7b64e33a12369c92b0064baf8388fe08a8ff64fe3dd98896',
+  },
 };
+
+// The identity table is the profile registry: a profile without a pinned
+// toolchain identity cannot be admitted, so nothing may recognize a name the
+// table does not carry.
+export function isExternalProfile(value: string | undefined): value is ExternalProfile {
+  return value !== undefined && Object.hasOwn(TOOLCHAIN_IDENTITIES, value);
+}
 
 export async function verifyToolchainDirectory(
   profile: ExternalProfile,
   root: string,
+  // What the tree has to be. The profile only names it; the identity itself is
+  // the thing being checked, and a caller that has one already need not go
+  // through the table to say so.
+  expected: ToolchainIdentity = TOOLCHAIN_IDENTITIES[profile],
 ): Promise<ToolchainIdentity> {
-  const expected = TOOLCHAIN_IDENTITIES[profile];
   const resolvedRoot = resolve(root);
-  const manifest = JSON.parse(await readFile(join(resolvedRoot, 'manifest.json'), 'utf8')) as {
-    fingerprint?: unknown;
-  };
-  if (manifest.fingerprint !== expected.fingerprint) {
+  // The pinned fingerprint is the digest of the checksum manifest, so it is
+  // computed here from the manifest on disk rather than read out of the tree.
+  // Taking the tree's own `manifest.json` value would only compare the pin
+  // against whatever the directory claims to be, which any directory can claim.
+  const checksums = await readFile(join(resolvedRoot, 'checksums.sha256'), 'utf8');
+  const fingerprint = `sha256:${createHash('sha256').update(checksums).digest('hex')}`;
+  if (fingerprint !== expected.fingerprint) {
     throw new Error(`${profile} toolchain fingerprint mismatch`);
   }
-  const checksums = await readFile(join(resolvedRoot, 'checksums.sha256'), 'utf8');
   for (const line of checksums.split('\n')) {
     if (!line.trim()) continue;
     const match = /^([a-f0-9]{64})\s+(.+)$/u.exec(line);

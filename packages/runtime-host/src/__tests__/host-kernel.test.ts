@@ -1,3 +1,23 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { RuntimeHostProtocolError } from '../protocol/errors.js';
 import { defineInteractiveRuntimeHostComposition } from '../server/host-composition.js';
 import assert from 'node:assert/strict';
 import { execFile, fork, type ChildProcess } from 'node:child_process';
@@ -35,6 +55,10 @@ import {
   type DetachedCandidateInput,
 } from '../client/launcher.js';
 import { readHostRegistration } from '../control/registration.js';
+import {
+  readCandidateStartupDiagnostic,
+  writeCandidateStartupDiagnostic,
+} from '../control/startup-diagnostic.js';
 import { removePosixEndpointDirectories } from './fixtures/endpoint-hygiene.js';
 import {
   decodeHostFrame,
@@ -42,25 +66,25 @@ import {
   RUNTIME_HOST_COMPATIBILITY_EPOCH,
   RUNTIME_HOST_MAX_MESSAGE_BYTES,
   RUNTIME_HOST_PROTOCOL_VERSION,
-  RuntimeHostProtocolError,
+  RUNTIME_HOST_REGISTRATION_SCHEMA_VERSION,
   type ClientFrame,
-  type ClientSurface,
 } from '../protocol/index.js';
 import {
   RuntimeHostKernel,
   RuntimeHostProcessTerminationRequiredError,
-  startInteractiveRuntimeHostCandidate,
-  type InteractiveRuntimeHostCandidateOptions,
-  type InteractiveRuntimeHostCandidateResult,
   type RuntimeHostComposition,
   type RuntimeHostCompositionContext,
   type RuntimeHostCompositionFactory,
-  type RuntimeHostCompositionSource,
   type RuntimeHostKernelOptions,
-} from '../server/index.js';
+} from '../server/host-kernel.js';
+import {
+  startInteractiveRuntimeHostCandidate,
+  type InteractiveRuntimeHostCandidateOptions,
+  type InteractiveRuntimeHostCandidateResult,
+} from '../server/candidate.js';
+import type { RuntimeHostCompositionSource } from '../server/host-composition.js';
 import { createUnavailableDomainOperationHandlers } from '../server/operation-dispatcher.js';
-import { HostConfigurationChangeService } from '../server/configuration-change-service.js';
-import { HostSessionCatalogChangeService } from '../server/session-catalog-change-service.js';
+import { HostChangeFeed } from '../server/host-change-feed.js';
 import { FramedTransport, RuntimeHostTransportError } from '../transport/framed-transport.js';
 import {
   prepareStorageRootControlDirectory,
@@ -79,6 +103,8 @@ const CURRENT_PROTOCOL = {
   max: RUNTIME_HOST_PROTOCOL_VERSION,
 } as const;
 const LEGACY_PROTOCOL = { min: 1, max: 1 } as const;
+const STARTUP_ATTEMPT_A = '00000000-0000-4000-8000-000000000001';
+const STARTUP_ATTEMPT_B = '00000000-0000-4000-8000-000000000002';
 const KERNEL_CANDIDATE_ENTRYPOINT = new URL('./fixtures/kernel-candidate.js', import.meta.url);
 const KERNEL_COMPOSITION = defineInteractiveRuntimeHostComposition(async () => ({
   handlers: createUnavailableDomainOperationHandlers(),
@@ -111,13 +137,31 @@ export type GenericRuntimeHostCompositionSource = RuntimeHostCompositionSource<'
 // @ts-expect-error Runtime Host kernel options are concretely interactive.
 export type GenericRuntimeHostKernelOptions = RuntimeHostKernelOptions<'interactive'>;
 
+function diagnosticRegistration(state: 'ready' | 'draining') {
+  return {
+    kind: 'maka-runtime-host',
+    schemaVersion: RUNTIME_HOST_REGISTRATION_SCHEMA_VERSION,
+    rootId: '00000000-0000-4000-8000-000000000003',
+    hostEpoch: '00000000-0000-4000-8000-000000000004',
+    endpoint: '\\\\.\\pipe\\maka-runtime-host-diagnostic',
+    protocolMin: CURRENT_PROTOCOL.min,
+    protocolMax: CURRENT_PROTOCOL.max,
+    compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
+    compositionId: KERNEL_COMPOSITION.descriptor.id,
+    compositionRevision: KERNEL_COMPOSITION.descriptor.revision,
+    lifecycleMode: 'ephemeral',
+    state,
+    pid: 4242,
+    createdAt: '2026-08-22T00:00:00.000Z',
+  } as const;
+}
+
 describe('non-serving Runtime Host kernel', () => {
   test('reports a recovery failure when the election produces no ready Host', async () => {
     await withHostPaths(async (paths) => {
       const result = await connectOrSpawnRuntimeHostWithDependencies(
         {
           rootPath: paths.root,
-          surface: 'desktop',
           protocol: CURRENT_PROTOCOL,
           compositionId: KERNEL_COMPOSITION.descriptor.id,
           candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -145,7 +189,6 @@ describe('non-serving Runtime Host kernel', () => {
       const result = await connectOrSpawnRuntimeHostWithDependencies(
         {
           rootPath: paths.root,
-          surface: 'desktop',
           protocol: CURRENT_PROTOCOL,
           compositionId: KERNEL_COMPOSITION.descriptor.id,
           candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -160,6 +203,7 @@ describe('non-serving Runtime Host kernel', () => {
                 pid: process.pid,
                 startupFailure: Promise.resolve({
                   reason: 'operational_state_migration_blocked' as const,
+                  startupAttemptId: STARTUP_ATTEMPT_A,
                 }),
               }),
             };
@@ -177,7 +221,6 @@ describe('non-serving Runtime Host kernel', () => {
       const result = await connectOrSpawnRuntimeHostWithDependencies(
         {
           rootPath: paths.root,
-          surface: 'desktop',
           protocol: CURRENT_PROTOCOL,
           compositionId: KERNEL_COMPOSITION.descriptor.id,
           candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -194,7 +237,398 @@ describe('non-serving Runtime Host kernel', () => {
         },
       );
 
-      assert.deepEqual(result, { kind: 'failed', reason: 'startup_timeout' });
+      assert.equal(result.kind, 'failed');
+      if (result.kind !== 'failed') return;
+      assert.equal(result.reason, 'startup_timeout');
+      assert.ok(result.diagnostic);
+      assert.equal(result.diagnostic.candidateLaunches, 1);
+    });
+  });
+
+  test('attributes an unresponsive endpoint to the exact running Candidate attempt', async () => {
+    await withHostPaths(async (paths) => {
+      let connectCalls = 0;
+      const result = await connectOrSpawnRuntimeHostWithDependencies(
+        {
+          rootPath: paths.root,
+          protocol: CURRENT_PROTOCOL,
+          compositionId: KERNEL_COMPOSITION.descriptor.id,
+          candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+          electionDeadlineMs: 500,
+        },
+        {
+          random: () => 0.5,
+          connectHost: async () => {
+            connectCalls += 1;
+            return connectCalls === 1
+              ? {
+                  kind: 'unavailable' as const,
+                  reason: 'not_registered' as const,
+                  endpointConnected: false,
+                }
+              : { kind: 'election_deadline_elapsed' as const, endpointConnected: true };
+          },
+          launchCandidate: () => ({
+            spawned: Promise.resolve({
+              pid: 4242,
+              startupAttemptId: STARTUP_ATTEMPT_A,
+              exited: new Promise<never>(() => undefined),
+              startupFailure: new Promise<never>(() => undefined),
+            }),
+          }),
+        },
+      );
+
+      assert.equal(result.kind, 'failed');
+      if (result.kind !== 'failed') return;
+      assert.equal(result.reason, 'host_unresponsive');
+      assert.ok(result.diagnostic);
+      assert.equal(result.diagnostic.candidateLaunches, 1);
+      assert.equal(result.diagnostic.sawEndpointConnected, true);
+      assert.deepEqual(result.diagnostic.observations, {
+        totalResults: 2,
+        notRegistered: 1,
+        connectFailed: 0,
+        handshakeFailed: 0,
+        connected: 0,
+        readyWaitFailed: 0,
+        deadlineElapsed: 1,
+        otherResults: 0,
+      });
+      assert.deepEqual(result.diagnostic.latestCandidate, {
+        pid: 4242,
+        startupAttemptId: STARTUP_ATTEMPT_A,
+        state: 'running',
+      });
+    });
+  });
+
+  test('keeps diagnostic observation buckets reconcilable for unclassified results', async () => {
+    await withHostPaths(async (paths) => {
+      let connectCalls = 0;
+      const result = await connectOrSpawnRuntimeHostWithDependencies(
+        {
+          rootPath: paths.root,
+          protocol: CURRENT_PROTOCOL,
+          compositionId: KERNEL_COMPOSITION.descriptor.id,
+          candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+          electionDeadlineMs: 500,
+        },
+        {
+          random: () => 0,
+          connectHost: async () => {
+            connectCalls += 1;
+            if (connectCalls === 1) {
+              return {
+                kind: 'draining' as const,
+                registration: diagnosticRegistration('draining'),
+              };
+            }
+            if (connectCalls === 2) {
+              return {
+                kind: 'unavailable' as const,
+                reason: 'invalid_registration' as const,
+                endpointConnected: false,
+              };
+            }
+            return { kind: 'election_deadline_elapsed' as const, endpointConnected: true };
+          },
+          launchCandidate: () => ({ spawned: Promise.resolve({ pid: process.pid }) }),
+        },
+      );
+
+      assert.equal(result.kind, 'failed');
+      if (result.kind !== 'failed') return;
+      assert.equal(result.reason, 'host_unresponsive');
+      assert.deepEqual(result.diagnostic?.observations, {
+        totalResults: 3,
+        notRegistered: 0,
+        connectFailed: 0,
+        handshakeFailed: 0,
+        connected: 0,
+        readyWaitFailed: 0,
+        deadlineElapsed: 1,
+        otherResults: 2,
+      });
+      const observations = result.diagnostic?.observations;
+      assert.equal(
+        observations?.totalResults,
+        (observations?.notRegistered ?? 0) +
+          (observations?.connectFailed ?? 0) +
+          (observations?.handshakeFailed ?? 0) +
+          (observations?.connected ?? 0) +
+          (observations?.deadlineElapsed ?? 0) +
+          (observations?.otherResults ?? 0),
+      );
+    });
+  });
+
+  for (const handshakeResult of [
+    {
+      name: 'draining',
+      result: {
+        kind: 'draining' as const,
+        registration: diagnosticRegistration('draining'),
+      },
+    },
+    {
+      name: 'non-blocking incompatible',
+      result: {
+        kind: 'incompatible' as const,
+        registration: diagnosticRegistration('ready'),
+        handshake: {
+          kind: 'incompatible' as const,
+          hostEpoch: '00000000-0000-4000-8000-000000000004',
+          protocolMin: CURRENT_PROTOCOL.min,
+          protocolMax: CURRENT_PROTOCOL.max,
+          compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
+          compositionId: KERNEL_COMPOSITION.descriptor.id,
+          compositionRevision: KERNEL_COMPOSITION.descriptor.revision,
+          state: 'ready' as const,
+          replacement: 'wait_for_idle_exit' as const,
+        },
+      },
+    },
+    {
+      name: 'registration root mismatch',
+      result: {
+        kind: 'unavailable' as const,
+        reason: 'root_mismatch' as const,
+        endpointConnected: false,
+        registration: diagnosticRegistration('ready'),
+      },
+      expectedEndpointConnected: false,
+    },
+    {
+      name: 'handshake root mismatch',
+      result: {
+        kind: 'unavailable' as const,
+        reason: 'root_mismatch' as const,
+        endpointConnected: true,
+        registration: diagnosticRegistration('ready'),
+      },
+      expectedEndpointConnected: true,
+    },
+    {
+      name: 'epoch mismatch',
+      result: {
+        kind: 'unavailable' as const,
+        reason: 'epoch_mismatch' as const,
+        endpointConnected: true,
+        registration: diagnosticRegistration('ready'),
+      },
+      expectedEndpointConnected: true,
+    },
+    {
+      name: 'composition mismatch',
+      result: {
+        kind: 'unavailable' as const,
+        reason: 'composition_mismatch' as const,
+        endpointConnected: true,
+        registration: diagnosticRegistration('ready'),
+      },
+      expectedEndpointConnected: true,
+    },
+  ]) {
+    test(`records ${handshakeResult.name} endpoint evidence exactly`, async () => {
+      await withHostPaths(async (paths) => {
+        const launch = {
+          spawned: Promise.resolve({
+            pid: 4242,
+            startupAttemptId: STARTUP_ATTEMPT_A,
+            exited: new Promise<never>(() => undefined),
+            startupFailure: new Promise<never>(() => undefined),
+          }),
+        };
+        const result = await connectOrSpawnRuntimeHostWithDependencies(
+          {
+            rootPath: paths.root,
+            protocol: CURRENT_PROTOCOL,
+            compositionId: KERNEL_COMPOSITION.descriptor.id,
+            candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+            electionDeadlineMs: 300,
+          },
+          {
+            random: () => 0,
+            connectHost: async () => handshakeResult.result,
+            launchCandidate: () => launch,
+          },
+        );
+
+        assert.equal(result.kind, 'failed');
+        if (result.kind !== 'failed') return;
+        assert.equal(result.reason, 'startup_timeout');
+        assert.equal(
+          result.diagnostic?.sawEndpointConnected,
+          'expectedEndpointConnected' in handshakeResult
+            ? handshakeResult.expectedEndpointConnected
+            : true,
+        );
+      });
+    });
+  }
+
+  test('keeps one live Candidate in flight for the whole election', async () => {
+    await withHostPaths(async (paths) => {
+      let launches = 0;
+      const result = await connectOrSpawnRuntimeHostWithDependencies(
+        {
+          rootPath: paths.root,
+          protocol: CURRENT_PROTOCOL,
+          compositionId: KERNEL_COMPOSITION.descriptor.id,
+          candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+          electionDeadlineMs: 500,
+        },
+        {
+          random: () => 0,
+          launchCandidate: () => {
+            launches += 1;
+            return {
+              spawned: Promise.resolve({
+                pid: 4242,
+                exited: new Promise<never>(() => undefined),
+              }),
+            };
+          },
+        },
+      );
+
+      assert.equal(result.kind, 'failed');
+      if (result.kind !== 'failed') return;
+      assert.equal(result.reason, 'startup_timeout');
+      assert.equal(result.diagnostic?.candidateLaunches, 1);
+      assert.equal(launches, 1);
+    });
+  });
+
+  test('launches one successor after the exact in-flight Candidate exits', async () => {
+    await withHostPaths(async (paths) => {
+      let launches = 0;
+      const result = await connectOrSpawnRuntimeHostWithDependencies(
+        {
+          rootPath: paths.root,
+          protocol: CURRENT_PROTOCOL,
+          compositionId: KERNEL_COMPOSITION.descriptor.id,
+          candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+          electionDeadlineMs: 700,
+        },
+        {
+          random: () => 0,
+          launchCandidate: () => {
+            launches += 1;
+            return {
+              spawned: Promise.resolve({
+                pid: 4241 + launches,
+                exited:
+                  launches === 1
+                    ? new Promise((resolve) => {
+                        setTimeout(
+                          () =>
+                            resolve({
+                              code: 2,
+                              signal: null,
+                              stderr: '',
+                              stderrTruncated: false,
+                            }),
+                          25,
+                        );
+                      })
+                    : new Promise<never>(() => undefined),
+              }),
+            };
+          },
+        },
+      );
+
+      assert.equal(result.kind, 'failed');
+      if (result.kind !== 'failed') return;
+      assert.equal(result.reason, 'startup_timeout');
+      assert.equal(result.diagnostic?.candidateLaunches, 2);
+      assert.equal(launches, 2);
+    });
+  });
+
+  test('retries after a Candidate spawn is rejected before an attempt exists', async () => {
+    await withHostPaths(async (paths) => {
+      let launches = 0;
+      const result = await connectOrSpawnRuntimeHostWithDependencies(
+        {
+          rootPath: paths.root,
+          protocol: CURRENT_PROTOCOL,
+          compositionId: KERNEL_COMPOSITION.descriptor.id,
+          candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+          electionDeadlineMs: 700,
+        },
+        {
+          random: () => 0,
+          launchCandidate: () => {
+            launches += 1;
+            return launches === 1
+              ? { spawned: Promise.reject(new Error('spawn refused')) }
+              : {
+                  spawned: Promise.resolve({
+                    pid: 4242,
+                    exited: new Promise<never>(() => undefined),
+                  }),
+                };
+          },
+        },
+      );
+
+      assert.equal(result.kind, 'failed');
+      if (result.kind !== 'failed') return;
+      assert.equal(result.reason, 'startup_timeout');
+      assert.equal(result.diagnostic?.candidateLaunches, 2);
+      assert.equal(launches, 2);
+    });
+  });
+
+  test('publishes the diagnostic from the Candidate failure selected by the election', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      let launches = 0;
+      const result = await connectOrSpawnRuntimeHostWithDependencies(
+        {
+          rootPath: paths.root,
+          protocol: CURRENT_PROTOCOL,
+          compositionId: KERNEL_COMPOSITION.descriptor.id,
+          candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
+          electionDeadlineMs: 800,
+        },
+        {
+          random: () => 0.5,
+          launchCandidate: () => {
+            launches += 1;
+            if (launches > 2) return { spawned: new Promise(() => undefined) };
+            const startupAttemptId = launches === 1 ? STARTUP_ATTEMPT_A : STARTUP_ATTEMPT_B;
+            const reason =
+              launches === 1
+                ? ('local_ipc_security_failed' as const)
+                : ('internal_startup_failure' as const);
+            return {
+              spawned: writeCandidateStartupDiagnostic({
+                rootId: capability.rootId,
+                startupAttemptId,
+                failure: { reason },
+                error: new Error(`Candidate ${launches} failed`),
+              }).then(() => ({
+                pid: process.pid,
+                startupFailure: Promise.resolve({ reason, startupAttemptId }),
+              })),
+            };
+          },
+        },
+      );
+
+      assert.deepEqual(result, { kind: 'failed', reason: 'local_ipc_security_failed' });
+      assert.equal(
+        (await readCandidateStartupDiagnostic(capability.rootId))?.startupAttemptId,
+        STARTUP_ATTEMPT_A,
+      );
+      assert.equal(
+        await readCandidateStartupDiagnostic(capability.rootId, STARTUP_ATTEMPT_B),
+        undefined,
+      );
     });
   });
 
@@ -202,12 +636,14 @@ describe('non-serving Runtime Host kernel', () => {
     await withHostPaths(async (paths) => {
       let launches = 0;
       let reportBlocker:
-        | ((failure: { reason: 'operational_state_migration_blocked' }) => void)
+        | ((failure: {
+            reason: 'operational_state_migration_blocked';
+            startupAttemptId: string;
+          }) => void)
         | undefined;
       const result = await connectOrSpawnRuntimeHostWithDependencies(
         {
           rootPath: paths.root,
-          surface: 'desktop',
           protocol: CURRENT_PROTOCOL,
           compositionId: KERNEL_COMPOSITION.descriptor.id,
           candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -221,13 +657,22 @@ describe('non-serving Runtime Host kernel', () => {
               return {
                 spawned: Promise.resolve({
                   pid: process.pid,
+                  exited: Promise.resolve({
+                    code: 2,
+                    signal: null,
+                    stderr: '',
+                    stderrTruncated: false,
+                  }),
                   startupFailure: new Promise((resolve) => {
                     reportBlocker = resolve;
                   }),
                 }),
               };
             }
-            reportBlocker?.({ reason: 'operational_state_migration_blocked' });
+            reportBlocker?.({
+              reason: 'operational_state_migration_blocked',
+              startupAttemptId: STARTUP_ATTEMPT_A,
+            });
             return launchTestRuntimeHostCandidate(paths, {
               ...input,
             });
@@ -237,7 +682,10 @@ describe('non-serving Runtime Host kernel', () => {
 
       assert.equal(result.kind, 'connected');
       assert.ok(launches >= 2);
-      if (result.kind === 'connected') await result.connection.close();
+      if (result.kind === 'connected') {
+        assert.equal(result.spawnedProcess?.pid, result.registration.pid);
+        await result.connection.close();
+      }
     });
   });
 
@@ -254,7 +702,6 @@ describe('non-serving Runtime Host kernel', () => {
       const result = await connectOrSpawnRuntimeHostWithDependencies(
         {
           rootPath: paths.root,
-          surface: 'inspect',
           protocol: CURRENT_PROTOCOL,
           compositionId: KERNEL_COMPOSITION.descriptor.id,
           candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -295,27 +742,17 @@ describe('non-serving Runtime Host kernel', () => {
 
       const connected = await connectRuntimeHost({
         rootPath: paths.root,
-        surface: 'desktop',
         protocol: CURRENT_PROTOCOL,
         generation: 'desktop-current',
       });
       assert.equal(connected.kind, 'connected');
       if (connected.kind !== 'connected') return;
       assert.equal(connected.registration.lifecycleMode, 'service');
-      await assert.rejects(
-        connected.connection.request('host.upgrade.prepare', {
-          expectedHostEpoch: connected.connection.hostEpoch,
-          allowInterruptActiveTasks: false,
-        }),
-        (error: unknown) =>
-          error instanceof RuntimeHostOperationError && error.code === 'operation_unavailable',
-      );
       await connected.connection.close();
 
       const incompatible = await connectOrSpawnRuntimeHost({
         ...paths,
         rootPath: paths.root,
-        surface: 'tui',
         protocol: LEGACY_PROTOCOL,
         compositionId: KERNEL_COMPOSITION.descriptor.id,
         candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -442,7 +879,6 @@ describe('non-serving Runtime Host kernel', () => {
         await writeClientFrame(transport, {
           kind: 'hello',
           clientInstanceId: 'lifecycle-test',
-          surface: 'inspect',
           protocolMin: CURRENT_PROTOCOL.min,
           protocolMax: CURRENT_PROTOCOL.max,
           compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
@@ -558,7 +994,7 @@ describe('non-serving Runtime Host kernel', () => {
           return testComposition();
         }),
       });
-      const connected = await retryConnect(paths, CURRENT_PROTOCOL, 'desktop');
+      const connected = await retryConnect(paths, CURRENT_PROTOCOL);
       assert.equal(connected.kind, 'connected');
       if (connected.kind !== 'connected') return;
 
@@ -598,6 +1034,35 @@ describe('non-serving Runtime Host kernel', () => {
     });
   });
 
+  test('local owner can prepare a managed service Host for retirement', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const owner = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(owner);
+      const host = await RuntimeHostKernel.start({
+        owner,
+        lifecycleMode: 'service',
+        composition: KERNEL_COMPOSITION,
+      });
+      const connected = await retryConnect(paths, CURRENT_PROTOCOL);
+      assert.equal(connected.kind, 'connected');
+      if (connected.kind !== 'connected') return;
+
+      assert.deepEqual(
+        await connected.connection.request('host.upgrade.prepare', {
+          expectedHostEpoch: host.hostEpoch,
+          allowInterruptActiveTasks: false,
+        }),
+        { kind: 'prepared', pid: process.pid },
+      );
+      await host.closed;
+      assert.equal(host.shutdownReason, 'retirement');
+      const successor = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(successor);
+      await successor?.close();
+    });
+  });
+
   test('an explicit generation takeover drains only the exact unobserved ephemeral Host', async () => {
     await withHostPaths(async (paths) => {
       const candidate = await startTestRuntimeHostCandidate(paths, {
@@ -610,7 +1075,6 @@ describe('non-serving Runtime Host kernel', () => {
 
       const observer = await connectRuntimeHost({
         rootPath: paths.root,
-        surface: 'tui',
         protocol: CURRENT_PROTOCOL,
       });
       assert.equal(observer.kind, 'connected');
@@ -618,7 +1082,6 @@ describe('non-serving Runtime Host kernel', () => {
 
       const blocked = await connectRuntimeHost({
         rootPath: paths.root,
-        surface: 'desktop',
         protocol: CURRENT_PROTOCOL,
         generation: 'desktop-new',
         takeoverHostEpoch: candidate.host.hostEpoch,
@@ -635,7 +1098,6 @@ describe('non-serving Runtime Host kernel', () => {
       await observer.connection.close();
       const restartable = await connectRuntimeHost({
         rootPath: paths.root,
-        surface: 'desktop',
         protocol: CURRENT_PROTOCOL,
         generation: 'desktop-new',
       });
@@ -645,7 +1107,6 @@ describe('non-serving Runtime Host kernel', () => {
       }
       const takeover = await connectRuntimeHost({
         rootPath: paths.root,
-        surface: 'desktop',
         protocol: CURRENT_PROTOCOL,
         generation: 'desktop-new',
         takeoverHostEpoch: candidate.host.hostEpoch,
@@ -662,7 +1123,6 @@ describe('non-serving Runtime Host kernel', () => {
       if (replacement.kind !== 'winner') return;
       const attached = await connectRuntimeHost({
         rootPath: paths.root,
-        surface: 'desktop',
         protocol: CURRENT_PROTOCOL,
         generation: 'desktop-new',
       });
@@ -711,6 +1171,104 @@ describe('non-serving Runtime Host kernel', () => {
       } finally {
         await owner.close();
       }
+    });
+  });
+
+  test('never-connected ephemeral candidate drains after the initial connection timeout despite a boot residency', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const owner = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(owner);
+      let releaseBootWork: (() => void) | undefined;
+      const host = await RuntimeHostKernel.start({
+        owner,
+        initialConnectionTimeoutMs: 100,
+        idleGraceMs: 10_000,
+        composition: defineInteractiveRuntimeHostComposition(async (context) => {
+          const residency = context.acquireResidency('boot-work');
+          releaseBootWork = () => residency.release();
+          return testComposition({
+            beginDrain: () => releaseBootWork?.(),
+          });
+        }),
+      });
+
+      await withTimeout(
+        host.closed,
+        2_000,
+        'ephemeral candidate outlived its initial connection timeout',
+      );
+      const successor = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(successor);
+      await successor.close();
+    });
+  });
+
+  test('never-connected ephemeral candidate with a hung composition startup fails stop at the deadlines', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const owner = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(owner);
+      const hostTask = RuntimeHostKernel.start({
+        owner,
+        initialConnectionTimeoutMs: 100,
+        idleGraceMs: 10_000,
+        shutdownGraceMs: 100,
+        composition: defineInteractiveRuntimeHostComposition(() => new Promise(() => {})),
+      });
+
+      try {
+        const error = await withTimeout(
+          hostTask.then(
+            () => assert.fail('Runtime Host startup unexpectedly succeeded'),
+            (startupError: unknown) => startupError,
+          ),
+          2_000,
+          'hung composition startup was not bounded by the initial connection deadline',
+        );
+        assert.ok(error instanceof AggregateError);
+        assert.ok(
+          error.errors.some(
+            (candidate: unknown) => candidate instanceof RuntimeHostProcessTerminationRequiredError,
+          ),
+        );
+      } finally {
+        await owner.close();
+      }
+    });
+  });
+
+  test('a silent handshake defers the never-connected drain instead of being drained under it', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const owner = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(owner);
+      const host = await RuntimeHostKernel.start({
+        owner,
+        initialConnectionTimeoutMs: 500,
+        idleGraceMs: 10_000,
+        handshakeTimeoutMs: 2_000,
+        composition: defineInteractiveRuntimeHostComposition(async () => testComposition()),
+      });
+
+      const silent = await openSocket(host.endpoint);
+      try {
+        // Past the initial connection timeout but inside the handshake
+        // deferral window: the pending handshake must keep the Host alive.
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        assert.equal(host.state, 'ready');
+      } finally {
+        silent.destroy();
+      }
+      // With the handshake gone, the deferred deadline drains the Host.
+      await withTimeout(
+        host.closed,
+        5_000,
+        'silently-handshaked ephemeral candidate never drained after the deferral',
+      );
+      const successor = await tryAcquireInteractiveRootOwner(capability);
+      assert.ok(successor);
+      await successor.close();
     });
   });
 
@@ -840,7 +1398,7 @@ describe('non-serving Runtime Host kernel', () => {
       });
       assert.equal(candidate.kind, 'winner');
       if (candidate.kind !== 'winner') return;
-      const resident = await retryConnect(paths, CURRENT_PROTOCOL, 'desktop');
+      const resident = await retryConnect(paths, CURRENT_PROTOCOL);
       assert.equal(resident.kind, 'connected');
       if (resident.kind !== 'connected') return;
 
@@ -850,9 +1408,10 @@ describe('non-serving Runtime Host kernel', () => {
         encodeLegacyProtocolFrame({
           kind: 'hello',
           clientInstanceId: 'stale-schema-resident',
-          surface: 'tui',
           protocolMin: CURRENT_PROTOCOL.min,
           protocolMax: CURRENT_PROTOCOL.max,
+          compatibilityEpoch: 20,
+          compositionId: KERNEL_COMPOSITION.descriptor.id,
         }),
       );
       assert.deepEqual(decodeHostFrame(await staleWhileResident.read(1_000)), {
@@ -872,7 +1431,6 @@ describe('non-serving Runtime Host kernel', () => {
       const blocked = await connectOrSpawnRuntimeHost({
         ...paths,
         rootPath: paths.root,
-        surface: 'tui',
         protocol: LEGACY_PROTOCOL,
         compositionId: KERNEL_COMPOSITION.descriptor.id,
         candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -890,7 +1448,6 @@ describe('non-serving Runtime Host kernel', () => {
         encodeLegacyProtocolFrame({
           kind: 'hello',
           clientInstanceId: 'stale-schema-idle',
-          surface: 'tui',
           protocolMin: CURRENT_PROTOCOL.min,
           protocolMax: CURRENT_PROTOCOL.max,
         }),
@@ -907,13 +1464,11 @@ describe('non-serving Runtime Host kernel', () => {
         connectRuntimeHost({
           ...paths,
           rootPath: paths.root,
-          surface: 'tui',
           protocol: LEGACY_PROTOCOL,
         }),
         connectRuntimeHost({
           ...paths,
           rootPath: paths.root,
-          surface: 'run',
           protocol: LEGACY_PROTOCOL,
         }),
       ]);
@@ -945,8 +1500,8 @@ describe('non-serving Runtime Host kernel', () => {
 
   test('two independent Clients with different cache environments attach to one cold-start Host', async () => {
     await withHostPaths(async (paths) => {
-      const first = spawnConnectClient(paths, 'desktop', 'a');
-      const second = spawnConnectClient(paths, 'tui', 'b');
+      const first = spawnConnectClient(paths, 'a');
+      const second = spawnConnectClient(paths, 'b');
       const [firstConnected, secondConnected] = await Promise.all([
         waitForConnectedClient(first),
         waitForConnectedClient(second),
@@ -1008,7 +1563,6 @@ describe('non-serving Runtime Host kernel', () => {
           const stillConnected = await connectRuntimeHost({
             ...paths,
             rootPath: paths.root,
-            surface: 'run',
             protocol: CURRENT_PROTOCOL,
           });
           assert.equal(stillConnected.kind, 'connected');
@@ -1032,7 +1586,6 @@ describe('non-serving Runtime Host kernel', () => {
           const staleDiscovery = await connectOrSpawnRuntimeHostWithDependencies(
             {
               rootPath: paths.root,
-              surface: 'inspect',
               protocol: CURRENT_PROTOCOL,
               compositionId: KERNEL_COMPOSITION.descriptor.id,
               candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -1046,13 +1599,16 @@ describe('non-serving Runtime Host kernel', () => {
               },
             },
           );
-          assert.deepEqual(staleDiscovery, { kind: 'failed', reason: 'startup_timeout' });
+          assert.equal(staleDiscovery.kind, 'failed');
+          if (staleDiscovery.kind !== 'failed') return;
+          assert.equal(staleDiscovery.reason, 'startup_timeout');
+          assert.ok(staleDiscovery.diagnostic);
+          assert.equal(staleDiscovery.diagnostic.candidateLaunches, staleLaunchAttempts);
           assert.ok(staleLaunchAttempts > 0);
 
           const successor = await connectOrSpawnRuntimeHostWithDependencies(
             {
               rootPath: paths.root,
-              surface: 'inspect',
               protocol: CURRENT_PROTOCOL,
               compositionId: KERNEL_COMPOSITION.descriptor.id,
               candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -1135,6 +1691,28 @@ describe('non-serving Runtime Host kernel', () => {
     });
   });
 
+  test('a detached Candidate survives writing stderr after its launcher exits', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const markerPath = join(paths.base, 'stderr-after-launcher-exit');
+      const launcher = paths.resources.trackChild(
+        fork(
+          new URL('./fixtures/detached-launcher.js', import.meta.url),
+          [paths.root, capability.rootId, markerPath],
+          { stdio: ['ignore', 'ignore', 'inherit', 'ipc'] },
+        ),
+      );
+      const launchedPid = paths.resources.trackPid(await waitForLaunch(launcher));
+      await waitForExit(launcher);
+
+      assert.equal(await waitForFileText(markerPath), 'alive');
+      assert.equal(isProcessAlive(launchedPid), true);
+      terminateProcess(launchedPid);
+      await waitForProcessExit(launchedPid);
+      paths.resources.forgetPid(launchedPid);
+    });
+  });
+
   test('an Electron Client using the real Candidate launcher survives its parent process', async () => {
     const electronPath = require('electron') as string;
     await withHostPaths(async (paths) => {
@@ -1150,12 +1728,7 @@ describe('non-serving Runtime Host kernel', () => {
         paths.resources.trackPid(pid),
       );
       await waitForSuccessfulExit(parent, 'Electron connect parent');
-      assert.ok(launched.candidatePids.includes(launched.pid));
-      for (const pid of launched.candidatePids) {
-        if (pid === launched.pid) continue;
-        await waitForProcessExit(pid);
-        paths.resources.forgetPid(pid);
-      }
+      assert.deepEqual(launched.candidatePids, [launched.pid]);
 
       const connected = await retryConnect(paths, CURRENT_PROTOCOL);
       assert.equal(connected.kind, 'connected');
@@ -1266,7 +1839,7 @@ describe('non-serving Runtime Host kernel', () => {
       const probeWindowCrossed = new Promise<void>((resolve) => {
         markProbesCrossed = resolve;
       });
-      const connected = await retryConnect(paths, CURRENT_PROTOCOL, 'tui', {
+      const connected = await retryConnect(paths, CURRENT_PROTOCOL, {
         livenessIntervalMs,
         onLivenessProbe: () => {
           livenessProbes += 1;
@@ -1423,13 +1996,15 @@ describe('non-serving Runtime Host kernel', () => {
       assert.ok(owner);
       const result = await connectOrSpawnRuntimeHost({
         rootPath: paths.root,
-        surface: 'tui',
         protocol: CURRENT_PROTOCOL,
         compositionId: KERNEL_COMPOSITION.descriptor.id,
         candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
         electionDeadlineMs: 100,
       });
-      assert.deepEqual(result, { kind: 'failed', reason: 'startup_timeout' });
+      assert.equal(result.kind, 'failed');
+      if (result.kind !== 'failed') return;
+      assert.equal(result.reason, 'startup_timeout');
+      assert.ok(result.diagnostic);
       assert.equal(await tryAcquireInteractiveRootOwner(capability), undefined);
       await owner?.close();
     });
@@ -1519,7 +2094,6 @@ describe('non-serving Runtime Host kernel', () => {
           connectOrSpawnRuntimeHostWithDependencies(
             {
               rootPath: paths.root,
-              surface: 'tui',
               protocol: CURRENT_PROTOCOL,
               compositionId: KERNEL_COMPOSITION.descriptor.id,
               candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -1537,7 +2111,16 @@ describe('non-serving Runtime Host kernel', () => {
           1_000,
           'election exceeded its total deadline',
         );
-        assert.deepEqual(result, { kind: 'failed', reason: 'host_unresponsive' });
+        assert.equal(result.kind, 'failed');
+        if (result.kind !== 'failed') return;
+        assert.equal(result.reason, 'host_unresponsive');
+        assert.ok(result.diagnostic);
+        assert.equal(result.diagnostic.deadlineMs, 50);
+        assert.ok(result.diagnostic.elapsedMs >= 40);
+        assert.equal(result.diagnostic.candidateLaunches, 0);
+        assert.equal(result.diagnostic.sawEndpointConnected, true);
+        assert.ok(result.diagnostic.observations.deadlineElapsed >= 1);
+        assert.equal(result.diagnostic.lastRegistration?.pid, attempt.pid);
         assert.equal(launchCount, 0);
       } finally {
         if (stopped) process.kill(attempt.pid, 'SIGCONT');
@@ -1562,7 +2145,6 @@ describe('non-serving Runtime Host kernel', () => {
       await writeClientFrame(transport, {
         kind: 'hello',
         clientInstanceId: 'draining-client',
-        surface: 'tui',
         protocolMin: CURRENT_PROTOCOL.min,
         protocolMax: CURRENT_PROTOCOL.max,
         compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
@@ -1578,6 +2160,90 @@ describe('non-serving Runtime Host kernel', () => {
       transport.abort();
       await transport.closed;
       await closing;
+    });
+  });
+
+  test('rejects a previous-epoch Client before admitting ScheduledTask commands', async () => {
+    await withHostPaths(async (paths) => {
+      const candidate = await startTestRuntimeHostCandidate(paths, {
+        rootPath: paths.root,
+        idleGraceMs: 10_000,
+      });
+      assert.equal(candidate.kind, 'winner');
+      if (candidate.kind !== 'winner') return;
+
+      const transport = new FramedTransport(await openSocket(candidate.host.endpoint));
+      try {
+        await writeClientFrame(transport, {
+          kind: 'hello',
+          clientInstanceId: 'previous-epoch-client',
+          protocolMin: CURRENT_PROTOCOL.min,
+          protocolMax: CURRENT_PROTOCOL.max,
+          compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH - 1,
+          compositionId: 'maka.interactive',
+        });
+        const response = decodeHostFrame(await transport.read(2_000));
+        assert.ok('kind' in response && response.kind === 'incompatible');
+        if (!('kind' in response) || response.kind !== 'incompatible') return;
+        assert.equal(response.compatibilityEpoch, RUNTIME_HOST_COMPATIBILITY_EPOCH);
+        assert.equal(response.hostEpoch, candidate.host.hostEpoch);
+        await transport.closed;
+        await assert.rejects(
+          () =>
+            writeClientFrame(transport, {
+              requestId: 'post-epoch-mismatch-scheduled-task-query',
+              operation: 'scheduled-task.query',
+              input: { kind: 'list' },
+            }),
+          (error: unknown) => error instanceof RuntimeHostTransportError && error.code === 'closed',
+        );
+      } finally {
+        transport.abort();
+      }
+    });
+  });
+
+  test('accepts Client hellos with and without the legacy surface identity', async () => {
+    await withHostPaths(async (paths) => {
+      const candidate = await startTestRuntimeHostCandidate(paths, {
+        rootPath: paths.root,
+        idleGraceMs: 10_000,
+      });
+      assert.equal(candidate.kind, 'winner');
+      if (candidate.kind !== 'winner') return;
+
+      try {
+        for (const hello of [
+          {
+            kind: 'hello',
+            clientInstanceId: 'client-without-surface',
+            protocolMin: CURRENT_PROTOCOL.min,
+            protocolMax: CURRENT_PROTOCOL.max,
+            compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
+            compositionId: 'maka.interactive',
+          },
+          {
+            kind: 'hello',
+            clientInstanceId: 'legacy-client-with-surface',
+            surface: 'tui',
+            protocolMin: CURRENT_PROTOCOL.min,
+            protocolMax: CURRENT_PROTOCOL.max,
+            compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
+            compositionId: 'maka.interactive',
+          },
+        ]) {
+          const transport = new FramedTransport(await openSocket(candidate.host.endpoint));
+          try {
+            await writeRawLocalIpc(transport, encodeLegacyProtocolFrame(hello));
+            const response = decodeHostFrame(await transport.read(2_000));
+            assert.ok('kind' in response && response.kind === 'accepted');
+          } finally {
+            transport.abort();
+          }
+        }
+      } finally {
+        await candidate.host.close();
+      }
     });
   });
 
@@ -1630,7 +2296,6 @@ describe('non-serving Runtime Host kernel', () => {
         await writeClientFrame(transport, {
           kind: 'hello',
           clientInstanceId: 'composition-connection-release',
-          surface: 'tui',
           protocolMin: CURRENT_PROTOCOL.min,
           protocolMax: CURRENT_PROTOCOL.max,
           compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
@@ -1674,8 +2339,7 @@ describe('non-serving Runtime Host kernel', () => {
       const owner = await tryAcquireInteractiveRootOwner(capability);
       assert.ok(owner);
       if (!owner) return;
-      const configurationChanges = new HostConfigurationChangeService();
-      const sessionCatalogChanges = new HostSessionCatalogChangeService();
+      const hostChanges = new HostChangeFeed();
       let releaseFactory!: () => void;
       let markFactoryEntered!: () => void;
       const factoryEntered = new Promise<void>((resolve) => {
@@ -1692,8 +2356,7 @@ describe('non-serving Runtime Host kernel', () => {
           await factoryReleased;
           return {
             handlers: createUnavailableDomainOperationHandlers(),
-            configurationChanges,
-            sessionCatalogChanges,
+            hostChanges,
             beginDrain() {},
             async recover() {},
             async close() {},
@@ -1706,7 +2369,6 @@ describe('non-serving Runtime Host kernel', () => {
         await withTimeout(factoryEntered, 1_000, 'Runtime Host did not enter composition');
         const connected = await connectRuntimeHost({
           rootPath: paths.root,
-          surface: 'desktop',
           protocol: CURRENT_PROTOCOL,
         });
         assert.equal(connected.kind, 'connected');
@@ -1721,8 +2383,8 @@ describe('non-serving Runtime Host kernel', () => {
         });
         releaseFactory();
         host = await hostTask;
-        configurationChanges.publish();
-        sessionCatalogChanges.publish('session-1');
+        hostChanges.publishConfiguration();
+        hostChanges.publishSessionCatalog('session-1');
         assert.equal(
           await withTimeout(observed, 1_000, 'Client did not receive configuration change'),
           1,
@@ -1759,7 +2421,6 @@ describe('non-serving Runtime Host kernel', () => {
         await writeClientFrame(transport, {
           kind: 'hello',
           clientInstanceId: 'half-open-client',
-          surface: 'tui',
           protocolMin: CURRENT_PROTOCOL.min,
           protocolMax: CURRENT_PROTOCOL.max,
           compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
@@ -1802,7 +2463,6 @@ describe('non-serving Runtime Host kernel', () => {
       const observer = await connectRuntimeHost({
         ...paths,
         rootPath: paths.root,
-        surface: 'inspect',
         protocol: CURRENT_PROTOCOL,
       });
       assert.equal(observer.kind, 'connected');
@@ -1890,7 +2550,6 @@ describe('non-serving Runtime Host kernel', () => {
         await writeClientFrame(transport, {
           kind: 'hello',
           clientInstanceId: 'bounded-shutdown-test',
-          surface: 'tui',
           protocolMin: CURRENT_PROTOCOL.min,
           protocolMax: CURRENT_PROTOCOL.max,
           compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
@@ -1934,7 +2593,6 @@ describe('non-serving Runtime Host kernel', () => {
           await writeClientFrame(rejectedHandshakeTransport, {
             kind: 'hello',
             clientInstanceId: 'post-drain-client',
-            surface: 'inspect',
             protocolMin: CURRENT_PROTOCOL.min,
             protocolMax: CURRENT_PROTOCOL.max,
             compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,
@@ -2043,7 +2701,6 @@ describe('non-serving Runtime Host kernel', () => {
         () =>
           connectRuntimeHost({
             rootPath: paths.root,
-            surface: 'tui',
             protocol: CURRENT_PROTOCOL,
             connectTimeoutMs: 0,
           }),
@@ -2053,7 +2710,6 @@ describe('non-serving Runtime Host kernel', () => {
         () =>
           connectRuntimeHost({
             rootPath: paths.root,
-            surface: 'tui',
             protocol: CURRENT_PROTOCOL,
             handshakeTimeoutMs: 0,
           }),
@@ -2063,7 +2719,6 @@ describe('non-serving Runtime Host kernel', () => {
         () =>
           connectRuntimeHost({
             rootPath: paths.root,
-            surface: 'tui',
             protocol: CURRENT_PROTOCOL,
             clientInstanceId: '',
           }),
@@ -2073,7 +2728,6 @@ describe('non-serving Runtime Host kernel', () => {
         () =>
           connectOrSpawnRuntimeHost({
             rootPath: paths.root,
-            surface: 'tui',
             protocol: CURRENT_PROTOCOL,
             compositionId: 'Invalid Composition',
             candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -2092,7 +2746,6 @@ describe('non-serving Runtime Host kernel', () => {
         () =>
           connectOrSpawnRuntimeHost({
             rootPath: paths.root,
-            surface: 'tui',
             protocol: CURRENT_PROTOCOL,
             compositionId: KERNEL_COMPOSITION.descriptor.id,
             candidateEntrypoint: KERNEL_CANDIDATE_ENTRYPOINT,
@@ -2122,6 +2775,66 @@ describe('non-serving Runtime Host kernel', () => {
           'code' in error &&
           (error as NodeJS.ErrnoException).code === 'ENOENT',
       );
+    });
+  });
+
+  test('detached launcher exposes exact Candidate process settlement', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const attempt = await launchDetachedRuntimeHostCandidate({
+        rootPath: paths.root,
+        expectedRootId: capability.rootId,
+        entrypoint: new URL('./fixtures/owned-candidate-exit.js', import.meta.url),
+        env: { MAKA_TEST_EXIT_CODE: '1' },
+      }).spawned;
+
+      assert.ok(attempt.exited);
+      assert.deepEqual(
+        await withTimeout(attempt.exited, 2_000, 'detached Candidate did not exit'),
+        { code: 1, signal: null, stderr: '', stderrTruncated: false },
+      );
+    });
+  });
+
+  test('detached launcher preserves a bounded stderr tail with process exit evidence', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const attempt = await launchDetachedRuntimeHostCandidate({
+        rootPath: paths.root,
+        expectedRootId: capability.rootId,
+        entrypoint: new URL('./fixtures/candidate-stderr-exit.js', import.meta.url),
+      }).spawned;
+      paths.resources.trackPid(attempt.pid);
+      assert.ok(attempt.exited);
+
+      const exit = await withTimeout(attempt.exited, 2_000, 'Candidate exit was not observed');
+      paths.resources.forgetPid(attempt.pid);
+      assert.equal(exit.code, 23);
+      assert.equal(exit.signal, null);
+      assert.equal(exit.stderrTruncated, true);
+      assert.ok(Buffer.byteLength(exit.stderr, 'utf8') <= 4 * 1024);
+      assert.match(exit.stderr, /token=fixture-secret/);
+    });
+  });
+
+  test('detached launcher does not mark an exact-limit stderr payload as truncated', async () => {
+    await withHostPaths(async (paths) => {
+      const capability = await resolveStorageRoot({ path: paths.root, kind: 'interactive' });
+      const attempt = await launchDetachedRuntimeHostCandidate({
+        rootPath: paths.root,
+        expectedRootId: capability.rootId,
+        entrypoint: new URL('./fixtures/candidate-stderr-exit.js', import.meta.url),
+        env: { MAKA_TEST_STDERR_EXACT_LIMIT: '1' },
+      }).spawned;
+      paths.resources.trackPid(attempt.pid);
+      assert.ok(attempt.exited);
+
+      const exit = await withTimeout(attempt.exited, 2_000, 'Candidate exit was not observed');
+      paths.resources.forgetPid(attempt.pid);
+      assert.equal(exit.code, 24);
+      assert.equal(exit.signal, null);
+      assert.equal(exit.stderrTruncated, false);
+      assert.equal(Buffer.byteLength(exit.stderr, 'utf8'), 4 * 1024);
     });
   });
 
@@ -2162,7 +2875,6 @@ describe('non-serving Runtime Host kernel', () => {
       const result = await connectRuntimeHost({
         ...paths,
         rootPath: paths.root,
-        surface: 'inspect',
         protocol: CURRENT_PROTOCOL,
       });
       assert.deepEqual(result, { kind: 'unavailable', reason: 'invalid_registration' });
@@ -2324,14 +3036,10 @@ async function withHostPaths(run: (paths: HostPaths) => Promise<void>): Promise<
   }
 }
 
-function spawnConnectClient(
-  paths: HostPaths,
-  surface: 'desktop' | 'tui',
-  environmentSuffix: string,
-): ChildProcess {
+function spawnConnectClient(paths: HostPaths, environmentSuffix: string): ChildProcess {
   const fakeHome = join(paths.base, `fake-home-${environmentSuffix}`);
   return paths.resources.trackChild(
-    fork(new URL('./fixtures/connect-client.js', import.meta.url), [paths.root, surface], {
+    fork(new URL('./fixtures/connect-client.js', import.meta.url), [paths.root], {
       stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
       env: {
         ...process.env,
@@ -2393,7 +3101,6 @@ function isConnectedClientMessage(
 async function retryConnect(
   paths: HostPaths,
   protocol: { min: number; max: number },
-  surface: ClientSurface = 'tui',
   options?: { livenessIntervalMs?: number; onLivenessProbe?: () => void },
 ) {
   const deadline = Date.now() + 5_000;
@@ -2401,7 +3108,6 @@ async function retryConnect(
     ...paths,
     ...options,
     rootPath: paths.root,
-    surface,
     protocol,
   });
   while (result.kind !== 'connected' && Date.now() < deadline) {
@@ -2410,7 +3116,6 @@ async function retryConnect(
       ...paths,
       ...options,
       rootPath: paths.root,
-      surface,
       protocol,
     });
   }
@@ -2646,6 +3351,16 @@ function waitForExit(child: ChildProcess): Promise<void> {
   return new Promise((resolve) => child.once('exit', () => resolve()));
 }
 
+async function waitForFileText(path: string, timeoutMs = 5_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await readFile(path, 'utf8').catch(() => undefined);
+    if (value !== undefined) return value;
+    await sleep(20);
+  }
+  throw new Error(`File was not written before timeout: ${path}`);
+}
+
 function waitForSuccessfulExit(child: ChildProcess, label: string): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return child.exitCode === 0
@@ -2778,7 +3493,6 @@ async function openNonReadingStatusSocket(path: string): Promise<Socket> {
       `${JSON.stringify({
         kind: 'hello',
         clientInstanceId: 'non-reading-client',
-        surface: 'tui',
         protocolMin: CURRENT_PROTOCOL.min,
         protocolMax: CURRENT_PROTOCOL.max,
         compatibilityEpoch: RUNTIME_HOST_COMPATIBILITY_EPOCH,

@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { resolve } from 'node:path';
 import { describe, test } from 'node:test';
@@ -16,6 +35,9 @@ import { parseRuntimeHostCommand } from '../runtime-host-cli.js';
 import { runRuntimeHostProjectCli } from '../runtime-host-project-command.js';
 import { createRuntimeHostServiceReadyEvent } from '../runtime-host-service-command.js';
 
+const projectRootA = process.platform === 'win32' ? 'C:\\srv\\projects' : '/srv/projects';
+const projectRootB = process.platform === 'win32' ? 'D:\\data' : '/mnt/data';
+
 describe('Runtime Host operator commands', () => {
   test('parses project management and machine-readable service readiness', () => {
     assert.deepEqual(parseRuntimeHostCommand(['project', 'list', '--root', '/srv/maka']), {
@@ -30,10 +52,24 @@ describe('Runtime Host operator commands', () => {
         path: '/work/project',
       },
     );
-    assert.deepEqual(parseRuntimeHostCommand(['serve', '--json']), {
-      kind: 'runtime-host-serve',
-      json: true,
-    });
+    assert.deepEqual(
+      parseRuntimeHostCommand([
+        'serve',
+        '--json',
+        '--project-root',
+        `Projects=${projectRootA}`,
+        '--project-root',
+        `Data=${projectRootB}`,
+      ]),
+      {
+        kind: 'runtime-host-serve',
+        json: true,
+        projectDirectoryRoots: [
+          { label: 'Projects', path: projectRootA },
+          { label: 'Data', path: projectRootB },
+        ],
+      },
+    );
     assert.deepEqual(
       parseRuntimeHostCommand([
         'serve',
@@ -62,6 +98,20 @@ describe('Runtime Host operator commands', () => {
       ]).kind,
       'error',
     );
+    assert.equal(
+      parseRuntimeHostCommand(['serve', '--project-root', 'Projects=relative/path']).kind,
+      'error',
+    );
+    assert.equal(
+      parseRuntimeHostCommand([
+        'serve',
+        '--project-root',
+        `Projects=${projectRootA}`,
+        '--project-root',
+        `Projects=${projectRootB}`,
+      ]).kind,
+      'error',
+    );
   });
 
   test('expands access presets without access administration or Host paths', () => {
@@ -72,7 +122,11 @@ describe('Runtime Host operator commands', () => {
       assert.equal(resolved.principalKind, 'remote_owner');
       assert.equal(resolved.canUseHostPaths, false);
       assert.equal(resolved.operationGrants.includes('access.credential.issue'), false);
+      assert.equal(resolved.operationGrants.includes('access.credential.prepare'), false);
+      assert.equal(resolved.operationGrants.includes('access.credential.replace'), false);
       assert.equal(resolved.operationGrants.includes('access.credential.revoke'), false);
+      assert.equal(resolved.operationGrants.includes('access.credential.rotation.prepare'), false);
+      assert.equal(resolved.operationGrants.includes('access.credential.rotation.revoke'), false);
       assert.equal(resolved.operationGrants.includes('host.upgrade.prepare'), false);
       assert.equal(resolved.operationGrants.includes('turn.start'), true);
       assert.equal(resolved.operationGrants.includes('project.catalog.query'), true);
@@ -95,6 +149,50 @@ describe('Runtime Host operator commands', () => {
       'error',
     );
     assert.deepEqual(
+      parseRuntimeHostCommand([
+        'access',
+        'prepare',
+        '--current-fingerprint',
+        'a'.repeat(32),
+        '--root',
+        '/srv/maka',
+        '--expected-root',
+        'a'.repeat(64),
+        '--framed',
+      ]),
+      {
+        kind: 'runtime-host-access-prepare',
+        rootPath: '/srv/maka',
+        expectedRootId: 'a'.repeat(64),
+        currentCredentialFingerprint: 'a'.repeat(32),
+      },
+    );
+    assert.equal(
+      parseRuntimeHostCommand(['access', 'prepare', '--current-fingerprint', 'a'.repeat(32)]).kind,
+      'error',
+    );
+    assert.deepEqual(parseRuntimeHostCommand(['access', 'list', '--framed']), {
+      kind: 'runtime-host-access-list',
+      framed: true,
+    });
+    assert.deepEqual(
+      parseRuntimeHostCommand([
+        'access',
+        'revoke',
+        '--credential',
+        'credential-1',
+        '--current-fingerprint',
+        'a'.repeat(32),
+        '--framed',
+      ]),
+      {
+        kind: 'runtime-host-access-revoke',
+        credentialId: 'credential-1',
+        currentCredentialFingerprint: 'a'.repeat(32),
+        framed: true,
+      },
+    );
+    assert.deepEqual(
       Object.keys(HOST_OPERATION_SPECS)
         .filter(
           (operation) =>
@@ -105,7 +203,11 @@ describe('Runtime Host operator commands', () => {
         .sort(),
       [
         'access.credential.issue',
+        'access.credential.prepare',
+        'access.credential.replace',
         'access.credential.revoke',
+        'access.credential.rotation.prepare',
+        'access.credential.rotation.revoke',
         'host.upgrade.prepare',
         'hosted.execution.cancel',
         'hosted.execution.start',

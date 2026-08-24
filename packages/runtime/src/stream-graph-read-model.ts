@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type { AgentGraphClientClaimAdmission } from '@maka/core/agent-graph-client-projection';
 import type { AgentGraphIntentClaim } from '@maka/core/agent-graph-control';
 import type { AgentGraphOperatorProvision } from '@maka/core/agent-graph-topology';
@@ -82,7 +101,6 @@ export interface AgentGraphClientOperator {
   scheduledWorkIds: string[];
   readiness: Array<{
     readinessId: string;
-    policyKind: 'map' | 'all_settled';
     status: 'waiting' | 'runnable';
     waitingFor: AgentGraphReadinessWait[];
     omittedWaitingFor: number;
@@ -118,6 +136,7 @@ export interface AgentGraphClientScheduledWork {
     | { kind: 'preset'; presetId: string }
     | { kind: 'operator'; operatorId: string };
   inputIds: string[];
+  selectedResultInputs?: Array<{ sourceGraphId: string; resultId: string }>;
   replaces?: string;
   status: AgentGraphScheduleWorkView['status'];
   instructionPreview: string;
@@ -657,7 +676,6 @@ function buildReadModel(input: BuildAgentGraphClientReadModelInput): BuiltReadMo
       .filter((entry) => entry.operatorId === binding.operatorId)
       .map((entry) => ({
         readinessId: entry.readinessId,
-        policyKind: entry.policyKind,
         status: entry.status,
         waitingFor: entry.waitingFor.slice(0, MAX_OPERATOR_READINESS_WAITS).map(cloneWait),
         omittedWaitingFor: Math.max(0, entry.waitingFor.length - MAX_OPERATOR_READINESS_WAITS),
@@ -1051,6 +1069,9 @@ function clientWork(work: AgentGraphScheduleWorkView): AgentGraphClientScheduled
     workId: work.workId,
     target: { ...work.target },
     inputIds: [...work.inputIds],
+    ...(work.selectedResultInputs
+      ? { selectedResultInputs: work.selectedResultInputs.map((input) => ({ ...input })) }
+      : {}),
     ...(work.replaces ? { replaces: work.replaces } : {}),
     status: work.status,
     instructionPreview: instructionTruncated

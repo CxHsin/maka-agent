@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { Buffer } from "node:buffer";
 import type { ComputerUseToolSet } from '@maka/runtime/computer-use-tools';
 import {
@@ -21,6 +40,7 @@ import type {
   ClientCapabilityServiceOffer,
 } from "@maka/runtime-host/protocol";
 import { toJSONSchema, z } from "zod";
+import type { DesktopTargetScope } from '../shared/runtime-host-identity.js';
 
 const CAPABILITY_VERSION = "0";
 const BROWSER_OFFER_ID = "desktop_browser";
@@ -55,7 +75,9 @@ export interface DesktopNativeCapabilityProviderInput {
   ) => void | Promise<void>;
   readonly oauthPresentation?: OAuthPresentationBackend;
   readonly additionalGroups?: () => readonly DesktopCapabilityGroup[];
-  readonly additionalServices?: () => readonly DesktopCapabilityService[];
+  readonly additionalServices?: (
+    scope: DesktopTargetScope,
+  ) => readonly DesktopCapabilityService[];
 }
 
 export interface DesktopCapabilityService extends ClientCapabilityServiceOffer {
@@ -82,6 +104,7 @@ interface DesktopNativeCapabilityProviderOptions {
   readonly onInvalidTool?: (error: Error) => void;
   readonly onClosed?: () => void;
   readonly nativeSessionId?: (sessionId: string) => string;
+  readonly targetScope?: DesktopTargetScope;
 }
 
 /** Adapt Desktop-owned Maka tools to the open Client Capability protocol. */
@@ -102,7 +125,10 @@ export function createDesktopNativeCapabilityProvider(
   const oauthPresentation = input.oauthPresentation
     ? createOAuthPresentationClientProvider(input.oauthPresentation)
     : undefined;
-  const services = indexServices(oauthPresentation?.services?.() ?? [], input.additionalServices?.() ?? []);
+  const additionalServices = input.additionalServices
+    ? input.additionalServices(requireTargetScope(providerOptions.targetScope))
+    : [];
+  const services = indexServices(oauthPresentation?.services?.() ?? [], additionalServices);
   const releaseSessionResources = [
     input.releaseBrowserSession,
     input.releaseComputerUseSession,
@@ -184,6 +210,11 @@ export function createDesktopNativeCapabilityProvider(
     },
     close,
   };
+}
+
+function requireTargetScope(scope: DesktopTargetScope | undefined): DesktopTargetScope {
+  if (!scope) throw new Error('Desktop native capability target scope is required');
+  return scope;
 }
 
 type IndexedService =
@@ -328,6 +359,7 @@ async function invokeNativeTool(
     toolCallId: frame.toolCallId,
     abortSignal: signal,
     emitOutput() {},
+    ...(options.progress ? { emitProgress: options.progress } : {}),
   });
   return projectToolResult(binding.tool, frame.toolCallId, args, output);
 }
@@ -366,6 +398,7 @@ function capabilityOffer(
           name: tool.name,
           description: tool.description,
           inputSchema: toolInputSchema(tool),
+          ...(tool.activityKind ? { activityKind: tool.activityKind } : {}),
           ...(tool.displayName
             ? { annotations: Object.freeze({ title: tool.displayName }) }
             : {}),

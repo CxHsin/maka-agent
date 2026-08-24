@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { PROMPT_RAIL_PROMPT_COUNT } from '../src/main/e2e-fixture/seed-helpers';
 import { expect, test } from './fixtures';
 import type { Page } from '@playwright/test';
@@ -72,6 +91,27 @@ async function scrollTranscriptTo(page: Page, position: 'top' | 'bottom'): Promi
     if (!scroller) throw new Error('the chat scroll container is missing');
     scroller.scrollTop = where === 'top' ? 0 : scroller.scrollHeight;
   }, position);
+}
+
+async function waitForPaintedFrames(page: Page, count = 2): Promise<void> {
+  await page.evaluate((frames) => new Promise<void>((resolve) => {
+    const tick = (left: number) => {
+      if (left <= 0) {
+        resolve();
+        return;
+      }
+      requestAnimationFrame(() => tick(left - 1));
+    };
+    tick(frames);
+  }), count);
+}
+
+function notifyTranscriptScrolled(page: Page): Promise<void> {
+  return page.evaluate(() => {
+    const root = document.querySelector<HTMLElement>('[data-chat-scroll-container="true"]');
+    if (!root) throw new Error('the chat scroll container is missing');
+    root.dispatchEvent(new Event('scroll'));
+  });
 }
 
 async function loadPromptRailBeyondVirtualWindow(page: Page): Promise<void> {
@@ -267,17 +307,36 @@ test('evicting a turn-owned sibling interaction hands focus back to the transcri
     return turn.dataset.virtualTurnId;
   });
 
-  await page.evaluate(() => {
+  // The injected control resizes the tail Turn. That can queue a scroll-anchor
+  // restore captured at the bottom. Let that setup-only restore finish before
+  // the one-shot jump so the assertion still catches any later restore that
+  // would pin the viewport back on the retained Turn (#3121).
+  await waitForPaintedFrames(page);
+  await scrollTranscriptTo(page, 'top');
+  await notifyTranscriptScrolled(page);
+  await expect.poll(async () => page.evaluate((turnId) => {
     const root = document.querySelector<HTMLElement>('[data-chat-scroll-container="true"]');
     if (!root) throw new Error('the chat scroll container is missing');
-    root.scrollTop = 0;
-    root.dispatchEvent(new Event('scroll'));
+    const mounted = [...document.querySelectorAll<HTMLElement>('[data-virtual-turn-id]')]
+      .map((turn) => turn.dataset.virtualTurnId ?? '');
+    const active = document.activeElement;
+    return {
+      retained: mounted.includes(turnId),
+      scrollTop: Math.round(root.scrollTop),
+      firstMounted: mounted[0] ?? null,
+      lastMounted: mounted.at(-1) ?? null,
+      focusOnTranscript: active instanceof HTMLElement
+        && active.classList.contains('maka-chat-message-list'),
+      selectionCollapsed: document.getSelection()?.isCollapsed ?? true,
+    };
+  }, retainedTurnId), {
+    message: 'the retained tail turn leaves after one jump to the top',
+  }).toMatchObject({
+    retained: false,
+    scrollTop: 0,
+    focusOnTranscript: true,
+    selectionCollapsed: true,
   });
-  await expect(page.locator(`[data-virtual-turn-id="${retainedTurnId}"]`)).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => ({
-    focus: document.activeElement?.classList.contains('maka-chat-message-list') ?? false,
-    selection: document.getSelection()?.isCollapsed ?? true,
-  }))).toEqual({ focus: true, selection: true });
 });
 
 test('a tick is what the pointer lands on, not the scrollbar', async ({

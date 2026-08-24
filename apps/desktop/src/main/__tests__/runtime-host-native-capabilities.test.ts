@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildComputerUseTools, type ComputerUseToolSet } from '@maka/runtime/computer-use-tools';
@@ -30,6 +49,7 @@ test('publishes self-described session-affine Browser and Computer Use offers', 
       affinity: offer.affinity,
       toolNames: offer.tools.map((descriptor) => descriptor.name),
       serverIds: offer.tools.map((descriptor) => descriptor.serverId),
+      activityKinds: offer.tools.map((descriptor) => descriptor.activityKind),
     })),
     [
       {
@@ -38,6 +58,7 @@ test('publishes self-described session-affine Browser and Computer Use offers', 
         affinity: 'session',
         toolNames: ['browser_snapshot'],
         serverIds: ['desktop_browser'],
+        activityKinds: [undefined],
       },
       {
         offerId: 'desktop_computer_use',
@@ -45,6 +66,7 @@ test('publishes self-described session-affine Browser and Computer Use offers', 
         affinity: 'session',
         toolNames: ['maka_computer'],
         serverIds: ['desktop_computer_use'],
+        activityKinds: ['computer'],
       },
     ],
   );
@@ -299,21 +321,24 @@ test('omits optional MCP tools that would exceed the complete manifest byte limi
 
 test('publishes and admits additional Desktop native-effect services', async () => {
   let admitted = false;
-  const provider = createDesktopNativeCapabilityProvider({
-    browserTools: [],
-    releaseBrowserSession() {},
-    computerUseTools: computerTools(),
-    releaseComputerUseSession() {},
-    additionalServices: () => [
-      {
-        serviceId: 'maka_scheduled_task_native_effect',
-        version: '1',
-        async call(method, input) {
-          return { method, id: input.id };
+  const provider = createDesktopNativeCapabilityProvider(
+    {
+      browserTools: [],
+      releaseBrowserSession() {},
+      computerUseTools: computerTools(),
+      releaseComputerUseSession() {},
+      additionalServices: (scope) => [
+        {
+          serviceId: 'maka_scheduled_task_native_effect',
+          version: '1',
+          async call(method, input) {
+            return { method, id: input.id, hostId: scope.hostId };
+          },
         },
-      },
-    ],
-  });
+      ],
+    },
+    { targetScope: { hostId: 'host-1', targetEpoch: 'epoch-1' } },
+  );
   assert.deepEqual(provider.services?.(), [
     { serviceId: 'maka_scheduled_task_native_effect', version: '1' },
   ]);
@@ -325,7 +350,7 @@ test('publishes and admits additional Desktop native-effect services', async () 
     },
   });
   assert.equal(admitted, true);
-  assert.deepEqual(result, { method: 'notify_local', id: 'task-1' });
+  assert.deepEqual(result, { method: 'notify_local', id: 'task-1', hostId: 'host-1' });
 });
 
 test('validates before admission and invokes the exact offered tool with Host context', async () => {
@@ -719,6 +744,7 @@ function computerTools(
     ? [
         {
           ...tool('maka_computer', z.object({ wait: z.boolean().optional() }), impl),
+          activityKind: 'computer' as const,
           toModelOutput: ({ output }: { output: unknown }) => {
             const result = output as {
               text: string;

@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 /**
  * AiSdkBackend — single backend for all LLM providers via Vercel AI SDK.
  *
@@ -82,13 +101,13 @@ import {
   PROVIDER_IMAGE_BUDGET_EXCEEDED_MESSAGE,
 } from '@maka/core/attachments';
 import { stripUndefinedDeep } from '@maka/core/tool-args-identity';
+import { pricingModelKey } from '@maka/core/usage-stats/pricing';
 import type {
   LlmCallRecord,
   PricingConfig,
   ToolInvocationRecord,
 } from '@maka/core/usage-stats/types';
 import type { ContextBudgetDiagnostic, PromptSegmentEstimate } from '@maka/core/usage-stats/types';
-import { DEFAULT_CODE_MODE_LIMITS, executeCodeCell } from '@maka/code-mode';
 import type {
   JSONValue,
   ModelFinishReason,
@@ -108,6 +127,12 @@ import { z } from 'zod';
 
 import { AsyncEventQueue } from './async-queue.js';
 import { jsonSchemaErrorSummary, validateJsonSchemaInput } from './json-schema-validation.js';
+import { AdmissionLimiter } from './admission-limiter.js';
+import {
+  type CodeModeExecutionResult,
+  DEFAULT_CODE_MODE_EXECUTION_POLICY,
+  executeCodeCell,
+} from './code-mode.js';
 import {
   StreamWatchdog,
   formatStreamWatchdogError,
@@ -136,6 +161,7 @@ import {
   type ModelStreamResult,
   type RepairableAiSdkToolCall,
 } from './model-adapter.js';
+import { buildProviderOptions } from './model-factory.js';
 import { persistedOpenAiResponsesStepMessages } from './openai-responses-continuation.js';
 import type { OpenAiResponsesTransportState } from './openai-responses-websocket.js';
 import {
@@ -146,7 +172,6 @@ import {
 } from './request-projection.js';
 import type { ActiveToolResultPruneDiagnosticPatch } from './active-tool-result-prune.js';
 import { toolResultOutput } from './tool-result-output.js';
-import { buildActiveCompactionHeadAnchor } from './active-full-compact.js';
 import { compactionDecisionDiagnosticPatch } from './compaction-boundary.js';
 import type {
   AutomaticMemoryCompactionDecision,
@@ -159,7 +184,6 @@ import {
 } from './context-diagnostics.js';
 import {
   AiSdkCompaction,
-  composeActiveCompactionProjection,
   hasActiveToolResultPruneDiagnosticPatch,
   hasBlockingReplayDiagnostics,
 } from './ai-sdk-compaction.js';
@@ -219,7 +243,6 @@ import {
 import { modelUsesNativeOpenAiResponses, resolveModelRuntime } from './model-runtime.js';
 import {
   applyPatchReplayFactText,
-  freeformApplyPatchResultText,
   normalizeApplyPatchReplayInput,
   routeApplyPatchTools,
   type ApplyPatchProfile,
@@ -227,20 +250,11 @@ import {
 import {
   applyRuntimeEventContextBudget,
   buildContextBudgetDiagnosticShell,
-  buildHistoryCompactBlockFromSummary,
-  buildHistorySearchSource,
   buildPromptSegmentEstimates,
   estimateRuntimeEventsTokens,
-  hasOversizedRetainedHistoryTurn,
   mergeContextBudgetDiagnostic,
   mergeContextBudgetDiagnosticPatches,
-  mergeRuntimeEventsInOriginalOrder,
   minimalContextBudgetDiagnostic,
-  rawEvidenceRequestReason,
-  retrieveArchivedToolResultsForReplay,
-  retrieveReplayHistoryAroundSearchSource,
-  retrieveRuntimeEventHistoryAround,
-  runtimeEventTurnKey,
   shouldAppendContextCompactedNote,
   shouldAppendContextCompactionFailedOpenNote,
   type ContextBudgetPolicy,
@@ -248,9 +262,7 @@ import {
 import {
   evaluateHistoryCompactCheckpointReplay,
   isHistoryCompactContentEvent,
-  replaceHistoryCompactReplayBlocks,
-} from './history-compact.js';
-import { selectSynthesisCacheForReplay } from './synthesis-cache.js';
+} from './history-compaction.js';
 import {
   canContinueHistoryCompactCheckpointForModel,
   historyCompactCheckpointToModelMessage,
@@ -631,24 +643,10 @@ function joinPromptFragments(fragments: readonly (string | undefined)[]): string
 export type AppendMessageFn = (m: StoredMessage) => Promise<void>;
 export type ToolTelemetryRecorder = (record: ToolInvocationRecord) => void;
 export type {
-  ActiveFullCompactBlockRecorder,
   HistoryCompactCheckpointLoader,
   HistoryCompactCheckpointRecorder,
-  HistoryCompactLoader,
-  HistoryCompactLoadInput,
-  HistoryCompactLoadResult,
   HistoryCompactSummarizer,
   HistoryCompactSummaryInput,
-  HistoryCompactWriter,
-  HistoryCompactWriteInput,
-  HistoryCompactWriteResult,
-  SemanticCompactBlockRecorder,
-  SynthesisCacheLoader,
-  SynthesisCacheLoadInput,
-  SynthesisCacheLoadResult,
-  SynthesisCacheWriter,
-  SynthesisCacheWriteInput,
-  SynthesisCacheWriteResult,
 } from './ai-sdk-compaction-contract.js';
 
 export interface AiSdkBackendInput extends AiSdkCompactionCapabilities {
@@ -862,15 +860,14 @@ function nativeApplyPatchFailureOutput(output: ToolResultOutput): ToolResultOutp
   };
 }
 
-function freeformApplyPatchOutput(output: ToolResultOutput): ToolResultOutput {
-  if (output.type === 'text' || output.type === 'error-text') return output;
-  const value = output.type === 'json' || output.type === 'error-json' ? output.value : undefined;
-  const record = value && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
-  const text = record ? freeformApplyPatchResultText(record) : freeformApplyPatchResultText(value);
-  return output.type === 'error-json'
-    ? { type: 'error-text', value: text }
-    : { type: 'text', value: text };
-}
+/**
+ * One Code Mode cell runs at a time on a backend, with one allowed to wait.
+ * Widening either needs evidence that concurrent cells are wanted; none exists
+ * today, and this is the bound the Code Mode adapter enforced before execution
+ * admission moved to the side that owns it.
+ */
+const MAX_ACTIVE_CODE_MODE_CELLS = 1;
+const MAX_WAITING_CODE_MODE_CELLS = 1;
 
 const MAX_PROVIDER_ATTEMPTS_PER_STEP = 10;
 const MAX_IDLE_WATCHDOG_RETRIES_PER_STEP = 1;
@@ -895,6 +892,8 @@ function providerRetryReason(kind: ModelFailureKind): ProviderRetryReason {
     case 'rate_limit':
     case 'timeout':
       return kind;
+    case 'provider_capacity':
+      return 'provider_capacity';
     default:
       return 'unknown';
   }
@@ -1010,8 +1009,12 @@ export class AiSdkBackend implements AgentBackend {
   private readonly maxSteps: number | undefined;
   private readonly providerRetrySleep: (delayMs: number, signal: AbortSignal) => Promise<void>;
   private readonly modelAdapter: ModelAdapter;
+  private readonly resolvedProviderOptions: Record<string, unknown>;
   private readonly toolAvailabilityRuntime: ToolAvailabilityRuntime;
   private readonly applyPatchProfile: ApplyPatchProfile | null;
+
+  /** Bounds outstanding Code Mode cells on this backend. */
+  private readonly codeCellAdmission = new AdmissionLimiter(MAX_ACTIVE_CODE_MODE_CELLS);
 
   /**
    * Every `send()` currently in flight on this backend.
@@ -1045,13 +1048,23 @@ export class AiSdkBackend implements AgentBackend {
     this.now = input.now ?? (() => Date.now());
     this.maxSteps = input.maxSteps;
     this.providerRetrySleep = input.providerRetrySleep ?? sleepForProviderRetry;
+    // One resolved options value for every reader: the main call, the
+    // auxiliary memory-extraction call, and the request-shape diagnostics all
+    // describe the same request, so they must not disagree on what was sent.
+    this.resolvedProviderOptions =
+      input.providerOptions ??
+      buildProviderOptions(input.connection, input.modelId, input.header.thinkingLevel);
     this.modelAdapter = new ModelAdapter({
       sessionId: input.sessionId,
       connection: input.connection,
       apiKey: input.apiKey,
       modelId: input.modelId,
       modelFactory: input.modelFactory,
-      providerOptions: input.providerOptions,
+      // `input.providerOptions` is an override escape hatch: when set it owns
+      // the whole provider-options namespace (including reasoning effort), and
+      // the computed defaults are dropped entirely. Keep providerOptions the
+      // single seam — do not re-add a parallel reasoning channel here.
+      providerOptions: this.resolvedProviderOptions,
       newId: this.newId,
       now: this.now,
       ...(input.openAiResponsesTransportState
@@ -1164,9 +1177,7 @@ export class AiSdkBackend implements AgentBackend {
         : {}),
       sourceTools: { ...scope.memorySourceTools },
       sourceActiveTools: [...scope.memorySourceActiveTools],
-      ...(this.input.providerOptions
-        ? { sourceProviderOptions: structuredClone(this.input.providerOptions) }
-        : {}),
+      sourceProviderOptions: structuredClone(this.resolvedProviderOptions),
       ...(this.modelAdapter.maxOutputTokens() !== undefined
         ? { sourceMaxOutputTokens: this.modelAdapter.maxOutputTokens() }
         : {}),
@@ -1630,7 +1641,7 @@ export class AiSdkBackend implements AgentBackend {
     );
     const providerTools = plan.providerTools;
     let activeToolResultPruneDiagnosticPatch: ActiveToolResultPruneDiagnosticPatch = {};
-    let activeCompactDiagnosticPatch: Partial<ContextBudgetDiagnostic> | undefined;
+    let midTurnCompactDiagnosticPatch: Partial<ContextBudgetDiagnostic> | undefined;
     // Tool names the repair path matches a mis-cased call against — follows the
     // current step's snapshot so a group loaded mid-turn is repairable on the
     // step it becomes active, not routed to `invalid`.
@@ -1908,14 +1919,6 @@ export class AiSdkBackend implements AgentBackend {
             ? currentTurnMessages
             : [...priorReplay.messages, ...currentTurnMessages];
         };
-        const activeCompactionHeadAnchor =
-          messages[messages.length - 1]?.role === 'user'
-            ? buildActiveCompactionHeadAnchor(
-                messages,
-                messages.length - 1,
-                this.input.contextBudget?.charsPerToken,
-              )
-            : undefined;
         // Diagnostics describe the provider-visible (active) tool subset. A group
         // loaded *this* turn expands that subset on later provider requests,
         // so the durable cost record is refined against the final active set once
@@ -1947,7 +1950,7 @@ export class AiSdkBackend implements AgentBackend {
                 connection: this.input.connection,
                 modelId: this.input.modelId,
                 systemPrompt,
-                providerOptions: this.input.providerOptions,
+                providerOptions: this.resolvedProviderOptions,
                 providerTools,
                 activeTools: active,
                 priorMessages: priorReplay.messages,
@@ -1960,27 +1963,17 @@ export class AiSdkBackend implements AgentBackend {
           };
         };
         // Publish a diagnostics snapshot to every telemetry sink at once so the
-        // cost record, the prefix baseline, and the context-budget high-water
-        // "after" hash never diverge — they must all describe the same active
-        // tool set. A same-turn deferred load re-publishes the final snapshot
-        // below; the high-water "before" hash is the pre-turn baseline, set once.
+        // cost record and prefix baseline describe the same active tool set. A
+        // same-turn deferred load re-publishes the final snapshot below.
         let turnDiagnostics = computeTurnDiagnostics(activeTools);
         const publishTurnDiagnostics = (diag: typeof turnDiagnostics): void => {
           turnDiagnostics = diag;
           promptSegmentsForTelemetry = diag.promptSegments;
           requestShapeForTelemetry = diag.requestShape;
           this.priorRequestShape = diag.requestShape;
-          if (priorReplay.contextBudget?.highWaterReason) {
-            priorReplay.contextBudget.highWaterRequestShapeHashAfter =
-              diag.requestShape.requestShapeHash;
-          }
         };
         // Step-0 (turn-start) view: literally what the first request carries, so
         // the stream-start trace reports it as the prefix actually sent.
-        if (priorReplay.contextBudget?.highWaterReason) {
-          priorReplay.contextBudget.highWaterRequestShapeHashBefore =
-            priorShapeBaseline?.requestShapeHash;
-        }
         publishTurnDiagnostics(turnDiagnostics);
         trace.modelStreamStarted(activeTools, {
           systemPromptHash: turnDiagnostics.requestShape.componentHashes.systemPromptHash,
@@ -2002,82 +1995,9 @@ export class AiSdkBackend implements AgentBackend {
           ...(priorReplay.contextBudget ? { contextBudget: priorReplay.contextBudget } : {}),
         });
 
-        const stepRequestShapeHash = (
-          stepMessages: readonly ModelMessage[],
-          activeToolsForStep: readonly string[] | undefined,
-        ): string =>
-          computeRequestShapeDiagnostic(
-            {
-              connection: this.input.connection,
-              modelId: this.input.modelId,
-              systemPrompt,
-              providerOptions: this.input.providerOptions,
-              providerTools,
-              activeTools: activeToolsForStep ?? plan.activeTools,
-              priorMessages: stepMessages,
-            },
-            priorShapeBaseline,
-          ).requestShapeHash;
-        const activeCompactHook = composeActiveCompactionProjection(
-          this.compaction.buildSemanticCompactProjection(
-            turnId,
-            model,
-            input.runtimeContext,
-            activeCompactionHeadAnchor,
-            (messagesForStep, activeToolsForStep) =>
-              stepRequestShapeHash(messagesForStep, activeToolsForStep),
-            (patch) => {
-              activeCompactDiagnosticPatch = mergeContextBudgetDiagnosticPatches(
-                activeCompactDiagnosticPatch,
-                patch,
-              );
-            },
-            scope,
-            turnAbortController.signal,
-          ),
-          this.compaction.buildActiveFullCompactProjection(
-            turnId,
-            input.runtimeContext,
-            activeCompactionHeadAnchor,
-            (messagesForStep, activeToolsForStep) =>
-              stepRequestShapeHash(messagesForStep, activeToolsForStep),
-            (patch) => {
-              activeCompactDiagnosticPatch = mergeContextBudgetDiagnosticPatches(
-                activeCompactDiagnosticPatch,
-                patch,
-              );
-            },
-          ),
-        );
-        // Deterministic priority on a capacity-replaced step: the hard window
-        // invariant owns the projection, so semantic/active-full compaction
-        // yields for that step (recorded as a decision) instead of running a
-        // second summarizer over the same request.
-        const activeCompactAfterMidTurn =
-          activeCompactHook && midTurnState
-            ? (options: RequestProjectionContext) => {
-                if (midTurnState.replacedStepNumber === options.stepNumber) {
-                  activeCompactDiagnosticPatch = mergeContextBudgetDiagnosticPatches(
-                    activeCompactDiagnosticPatch,
-                    compactionDecisionDiagnosticPatch({
-                      stage: 'activeStep',
-                      sourceKind: 'providerMessages',
-                      decision: 'unchanged',
-                      boundaryKind: 'historyCompact',
-                      reason: 'mid_turn_capacity_precedence',
-                      skippedReasonCounts: {
-                        mid_turn_capacity_precedence: 1,
-                      },
-                    }),
-                  );
-                  return undefined;
-                }
-                return activeCompactHook(options);
-              }
-            : activeCompactHook;
         const onMidTurnDiagnosticPatch = (patch: Partial<ContextBudgetDiagnostic>): void => {
-          activeCompactDiagnosticPatch = mergeContextBudgetDiagnosticPatches(
-            activeCompactDiagnosticPatch,
+          midTurnCompactDiagnosticPatch = mergeContextBudgetDiagnosticPatches(
+            midTurnCompactDiagnosticPatch,
             patch,
           );
         };
@@ -2117,7 +2037,6 @@ export class AiSdkBackend implements AgentBackend {
           plan.projectActiveTools,
           midTurnCapacityHook,
           activeToolResultPruneHook,
-          activeCompactAfterMidTurn,
         );
         // The verdict owner wraps the WHOLE shaping pipeline: hooks shape, one
         // owner measures the final payload and decides pass/terminate.
@@ -2534,6 +2453,7 @@ export class AiSdkBackend implements AgentBackend {
                 incompleteStreamHasNoObservableOutput;
               if (
                 (failure.retryable || idleWatchdogRecovery || incompleteStreamRecovery) &&
+                failure.kind !== 'context_overflow' &&
                 providerAttempt < MAX_PROVIDER_ATTEMPTS_PER_STEP &&
                 stepBudgetRemains &&
                 (attemptHasNoObservableOutput() || idleWatchdogRecovery || incompleteStreamRecovery)
@@ -2725,14 +2645,42 @@ export class AiSdkBackend implements AgentBackend {
             ...(providerStepUsage ? { usage: providerStepUsage } : {}),
           });
           const stepLimitReached = maxSteps !== undefined && runtimeSteps >= maxSteps;
-          if (
-            returnedToolCalls.length > 0 &&
-            !stepLimitReached &&
-            !scope.loopStopRequested &&
-            !scope.aborted
-          ) {
+          const mayTakeAnotherStep =
+            !stepLimitReached && !scope.loopStopRequested && !scope.aborted;
+          if (returnedToolCalls.length > 0 && mayTakeAnotherStep) {
             currentStepMessageId = this.newId();
             continue agentLoop;
+          }
+          // Continuing the turn needs the durable current-run reader, for the
+          // same reason the tool-call edge above demands it: the next request
+          // has to carry the assistant output this step just produced, and only
+          // the ledger projection has it. The no-reader fallback at the top of
+          // the loop appends steering alone, which would ask the model to
+          // redirect work it cannot see. Without a reader this edge is skipped
+          // rather than throwing — the turn still completes and the Host folds
+          // the message into the next Turn, which is today's behaviour.
+          if (mayTakeAnotherStep && this.input.loadTurnRuntimeEvents) {
+            // Last chance for a steer that landed after this turn's final
+            // tool-call boundary — including the only boundary a tool-free
+            // turn has, which precedes the model's first token. Without it the
+            // message is never pulled at all, and whether Steer works would
+            // depend on the model happening to call a tool afterwards (#3529).
+            // A step-limited turn deliberately skips this: its budget is spent,
+            // and the Host folds the message into the next Turn instead.
+            const injectedBefore = scope.injectedSteeringMessages.length;
+            await this.drainSteeringInto(scope, input, queue);
+            // Re-read the stop flags: the drain awaits a durable push, so an
+            // `after_step` stop or an abort can land while it is in flight, and
+            // `mayTakeAnotherStep` is stale by now. Stop wins — the message is
+            // already durable, so the Host folds it into the next Turn.
+            if (
+              scope.injectedSteeringMessages.length > injectedBefore &&
+              !scope.loopStopRequested &&
+              !scope.aborted
+            ) {
+              currentStepMessageId = this.newId();
+              continue agentLoop;
+            }
           }
           break agentLoop;
         }
@@ -2759,10 +2707,10 @@ export class AiSdkBackend implements AgentBackend {
           if (tokenUsage) {
             const systemPromptHash = turnDiagnostics.requestShape.componentHashes.systemPromptHash;
             tokenUsageCostUsd = this.computeTokenUsageCostUsd(tokenUsage);
-            const contextBudgetForUsage = contextBudgetWithActiveProjectionDiagnostics(
+            const contextBudgetForUsage = contextBudgetWithRequestProjectionDiagnostics(
               contextBudgetForTelemetry,
               activeToolResultPruneDiagnosticPatch,
-              activeCompactDiagnosticPatch,
+              midTurnCompactDiagnosticPatch,
             );
             const tu: TokenUsageMessage = {
               type: 'token_usage',
@@ -2963,10 +2911,10 @@ export class AiSdkBackend implements AgentBackend {
       } finally {
         watchdogState.current?.stop();
         if (scope.watchdog === watchdogState.current) scope.watchdog = null;
-        contextBudgetForTelemetry = contextBudgetWithActiveProjectionDiagnostics(
+        contextBudgetForTelemetry = contextBudgetWithRequestProjectionDiagnostics(
           contextBudgetForTelemetry,
           activeToolResultPruneDiagnosticPatch,
-          activeCompactDiagnosticPatch,
+          midTurnCompactDiagnosticPatch,
         );
         // `tokenUsage` still backfills from the completed steps when the send
         // ended without a final `usage`: the terminal outcome and the
@@ -3056,7 +3004,7 @@ export class AiSdkBackend implements AgentBackend {
           const nextBytes = new TextEncoder().encode(event.chunk).byteLength;
           if (
             nestedOutputLimitExceeded ||
-            nestedOutputBytes + nextBytes > DEFAULT_CODE_MODE_LIMITS.maxToolOutputBytes
+            nestedOutputBytes + nextBytes > DEFAULT_CODE_MODE_EXECUTION_POLICY.maxToolOutputBytes
           ) {
             nestedOutputLimitExceeded = true;
             return;
@@ -3067,38 +3015,64 @@ export class AiSdkBackend implements AgentBackend {
       },
       pushAndWaitUntilConsumed: (event) => eventSink.pushAndWaitUntilConsumed(event),
     };
-    return executeCodeCell({
-      code,
-      signal: context.abortSignal,
-      tools: [...snapshot.values()].map((tool) => ({
-        name: tool.name,
-      })),
-      isFatalToolError: isRuntimeCommitBoundaryError,
-      callTool: async (name, input, signal) => {
-        const tool = snapshot.get(name);
-        if (!tool) throw new Error(`Tool "${name}" is not active or nestable in this cell`);
-        const parsedInput = await validateCodeModeToolInput(tool, input);
-        const settlement = await scope.toolRuntime.settleToolCallRaw({
-          tool,
-          turnId: context.turnId,
-          toolCallId: `${context.toolCallId}:nested:${this.newId()}`,
-          input: parsedInput,
-          abortSignal: signal,
-          eventSink: nestedEventSink,
-          origin: 'code_mode',
-          parentToolCallId: context.toolCallId,
-          ...(context.operationId ? { parentOperationId: context.operationId } : {}),
-          maxResultBytes: DEFAULT_CODE_MODE_LIMITS.maxToolOutputBytes,
-        });
-        if (settlement.providerError !== undefined) {
-          throw new Error(settlement.providerError);
-        }
-        if (nestedOutputLimitExceeded) {
-          throw new Error('Code Mode nested output byte limit exceeded');
-        }
-        return settlement.result;
-      },
-    });
+    // A permit is held across the cell's complete lifecycle, not just its
+    // sandbox run: `executeCodeCell` settles only once the cell's host
+    // operations have drained, so releasing on settlement covers the drain.
+    // The sandbox worker cap cannot serve this purpose — on cancellation
+    // `runCodeMode` releases its worker and rejects at once, by design, while
+    // host operations started by the cell may still be running with durable
+    // side effects. Only the Runtime waits for those, so only the Runtime can
+    // bound them; releasing when the worker is released would let repeated
+    // cancellation accumulate host work without bound.
+    //
+    // One cell may wait; the next is turned away rather than queued, which is
+    // what the Code Mode adapter did before this moved to the side that owns
+    // execution. Nothing awaits between reading `waitingCount` and the enqueue
+    // inside `acquire`, so the pair is atomic.
+    if (this.codeCellAdmission.waitingCount >= MAX_WAITING_CODE_MODE_CELLS) {
+      return {
+        ok: false,
+        error: { kind: 'limit_exceeded', message: 'Code Mode execution queue is full' },
+        toolCalls: [],
+      } satisfies CodeModeExecutionResult;
+    }
+    const permit = await this.codeCellAdmission.acquire(context.abortSignal);
+    try {
+      return await executeCodeCell({
+        code,
+        signal: context.abortSignal,
+        tools: [...snapshot.values()].map((tool) => ({
+          name: tool.name,
+        })),
+        isFatalToolError: isRuntimeCommitBoundaryError,
+        callTool: async (name, input, signal) => {
+          const tool = snapshot.get(name);
+          if (!tool) throw new Error(`Tool "${name}" is not active or nestable in this cell`);
+          const parsedInput = await validateCodeModeToolInput(tool, input);
+          const settlement = await scope.toolRuntime.settleToolCallRaw({
+            tool,
+            turnId: context.turnId,
+            toolCallId: `${context.toolCallId}:nested:${this.newId()}`,
+            input: parsedInput,
+            abortSignal: signal,
+            eventSink: nestedEventSink,
+            origin: 'code_mode',
+            parentToolCallId: context.toolCallId,
+            ...(context.operationId ? { parentOperationId: context.operationId } : {}),
+            maxResultBytes: DEFAULT_CODE_MODE_EXECUTION_POLICY.maxToolOutputBytes,
+          });
+          if (settlement.providerError !== undefined) {
+            throw new Error(settlement.providerError);
+          }
+          if (nestedOutputLimitExceeded) {
+            throw new Error('Code Mode nested output byte limit exceeded');
+          }
+          return settlement.result;
+        },
+      });
+    } finally {
+      permit.release();
+    }
   }
 
   private handlePlanToolResult(
@@ -3241,7 +3215,7 @@ export class AiSdkBackend implements AgentBackend {
   private computeTokenUsageCostUsd(usage: NormalizedAiSdkUsage): number | undefined {
     try {
       const pricing = (this.input.lookupPricing ?? getBuiltinPricing)(
-        `${this.input.connection.providerType}:${this.input.modelId}`,
+        pricingModelKey(this.input.connection.providerType, this.input.modelId),
       );
       if (pricing === null) return undefined;
       return computeCost(
@@ -3275,6 +3249,7 @@ export class AiSdkBackend implements AgentBackend {
     turnId: string;
     callKind: ModelCallKind;
     modelId: string;
+    historyCompactRoute?: ModelCallAttempt['historyCompactRoute'];
     /**
      * Stated by every caller, never defaulted: an unattributed provider request
      * is silently dropped by usage accounting, so the compiler has to be the
@@ -3286,6 +3261,7 @@ export class AiSdkBackend implements AgentBackend {
     const accounting = this.modelCallAccounting(input.callKind, {
       modelId: input.modelId,
       ...(input.runId ? { runId: input.runId } : {}),
+      ...(input.historyCompactRoute ? { historyCompactRoute: input.historyCompactRoute } : {}),
     });
     const runId = input.runId;
     const beforeRunProviderDispatch = this.input.beforeRunProviderDispatch;
@@ -3329,6 +3305,7 @@ export class AiSdkBackend implements AgentBackend {
       runId?: string;
       /** The model this call actually runs against; priced as that model. */
       modelId?: string;
+      historyCompactRoute?: ModelCallAttempt['historyCompactRoute'];
     },
   ): ModelCallAccountingInput | undefined {
     const record = this.input.recordModelCallAttempt;
@@ -3340,6 +3317,9 @@ export class AiSdkBackend implements AgentBackend {
       connectionSlug: this.input.connection.slug,
       providerId: this.input.connection.providerType,
       callKind,
+      ...(identity?.historyCompactRoute
+        ? { historyCompactRoute: identity.historyCompactRoute }
+        : {}),
       record,
       resolveCost: (usage: ProviderRequestUsage) => this.resolveModelCallCost(usage, modelId),
       ...(this.input.assertModelCallAccountingReady
@@ -3358,11 +3338,9 @@ export class AiSdkBackend implements AgentBackend {
    * record then carries `costBasis: 'unpriced'`, which is not the same claim as
    * a call that was free.
    *
-   * Priced against the model that actually served the request, which is not
-   * always the session's model: a configured semantic-compact summarizer runs
-   * on its own. Recording one model's id beside another model's rates would
-   * make the stored amount unauditable in exactly the way `pricingRates` exists
-   * to prevent.
+   * Priced against the model that actually served the request. Recording one
+   * model's id beside another model's rates would make the stored amount
+   * unauditable in exactly the way `pricingRates` exists to prevent.
    */
   private resolveModelCallCost(
     usage: ProviderRequestUsage,
@@ -3370,7 +3348,7 @@ export class AiSdkBackend implements AgentBackend {
   ): ResolvedModelCallCost | undefined {
     try {
       const pricing = (this.input.lookupPricing ?? getBuiltinPricing)(
-        `${this.input.connection.providerType}:${modelId}`,
+        pricingModelKey(this.input.connection.providerType, modelId),
       );
       if (pricing === null) return undefined;
       const costUsd = computeCost(
@@ -3419,45 +3397,9 @@ export class AiSdkBackend implements AgentBackend {
     const preparedContextBudget =
       await this.compaction.prepareContextBudgetPolicy(priorRuntimeContext);
     let contextBudget = preparedContextBudget.policy;
-    let budgeted = applyRuntimeEventContextBudget(priorRuntimeContext, contextBudget, {
-      historyCompactProtocol:
-        contextBudget?.historyCompact?.checkpoint ||
-        this.compaction.hasHistoryCompactCheckpointWriter()
-          ? 'checkpoint_v2'
-          : 'legacy_v1',
-    });
-    const oversizedRetainedTurn = hasOversizedRetainedHistoryTurn(
-      budgeted?.events ?? priorRuntimeContext,
-      contextBudget,
-    );
-    let contextBudgetExhaustedDetail: ContextBudgetExhaustedDetail | undefined =
-      oversizedRetainedTurn && contextBudget?.historyCompact?.enabled !== true
-        ? 'no_safe_completed_span'
-        : undefined;
-    if (oversizedRetainedTurn && contextBudget?.historyCompact?.enabled === true) {
-      const overflowRecoveryPolicy: ContextBudgetPolicy = {
-        ...contextBudget,
-        minRecentTurns: 0,
-        historyCompact: {
-          ...contextBudget.historyCompact,
-          minRecentTurns: 0,
-        },
-      };
-      contextBudget = overflowRecoveryPolicy;
-      budgeted = applyRuntimeEventContextBudget(priorRuntimeContext, overflowRecoveryPolicy, {
-        historyCompactProtocol:
-          overflowRecoveryPolicy.historyCompact?.checkpoint ||
-          this.compaction.hasHistoryCompactCheckpointWriter()
-            ? 'checkpoint_v2'
-            : 'legacy_v1',
-      });
-    }
+    const budgeted = applyRuntimeEventContextBudget(priorRuntimeContext, contextBudget);
     let runtimeContext = budgeted?.events ?? priorRuntimeContext;
     let contextBudgetDiagnostic = budgeted?.diagnostic;
-    // The checkpoint this projection was replayed THROUGH, not the one the
-    // policy happens to carry: a loaded checkpoint that missed its prefix or
-    // failed the replay fit left the raw prefix in these events, and a caller
-    // asking what the prompt was built from must not be told otherwise (#2323).
     let projectedHistoryCompactCheckpoint = budgeted?.historyCompactCheckpoint;
     if (preparedContextBudget.diagnosticPatch) {
       contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
@@ -3466,266 +3408,91 @@ export class AiSdkBackend implements AgentBackend {
         preparedContextBudget.diagnosticPatch,
       );
     }
+
+    const maxHistoryTokens = contextBudget?.maxHistoryEstimatedTokens;
+    const needsCompaction =
+      maxHistoryTokens !== undefined &&
+      estimateRuntimeEventsTokens(runtimeContext, contextBudget?.charsPerToken) > maxHistoryTokens;
+    let compactionFailure: ContextBudgetExhaustedDetail | undefined;
     if (
-      budgeted?.historyCompactBlocks?.length &&
-      contextBudget?.historyCompact?.mode === 'read_write' &&
-      this.compaction.hasHistoryCompactWriter()
+      needsCompaction &&
+      contextBudget?.historyCompact?.enabled === true &&
+      this.compaction.hasHistoryCompactCheckpointWriter()
     ) {
-      const loadedBlockIds = new Set(
-        (contextBudget.historyCompact.blocks ?? []).map((block) => block.blockId),
+      const automaticMemoryDecision = automaticMemory
+        ? this.automaticMemoryCompactionDecision()
+        : undefined;
+      const automaticMemorySource = automaticMemoryDecision
+        ? lastNonCompactRuntimeEvent(priorRuntimeContext)
+        : undefined;
+      const compactResult = await this.compaction.compactHistory(
+        {
+          turnId: input.turnId,
+          runId: scope.runId,
+          runtimeContext: priorRuntimeContext,
+        },
+        this.priorRequestShape?.requestShapeHash,
+        automaticMemorySource
+          ? {
+              runId: automaticMemorySource.runId,
+              turnId: automaticMemorySource.turnId,
+              runtimeEventId: automaticMemorySource.id,
+              disposition: automaticMemoryDecision!.disposition,
+            }
+          : undefined,
       );
-      const draftBlocks = budgeted.historyCompactBlocks.filter(
-        (block) => !loadedBlockIds.has(block.blockId),
-      );
-      if (draftBlocks.length > 0) {
-        if (this.input.summarizeHistoryCompact && this.input.recordHistoryCompactCheckpoint) {
-          const automaticMemoryDecision = automaticMemory
-            ? this.automaticMemoryCompactionDecision()
-            : undefined;
-          const automaticMemoryBoundary = automaticMemoryDecision
-            ? lastNonCompactRuntimeEvent(priorRuntimeContext)
-            : undefined;
-          const writePatch = await this.compaction.writeHistoryCompactCheckpoint({
-            turnId: input.turnId,
-            // Stated, not resolved: this runs inside a send, and the backend
-            // may be serving another turn whose run is not this one (#1990).
-            runId: scope.runId,
-            contextBudget,
-            priorRuntimeContext,
-            draftBlock: draftBlocks[0]!,
-            abortSignal: scope.abortController.signal,
-            requestShapeHashBefore: this.priorRequestShape?.requestShapeHash,
-            ...(automaticMemoryBoundary
-              ? {
-                  automaticMemoryBoundary: {
-                    runId: automaticMemoryBoundary.runId,
-                    turnId: automaticMemoryBoundary.turnId,
-                    runtimeEventId: automaticMemoryBoundary.id,
-                    disposition: automaticMemoryDecision!.disposition,
-                  },
-                }
-              : {}),
-          });
-          if (writePatch.replacementCheckpoint) {
-            projectedHistoryCompactCheckpoint = writePatch.replacementCheckpoint;
-            if (automaticMemoryDecision?.dispatch && automaticMemory) {
-              this.dispatchAutomaticMemoryCompaction(scope, {
-                checkpoint: writePatch.replacementCheckpoint,
-                activeTools: [],
-              });
-            }
-            runtimeContext = [
-              ...(isTextHistoryCompactCheckpoint(writePatch.replacementCheckpoint)
-                ? [historyCompactCheckpointToRuntimeEvent(writePatch.replacementCheckpoint)]
-                : []),
-              ...runtimeContext.filter((event) => !event.id.startsWith('history-compact:')),
-            ];
-          } else {
-            if (oversizedRetainedTurn && !writePatch.fallbackCheckpoint) {
-              contextBudgetExhaustedDetail = 'summarizer_failed';
-            }
-            // Fail-open rebuilds the context around the older checkpoint, so
-            // that one — not the fold this send failed to write — is the
-            // boundary the prompt now stands on.
-            if (writePatch.fallbackCheckpoint) {
-              const fallback = buildHistoryCompactCheckpointFailOpenContext(
-                writePatch.fallbackCheckpoint,
-                priorRuntimeContext,
-                contextBudget,
-                runtimeContext.filter((event) => !event.id.startsWith('history-compact:')),
-              );
-              runtimeContext = fallback.events;
-              projectedHistoryCompactCheckpoint = fallback.checkpoint;
-            } else {
-              runtimeContext = runtimeContext.filter(
-                (event) => !event.id.startsWith('history-compact:'),
-              );
-              projectedHistoryCompactCheckpoint = undefined;
-            }
-          }
-          contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
-            contextBudgetDiagnostic ??
-              buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
-            writePatch.diagnosticPatch,
-          );
-        } else {
-          const writePatch = await this.compaction.writeHistoryCompactBlocks({
-            turnId: input.turnId,
-            contextBudget,
-            priorRuntimeContext,
-            draftBlocks,
-            abortSignal: scope.abortController.signal,
-            requestShapeHashBefore: this.priorRequestShape?.requestShapeHash,
-          });
-          if (writePatch.replacementBlocks.length > 0) {
-            runtimeContext = replaceHistoryCompactReplayBlocks(
-              runtimeContext,
-              writePatch.replacementBlocks,
-            );
-          } else {
-            // Back to the raw prior ledger: whatever boundary the projection
-            // stood on a moment ago is not in this context any more.
-            runtimeContext = priorRuntimeContext;
-            projectedHistoryCompactCheckpoint = undefined;
-            contextBudgetDiagnostic = buildContextBudgetDiagnosticShell(
-              priorRuntimeContext,
-              runtimeContext,
-              contextBudget,
-            );
-          }
-          contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
-            contextBudgetDiagnostic ??
-              buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
-            writePatch.diagnosticPatch,
-          );
+      let durableCheckpoint = compactResult.checkpoint;
+      if (!durableCheckpoint && compactResult.outcome.kind === 'unchanged') {
+        try {
+          durableCheckpoint = await Promise.resolve(this.input.loadHistoryCompactCheckpoint?.());
+        } catch {
+          durableCheckpoint = undefined;
         }
       }
+      if (durableCheckpoint) {
+        const replay = buildHistoryCompactCheckpointFailOpenContext(
+          durableCheckpoint,
+          priorRuntimeContext,
+          contextBudget!,
+          priorRuntimeContext,
+        );
+        runtimeContext = replay.events;
+        projectedHistoryCompactCheckpoint = replay.checkpoint;
+        if (
+          replay.checkpoint &&
+          compactResult.outcome.kind === 'compacted' &&
+          automaticMemoryDecision?.dispatch &&
+          automaticMemory
+        ) {
+          this.dispatchAutomaticMemoryCompaction(scope, {
+            checkpoint: replay.checkpoint,
+            activeTools: [],
+          });
+        }
+      }
+      if (compactResult.outcome.kind === 'failed') {
+        compactionFailure =
+          compactResult.outcome.reason === 'no_safe_completed_span'
+            ? 'no_safe_completed_span'
+            : 'summarizer_failed';
+      }
+      contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
+        contextBudgetDiagnostic ??
+          buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
+        compactResult.contextBudget ?? {},
+      );
     }
 
     if (
-      oversizedRetainedTurn &&
-      contextBudget?.maxHistoryEstimatedTokens !== undefined &&
-      estimateRuntimeEventsTokens(runtimeContext, contextBudget.charsPerToken) >
-        contextBudget.maxHistoryEstimatedTokens
+      maxHistoryTokens !== undefined &&
+      estimateRuntimeEventsTokens(runtimeContext, contextBudget?.charsPerToken) > maxHistoryTokens
     ) {
-      contextBudgetExhaustedDetail ??= 'no_safe_completed_span';
-    }
-    if (contextBudgetExhaustedDetail) {
       return {
         status: 'context_budget_exhausted',
-        detail: contextBudgetExhaustedDetail,
+        detail: compactionFailure ?? 'no_safe_completed_span',
         ...(contextBudgetDiagnostic ? { contextBudget: contextBudgetDiagnostic } : {}),
       };
     }
-
-    const historySearchSource = buildHistorySearchSource(priorRuntimeContext, contextBudget);
-    const historyAround =
-      contextBudget?.archiveRetrieval?.mode === 'history_search_gated'
-        ? retrieveReplayHistoryAroundSearchSource(
-            historySearchSource,
-            priorRuntimeContext,
-            input.text,
-            contextBudget?.historySearch,
-            { charsPerToken: contextBudget?.charsPerToken },
-          )
-        : retrieveRuntimeEventHistoryAround(
-            historySearchSource,
-            input.text,
-            contextBudget?.historySearch,
-            { charsPerToken: contextBudget?.charsPerToken },
-          );
-    const archiveRetrievalAllowedTurnIds =
-      contextBudget?.archiveRetrieval?.mode === 'history_search_gated'
-        ? new Set(historyAround.events.map((event) => runtimeEventTurnKey(event)))
-        : undefined;
-    if (historyAround.events.length > 0) {
-      runtimeContext = mergeRuntimeEventsInOriginalOrder(
-        priorRuntimeContext,
-        runtimeContext,
-        historyAround.events,
-      );
-      contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
-        contextBudgetDiagnostic ??
-          buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
-        historyAround.diagnosticPatch,
-      );
-    } else if (contextBudget?.historySearch?.enabled === true) {
-      contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
-        contextBudgetDiagnostic ??
-          buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
-        historyAround.diagnosticPatch,
-      );
-    }
-
-    const synthesis = selectSynthesisCacheForReplay(
-      runtimeContext,
-      input.text,
-      contextBudget?.synthesisCache,
-      {
-        sessionId: this.sessionId,
-        charsPerToken: contextBudget?.charsPerToken,
-      },
-    );
-    runtimeContext = synthesis.events;
-    if (contextBudget?.synthesisCache?.enabled === true) {
-      contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
-        contextBudgetDiagnostic ??
-          buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
-        synthesis.diagnosticPatch,
-      );
-    }
-
-    if (synthesis.selectedBlocks.length === 0) {
-      const retrieval = await retrieveArchivedToolResultsForReplay(
-        runtimeContext,
-        contextBudget?.archiveRetrieval,
-        this.input.toolResultArchive?.services.readToolResultArchive,
-        {
-          sessionId: this.sessionId,
-          charsPerToken: contextBudget?.charsPerToken,
-          allowedTurnIds: archiveRetrievalAllowedTurnIds,
-        },
-      );
-      runtimeContext = retrieval.events;
-      if (contextBudget?.archiveRetrieval?.enabled === true) {
-        contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
-          contextBudgetDiagnostic ??
-            buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
-          retrieval.diagnosticPatch,
-        );
-      }
-      if (
-        contextBudget?.synthesisCache?.enabled === true &&
-        contextBudget.synthesisCache.mode === 'read_write' &&
-        this.input.writeSynthesisCache &&
-        (retrieval.retrievedSourceRefs?.length ?? 0) > 0 &&
-        (retrieval.diagnosticPatch.retrievedArchiveToolResults ?? 0) > 0
-      ) {
-        const evidenceRequestReason = rawEvidenceRequestReason(input.text);
-        if (evidenceRequestReason) {
-          contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
-            contextBudgetDiagnostic ??
-              buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
-            {
-              synthesisCacheWriteSkipped: 1,
-              synthesisCacheWriteSkippedReasonCounts: {
-                [evidenceRequestReason]: 1,
-              },
-            },
-          );
-        } else {
-          const writePatch = await this.compaction.writeSynthesisCacheBlocks({
-            turnId: input.turnId,
-            query: input.text,
-            hydratedRuntimeEvents: runtimeContext,
-            retrievedArchiveRefs: retrieval.retrievedSourceRefs ?? [],
-            archiveRetrievalMode: contextBudget.archiveRetrieval?.mode ?? 'eager',
-            contextBudget,
-            requestShapeHashBefore: this.priorRequestShape?.requestShapeHash,
-          });
-          contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
-            contextBudgetDiagnostic ??
-              buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
-            writePatch,
-          );
-        }
-      } else if (
-        contextBudget?.synthesisCache?.enabled === true &&
-        contextBudget.synthesisCache.mode === 'read_write' &&
-        synthesis.selectedBlocks.length === 0 &&
-        (retrieval.diagnosticPatch.retrievedArchiveToolResults ?? 0) === 0
-      ) {
-        contextBudgetDiagnostic = mergeContextBudgetDiagnostic(
-          contextBudgetDiagnostic ??
-            buildContextBudgetDiagnosticShell(priorRuntimeContext, runtimeContext, contextBudget),
-          {
-            synthesisCacheWriteSkipped: 1,
-            synthesisCacheWriteSkippedReasonCounts: { source_missing: 1 },
-          },
-        );
-      }
-    }
-
     // The boundary belongs to the runtime-event projection above. A gate that
     // falls back to the stored-message projection returns a prompt no
     // checkpoint shaped, so it reports none rather than one the request never
@@ -3802,9 +3569,22 @@ export class AiSdkBackend implements AgentBackend {
     }
 
     if (!this.canReplayProviderNative(plan)) {
+      // Degrade per item, not per plan: an unsupported provider-executed pair
+      // must not cost unrelated client tool history (#2972). Thinking items
+      // stay in the plan; materializeRuntimeReplayPlan degrades unsupported
+      // reasoning per item via reasoningReplay.
+      const degradedPlan = this.dropUnsupportedReplayItems(plan);
       return {
         status: 'ready',
-        messages: await materializeReplayFallback(),
+        messages:
+          degradedPlan.items.length > 0 || hasProviderHistoryCompactCheckpoint
+            ? await this.materializeRuntimeReplayPlan(
+                degradedPlan,
+                scope.imageBudget,
+                undefined,
+                projectedHistoryCompactCheckpoint,
+              )
+            : await materializeReplayFallback(),
         gate: input.continuation
           ? 'runtime_replay_text_only'
           : 'runtime_replay_unsupported_semantics',
@@ -3836,9 +3616,39 @@ export class AiSdkBackend implements AgentBackend {
     for (const item of plan.items) {
       if (item.kind === 'tool_call' && !support.toolCalls) return false;
       if (item.kind === 'tool_result' && !support.toolResults) return false;
+      if (
+        (item.kind === 'tool_call' || item.kind === 'tool_result') &&
+        item.providerExecuted === true &&
+        !support.providerExecutedTools
+      ) {
+        return false;
+      }
       if (item.kind === 'thinking' && item.signature && !support.signedThinking) return false;
     }
     return true;
+  }
+
+  /**
+   * Per-item counterpart to {@link canReplayProviderNative}: drop only the
+   * items the adapter cannot represent so one unsupported provider-executed
+   * pair does not cost unrelated client tool history (#2972). Call and result
+   * items fall together — a call without its result is a dangling wire item,
+   * and provider-executed pairs are flagged on both items by the plan.
+   */
+  private dropUnsupportedReplayItems(
+    plan: RuntimeEventModelReplayPlan,
+  ): RuntimeEventModelReplayPlan {
+    const support = this.modelAdapter.runtimeEventReplaySupport();
+    return {
+      ...plan,
+      items: plan.items.filter((item) => {
+        if (item.kind === 'tool_call' || item.kind === 'tool_result') {
+          if (!support.toolCalls || !support.toolResults) return false;
+          if (item.providerExecuted === true && !support.providerExecutedTools) return false;
+        }
+        return true;
+      }),
+    };
   }
 
   /**
@@ -3901,7 +3711,16 @@ export class AiSdkBackend implements AgentBackend {
             }
           : undefined;
       }
-      if (replaySupport.openAiResponsesEncryptedThinking) {
+      if (replaySupport.responsesReasoning === 'plaintext-content') {
+        if (item.text.length === 0) return undefined;
+        return {
+          part: {
+            type: 'reasoning' as const,
+            text: item.text,
+          },
+        };
+      }
+      if (replaySupport.responsesReasoning === 'encrypted-content') {
         const openai = item.providerOptions?.openai;
         if (openai && typeof openai === 'object' && !Array.isArray(openai)) {
           const { itemId, reasoningEncryptedContent } = openai as {
@@ -3959,9 +3778,6 @@ export class AiSdkBackend implements AgentBackend {
           `runtime-event:${result.eventId}:tool-result`,
         ));
       if (toolName !== 'apply_patch') return output;
-      if (this.applyPatchProfile?.kind === 'codex-v4a-freeform') {
-        return freeformApplyPatchOutput(output);
-      }
       return result.isError ? nativeApplyPatchFailureOutput(output) : output;
     };
     const pushClientToolResults = async (calls: readonly ToolCallItem[]) => {
@@ -4916,13 +4732,13 @@ function sumOptionalCounts<K extends keyof ActiveToolResultPruneDiagnosticPatch>
   return total > 0 ? ({ [key]: total } as Pick<ActiveToolResultPruneDiagnosticPatch, K>) : {};
 }
 
-function contextBudgetWithActiveProjectionDiagnostics(
+function contextBudgetWithRequestProjectionDiagnostics(
   base: ContextBudgetDiagnostic | undefined,
   patch: ActiveToolResultPruneDiagnosticPatch,
-  activeFullCompactPatch: Partial<ContextBudgetDiagnostic> | undefined,
+  compactionPatch: Partial<ContextBudgetDiagnostic> | undefined,
 ): ContextBudgetDiagnostic | undefined {
   const prunePatch = hasActiveToolResultPruneDiagnosticPatch(patch) ? patch : undefined;
-  const mergedPatch = mergeContextBudgetDiagnosticPatches(prunePatch, activeFullCompactPatch);
+  const mergedPatch = mergeContextBudgetDiagnosticPatches(prunePatch, compactionPatch);
   if (!mergedPatch) return base;
   return mergeContextBudgetDiagnostic(base ?? minimalContextBudgetDiagnostic(), mergedPatch);
 }

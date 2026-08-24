@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import electronUpdater from 'electron-updater';
 import type { AppUpdater, UpdateCheckResult } from 'electron-updater';
 import type { ProgressInfo, UpdateInfo } from 'electron-updater';
@@ -67,6 +86,11 @@ interface AppUpdateServiceDeps {
   currentVersion: string;
   isPackaged: boolean;
   updater?: AppUpdater;
+  /**
+   * Harness-only feed override (`MAKA_UPDATE_TEST_FEED`); see
+   * {@link resolveUpdateFeedOverride} for the exact accepted shape.
+   */
+  testFeedUrl?: string;
   mockLatestVersion?: string;
   mockState?: 'available' | 'downloading' | 'downloaded';
   onStatusChange?: (status: AppUpdateStatus) => void;
@@ -92,6 +116,58 @@ const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
  * four-hour timer stays as the floor for a window that is never refocused.
  */
 const UPDATE_CHECK_ON_FOCUS_MIN_INTERVAL_MS = 15 * 60 * 1000;
+
+/**
+ * Harness-only override for the update feed (`MAKA_UPDATE_TEST_FEED`).
+ *
+ * Accepts exactly `http://127.0.0.1:<port>[/path]` and maps it to a generic
+ * provider so the end-to-end Windows auto-update verification can serve a
+ * candidate installer plus `latest.yml` from a loopback HTTP server. Anything
+ * else set — a remote host, `localhost`, another loopback alias, HTTPS,
+ * userinfo, a query string, or a malformed URL — throws: a mistyped override
+ * must never silently fall back to the production GitHub feed, because a test
+ * run quietly installing a real release is exactly the failure this shape
+ * exists to prevent.
+ *
+ * Security posture (this is not an update-hijack vector): setting an
+ * environment variable on the app's process already requires code execution
+ * as the same user, and the per-user NSIS install model means that user can
+ * rewrite the installation directory directly — the override grants no
+ * capability across any privilege boundary. Loopback-only keeps even that
+ * same-user surface minimal: the feed must be a process listening on this
+ * machine. With the variable unset the feed configuration is byte-identical
+ * to production, and update signature verification (once a certificate
+ * exists) applies to overridden feeds exactly as it does to the GitHub feed —
+ * nothing here relaxes it.
+ */
+export function resolveUpdateFeedOverride(
+  raw: string | undefined,
+): { provider: 'generic'; url: string } | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new TypeError(
+      `MAKA_UPDATE_TEST_FEED is not a URL: ${JSON.stringify(raw)}`,
+    );
+  }
+  if (
+    url.protocol !== 'http:' ||
+    url.hostname !== '127.0.0.1' ||
+    url.port === '' ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.search !== '' ||
+    url.hash !== ''
+  ) {
+    throw new TypeError(
+      'MAKA_UPDATE_TEST_FEED must be http://127.0.0.1:<port>[/path] ' +
+        `(got ${JSON.stringify(raw)})`,
+    );
+  }
+  return { provider: 'generic', url: url.toString() };
+}
 
 function normalizeVersion(version: string): string {
   return version.trim().replace(/^v/i, '');
@@ -239,13 +315,11 @@ export function createAppUpdateService(deps: AppUpdateServiceDeps): AppUpdateSer
 
   updater.autoDownload = true;
   updater.autoInstallOnAppQuit = false;
-  updater.allowPrerelease = false;
   updater.logger = null;
-  updater.setFeedURL({
-    provider: 'github',
-    owner: 'Maka-Agent',
-    repo: 'maka-agent',
-  });
+  const testFeed = resolveUpdateFeedOverride(deps.testFeedUrl);
+  // Production reads electron-builder's packaged app-update.yml. Only the
+  // loopback harness replaces that single authority boundary.
+  if (testFeed) updater.setFeedURL(testFeed);
 
   updater.on('checking-for-update', () => {
     publish({ state: 'checking', currentVersion: deps.currentVersion });

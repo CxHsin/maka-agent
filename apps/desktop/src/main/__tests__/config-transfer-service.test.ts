@@ -1,9 +1,28 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import type { AppSettings } from '@maka/core/settings';
 import type { LlmConnection } from '@maka/core/llm-connections';
 import type { CredentialKind } from '@maka/storage';
-import { applyConfigImport, gatherConfigExport, type ConfigTransferDeps } from '../config-transfer-service.js';
+import { applyConfigImport, type ConfigTransferDeps } from '../config-transfer-service.js';
 
 function conn(slug: string): LlmConnection {
   return {
@@ -17,15 +36,6 @@ function conn(slug: string): LlmConnection {
   };
 }
 
-function settingsWithSecrets(): AppSettings {
-  return {
-    theme: 'dark',
-    network: { proxy: { host: '127.0.0.1', password: 'proxy-secret' } },
-    botChat: { channels: { telegram: { chatId: '42', token: 'bot-secret', appSecret: 'app-secret' } } },
-    webSearch: { providers: { tavily: { apiKey: 'tavily-secret' } } },
-  } as unknown as AppSettings;
-}
-
 function makeDeps(overrides: Partial<ConfigTransferDeps> = {}): {
   deps: ConfigTransferDeps;
   saved: LlmConnection[];
@@ -37,9 +47,7 @@ function makeDeps(overrides: Partial<ConfigTransferDeps> = {}): {
   const updatedSettings: unknown[] = [];
   const setCreds: Array<{ slug: string; kind: CredentialKind; value: string }> = [];
   const writtenMemory: string[] = [];
-  const secretsBySlugKind = new Map<string, string>([['deepseek-main::api_key', 'sk-real-key']]);
   const deps: ConfigTransferDeps = {
-    appVersion: '0.1.0',
     connectionStore: {
       list: async () => [conn('deepseek-main')],
       save: async (c) => {
@@ -48,19 +56,16 @@ function makeDeps(overrides: Partial<ConfigTransferDeps> = {}): {
       },
     },
     settingsStore: {
-      get: async () => settingsWithSecrets(),
       update: async (patch) => {
         updatedSettings.push(patch);
         return patch as unknown as AppSettings;
       },
     },
     credentialStore: {
-      getSecret: async (slug, kind) => secretsBySlugKind.get(`${slug}::${kind}`) ?? null,
       setSecret: async (slug, kind, value) => {
         setCreds.push({ slug, kind, value });
       },
     },
-    readMemory: async () => '# MEMORY\n- note',
     writeMemory: async (content) => {
       writtenMemory.push(content);
     },
@@ -70,41 +75,6 @@ function makeDeps(overrides: Partial<ConfigTransferDeps> = {}): {
 }
 
 describe('config-transfer-service', () => {
-  it('exports only selected categories', async () => {
-    const { deps } = makeDeps();
-    const bundle = await gatherConfigExport(['connections'], deps);
-    assert.deepEqual(bundle.includedData, ['connections']);
-    assert.equal(bundle.data.settings, undefined);
-    assert.equal(bundle.data.credentials, undefined);
-  });
-
-  it('omits (does not blank) settings secrets when credentials are NOT included', async () => {
-    // Secret keys must be ABSENT, not '' — mergeSettings deep-merges to the
-    // leaf, so an absent key preserves the target machine's existing secret on
-    // import, whereas '' would overwrite and wipe it.
-    const { deps } = makeDeps();
-    const bundle = await gatherConfigExport(['settings'], deps);
-    const s = bundle.data.settings as Record<string, any>;
-    assert.equal('password' in s.network.proxy, false, 'proxy password key omitted');
-    assert.equal('token' in s.botChat.channels.telegram, false, 'bot token key omitted');
-    assert.equal('appSecret' in s.botChat.channels.telegram, false, 'bot appSecret key omitted');
-    assert.equal('apiKey' in s.webSearch.providers.tavily, false, 'tavily apiKey key omitted');
-    // Non-secret fields at every level pass through untouched.
-    assert.equal(s.theme, 'dark');
-    assert.equal(s.network.proxy.host, '127.0.0.1');
-    assert.equal(s.botChat.channels.telegram.chatId, '42');
-  });
-
-  it('keeps settings secrets and enumerates credentials when credentials ARE included', async () => {
-    const { deps } = makeDeps();
-    const bundle = await gatherConfigExport(['settings', 'credentials'], deps);
-    const s = bundle.data.settings as Record<string, any>;
-    assert.equal(s.network.proxy.password, 'proxy-secret', 'secrets retained alongside credentials');
-    assert.deepEqual(bundle.data.credentials, [
-      { slug: 'deepseek-main', kind: 'api_key', value: 'sk-real-key' },
-    ]);
-  });
-
   it('applies an imported bundle to the stores and summarizes', async () => {
     const { deps, saved, updatedSettings, setCreds, writtenMemory } = makeDeps();
     const bundle = {
@@ -189,5 +159,56 @@ describe('config-transfer-service', () => {
     const result = await applyConfigImport(bundle as any, 'overwrite', deps);
     assert.deepEqual(setCreds, [{ slug: 'deepseek-main', kind: 'api_key', value: 'sk-new' }]);
     assert.deepEqual(result.credentials, { applied: 1, skipped: 0 });
+  });
+  it('restores the whole bundle when it carries a retained retired connection', async () => {
+    // A backup taken before the retirement still lists the connection, and the
+    // catalog refuses to create one. Before this was planned as skipped, the
+    // refusal threw mid-import: a fresh profile got whichever connections
+    // happened to be saved first and no settings, credentials, or memory at
+    // all. The live connection is ordered first here on purpose, so a restored
+    // abort would look like a partial success rather than a clean failure.
+    const { deps, saved, setCreds, writtenMemory, updatedSettings } = makeDeps({
+      connectionStore: {
+        list: async () => [],
+        save: async (c) => {
+          if (c.providerType === 'claude-subscription') {
+            throw new Error('"claude-subscription" is retired and cannot be added');
+          }
+          saved.push(c);
+          return c;
+        },
+      },
+    });
+    const bundle = {
+      schemaVersion: 1,
+      exportedAt: '',
+      appVersion: '0.1.0',
+      includedData: ['connections', 'settings', 'credentials', 'memory'] as const,
+      data: {
+        connections: [
+          conn('deepseek-main'),
+          { ...conn('claude-subscription'), providerType: 'claude-subscription' },
+        ],
+        settings: { theme: 'light' },
+        credentials: [
+          { slug: 'deepseek-main', kind: 'api_key', value: 'sk-live' },
+          { slug: 'claude-subscription', kind: 'oauth_token', value: 'retired-secret' },
+        ],
+        memory: '# imported memory',
+      },
+    };
+
+    const result = await applyConfigImport(bundle as any, 'skip', deps);
+
+    assert.deepEqual(result.connections, { created: 1, overwritten: 0, skipped: 1 });
+    assert.deepEqual(saved.map((c) => c.slug), ['deepseek-main']);
+    // The rest of the bundle still lands — the point of the whole fix.
+    assert.equal(result.settings?.applied, true);
+    assert.equal(updatedSettings.length, 1);
+    assert.deepEqual(writtenMemory, ['# imported memory']);
+    // The retired connection's secret is skipped with it: only a created or
+    // overwritten slug gets one written.
+    assert.deepEqual(setCreds, [{ slug: 'deepseek-main', kind: 'api_key', value: 'sk-live' }]);
+    assert.deepEqual(result.credentials, { applied: 1, skipped: 1 });
   });
 });

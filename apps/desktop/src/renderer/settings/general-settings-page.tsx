@@ -1,4 +1,23 @@
-import { useMemo, useState } from "react";
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { useEffect, useMemo, useState } from "react";
 import { PersonalizationSettingsSection } from "./personalization-settings-section";
 import {
   SettingsActions,
@@ -10,6 +29,7 @@ import {
 import type {
   AppSettings,
   ChatDefaultPermissionMode,
+  ShellPreference,
   NetworkProxySettings,
   UpdateAppSettingsResult,
 } from '@maka/core/settings';
@@ -43,34 +63,69 @@ import { useOptimisticSettingsDraft } from "./use-optimistic-settings-draft";
 import { getSettingsPreferencesCopy } from "../locales/settings-preferences-copy.js";
 import { settingsTestResultMessage } from "../locales/settings-test-result-copy.js";
 import { getShellCopy } from "../locales/shell-copy.js";
+import type { RuntimeHostSettingsConnectionsBridge } from './runtime-host-settings-bridge.js';
+import { getSettingsSharedCopy } from '../locales/settings-shared-copy.js';
+import {
+  useOptionalRuntimeHostSettingsTarget,
+  useRuntimeHostSettingsTarget,
+} from './runtime-host-settings-target.js';
 
 export function GeneralSettingsPage(props: {
   settings: AppSettings;
   connections: readonly LlmConnection[];
   defaultSlug: string | null;
+  connectionsBridge: Pick<RuntimeHostSettingsConnectionsBridge, 'setDefaultModel'> | undefined;
+  runtimeHostStatus: 'loading' | 'ready' | 'unavailable' | 'error';
+  testNetworkProxy?(input: TestProxyInput): Promise<import('@maka/core/settings').SettingsTestResult>;
   onUpdate(
     patch: Parameters<typeof window.maka.settings.update>[0],
   ): Promise<UpdateAppSettingsResult>;
   onRefreshConnections(): Promise<void>;
+  onRetryRuntimeHost(): Promise<void>;
 }) {
+  const host = useOptionalRuntimeHostSettingsTarget();
   const locale = useUiLocale();
   const copy = getSettingsPreferencesCopy(locale).general;
   const sections = getSettingsPreferencesCopy(locale).sections;
+  const sharedCopy = getSettingsSharedCopy(locale);
   const toast = useToast();
+  const hostDiagnosticTarget = host ? { profileId: host.profileId } : undefined;
+  const runtimeHostAvailable =
+    host !== undefined &&
+    props.runtimeHostStatus === 'ready' &&
+    props.connectionsBridge !== undefined &&
+    props.testNetworkProxy !== undefined;
   return (
     <SettingsPage>
+      {!runtimeHostAvailable ? (
+        <Banner
+          status={props.runtimeHostStatus === 'error' ? 'error' : 'warning'}
+          title={props.runtimeHostStatus === 'loading'
+            ? sharedCopy.loading
+            : sharedCopy.runtimeHostUnavailable}
+          endContent={props.runtimeHostStatus === 'error' ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              label={sharedCopy.retry}
+              onClick={() => void props.onRetryRuntimeHost()}
+            />
+          ) : undefined}
+        />
+      ) : null}
       {/* Designer audit P2-13: identity fields (显示名称/界面语言/语气偏好)
           moved here from the 外观 page — they configure who you are to the
           app, not how the app looks. The component keeps its save flow. */}
       <PersonalizationSettingsSection
         settings={props.settings}
+        runtimeHostAvailable={runtimeHostAvailable}
         onUpdate={props.onUpdate}
       />
       <SettingsSection
         title={sections.privacy}
         description={sections.privacyHelp}
       >
-        <SettingsRow
+        {runtimeHostAvailable ? <SettingsRow
           label={copy.incognito}
           description={copy.incognitoHelp}
           end={
@@ -85,12 +140,14 @@ export function GeneralSettingsPage(props: {
                   toast.error(
                     copy.incognitoFailed,
                     settingsActionErrorMessage(error, locale),
+                    undefined,
+                    hostDiagnosticTarget,
                   );
                 }
               }}
             />
           }
-        />
+        /> : null}
         <SettingsRow
           label={copy.notifications}
           description={copy.notificationsHelp}
@@ -112,7 +169,7 @@ export function GeneralSettingsPage(props: {
             />
           }
         />
-        <SettingsRow
+        {runtimeHostAvailable ? <SettingsRow
           label={copy.workspaceInstructions}
           description={copy.workspaceInstructionsHelp}
           end={
@@ -127,31 +184,173 @@ export function GeneralSettingsPage(props: {
                   toast.error(
                     copy.workspaceInstructionsFailed,
                     settingsActionErrorMessage(error, locale),
+                    undefined,
+                    hostDiagnosticTarget,
                   );
+                }
+              }}
+            />
+          }
+        /> : null}
+        <SettingsRow
+          label={copy.workHub}
+          description={copy.workHubHelp}
+          end={
+            <Switch
+              label={copy.workHub}
+              isLabelHidden
+              value={props.settings.workHub.enabled}
+              changeAction={async (enabled) => {
+                try {
+                  await props.onUpdate({ workHub: { enabled } });
+                } catch (error: unknown) {
+                  toast.error(copy.workHubFailed, settingsActionErrorMessage(error, locale));
                 }
               }}
             />
           }
         />
       </SettingsSection>
-      <GeneralDefaultsCard
-        connections={props.connections}
-        defaultSlug={props.defaultSlug}
-        onRefresh={props.onRefreshConnections}
-        permissionMode={props.settings.chatDefaults.permissionMode}
-        thinkingLevel={props.settings.chatDefaults.thinkingLevel}
-        onUpdate={props.onUpdate}
-      />
-      <SettingsSection
-        title={sections.network}
-        description={sections.networkHelp}
-      >
-        <NetworkProxySection
-          settings={props.settings}
-          onUpdate={props.onUpdate}
-        />
-      </SettingsSection>
+      {runtimeHostAvailable ? (
+        <>
+          <GeneralDefaultsCard
+            connections={props.connections}
+            defaultSlug={props.defaultSlug}
+            connectionsBridge={props.connectionsBridge!}
+            onRefresh={props.onRefreshConnections}
+            permissionMode={props.settings.chatDefaults.permissionMode}
+            thinkingLevel={props.settings.chatDefaults.thinkingLevel}
+            onUpdate={props.onUpdate}
+          />
+          <ShellSettingsSection settings={props.settings} onUpdate={props.onUpdate} />
+          <SettingsSection
+            title={sections.network}
+            description={sections.networkHelp}
+          >
+            <NetworkProxySection
+              settings={props.settings}
+              onUpdate={props.onUpdate}
+              testNetworkProxy={props.testNetworkProxy!}
+            />
+          </SettingsSection>
+        </>
+      ) : null}
     </SettingsPage>
+  );
+}
+
+const DEFAULT_GIT_BASH_EXECUTABLE = "C:\\Program Files\\Git\\bin\\bash.exe";
+
+function ShellSettingsSection(props: {
+  settings: AppSettings;
+  onUpdate(
+    patch: Parameters<typeof window.maka.settings.update>[0],
+  ): Promise<UpdateAppSettingsResult>;
+}) {
+  const host = useRuntimeHostSettingsTarget();
+  const locale = useUiLocale();
+  const copy = getSettingsPreferencesCopy(locale).general;
+  const sections = getSettingsPreferencesCopy(locale).sections;
+  const toast = useToast();
+  const mountedRef = useMountedRef();
+  const saveGuard = useActionGuard<"save-shell">();
+  const [preference, setPreference] = useState<ShellPreference>(
+    props.settings.shell.preference,
+  );
+  const [executable, setExecutable] = useState(props.settings.shell.executable);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setPreference(props.settings.shell.preference);
+    setExecutable(props.settings.shell.executable);
+  }, [props.settings.shell.executable, props.settings.shell.preference]);
+
+  const normalizedExecutable = executable.trim();
+  const dirty =
+    preference !== props.settings.shell.preference ||
+    normalizedExecutable !== props.settings.shell.executable;
+  const canSave =
+    dirty && !saving && (preference === "auto" || normalizedExecutable.length > 0);
+
+  async function save(): Promise<void> {
+    if (!saveGuard.begin("save-shell")) return;
+    setSaving(true);
+    try {
+      await props.onUpdate({
+        shell: { preference, executable: normalizedExecutable },
+      });
+    } catch (error) {
+      if (mountedRef.current) {
+        toast.error(
+          copy.saveShellFailed,
+          isRejectedShellPreference(error)
+            ? copy.shellExecutableRejected
+            : settingsActionErrorMessage(error, locale),
+          undefined,
+          { profileId: host.profileId },
+        );
+      }
+    } finally {
+      saveGuard.finish();
+      if (mountedRef.current) setSaving(false);
+    }
+  }
+
+  return (
+    <SettingsSection title={sections.shell} description={sections.shellHelp}>
+      <SettingsRow
+        label={copy.shellPreference}
+        description={copy.shellPreferenceHelp}
+        end={
+          <Selector
+            label={copy.shellPreference}
+            isLabelHidden
+            value={preference}
+            options={[
+              { value: "auto", label: copy.shellAuto },
+              { value: "git_bash", label: copy.shellGitBash },
+            ]}
+            isDisabled={saving}
+            onChange={(value) => {
+              const next = value as ShellPreference;
+              setPreference(next);
+              if (next === "git_bash" && executable.trim().length === 0) {
+                setExecutable(DEFAULT_GIT_BASH_EXECUTABLE);
+              }
+            }}
+          />
+        }
+      />
+      {preference === "git_bash" ? (
+        <SettingsField>
+          <TextInput
+            value={executable}
+            onChange={setExecutable}
+            label={copy.shellExecutable}
+            description={copy.shellExecutableHelp}
+            placeholder={DEFAULT_GIT_BASH_EXECUTABLE}
+            width="100%"
+            isDisabled={saving}
+          />
+        </SettingsField>
+      ) : null}
+      <SettingsActions>
+        <Button
+          variant="primary"
+          isDisabled={!canSave}
+          isLoading={saving}
+          onClick={() => void save()}
+          label={saving ? copy.savingShell : dirty ? copy.saveShell : copy.shellSaved}
+        />
+      </SettingsActions>
+    </SettingsSection>
+  );
+}
+
+function isRejectedShellPreference(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("Runtime policy mutation is invalid for the current state")
   );
 }
 
@@ -181,6 +380,7 @@ const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "med
 function GeneralDefaultsCard(props: {
   connections: readonly LlmConnection[];
   defaultSlug: string | null;
+  connectionsBridge: Pick<RuntimeHostSettingsConnectionsBridge, 'setDefaultModel'>;
   onRefresh(): Promise<void>;
   permissionMode: ChatDefaultPermissionMode;
   thinkingLevel?: ThinkingLevel;
@@ -188,6 +388,7 @@ function GeneralDefaultsCard(props: {
     patch: Parameters<typeof window.maka.settings.update>[0],
   ): Promise<UpdateAppSettingsResult>;
 }) {
+  const host = useRuntimeHostSettingsTarget();
   const locale = useUiLocale();
   const copy = getSettingsPreferencesCopy(locale).general;
   // Level names come from the composer's own map — one vocabulary for the
@@ -232,7 +433,7 @@ function GeneralDefaultsCard(props: {
     setSaving(true);
     try {
       const parsed = parseModelChoiceValue(nextValue);
-      await window.maka.connections.setDefaultModel(
+      await props.connectionsBridge.setDefaultModel(
         parsed
           ? {
               slug: parsed.llmConnectionSlug,
@@ -247,6 +448,8 @@ function GeneralDefaultsCard(props: {
         toast.error(
           copy.saveDefaultModelFailed,
           settingsActionErrorMessage(error, locale),
+          undefined,
+          { profileId: host.profileId },
         );
       }
     } finally {
@@ -295,6 +498,8 @@ function GeneralDefaultsCard(props: {
         toast.error(
           copy.saveDefaultPermissionFailed,
           settingsActionErrorMessage(error, locale),
+          undefined,
+          { profileId: host.profileId },
         );
       }
     } finally {
@@ -311,7 +516,12 @@ function GeneralDefaultsCard(props: {
       await props.onUpdate({ chatDefaults: { thinkingLevel: next } });
     } catch (error) {
       if (mountedRef.current) {
-        toast.error(copy.saveDefaultThinkingFailed, settingsActionErrorMessage(error, locale));
+        toast.error(
+          copy.saveDefaultThinkingFailed,
+          settingsActionErrorMessage(error, locale),
+          undefined,
+          { profileId: host.profileId },
+        );
       }
     } finally {
       releaseSave();
@@ -390,10 +600,12 @@ function GeneralDefaultsCard(props: {
 
 function NetworkProxySection(props: {
   settings: AppSettings;
+  testNetworkProxy(input: TestProxyInput): Promise<import('@maka/core/settings').SettingsTestResult>;
   onUpdate(
     patch: Parameters<typeof window.maka.settings.update>[0],
   ): Promise<UpdateAppSettingsResult>;
 }) {
+  const host = useRuntimeHostSettingsTarget();
   const locale = useUiLocale();
   const copy = getSettingsPreferencesCopy(locale).general;
   const persistedProxy = props.settings.network.proxy;
@@ -416,6 +628,8 @@ function NetworkProxySection(props: {
         toast.error(
           copy.saveNetworkFailed,
           settingsActionErrorMessage(error, locale),
+          undefined,
+          { profileId: host.profileId },
         ),
     },
   );
@@ -428,22 +642,27 @@ function NetworkProxySection(props: {
     if (!proxyTestGuard.begin("test")) return;
     setTesting(true);
     try {
-      const result = await window.maka.settings.testNetworkProxy(
-        toProxyTestInput(proxyDraftRef.current),
-      );
+      const result = await props.testNetworkProxy(toProxyTestInput(proxyDraftRef.current));
       const latency =
         result.latencyMs !== undefined ? ` · ${result.latencyMs} ms` : "";
       const message = settingsTestResultMessage(result, locale);
       if (result.ok && networkPageMountedRef.current) {
         toast.success(copy.proxyReachable, `${message}${latency}`);
       } else if (networkPageMountedRef.current) {
-        toast.error(copy.proxyTestFailed, message);
+        toast.error(
+          copy.proxyTestFailed,
+          message,
+          undefined,
+          { profileId: host.profileId },
+        );
       }
     } catch (error) {
       if (networkPageMountedRef.current) {
         toast.error(
           copy.proxyTestError,
           settingsActionErrorMessage(error, locale),
+          undefined,
+          { profileId: host.profileId },
         );
       }
     } finally {

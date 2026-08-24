@@ -1,6 +1,25 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { useRef, useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { userEvent } from 'storybook/test';
+import { expect, userEvent, waitFor, within } from 'storybook/test';
 import { ToastProvider, useToast } from '@maka/ui';
 import type {
   AppSettings,
@@ -8,6 +27,7 @@ import type {
   ThemePalette,
   ThemePreference,
   UpdateAppSettingsResult,
+  UsageRange,
   UsageStats,
 } from '@maka/core/settings';
 import type {
@@ -18,10 +38,11 @@ import type {
   PermissionSnapshot,
 } from '@maka/core/capabilities';
 import type { HealthSignal, HealthSnapshot } from '@maka/core/health';
-import type { ExternalSessionSummary } from '@maka/core/external-session';
+import type { DesktopExternalSessionCatalogItem } from '../../src/preload/external-session-catalog';
 import type { SessionSummary } from '@maka/core/session';
 import { revisionFamilySessionIds } from '@maka/core/session-revisions';
 import type { LlmConnection, ProviderType } from '@maka/core/llm-connections';
+import { buildChatModelChoices } from '@maka/core/chat-model-choice';
 import type { LocalMemoryBackupInfo, LocalMemoryEntryPreview, LocalMemoryState } from '@maka/core/local-memory';
 import { buildHealthSnapshot } from '@maka/core/health';
 import { createDefaultSettings, mergeSettings } from '@maka/core/settings';
@@ -31,6 +52,10 @@ import { createUiLocaleUpdateGate } from '../../src/renderer/settings/ui-locale-
 import type { ConnectionsBridge } from '../../src/renderer/settings/providers-panel';
 import type { ProjectRecord } from '@maka/core/project';
 import type { ArchivedTasksBridge } from '../../src/renderer/settings/tasks-settings-page';
+import type {
+  DesktopRuntimeHostProfileSnapshot,
+  DesktopSessionSummary,
+} from '../../src/preload/bridge-contract.js';
 import { withScopedMakaBridge } from '../maka-bridge';
 import { getDailyReviewSettingsCopy } from '../../src/renderer/locales/settings-daily-review-copy';
 
@@ -42,6 +67,10 @@ import { getDailyReviewSettingsCopy } from '../../src/renderer/locales/settings-
  * text has to source that text where the UI does.
  */
 const DAILY_REVIEW_DEFAULT_MODEL_LABEL = getDailyReviewSettingsCopy('zh').defaultModel;
+/** A 1×1 transparent PNG: the picker needs a valid data URL, not real art. */
+const STORY_ICON_PREVIEW =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
 const STORY_PLATFORM = 'darwin' as const;
 
 // Fidelity convention (#1433): every story below names the real app path
@@ -88,11 +117,12 @@ const connections: LlmConnection[] = [
 ];
 
 const connectionsBridge: ConnectionsBridge = {
-  async list() {
-    return connections;
-  },
-  async getDefault() {
-    return 'zai-live';
+  async getSnapshot() {
+    return {
+      connections,
+      defaultConnection: 'zai-live',
+      chatModelChoices: buildChatModelChoices(connections),
+    };
   },
   async setDefault() {
     /* noop */
@@ -572,12 +602,47 @@ const healthSignals: HealthSignal[] = [
 
 const healthSnapshot: HealthSnapshot = buildHealthSnapshot(NOW - 45_000, healthSignals);
 
-const makaBridge = {
-  settings: {
-    get: async () => createDefaultSettings(),
-    update: async (patch: Parameters<typeof window.maka.settings.update>[0]): Promise<UpdateAppSettingsResult> => {
-      return { settings: mergeSettings(createDefaultSettings(), patch) };
+const runtimeHostProfiles: DesktopRuntimeHostProfileSnapshot = {
+  defaultProfileId: 'local',
+  entries: [
+    {
+      profile: { id: 'local', name: 'Local', kind: 'local' },
+      enabled: true,
+      isDefault: true,
+      readiness: 'ready',
+      hostId: 'storybook-local-host',
     },
+  ],
+};
+
+let storyClientSettings = createDefaultSettings();
+let storyRuntimeHostSettings = createDefaultSettings();
+
+const makaBridge = {
+  runtimeHostProfiles: {
+    getDefaultHost: async () => ({ profileId: 'local', hostId: 'storybook-local-host' }),
+    getSnapshot: async () => runtimeHostProfiles,
+    addAndEnable: async () => ({ kind: 'connected' as const, snapshot: runtimeHostProfiles }),
+    remove: async () => runtimeHostProfiles,
+    setEnabled: async () => runtimeHostProfiles,
+    setDefault: async () => runtimeHostProfiles,
+    subscribeChanges: () => () => undefined,
+  },
+  settings: {
+    getClient: async () => storyClientSettings,
+    get: async () => storyRuntimeHostSettings,
+    updateClient: async (
+      patch: Parameters<typeof window.maka.settings.updateClient>[0],
+    ): Promise<UpdateAppSettingsResult> => {
+      storyClientSettings = mergeSettings(storyClientSettings, patch);
+      return { settings: storyClientSettings };
+    },
+    update: async (patch: Parameters<typeof window.maka.settings.update>[0]): Promise<UpdateAppSettingsResult> => {
+      storyRuntimeHostSettings = mergeSettings(storyRuntimeHostSettings, patch);
+      return { settings: storyRuntimeHostSettings };
+    },
+    subscribeClientChanged: () => () => undefined,
+    subscribeExternalChanged: () => () => undefined,
     usageStats: async (): Promise<UsageStats> => usageStats,
     bots: {
       listStatuses: async () => ({}),
@@ -591,13 +656,6 @@ const makaBridge = {
   // mount, the Claude card never appears, and every other card stays at its
   // static 可用 label. Each card's login modal has its own fixture in
   // Product/Settings/Providers.
-  claudeSubscription: {
-    isExperimentalEnabled: async () => true,
-    getAccountState: async () => ({
-      runtimeState: 'authenticated',
-      profile: { email: 'claude@example.com' },
-    }),
-  },
   openAiCodex: {
     getAccountState: async () => ({
       runtimeState: 'authenticated',
@@ -629,6 +687,33 @@ const makaBridge = {
         '/Users/storybook-fixture-user/Library/Application Support/Maka/workspaces/infra-observability-platform-desktop',
     }),
     openPath: async () => ({ ok: true as const, opened: '/Users/storybook' }),
+    // The 外观 page mounts the app-icon picker as soon as it opens. Without
+    // these the story throws on mount rather than degrading: calling a bridge
+    // method the fixture does not define is a synchronous TypeError, which the
+    // effect's own `.catch()` never sees.
+    //
+    // The set deliberately spans one shipped icon per group plus an imported
+    // one, so the smoke covers the group headings and the remove affordance
+    // rather than an empty picker.
+    iconPreviews: async () => [
+      { id: 'default' as const, dataUrl: STORY_ICON_PREVIEW },
+      { id: 'mono' as const, dataUrl: STORY_ICON_PREVIEW },
+      { id: 'sky' as const, dataUrl: STORY_ICON_PREVIEW },
+      { id: 'ink' as const, dataUrl: STORY_ICON_PREVIEW },
+      { id: 'pencil-kraft' as const, dataUrl: STORY_ICON_PREVIEW },
+      { id: 'alpine' as const, dataUrl: STORY_ICON_PREVIEW },
+      {
+        id: `custom:${'a'.repeat(32)}` as const,
+        dataUrl: STORY_ICON_PREVIEW,
+        removable: true,
+      },
+    ],
+    selectIcon: async (icon: Parameters<typeof window.maka.app.selectIcon>[0]) => ({
+      ok: true as const,
+      selection: icon,
+    }),
+    importIcon: async () => ({ ok: false as const, reason: 'cancelled' as const }),
+    removeIcon: async () => ({ ok: true as const, selection: 'default' as const }),
     // About mounts update status + subscribe on open (Settings → 关于).
     updateStatus: async () => ({ state: 'idle' as const, currentVersion: '0.9.0-dev' }),
     subscribeUpdateStatus: () => () => undefined,
@@ -670,9 +755,17 @@ const makaBridge = {
   // judge.
   externalSessions: {
     listSources: async () => ({ adapterIds: ['codex'] }),
-    list: async (input: { includeArchived?: boolean; cursor?: string }) => {
+    list: async (input: { includeArchived?: boolean; cursor?: string; text?: string }) => {
+      // The stub honours `text` because the real Host applies it before
+      // paging. A stub that ignored it would render a search box that looks
+      // wired and is not, and the story would certify that.
+      const term = input.text?.trim().toLowerCase();
       const visible = externalConversations.filter(
-        (conversation) => input.includeArchived || !conversation.archived,
+        (conversation) =>
+          (input.includeArchived || !conversation.archived) &&
+          (!term ||
+            conversation.name.toLowerCase().includes(term) ||
+            conversation.cwd.toLowerCase().includes(term)),
       );
       const start = input.cursor === EXTERNAL_SECOND_PAGE ? EXTERNAL_PAGE_SIZE : 0;
       const end = start + EXTERNAL_PAGE_SIZE;
@@ -681,7 +774,7 @@ const makaBridge = {
         nextCursor: end < visible.length ? EXTERNAL_SECOND_PAGE : null,
       };
     },
-    import: async () => ({ ok: false as const }),
+    import: async () => ({ ok: false as const, reason: 'commit_outcome_unknown' as const }),
   },
   // Appearance mounts CustomPetSettingsSection, which reads and subscribes on
   // window.maka.pets. Without this fixture the catalog story throws on mount
@@ -717,7 +810,7 @@ function archivedTask(
     isArchived: true,
     labels: [],
     hasUnread: false,
-    status: 'archived',
+    status: 'active',
     backend: 'ai-sdk',
     llmConnectionSlug: 'zai-live',
     connectionLocked: true,
@@ -774,24 +867,31 @@ const archivedTaskSessions: SessionSummary[] = [
 const EXTERNAL_PAGE_SIZE = 2;
 const EXTERNAL_SECOND_PAGE = 'page-2';
 
-const externalConversations: ExternalSessionSummary[] = [
+const externalConversations: DesktopExternalSessionCatalogItem[] = [
   {
     id: 'codex-01930f',
     name: 'Trace the flaky worktree teardown in CI',
     cwd: '/Users/storybook-fixture-user/workspace/maka-agent',
     updatedAt: Date.now() - 42 * 60 * 1000,
+    importState: {
+      importedCount: 2,
+      importedSessionIds: ['imported-task-newest', 'imported-task-older'],
+      isImporting: false,
+    },
   },
   {
     id: 'codex-01930e',
     name: '把 provider catalog 的分页改成游标',
     cwd: '/Users/storybook-fixture-user/workspace/maka-agent',
     updatedAt: Date.now() - 3 * 60 * 60 * 1000,
+    importState: { importedCount: 1, importedSessionIds: ['imported-task-1'], isImporting: true },
   },
   {
     id: 'codex-01930a',
     name: 'Reproduce the SQLite lock contention under parallel evals',
     cwd: '/Users/storybook-fixture-user/workspace/maka-agent',
     updatedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
+    importState: { importedCount: 0, importedSessionIds: [], isImporting: false },
   },
   {
     id: 'codex-01929c',
@@ -799,6 +899,7 @@ const externalConversations: ExternalSessionSummary[] = [
     cwd: '/Users/storybook-fixture-user/workspace/docs',
     updatedAt: Date.now() - 6 * 24 * 60 * 60 * 1000,
     archived: true,
+    importState: { importedCount: 1, importedSessionIds: ['imported-archived'], isImporting: false },
   },
 ];
 
@@ -814,7 +915,15 @@ const archivedTaskProjects: ProjectRecord[] = [
  */
 function useArchivedTasksStoryBridge(seed: readonly SessionSummary[]): ArchivedTasksBridge {
   const toast = useToast();
-  const [sessions, setSessions] = useState<SessionSummary[]>([...seed]);
+  const [sessions, setSessions] = useState<DesktopSessionSummary[]>(() =>
+    seed.map((session) => ({
+      ...session,
+      runtimeHostId: 'storybook-local',
+      profileId: 'local',
+      profileName: 'Local',
+      profileKind: 'local',
+    })),
+  );
   const confirmDelete = (sessionId: string) =>
     toast.confirm({
       title: `彻底删除「${sessions.find((session) => session.id === sessionId)?.name ?? ''}」？`,
@@ -852,10 +961,34 @@ function useArchivedTasksStoryBridge(seed: readonly SessionSummary[]): ArchivedT
     },
     onPurge: async (sessionIds) => {
       drop(sessionIds);
-      return { removed: sessionIds.length, remaining: [], verified: true, firstError: undefined };
+      return {
+        removed: sessionIds.length,
+        remaining: [],
+        restored: [],
+        verified: true,
+        firstError: undefined,
+      };
     },
   };
 }
+const gitBashSettings = mergeSettings(createDefaultSettings(), {
+  shell: {
+    preference: 'git_bash',
+    executable: 'C:\\Program Files\\Git\\bin\\bash.exe',
+  },
+});
+const withGitBashSettingsBridge = withScopedMakaBridge({
+  ...makaBridge,
+  settings: {
+    ...makaBridge.settings,
+    get: async () => gitBashSettings,
+    update: async (
+      patch: Parameters<typeof window.maka.settings.update>[0],
+    ): Promise<UpdateAppSettingsResult> => ({
+      settings: mergeSettings(gitBashSettings, patch),
+    }),
+  },
+} satisfies Record<string, unknown>);
 
 // #1364: list-page variants — empty vs populated vs long-content, per the
 // tracking issue's expected deliverables.
@@ -1091,9 +1224,6 @@ function SettingsStoryFrame(props: SettingsStoryProps) {
         }}
       >
         <SettingsSurface
-          connections={props.connections ?? connections}
-          defaultSlug={props.defaultSlug === undefined ? 'zai-live' : props.defaultSlug}
-          onRefresh={async () => undefined}
           onClose={noop}
           themePref={themePref}
           onThemeChange={setThemePref}
@@ -1108,6 +1238,8 @@ function SettingsStoryFrame(props: SettingsStoryProps) {
           onOpenSession={noop}
           archivedTasks={archivedTasks}
           onTaskImported={noop}
+          onRemoteHostAdded={noop}
+          onSelectedRuntimeHostProfileIdChange={noop}
         />
       </div>
     </>
@@ -1184,6 +1316,11 @@ export const General: Story = {
   decorators: [withSettingsBridge],
   render: () => <SettingsStory section="general" />,
 };
+// Real path: 设置 → 通用, after selecting Git Bash for the current Runtime Host.
+export const GeneralGitBash: Story = {
+  decorators: [withGitBashSettingsBridge],
+  render: () => <SettingsStory section="general" />,
+};
 // Real path: 设置 → 外观.
 export const Appearance: Story = {
   decorators: [withSettingsBridge],
@@ -1215,6 +1352,51 @@ export const UsageNarrow: Story = {
   ...UsageLongTail,
   parameters: { viewport: { defaultViewport: 'mobile2' } },
 };
+
+/** The persisted range lands with the async CLIENT settings load — usage
+ * is client-owned (settings-ownership.ts), so getClient() is the channel
+ * that carries it — after the section effect's first fetch already ran
+ * with the '24h' default. A Settings window restored directly onto
+ * 使用统计 must refetch when the persisted range arrives — without that,
+ * the page shows the default range's (empty) numbers under the persisted
+ * range's selected chip until a manual refresh. The bridge makes the race
+ * explicit: stats exist only for the persisted 'all' range, and the
+ * client settings resolve a beat late. */
+const withUsagePersistedRangeBridge = (() => {
+  const clientSettings = mergeSettings(createDefaultSettings(), { usage: { range: 'all' } });
+  return withScopedMakaBridge({
+    ...makaBridge,
+    settings: {
+      ...makaBridge.settings,
+      getClient: async () => {
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 30));
+        return clientSettings;
+      },
+      updateClient: async (
+        patch: Parameters<typeof window.maka.settings.updateClient>[0],
+      ): Promise<UpdateAppSettingsResult> => ({
+        settings: mergeSettings(clientSettings, patch),
+      }),
+      usageStats: async (range?: UsageRange): Promise<UsageStats> =>
+        range === 'all' ? usageStats : emptyUsageStats,
+    },
+  } satisfies Record<string, unknown>);
+})();
+
+// Real path: 设置 remembers 使用统计 as the last-open page and restores
+// straight onto it, with 全部 as the persisted range.
+export const UsagePersistedRangeRestore: Story = {
+  decorators: [withUsagePersistedRangeBridge],
+  render: () => <SettingsStory section="usage" />,
+  play: async ({ canvasElement }) => {
+    // The totals must come from the PERSISTED range's dataset, not the
+    // '24h' default the section effect first fired with.
+    await waitForStoryCondition(
+      () => (canvasElement.textContent ?? '').includes('420'),
+      'Usage totals for the persisted range did not render',
+    );
+  },
+};
 /**
  * #1364: entry list (long title / content / tag set), archived group, and
  * backup-candidate rows. The bridge used to lack the `memory` channel
@@ -1224,6 +1406,29 @@ export const UsageNarrow: Story = {
 export const MemoryPopulated: Story = {
   decorators: [withMemoryPopulatedBridge],
   render: () => <SettingsStory section="memory" />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const archiveButtons = await canvas.findAllByRole('button', { name: /^归档：/ });
+    expect(archiveButtons).toHaveLength(2);
+    for (const button of archiveButtons) {
+      expect(button).toHaveTextContent(/^归档$/);
+    }
+    const restoreButton = await canvas.findByRole('button', { name: /^恢复：/ });
+    expect(restoreButton).toHaveTextContent(/^恢复$/);
+    expect(canvas.getByRole('group', {
+      name: /^部署流程要走灰度队列.*手动记录.*记忆操作$/,
+    })).toBeInTheDocument();
+
+    const stableButton = archiveButtons.find((button) =>
+      button.getAttribute('aria-label')?.includes('用户偏好中文回复'));
+    const stableName = stableButton?.getAttribute('aria-label');
+    expect(stableName).toBeTruthy();
+    await userEvent.type(
+      canvas.getByRole('textbox', { name: '筛选本地记忆' }),
+      '用户偏好中文回复',
+    );
+    expect(await canvas.findByRole('button', { name: stableName! })).toHaveTextContent(/^归档$/);
+  },
 };
 // Real path: 设置 → 联网搜索.
 export const WebSearch: Story = {
@@ -1278,6 +1483,21 @@ export const PermissionCenterDiagnosticsExpanded: Story = {
   decorators: [withSettingsBridge],
   render: () => <SettingsStory section="permissions" />,
   play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const grantedFilter = await canvas.findByRole('button', { name: /^仅显示已授权权限/ });
+    expect(grantedFilter).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.click(grantedFilter);
+    await waitFor(() => {
+      expect(grantedFilter).toHaveAttribute('aria-pressed', 'true');
+      expect(canvasElement.querySelectorAll('[data-permission-id]')).toHaveLength(2);
+      expect(canvasElement.querySelector('[data-permission-id="screen_recording"]')).not.toBeInTheDocument();
+    });
+    await userEvent.click(grantedFilter);
+    await waitFor(() => {
+      expect(grantedFilter).toHaveAttribute('aria-pressed', 'false');
+      expect(canvasElement.querySelectorAll('[data-permission-id]')).toHaveLength(4);
+    });
+
     // Scoped through `data-readiness` — the capability rows' own attribute — so
     // the story cannot latch onto some other expandable button on the page.
     const trigger = await waitForStoryButton(
@@ -1299,6 +1519,24 @@ export const PermissionCenterDiagnosticsExpanded: Story = {
 export const HealthCenter: Story = {
   decorators: [withSettingsBridge],
   render: () => <SettingsStory section="health" />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const errorFilter = await canvas.findByRole('button', { name: /^仅显示错误健康信号/ });
+    expect(errorFilter).toHaveAttribute('aria-pressed', 'false');
+    await userEvent.click(errorFilter);
+    await waitFor(() => {
+      expect(errorFilter).toHaveAttribute('aria-pressed', 'true');
+      expect(canvas.getByText('OpenAI Review')).toBeInTheDocument();
+      expect(canvas.queryByText('Z.AI Live')).not.toBeInTheDocument();
+      expect(canvas.getByText('全部健康信号中，1/6 条会阻塞发送')).toBeInTheDocument();
+      expect(canvas.getByText('全部健康信号中，1/6 条会阻塞能力')).toBeInTheDocument();
+    });
+    await userEvent.click(errorFilter);
+    await waitFor(() => {
+      expect(errorFilter).toHaveAttribute('aria-pressed', 'false');
+      expect(canvas.getByText('Z.AI Live')).toBeInTheDocument();
+    });
+  },
 };
 // Real path: 设置 → 关于 (also reachable from 反馈 in the topbar).
 export const About: Story = {
@@ -1318,6 +1556,82 @@ export const ArchivedTasks: Story = {
 export const ImportTasks: Story = {
   decorators: [withSettingsBridge],
   render: () => <SettingsStory section="import-tasks" />,
+};
+
+// Real path: 设置 → 导入任务 → type into 搜索. The catalog pages 16 at a time
+// over a source that can hold a thousand sessions, so the term is the only way
+// to reach one by name. Typing here proves the box reaches the query rather
+// than filtering the page already on screen.
+export const ImportTasksSearch: Story = {
+  decorators: [withSettingsBridge],
+  render: () => <SettingsStory section="import-tasks" />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    const search = await body.findByRole('textbox', { name: '搜索' });
+    // `worktree` appears in exactly one fixture title, so a working search
+    // narrows three rows to one. Filtering the assembled page would too — the
+    // difference is that this term reaches the query, which is what the
+    // stub asserts by honouring it.
+    await userEvent.type(search, 'worktree');
+    // Debounced, so the list settles a moment after the last keystroke.
+    await waitFor(async () => {
+      const rows = body.queryAllByRole('listitem');
+      await expect(rows).toHaveLength(1);
+    });
+    await expect(
+      await body.findByText('Trace the flaky worktree teardown in CI'),
+    ).toBeInTheDocument();
+  },
+};
+
+function importOutcomeRecoveryBridge(): Record<string, unknown> {
+  let importAttempted = false;
+  const source = externalConversations[2];
+  return {
+    ...makaBridge,
+    externalSessions: {
+      ...makaBridge.externalSessions,
+      list: async () => ({
+        sessions: [
+          importAttempted
+            ? {
+                ...source,
+                importState: {
+                  importedCount: 1,
+                  importedSessionIds: ['outcome-recovered-task'],
+                  isImporting: false,
+                },
+              }
+            : source,
+        ],
+        nextCursor: null,
+      }),
+      import: async () => {
+        importAttempted = true;
+        return { ok: false as const, reason: 'commit_outcome_unknown' as const };
+      },
+    },
+  };
+}
+
+// The import response is deliberately unknown; the next authoritative catalog
+// read proves that the task landed and turns the banner into a usable entry.
+// Real path: 设置 → 导入任务 → 导入, when Main reports an unknown commit outcome that catalog recovery confirms.
+export const ImportTasksOutcomeUnknownRecovered: Story = {
+  decorators: [withScopedMakaBridge(importOutcomeRecoveryBridge())],
+  render: () => <SettingsStory section="import-tasks" />,
+  play: async ({ canvasElement }) => {
+    const importButton = await waitForStoryButton(canvasElement, (candidate) =>
+      ['导入', 'Import'].includes(candidate.textContent?.trim() ?? ''),
+    );
+    await userEvent.click(importButton);
+    await waitForStoryCondition(
+      () =>
+        canvasElement.textContent?.includes('已确认导入') === true ||
+        canvasElement.textContent?.includes('Import confirmed') === true,
+      'Unknown-outcome recovery did not expose the imported task',
+    );
+  },
 };
 
 // Real path: the same page on a machine with no supported agent — the common

@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import {
   defineObjectShape,
   hasExactShape,
@@ -53,6 +72,13 @@ export type ModelCallUsageBasis = (typeof MODEL_CALL_USAGE_BASES)[number];
 export const MODEL_CALL_COST_BASES = ['priced', 'unpriced'] as const;
 export type ModelCallCostBasis = (typeof MODEL_CALL_COST_BASES)[number];
 
+/** How a history-compaction call reduced the covered conversation. */
+export const HISTORY_COMPACT_ROUTES = ['text_summary', 'provider_native'] as const;
+export type HistoryCompactRoute = (typeof HISTORY_COMPACT_ROUTES)[number];
+
+/** Hard bound for provider-supplied diagnostic identifiers stored on an attempt. */
+export const MODEL_CALL_DIAGNOSTIC_FIELD_MAX_LENGTH = 256;
+
 export interface ModelCallAttempt {
   schemaVersion: typeof MODEL_CALL_ATTEMPT_SCHEMA_VERSION;
 
@@ -84,6 +110,8 @@ export interface ModelCallAttempt {
   attempt: number;
 
   callKind: ModelCallKind;
+  /** Present on history-compaction calls when the selected route is known. */
+  historyCompactRoute?: HistoryCompactRoute;
   connectionSlug?: string;
   providerId: string;
   modelId: string;
@@ -99,6 +127,10 @@ export interface ModelCallAttempt {
   status: ModelCallAttemptStatus;
   finishReason?: string;
   errorClass?: string;
+  httpStatus?: number;
+  providerCode?: string;
+  providerRequestId?: string;
+  retryable?: boolean;
 
   usageBasis: ModelCallUsageBasis;
   inputTokens?: number;
@@ -140,11 +172,16 @@ const MODEL_CALL_ATTEMPT_SHAPE = defineObjectShape<ModelCallAttempt>()(
   ],
   [
     'connectionSlug',
+    'historyCompactRoute',
     'contextWindow',
     'captureArtifactId',
     'timeToFirstTokenMs',
     'finishReason',
     'errorClass',
+    'httpStatus',
+    'providerCode',
+    'providerRequestId',
+    'retryable',
     'inputTokens',
     'outputTokens',
     'cacheReadInputTokens',
@@ -180,6 +217,22 @@ function isNonNegativeNumber(value: unknown): value is number {
 
 function isOptionalNonNegativeNumber(value: unknown): boolean {
   return value === undefined || isNonNegativeNumber(value);
+}
+
+function isOptionalDiagnosticString(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === 'string' &&
+      value.length > 0 &&
+      value.length <= MODEL_CALL_DIAGNOSTIC_FIELD_MAX_LENGTH)
+  );
+}
+
+function isOptionalHttpStatus(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (isFiniteNumber(value) && Number.isInteger(value) && value >= 100 && value <= 599)
+  );
 }
 
 const PRICING_RATES_SHAPE = defineObjectShape<PricingConfig>()(
@@ -226,6 +279,8 @@ export function decodeModelCallAttempt(value: unknown): ModelCallAttempt {
     isNonNegativeInteger(value.step) &&
     isNonNegativeInteger(value.attempt) &&
     (MODEL_CALL_KINDS as readonly unknown[]).includes(value.callKind) &&
+    (value.historyCompactRoute === undefined ||
+      (HISTORY_COMPACT_ROUTES as readonly unknown[]).includes(value.historyCompactRoute)) &&
     isOptionalString(value.connectionSlug) &&
     isNonEmptyString(value.providerId) &&
     isNonEmptyString(value.modelId) &&
@@ -237,7 +292,11 @@ export function decodeModelCallAttempt(value: unknown): ModelCallAttempt {
     isOptionalNonNegativeNumber(value.timeToFirstTokenMs) &&
     (MODEL_CALL_ATTEMPT_STATUSES as readonly unknown[]).includes(value.status) &&
     isOptionalString(value.finishReason) &&
-    isOptionalString(value.errorClass) &&
+    isOptionalDiagnosticString(value.errorClass) &&
+    isOptionalHttpStatus(value.httpStatus) &&
+    isOptionalDiagnosticString(value.providerCode) &&
+    isOptionalDiagnosticString(value.providerRequestId) &&
+    (value.retryable === undefined || typeof value.retryable === 'boolean') &&
     (MODEL_CALL_USAGE_BASES as readonly unknown[]).includes(value.usageBasis) &&
     TOKEN_FIELDS.every((field) => isOptionalNonNegativeNumber(value[field])) &&
     (MODEL_CALL_COST_BASES as readonly unknown[]).includes(value.costBasis) &&
@@ -250,6 +309,9 @@ export function decodeModelCallAttempt(value: unknown): ModelCallAttempt {
   const completedAt = value.completedAt as number;
   if (completedAt < startedAt) {
     throw new Error('ModelCallAttempt completedAt precedes startedAt');
+  }
+  if (value.historyCompactRoute !== undefined && value.callKind !== 'history_compact') {
+    throw new Error('ModelCallAttempt non-compaction call carries historyCompactRoute');
   }
   // `costBasis` and `costUsd` travel together in both directions. A price we
   // could not resolve must never be published as an amount, and a priced record

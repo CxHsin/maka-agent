@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { StoredMessage } from '@maka/core/session';
@@ -5,7 +24,11 @@ import {
   createRuntimeHostSessionProjectionSeed,
   RuntimeHostSessionProjector,
 } from '../adapter/session-projector.js';
-import type { SessionContinuitySnapshot, SubscriptionFrame } from '../protocol/index.js';
+import {
+  SESSION_CONTINUITY_SCHEMA_VERSION,
+  type SessionContinuitySnapshot,
+  type SubscriptionFrame,
+} from '../protocol/index.js';
 
 test('applies authoritative replacement once and does not complete it again at Turn terminal', () => {
   const projector = new RuntimeHostSessionProjector(
@@ -46,6 +69,103 @@ test('applies authoritative replacement once and does not complete it again at T
   assert.deepEqual(
     terminal.map((event) => event.type),
     ['complete'],
+  );
+});
+
+test('reseeds the latest provider retry when the active Turn still carries one', () => {
+  const retry = {
+    phase: 'scheduled' as const,
+    attempt: 8,
+    maxAttempts: 10,
+    delayMs: 40_000,
+    reason: 'rate_limit' as const,
+  };
+  const projector = new RuntimeHostSessionProjector(
+    snapshot({
+      rootTurn: {
+        sessionId: 'session-1',
+        turnId: 'turn-1',
+        runId: 'run-1',
+        status: 'running',
+        providerRetry: retry,
+      },
+    }),
+    createRuntimeHostSessionProjectionSeed([], snapshot()),
+    () => 10,
+  );
+
+  const seeded = projector.seedActive(true);
+  assert.equal(seeded.length, 1);
+  assert.equal(seeded[0]?.type, 'provider_retry');
+  assert.equal(seeded[0] && 'phase' in seeded[0] ? seeded[0].phase : undefined, 'scheduled');
+});
+
+test('emits a live provider retry when the snapshot overlay appears, then drops it after content', () => {
+  const projector = new RuntimeHostSessionProjector(
+    snapshot(),
+    createRuntimeHostSessionProjectionSeed([], snapshot()),
+    () => 10,
+  );
+  const retrying = snapshot({
+    projectionRevision: 2,
+    rootTurn: {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      runId: 'run-1',
+      status: 'running',
+      providerRetry: {
+        phase: 'scheduled',
+        attempt: 8,
+        maxAttempts: 10,
+        delayMs: 40_000,
+        reason: 'rate_limit',
+      },
+    },
+  });
+  const appeared = projector.accept({
+    kind: 'subscription.session_projection',
+    hostEpoch: 'host-1',
+    subscriptionId: 'subscription-1',
+    sequence: 1,
+    snapshot: retrying,
+  }).events;
+  assert.equal(appeared.length, 1);
+  assert.equal(appeared[0]?.type, 'provider_retry');
+
+  const recovered = snapshot({
+    projectionRevision: 3,
+    rootTurn: {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      runId: 'run-1',
+      status: 'running',
+    },
+  });
+  projector.accept({
+    kind: 'subscription.session_delta',
+    hostEpoch: 'host-1',
+    subscriptionId: 'subscription-1',
+    sequence: 2,
+    sessionId: 'session-1',
+    delta: {
+      kind: 'text',
+      turnId: 'turn-1',
+      runId: 'run-1',
+      messageId: 'message-1',
+      startOffset: 0,
+      text: 'ok',
+    },
+  });
+  projector.accept({
+    kind: 'subscription.session_projection',
+    hostEpoch: 'host-1',
+    subscriptionId: 'subscription-1',
+    sequence: 3,
+    snapshot: recovered,
+  });
+  assert.deepEqual(
+    projector.seedActive(true).map((event) => event.type),
+    ['text_delta'],
   );
 });
 
@@ -142,6 +262,74 @@ test('does not replay settled transcript steps when the active step reaches term
   );
 });
 
+test('marks Runtime Host tool results whose durable content is omitted', () => {
+  const projector = new RuntimeHostSessionProjector(
+    snapshot(),
+    createRuntimeHostSessionProjectionSeed([], snapshot()),
+    () => 10,
+  );
+
+  const projected = projector.accept({
+    kind: 'subscription.session_event',
+    hostEpoch: 'host-1',
+    subscriptionId: 'subscription-1',
+    sequence: 1,
+    sessionId: 'session-1',
+    runId: 'run-1',
+    event: {
+      type: 'tool_result',
+      id: 'result-1',
+      turnId: 'turn-1',
+      ts: 10,
+      toolUseId: 'tool-1',
+      status: 'completed',
+    },
+  }).events[0];
+
+  assert.equal(projected?.type, 'tool_result');
+  assert.equal(
+    projected?.type === 'tool_result' && 'contentOmitted' in projected
+      ? projected.contentOmitted
+      : undefined,
+    true,
+  );
+});
+
+test('preserves the bounded shell-run correlation on a tool start', () => {
+  const projector = new RuntimeHostSessionProjector(
+    snapshot(),
+    createRuntimeHostSessionProjectionSeed([], snapshot()),
+    () => 10,
+  );
+  const ref = 'maka://runtime/background-tasks/bg-1';
+
+  const projected = projector.accept({
+    kind: 'subscription.session_event',
+    hostEpoch: 'host-1',
+    subscriptionId: 'subscription-1',
+    sequence: 1,
+    sessionId: 'session-1',
+    runId: 'run-1',
+    event: {
+      type: 'tool_start',
+      id: 'start-1',
+      turnId: 'turn-1',
+      ts: 10,
+      toolUseId: 'tool-1',
+      toolName: 'Read',
+      shellRunRef: ref,
+    },
+  } as SubscriptionFrame).events[0];
+
+  assert.equal(projected?.type, 'tool_start');
+  assert.equal(
+    projected?.type === 'tool_start' && 'shellRunRef' in projected
+      ? projected.shellRunRef
+      : undefined,
+    ref,
+  );
+});
+
 function deltaFrame(
   sequence: number,
   startOffset: number,
@@ -168,13 +356,12 @@ function deltaFrame(
 
 function snapshot(overrides: Partial<SessionContinuitySnapshot> = {}): SessionContinuitySnapshot {
   return {
-    schemaVersion: 3,
+    schemaVersion: SESSION_CONTINUITY_SCHEMA_VERSION,
     session: {
       sessionId: 'session-1',
       metadataRevision: 1,
       status: 'running',
       createdAt: 1,
-      lastUsedAt: 1,
       isArchived: false,
     },
     projectionRevision: 1,

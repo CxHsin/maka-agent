@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import {
   MODEL_CALL_ATTEMPT_SCHEMA_VERSION,
   type ModelCallAttempt,
@@ -11,6 +30,10 @@ import {
   type PreparedRequestSegment,
 } from './request-shape.js';
 import { rawFinishReasonString } from './model-protocol.js';
+import {
+  providerFailureDiagnostic,
+  type ProviderFailureDiagnostic,
+} from './provider-error-classification.js';
 import { latestContextProjectionInput } from './latest-context-snapshot.js';
 import type { ContextDiagnosticsCompaction } from './context-diagnostics.js';
 import type { ModelCallCommit } from '@maka/core/agent-run';
@@ -88,6 +111,7 @@ export interface ProviderRequestAttemptRecord extends ProviderRequestUsage {
   completedAt: number;
   status: ProviderRequestAttemptStatus;
   finishReason?: string;
+  failure?: ProviderFailureDiagnostic;
   latencyMs: number;
   timeToFirstTokenMs?: number;
 }
@@ -152,6 +176,7 @@ export interface ModelCallAccountingInput {
    */
   providerId?: string;
   callKind: ModelCallKind;
+  historyCompactRoute?: ModelCallAttempt['historyCompactRoute'];
   /**
    * Commits the attempt, and with it the derived latest-context row when this
    * request is one that answers "what is the context made of" (#2323). One
@@ -370,7 +395,7 @@ export class ProviderRequestTracker {
     try {
       result = await input.doStream();
     } catch (error) {
-      await attempt.finalize(abortStatus(input.abortSignal, error));
+      await attempt.finalize(abortStatus(input.abortSignal, error), { error });
       throw error;
     }
 
@@ -397,6 +422,7 @@ export class ProviderRequestTracker {
           } else if (part?.type === 'error') {
             await attempt.finalize(
               input.abortSignal?.aborted ? 'aborted' : sawOutput ? 'interrupted' : 'failed',
+              { error: part.error },
             );
           }
           controller.enqueue(next.value);
@@ -407,6 +433,7 @@ export class ProviderRequestTracker {
               : sawOutput
                 ? 'interrupted'
                 : abortStatus(input.abortSignal, error),
+            { error },
           );
           controller.error(error);
         }
@@ -439,7 +466,7 @@ export class ProviderRequestTracker {
       });
       return result;
     } catch (error) {
-      await attempt.finalize(abortStatus(input.abortSignal, error));
+      await attempt.finalize(abortStatus(input.abortSignal, error), { error });
       throw error;
     }
   }
@@ -455,7 +482,7 @@ export class ProviderRequestTracker {
     observeOutput(): void;
     finalize(
       status: ProviderRequestAttemptStatus,
-      finish?: { reason?: string; usage?: ProviderRequestUsageLike },
+      finish?: { reason?: string; usage?: ProviderRequestUsageLike; error?: unknown },
     ): Promise<void>;
   } {
     const attempt = (this.attemptsByStep.get(step) ?? 0) + 1;
@@ -480,7 +507,7 @@ export class ProviderRequestTracker {
     let abortListener: (() => void) | undefined;
     const finalize = async (
       status: ProviderRequestAttemptStatus,
-      finish?: { reason?: string; usage?: ProviderRequestUsageLike },
+      finish?: { reason?: string; usage?: ProviderRequestUsageLike; error?: unknown },
     ): Promise<void> => {
       if (settled) return;
       const provisional = status === 'aborted' && finish?.usage === undefined;
@@ -493,6 +520,8 @@ export class ProviderRequestTracker {
       const completedAt = this.input.now();
       const usage = strictProviderRequestUsage(finish?.usage);
       const contextWindow = positiveInteger(this.input.contextWindow);
+      const failure =
+        finish?.error !== undefined ? providerFailureDiagnostic(finish.error) : undefined;
       const record: ProviderRequestAttemptRecord = {
         traceId: this.input.traceId,
         attemptId,
@@ -515,6 +544,7 @@ export class ProviderRequestTracker {
         completedAt,
         status,
         ...(finish?.reason !== undefined ? { finishReason: finish.reason } : {}),
+        ...(failure !== undefined ? { failure } : {}),
         latencyMs: Math.max(0, completedAt - startedAt),
         ...(timeToFirstTokenMs !== undefined ? { timeToFirstTokenMs } : {}),
         ...(usage ?? {}),
@@ -599,6 +629,9 @@ export class ProviderRequestTracker {
       step: Math.max(0, record.step),
       attempt: Math.max(0, record.attempt - 1),
       callKind: accounting.callKind,
+      ...(accounting.historyCompactRoute !== undefined
+        ? { historyCompactRoute: accounting.historyCompactRoute }
+        : {}),
       providerId: accounting.providerId ?? record.providerId,
       modelId: record.modelId,
       ...(context.contextWindow !== undefined ? { contextWindow: context.contextWindow } : {}),
@@ -613,6 +646,7 @@ export class ProviderRequestTracker {
         : {}),
       status: record.status,
       ...(record.finishReason !== undefined ? { finishReason: record.finishReason } : {}),
+      ...(record.failure ?? {}),
       usageBasis,
       ...(usageBasis === 'missing' ? {} : modelCallUsageFields(usage)),
       costBasis: priced ? 'priced' : 'unpriced',

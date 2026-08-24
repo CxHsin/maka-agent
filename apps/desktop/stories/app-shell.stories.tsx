@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import type { ComponentProps } from 'react';
@@ -12,13 +31,15 @@ import {
   TitlebarSessionIdentity,
 } from '@maka/ui';
 import type { ChatModelChoice, SessionViewMode, TurnViewModel } from '@maka/ui';
-import { AppShellTopbarActions, AppShellWorkspaceTopActions } from '../src/renderer/app-shell-chrome-actions';
+import { AppShellTopbarActions } from '../src/renderer/app-shell-chrome-actions';
+import { WorkbarTitlebarActions } from '../src/renderer/features/workbar';
 import { AppShellDetailPanel } from '../src/renderer/app-shell-detail-panel';
 import { deriveAppShellTurnPresentation } from '../src/renderer/app-shell-turn-view-model';
 import { deriveBranchBanner } from '../src/renderer/branch-banner';
 import { deriveSessionRevisionNavigation } from '../src/renderer/session-revisions';
 import { deriveSessionRail } from '../src/renderer/session-rail';
 import { AppShell as AstryxAppShell } from '@astryxdesign/core/AppShell';
+import { GoalDialog } from '../src/renderer/features/goals/testing';
 
 const NOW = Date.UTC(2026, 6, 1, 9, 30, 0);
 
@@ -182,14 +203,31 @@ const baseComposerProps: ComposerProps = {
   // session owns it, so the active-session stories below carry it without
   // showing it.
   workspacePicker: {
-    label: 'maka-agent',
-    branch: 'opencode/storybook-surface-coverage',
-    projects: catalogProjects.filter((item) => item.archivedAt === undefined),
-    selectedProjectId: 'project-maka',
-    onAdd: noop,
-    onSelectProject: noop,
-    onRelink: noop,
-    onSelectNoProject: noop,
+    label: 'backend-service',
+    hostBadge: 'Lab server',
+    selectedGroupId: 'lab-server',
+    groups: [
+      {
+        id: 'local',
+        label: 'This device',
+        projects: catalogProjects.filter((item) => item.archivedAt === undefined),
+        selectedProjectId: 'project-maka',
+        onAdd: noop,
+        onSelectProject: noop,
+        onRelink: noop,
+        onSelectNoProject: noop,
+      },
+      {
+        id: 'lab-server',
+        label: 'Lab server',
+        projects: [
+          project({ id: 'project-backend', name: 'backend-service' }),
+          project({ id: 'project-infra', name: 'infrastructure' }),
+        ],
+        selectedProjectId: 'project-backend',
+        onSelectProject: noop,
+      },
+    ],
   },
   onSend: noop,
   onStop: noop,
@@ -205,15 +243,16 @@ const baseComposerProps: ComposerProps = {
   onPermissionModeChange: noop,
   // Fidelity: production app-shell always wires these (app-shell.tsx
   // ~1851-1960), so the daily composer renders the upload button, the
-  // modes menu (Plan / Swarm), and the Skills picker. Omitting them here
-  // understated the persistent element count in every shell story.
+  // mode controls (Plan / orchestration), and the Skills picker. Omitting them
+  // here understated the persistent element count in every shell story.
   onPickAttachments: noop,
   planModeActive: false,
   onPlanModeChange: noop,
-  swarmModeActive: false,
-  onSwarmModeChange: noop,
-  graphModeActive: false,
-  onGraphModeChange: noop,
+  orchestrationMode: 'default',
+  onOrchestrationModeChange: noop,
+  // Production wires this for every Session it can interact with locally
+  // (app-shell.tsx), so the ＋ menu always carries the Goal entry.
+  onSetGoal: noop,
   // Thinking is a separate right-footer Selector when levels are offered.
   activeThinkingLevels: ['off', 'low', 'medium', 'high', 'xhigh'],
   activeThinkingLevel: 'medium',
@@ -242,7 +281,6 @@ function ShellFrame(props: {
       data-sidebar-state={props.sidebarCollapsed ? 'collapsed' : 'expanded'}
       style={
         {
-          height: '100%',
           minHeight: 640,
           /* Same publication point as production, for the same reason as
              `data-sidebar-state` above: the titlebar's first grid track is a
@@ -362,10 +400,10 @@ function ComposedShell(props: {
             })()}
           />
         )}
-        <AppShellWorkspaceTopActions
-          workbarAvailable
-          workbarCollapsed={false}
-          onToggleWorkbar={noop}
+        <WorkbarTitlebarActions
+          available
+          collapsed={false}
+          onToggle={noop}
         />
       </header>
       <AstryxAppShell
@@ -533,6 +571,65 @@ export const RunningStatusDuringToolRun: Story = {
   ),
 };
 
+// Real path: Desktop Computer Use is exposed through the Runtime Host Client
+// Capability bridge. The settled observation establishes the confirmed target;
+// the following sequence inherits it while live progress replaces the generic
+// working phrase at the bottom of the turn.
+export const ComputerUseObservability: Story = {
+  render: () => (
+    <ComposedShell
+      session={{ status: 'running', streaming: true }}
+      chat={{
+        runningStatus: true,
+        messages: [
+          user('msg-cu-1', 'turn-cu', 2, '在计算器里完成这组输入，并确认结果。'),
+          {
+            type: 'turn_state',
+            id: 'state-cu',
+            turnId: 'turn-cu',
+            ts: NOW - 40_000,
+            status: 'running',
+            partialOutputRetained: false,
+          },
+        ],
+        liveTurn: {
+          turnId: 'turn-cu',
+          phase: 'streamed',
+          steps: [{
+            stepId: 'msg-assistant-cu',
+            tools: [
+              {
+                toolUseId: 'tool-cu-observe',
+                toolName: 'mcp__desktop_computer_use__maka_computer',
+                activityKind: 'computer',
+                displayName: 'Maka Computer',
+                status: 'completed',
+                args: { action: 'observe', app: '计算器', window_id: 7 },
+                durationMs: 728,
+              },
+              {
+                toolUseId: 'tool-cu-sequence',
+                toolName: 'mcp__desktop_computer_use__maka_computer',
+                activityKind: 'computer',
+                displayName: 'Maka Computer',
+                status: 'running',
+                args: {
+                  action: 'element_sequence',
+                  observation_id: '00000000-0000-0000-0000-000000000001',
+                  steps: Array.from({ length: 11 }, (_, index) => ({
+                    label: `<text:${String(index).length}>`,
+                  })),
+                },
+                progress: { current: 7, total: 11 },
+              },
+            ],
+          }],
+        },
+      }}
+    />
+  ),
+};
+
 // Real path: the agent calls a tool that needs approval → session enters
 // waiting_for_user and the permission-mode picker is locked with a reason.
 //
@@ -581,6 +678,29 @@ export const NewChatComposer: Story = {
         newChatModel: { llmConnectionSlug: 'anthropic-main', model: 'claude-sonnet-4-5' },
         onPickNewChatModel: noop,
         onOpenModelSettings: noop,
+      }}
+    />
+  ),
+};
+
+// A ready Local Host with no registered Projects must still expose its two
+// bootstrap actions while another Host owns the draft.
+export const NewChatComposerEmptyLocalHost: Story = {
+  render: () => (
+    <ComposedShell
+      session={null}
+      chat={{ messages: [] }}
+      composer={{
+        newChatModel: { llmConnectionSlug: 'anthropic-main', model: 'claude-sonnet-4-5' },
+        onPickNewChatModel: noop,
+        onOpenModelSettings: noop,
+        workspacePicker: {
+          ...baseComposerProps.workspacePicker!,
+          groups: baseComposerProps.workspacePicker!.groups.map((group) =>
+            group.id === 'local'
+              ? { ...group, projects: [], selectedProjectId: undefined }
+              : group),
+        },
       }}
     />
   ),
@@ -828,18 +948,8 @@ const LINEAGE_SESSIONS: SessionSummary[] = [
   }),
 ];
 
-// Real path: open a derived revision that is running an autonomous goal with
-// local memory and Deep Research enabled. Session metadata stays in one context
-// layer above the transcript instead of splitting across header pills and
-// standalone branch/revision rows. The long session name is the point: it is
-// what forces that layer to collapse rather than wrap.
-//
-// The banner reads 分自 without 从中断前: deriveBranchBanner only adds that hint
-// when the caller supplies it, and the renderer deliberately does not until
-// parent-message preloading lands (app-shell.tsx). A story that showed it would
-// be showing a screen the app cannot currently produce.
-export const SessionContextLayer: Story = {
-  render: () => (
+function GoalContextStory(props: { goal: NonNullable<ChatViewProps['goalIndicator']> }) {
+  return (
     <ComposedShell
       relatedSessions={LINEAGE_SESSIONS}
       session={{
@@ -856,18 +966,80 @@ export const SessionContextLayer: Story = {
       chat={{
         memoryActive: true,
         onOpenMemorySettings: noop,
-        goalIndicator: {
-          condition: '把 Session Context Layer 收敛到可 review 状态',
-          status: 'active',
-          iterations: 4,
-          maxIterations: 12,
-          onClear: noop,
-        },
+        goalIndicator: props.goal,
         onBranchBannerClick: noop,
         onRevisionNavigate: noop,
       }}
     />
+  );
+}
+
+// Real path: open a derived revision that is running an autonomous goal with
+// local memory and Deep Research enabled. Session metadata stays in one context
+// layer above the transcript instead of splitting across header pills and
+// standalone branch/revision rows. The long session name is the point: it is
+// what forces that layer to collapse rather than wrap.
+//
+// The banner reads 分自 without 从中断前: deriveBranchBanner only adds that hint
+// when the caller supplies it, and the renderer deliberately does not until
+// parent-message preloading lands (app-shell.tsx). A story that showed it would
+// be showing a screen the app cannot currently produce.
+export const SessionContextLayer: Story = {
+  render: () => (
+    <GoalContextStory
+      goal={{
+        condition: '把 Session Context Layer 收敛到可 review 状态',
+        status: 'active',
+        iterations: 4,
+        maxIterations: 12,
+        setAt: Date.now() - 12 * 60_000,
+        tokensSpent: 72_000,
+        tokenBudget: 200_000,
+        onPause: noop,
+        onClear: noop,
+      }}
+    />
   ),
+};
+
+export const SessionContextLayerWaiting: Story = {
+  render: () => (
+    <GoalContextStory
+      goal={{
+        condition: '等待 CI 状态变化后继续处理 review',
+        status: 'waiting',
+        iterations: 4,
+        maxIterations: 12,
+        setAt: Date.now() - 12 * 60_000,
+        tokensSpent: 72_000,
+        tokenBudget: 200_000,
+        onPause: noop,
+        onClear: noop,
+      }}
+    />
+  ),
+};
+
+export const SessionContextLayerPaused: Story = {
+  render: () => {
+    const pausedAt = Date.now() - 4 * 60_000;
+    return (
+      <GoalContextStory
+        goal={{
+          condition: '把 Session Context Layer 收敛到可 review 状态',
+          status: 'paused',
+          iterations: 4,
+          maxIterations: 12,
+          setAt: pausedAt - 8 * 60_000,
+          pausedAt,
+          tokensSpent: 72_000,
+          tokenBudget: 200_000,
+          onResume: noop,
+          onClear: noop,
+        }}
+      />
+    );
+  },
 };
 
 // The titlebar states the session's identity in every session view, so the
@@ -908,15 +1080,16 @@ export const PlanModeOn: Story = {
 // product accent, so the icon is what has to keep the modes distinguishable —
 // this story is where that carries its own weight.
 export const SwarmModeOn: Story = {
-  render: () => <ComposedShell composer={{ swarmModeActive: true }} />,
+  render: () => <ComposedShell composer={{ orchestrationMode: 'swarm' }} />,
 };
 
-// Real path: Plan and Swarm are independent switches (collaborationMode vs
-// orchestrationMode), so both can be on at once. This is the widest the mode
-// tail ever gets next to a real model name.
+// Real path: Plan and orchestration are separate Session fields with separate
+// lifetimes, so both can be on at once — Plan is a temporary excursion, Swarm
+// is the standing default the execution afterwards runs under. This is the
+// widest the mode tail ever gets next to a real model name.
 export const PlanAndSwarmModeOn: Story = {
   render: () => (
-    <ComposedShell composer={{ planModeActive: true, swarmModeActive: true }} />
+    <ComposedShell composer={{ planModeActive: true, orchestrationMode: 'swarm' }} />
   ),
 };
 
@@ -935,5 +1108,46 @@ export const ModeOnWithPendingAttachments: Story = {
         onRemoveAttachment: noop,
       }}
     />
+  ),
+};
+
+// Real path: this Session already has a running Goal, which the composer shows
+// above the input. Arming refuses a second one, so the ＋ menu's Goal entry
+// says why instead of opening a dialog that would fail on submit.
+export const GoalAlreadySet: Story = {
+  render: () => <ComposedShell composer={{ goalActive: true }} />,
+};
+
+// Real path: composer ＋ → 设定 Goal…, on a Session with no Goal running and no
+// Turn in flight — app-shell mounts this dialog at the top level, over the
+// shell, exactly as composed here. It is the only place the two budgets that
+// stop a Goal are visible before one starts.
+export const GoalDialogOpen: Story = {
+  render: () => (
+    <>
+      <ComposedShell />
+      <GoalDialog
+        sessionId="session-1"
+        onArm={async () => ({
+          kind: 'armed',
+          goal: {
+            id: 'storybook-goal',
+            revision: 1,
+            sessionId: 'storybook-session',
+            condition: 'Ship the Storybook example',
+            status: 'active',
+            setAt: Date.now(),
+            iterations: 0,
+            maxIterations: 25,
+            consecutiveNoProgress: 0,
+            blockCap: 8,
+            tokensAtStart: 0,
+            tokensNow: 0,
+            tokensBaselinePending: false,
+          },
+        })}
+        onClose={noop}
+      />
+    </>
   ),
 };

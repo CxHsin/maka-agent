@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
@@ -7,12 +26,72 @@ import {
   type ShellRunLauncher,
 } from '../shell-tools.js';
 import type { ShellPlan } from '../shell-detect.js';
+import { ShellPreferenceError } from '../shell-detect.js';
 
 const pwshPlan: ShellPlan = {
   kind: 'pwsh',
   displayName: 'PowerShell 7 (pwsh)',
   exe: 'C:\\pf\\pwsh.exe',
 };
+
+test('an explicit Git Bash tool declares POSIX syntax', () => {
+  const tool = buildLocalForegroundBashTool({
+    shell: {
+      plan: {
+        kind: 'git-bash',
+        displayName: 'Git Bash',
+        exe: 'C:\\Program Files\\Git\\bin\\bash.exe',
+      },
+    },
+  });
+  assert.match(tool.description, /Git Bash/);
+  assert.match(tool.description, /POSIX shell syntax/);
+  assert.doesNotMatch(tool.description, /write PowerShell syntax/);
+});
+
+describe('Bash tool fails closed when the turn shell plan carries a setup error', () => {
+  const brokenShell = {
+    plan: { kind: 'cmd', displayName: 'cmd.exe' } as ShellPlan,
+    setupError: new ShellPreferenceError(
+      'executable_missing',
+      'The configured Git Bash was not found',
+    ),
+  };
+
+  test('description declares the outage instead of dialect guidance', () => {
+    const tool = buildLocalForegroundBashTool({ shell: brokenShell });
+    assert.match(tool.description, /unavailable this turn/);
+    assert.doesNotMatch(tool.description, /write cmd syntax/);
+  });
+
+  test('local foreground execution throws the setup error before spawning', async () => {
+    const tool = buildLocalForegroundBashTool({ shell: brokenShell });
+    await assert.rejects(
+      async () => {
+        await tool.impl({ command: 'echo never-runs' }, fakeToolContext());
+      },
+      (error: unknown) => {
+        assert.ok(error instanceof ShellPreferenceError);
+        assert.equal(error.code, 'executable_missing');
+        return true;
+      },
+    );
+  });
+
+  test('managed execution throws before any shell-run reaches the host', async () => {
+    const controller: ShellRunLauncher = {
+      runForegroundBash: () => Promise.reject(new Error('must not be called')),
+      runBackgroundBash: () => Promise.reject(new Error('must not be called')),
+    };
+    const tool = buildManagedBashTool(controller, { shell: brokenShell });
+    await assert.rejects(async () => {
+      await tool.impl({ command: 'echo never-runs' }, fakeToolContext());
+    }, ShellPreferenceError);
+    await assert.rejects(async () => {
+      await tool.impl({ command: 'echo never-runs', run_in_background: true }, fakeToolContext());
+    }, ShellPreferenceError);
+  });
+});
 
 describe('Bash tool shell is threaded through to execution, not just the description', () => {
   test('foreground tool executes with the same shell it declares', async () => {
@@ -21,7 +100,7 @@ describe('Bash tool shell is threaded through to execution, not just the descrip
     // reached the description would run via the default POSIX shell and
     // print a bare 'wired-marker'.
     const tool = buildLocalForegroundBashTool({
-      shell: { kind: 'pwsh', displayName: 'PowerShell 7 (pwsh)', exe: '/bin/echo' },
+      shell: { plan: { kind: 'pwsh', displayName: 'PowerShell 7 (pwsh)', exe: '/bin/echo' } },
     });
     const result = (await tool.impl({ command: 'echo wired-marker' }, fakeToolContext())) as {
       output: { stdout: string };
@@ -53,7 +132,7 @@ describe('Bash tool shell is threaded through to execution, not just the descrip
         });
       },
     };
-    const tool = buildManagedBashTool(controller, { shell: pwshPlan });
+    const tool = buildManagedBashTool(controller, { shell: { plan: pwshPlan } });
     await tool.impl({ command: 'echo hi', run_in_background: true }, fakeToolContext());
     assert.deepEqual((captured[0] as { shell?: unknown }).shell, pwshPlan);
   });

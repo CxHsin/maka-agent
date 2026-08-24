@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type {
   ConnectionTestResult,
   CreateConnectionInput,
@@ -5,6 +24,7 @@ import type {
   SavedRequestHeaders,
   UpdateConnectionInput,
 } from '@maka/core/llm-connections';
+import { buildChatModelChoices } from '@maka/core/chat-model-choice';
 import {
   connectionEnabledModelIds,
   defaultEnabledModelIdsWhenOmitted,
@@ -30,6 +50,7 @@ import {
   normalizeConnectionSlugForIpc,
   normalizeCreateConnectionInputForIpc,
 } from './connections-ipc-validation.js';
+import type { DesktopConnectionSnapshot } from '../shared/desktop-connection-snapshot.js';
 
 type HostConnectionsClient = Pick<
   DesktopRuntimeHostClient,
@@ -57,12 +78,15 @@ export function registerRuntimeHostConnectionsIpc(
   deps: RuntimeHostConnectionsIpcDeps,
 ): void {
   const snapshot = () => deps.client.loadConnectionCatalog();
-  const projected = async () => projectHostConnections(await snapshot());
 
-  handleReconnectableRead(deps.ipcMain, 'connections:list', projected);
-  handleReconnectableRead(deps.ipcMain, 'connections:getDefault', async () => {
+  handleReconnectableRead(deps.ipcMain, 'connections:getSnapshot', async () => {
     const catalog = await snapshot();
-    return defaultConnection(catalog)?.slug ?? null;
+    const connections = projectHostConnections(catalog);
+    return {
+      connections,
+      defaultConnection: defaultConnection(catalog)?.slug ?? null,
+      chatModelChoices: buildChatModelChoices(connections),
+    } satisfies DesktopConnectionSnapshot;
   });
   handleReconnectableRead(deps.ipcMain, 'connections:hasSecret', async (_event, slug: unknown) => {
     const catalog = await snapshot();

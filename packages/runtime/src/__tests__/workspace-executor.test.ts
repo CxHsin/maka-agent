@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, truncate, writeFile } from 'node:fs/promises';
@@ -218,7 +237,7 @@ describe('LocalWorkspaceExecutor file operations', () => {
   test('greps file contents with rg-compatible no-match behavior', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'maka-workspace-grep-'));
     await mkdir(join(cwd, 'src'), { recursive: true });
-    await writeFile(join(cwd, 'src', 'main.ts'), 'export const token = 1;\n', 'utf8');
+    await writeFile(join(cwd, 'src', 'main.ts'), 'export const token = 1; // --flag\n', 'utf8');
     const executor = new LocalWorkspaceExecutor();
 
     const hit = await executor.grepFiles({
@@ -237,8 +256,21 @@ describe('LocalWorkspaceExecutor file operations', () => {
       limit: 200,
       timeoutMs: 5_000,
     });
+    const optionLikePattern = await executor.grepFiles({
+      cwd,
+      pattern: '--flag',
+      path: join(cwd, 'src'),
+      maxCountPerFile: 50,
+      limit: 200,
+      timeoutMs: 5_000,
+    });
 
-    expect(hit.matches).toEqual([`${join(cwd, 'src', 'main.ts')}:1:export const token = 1;`]);
+    expect(hit.matches).toEqual([
+      `${join(cwd, 'src', 'main.ts')}:1:export const token = 1; // --flag`,
+    ]);
     expect(miss).toMatchObject({ matches: [] });
+    expect(optionLikePattern.matches).toEqual([
+      `${join(cwd, 'src', 'main.ts')}:1:export const token = 1; // --flag`,
+    ]);
   });
 });

@@ -1,4 +1,23 @@
-import type { SessionEvent } from '@maka/core/events';
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import type { ContextCompactionOutcome, SessionEvent } from '@maka/core/events';
 import type { StoredMessage } from '@maka/core/session';
 import type { UiLocale } from '@maka/core/ui-locale';
 import {
@@ -13,6 +32,7 @@ import {
   type InteractionQueues,
 } from '@maka/ui';
 import type { RefreshMessagesOptions } from './app-shell-chat-actions.js';
+import type { MessageQueueUiState } from './app-shell-session-ui-state.js';
 import {
   isNoRealConnectionEvent,
   noRealConnectionReasonFromEvent,
@@ -23,6 +43,9 @@ import { getDesktopConversationCopy } from './locales/conversation-copy.js';
 
 type RefBox<T> = { current: T };
 type StateUpdater<T> = (updater: (current: T) => T) => void;
+
+const TERMINAL_HANDOFF_ATTEMPTS = 3;
+const TERMINAL_HANDOFF_RETRY_DELAY_MS = 120;
 
 type ToastApi = {
   error(
@@ -60,10 +83,20 @@ export function createAppShellSessionEventHandlers(options: {
   refreshSessions: () => Promise<unknown>;
   setLiveTurnBySession: StateUpdater<Record<string, LiveTurnProjection>>;
   setInteractionBySession: StateUpdater<InteractionQueues>;
+  setMessageQueueBySession?: StateUpdater<Record<string, MessageQueueUiState>>;
   onInteractionChanged?: (sessionId: string) => void;
   /** A boundary decision settled: the session's execution boundary may have moved. */
   onExecutionBoundaryChanged?: (sessionId: string) => void;
-  showModelSetupToast: (description: string, reason?: string) => void;
+  onContextCompactionOutcome?: (
+    sessionId: string,
+    turnId: string,
+    outcome: ContextCompactionOutcome,
+  ) => void;
+  showModelSetupToast: (
+    description: string,
+    reason?: string,
+    diagnosticTarget?: { sessionId: string },
+  ) => void;
   toastApi: ToastApi;
   notifyRunEnded?: (payload: { kind: 'completed' | 'errored'; sessionId: string; body?: string }) => void;
   scheduleFrame?: (callback: () => void) => void;
@@ -77,8 +110,10 @@ export function createAppShellSessionEventHandlers(options: {
     refreshSessions,
     setLiveTurnBySession,
     setInteractionBySession,
+    setMessageQueueBySession,
     onInteractionChanged,
     onExecutionBoundaryChanged,
+    onContextCompactionOutcome,
     showModelSetupToast,
     toastApi,
     notifyRunEnded,
@@ -180,13 +215,37 @@ export function createAppShellSessionEventHandlers(options: {
   }
 
   async function settleAssistantStreaming(sessionId: string, messageId?: string): Promise<void> {
+    return handoffAssistantStreaming(sessionId, messageId, true);
+  }
+
+  async function handoffAssistantStreaming(
+    sessionId: string,
+    messageId: string | undefined,
+    requireCompletedLiveText: boolean,
+  ): Promise<void> {
     const projection = liveTurnBySessionRef.current[sessionId];
     if (!projection || !messageId) return;
     const step = projection.steps.find((candidate) => candidate.stepId === messageId);
-    if (!step?.text?.complete) return;
-    const refreshed = await refreshMessages(sessionId, { requiredAssistantMessageId: messageId }).catch(() => false);
-    if (!refreshed) return;
-    settleLiveStep(sessionId, messageId);
+    if (!step?.text || (requireCompletedLiveText && !step.text.complete)) return;
+    const attempts = requireCompletedLiveText ? 1 : TERMINAL_HANDOFF_ATTEMPTS;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const refreshed = await refreshMessages(sessionId, {
+        requiredAssistantMessageId: messageId,
+      }).catch(() => false);
+      if (refreshed) {
+        settleLiveStep(sessionId, messageId);
+        return;
+      }
+      if (
+        attempt + 1 >= attempts ||
+        !liveTurnBySessionRef.current[sessionId]?.steps.some(
+          (candidate) => candidate.stepId === messageId,
+        )
+      ) return;
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, TERMINAL_HANDOFF_RETRY_DELAY_MS);
+      });
+    }
   }
 
   function reconcilePersistedMessages(sessionId: string, messages: readonly StoredMessage[]): void {
@@ -223,6 +282,20 @@ export function createAppShellSessionEventHandlers(options: {
     updateLiveTurn(sessionId, [...pending, event]);
 
     switch (event.type) {
+      case 'queue_update':
+        setMessageQueueBySession?.((current) => {
+          if (event.steering.length === 0 && event.followup.length === 0) {
+            if (!(sessionId in current)) return current;
+            const next = { ...current };
+            delete next[sessionId];
+            return next;
+          }
+          return {
+            ...current,
+            [sessionId]: event.followupEntries?.map((entry) => structuredClone(entry)) ?? [],
+          };
+        });
+        break;
       case 'text_complete':
         void refreshMessages(sessionId, { requiredAssistantMessageId: event.messageId }).catch(() => false);
         break;
@@ -261,7 +334,11 @@ export function createAppShellSessionEventHandlers(options: {
         if (activeIdRef.current === sessionId) {
           if (isNoRealConnectionEvent(event)) {
             const reason = noRealConnectionReasonFromEvent(event);
-            showModelSetupToast(noRealConnectionSetupDescription(reason, uiLocale), reason);
+            showModelSetupToast(
+              noRealConnectionSetupDescription(reason, uiLocale),
+              reason,
+              { sessionId },
+            );
           } else {
             const copy = getDesktopConversationCopy(uiLocale).actions;
             toastApi.error(
@@ -285,12 +362,24 @@ export function createAppShellSessionEventHandlers(options: {
       case 'complete': {
         onInteractionChanged?.(sessionId);
         setInteractionBySession((current) => clearInteractions(current, sessionId));
+        if (event.contextCompactionOutcome) {
+          onContextCompactionOutcome?.(sessionId, event.turnId, event.contextCompactionOutcome);
+        }
         if (event.stopReason === 'end_turn' || event.stopReason === 'max_tokens') {
           const body = [...(before?.steps ?? [])].reverse().find((step) => step.text?.text)?.text?.text;
           notifyRunEnded?.({ kind: 'completed', sessionId, body });
         }
         void refreshSessions();
-        void refreshMessages(sessionId, terminalRefreshOptions(before));
+        const terminalMessageId = terminalRefreshOptions(before)?.requiredAssistantMessageId;
+        if (terminalMessageId) {
+          // Terminal durability, rather than Astryx's animation callback, is
+          // the authority for handing streamed text to the transcript. The
+          // callback remains the fast path, but a remount or interrupted-turn
+          // race can no longer strand the final reply in live-only state.
+          void handoffAssistantStreaming(sessionId, terminalMessageId, false);
+        } else {
+          void refreshMessages(sessionId);
+        }
         break;
       }
       default:

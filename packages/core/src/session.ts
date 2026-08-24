@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import {
   decodeMessageContent,
   TOOL_ACTIVITY_KINDS,
@@ -23,33 +42,22 @@ import {
 } from './record-schema.js';
 import { isPermissionDecisionFields } from './interaction-record-schema.js';
 import { isTokenUsageFields, type TokenUsageFields } from './usage-record-schema.js';
-import { decodeCanonicalToolResultContent } from './tool-result-record-schema.js';
+import {
+  decodeCanonicalToolResultContent,
+  decodePersistedToolResultContent,
+} from './tool-result-record-schema.js';
+import { markPersisted, type PersistedValue } from './persisted-value.js';
 import type { SubagentWorkspaceBinding } from './subagent-workspace.js';
+import { decodeTurnOrigin, type TurnOrigin } from './turn-origin.js';
 
 export { DEEP_RESEARCH_SESSION_LABEL, isDeepResearchSession } from './explore-agent.js';
 
-/**
- * `archived` is still here and still written by `SessionStore.archive()`
- * alongside `isArchived`; consolidating those two onto one authority is its own
- * change (#2984, PR 3) because it rewrites stored rows.
- *
- * `review` and `done` have no writer in current source, but they stay: this
- * list is read back out of storage, and narrowing it is a data migration, not a
- * cleanup. `resolveLegacyStatus` in the JSONL importer (removed in #2656) let
- * both values through into real SQLite stores verbatim, and `normalizeSession
- * Header` throws on an unrecognised status for the WHOLE header — so one stored
- * row carrying `done` fails an entire catalog page, not just its own row.
- * Removing them needs a schema migration or a tolerant read, which is its own
- * change with its own review.
- */
+/** Runtime execution states. Archive visibility is represented by `isArchived`. */
 export const SESSION_STATUSES = [
   'active',
   'running',
   'waiting_for_user',
   'blocked',
-  'review',
-  'done',
-  'archived',
   'aborted',
 ] as const;
 
@@ -122,8 +130,6 @@ export interface SubagentSessionRuntime {
   systemPrompt: string;
   toolNames: string[];
   categoryPolicy: Partial<Record<ToolCategory, PolicyDecision>>;
-  /** Legacy decode-only metadata. Current child sessions do not write it. */
-  permissionCeiling?: PermissionMode;
 }
 
 /**
@@ -210,7 +216,6 @@ export interface SessionHeader {
 
   // Lifecycle timestamps
   createdAt: number;
-  lastUsedAt: number;
   lastMessageAt?: number;
 
   // User metadata
@@ -220,7 +225,6 @@ export interface SessionHeader {
   labels: string[];
 
   isArchived: boolean;
-  archivedAt?: number;
   status: SessionStatus;
   blockedReason?: SessionBlockedReason;
   statusUpdatedAt?: number;
@@ -255,7 +259,7 @@ export interface SessionHeader {
   hasUnread: boolean;
 
   // Backend / model config
-  backend: BackendKind;
+  backend: PersistedBackendKind;
   llmConnectionSlug: string;
   /** True after first UserMessage is flushed. Storage self-heals (§5.2). */
   connectionLocked: boolean;
@@ -278,7 +282,32 @@ export interface SessionHeader {
   schemaVersion: 1;
 }
 
-export type BackendKind = 'ai-sdk' | 'fake';
+export type SessionHeaderPatch = Partial<Omit<SessionHeader, 'isArchived'>> & {
+  readonly isArchived?: never;
+};
+
+/**
+ * The backend a live build may select.
+ *
+ * `'fake'` was retired with the in-process FakeBackend (#3211): nothing in a
+ * shipped build may choose it, so it is not a member here. Values read back
+ * from durable state use {@link PersistedBackendKind} instead.
+ */
+export type BackendKind = 'ai-sdk';
+
+/**
+ * The backend value a persisted record may carry.
+ *
+ * Sessions, runs and Automations written by builds that still shipped
+ * FakeBackend hold `'fake'` forever. Decode keeps accepting it so those rows
+ * stay readable — rewriting them to `'ai-sdk'` would only make an unrunnable
+ * task look runnable, since their `llmConnectionSlug` still points at nothing.
+ * Activation refuses them with the product's `fake_backend` reason (see the
+ * refusal registered in `execution-composition.ts`).
+ *
+ * Never write this type: writers take {@link BackendKind}.
+ */
+export type PersistedBackendKind = BackendKind | 'fake';
 
 export interface SessionSummary {
   id: string;
@@ -295,8 +324,9 @@ export interface SessionSummary {
   blockedReason?: SessionBlockedReason;
   statusUpdatedAt?: number;
   /**
-   * The turns the runtime is running for this session right now. Omitted when
-   * there are none.
+   * The turns the runtime is running for this session right now. An explicit
+   * empty array means the runtime authoritatively knows there are none; omission
+   * means the summary source does not know the live state.
    *
    * Projected from the live runs, never persisted: "a run is in flight" is a
    * fact about the running process, so it must read false again after a crash.
@@ -310,8 +340,9 @@ export interface SessionSummary {
    * answer that from an arbitrary one of them.
    *
    * Only populated where the runtime is in a position to know: session LISTS
-   * come from the authority holding the runs. A summary returned by a mutation
-   * (rename, model change) describes the header alone and omits it.
+   * come from the authority holding the runs and include the field even when it
+   * is empty. A summary returned by a mutation (rename, model change) describes
+   * the header alone and omits it.
    */
   runningTurnIds?: string[];
   parentSessionId?: string;
@@ -325,13 +356,12 @@ export interface SessionSummary {
   revisionOfTurnId?: string;
   revisionIndex?: number;
   revisionState?: 'preparing' | 'committed';
-  backend: BackendKind;
+  backend: PersistedBackendKind;
   llmConnectionSlug: string;
   /**
    * True once the session has user messages — its connection/model is
-   * sticky and the send path will never silently rebind it. Surfaced so
-   * the renderer can project send outcomes (#1038) without a main
-   * round-trip.
+   * sticky and compatibility projections never select a replacement target.
+   * Surfaced so onboarding can project existing-session health (#1038).
    */
   connectionLocked: boolean;
   /** Sticky session default model id for renderer/header display. */
@@ -343,6 +373,11 @@ export interface SessionSummary {
   collaborationMode?: CollaborationMode;
   /** Defaults to `default` when absent on legacy summaries. */
   orchestrationMode?: OrchestrationMode;
+}
+
+/** A complete Session catalog row. Its order key is authoritative and never synthesized by clients. */
+export interface SessionCatalogSummary extends SessionSummary {
+  activityAt: number;
 }
 
 export function sessionRevisionFamilyId(
@@ -399,8 +434,18 @@ const SUBAGENT_SESSION_RUNTIME_SHAPE = defineObjectShape<SubagentSessionRuntime>
     'toolNames',
     'categoryPolicy',
   ],
-  ['permissionCeiling', 'presetId'],
+  ['presetId'],
 );
+
+/**
+ * Keys older child sessions wrote that this type no longer has.
+ *
+ * `hasExactShape` rejects unknown keys, so without this a record written before
+ * the key was dropped would fail validation and make the whole child Session
+ * unreadable. Nothing reads the values, and they stay in the stored JSON as
+ * written — this only stops their presence from being treated as corruption.
+ */
+const RETIRED_SUBAGENT_RUNTIME_KEYS: readonly string[] = ['permissionCeiling'];
 const SUBAGENT_SESSION_SPAWN_IDENTITY_SHAPE = defineObjectShape<SubagentSessionSpawn>()(
   ['schemaVersion', 'requestFingerprint', 'initialTurnId', 'initialRunId'],
   [],
@@ -448,11 +493,20 @@ export function isSubagentSessionParent(value: unknown): value is SubagentSessio
   return swarmValid && graphValid && !(value.swarm && value.graph);
 }
 
+function withoutRetiredSubagentRuntimeKeys(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!RETIRED_SUBAGENT_RUNTIME_KEYS.some((key) => Object.hasOwn(value, key))) return value;
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => !RETIRED_SUBAGENT_RUNTIME_KEYS.includes(key)),
+  );
+}
+
 /** Strict decoder guard for the persisted child execution snapshot. */
 export function isSubagentSessionRuntime(value: unknown): value is SubagentSessionRuntime {
   if (
     !isRecord(value) ||
-    !hasExactShape(value, SUBAGENT_SESSION_RUNTIME_SHAPE) ||
+    !hasExactShape(withoutRetiredSubagentRuntimeKeys(value), SUBAGENT_SESSION_RUNTIME_SHAPE) ||
     value.schemaVersion !== SUBAGENT_SESSION_RUNTIME_SCHEMA_VERSION ||
     !Number.isSafeInteger(value.definitionVersion) ||
     (value.definitionVersion as number) < 1 ||
@@ -475,7 +529,7 @@ export function isSubagentSessionRuntime(value: unknown): value is SubagentSessi
   ) {
     return false;
   }
-  return value.permissionCeiling === undefined || isPermissionMode(value.permissionCeiling);
+  return true;
 }
 
 /** Strict decoder guard for durable child-spawn idempotency metadata. */
@@ -639,10 +693,8 @@ export type SessionChangedReason =
   | 'rebound';
 
 export interface SessionChangedEvent {
-  type: 'sessions_changed';
   reason: SessionChangedReason;
   sessionId?: string;
-  connectionSlug?: string;
   modelId?: string;
   /**
    * The turn this change is ABOUT, when the change has a turn to name.
@@ -687,12 +739,8 @@ export interface UserMessage extends MessageContent {
   /** Canonical RuntimeEvent that materialized this mid-Turn steering projection. */
   steeringEventId?: string;
   /** Non-user trigger source. Lets the chat mark turns the user did not
-   * hand-type. Mirrors TurnOrigin in runtime-inputs. */
-  origin?:
-    | { kind: 'scheduled_task'; scheduledTaskId: string }
-    | { kind: 'legacy_automation'; automationId: string }
-    | { kind: 'goal'; goalId: string }
-    | { kind: 'agent_graph'; graphId: string; wakeId: string; attemptId: string };
+   * hand-type. */
+  origin?: TurnOrigin;
 }
 
 /** Prefer the human-facing view of a user message when one was stored. */
@@ -967,25 +1015,6 @@ const ASSISTANT_THINKING_SHAPE = defineObjectShape<AssistantThinking>()(
   ['text'],
   ['signature', 'providerOptions', 'parts'],
 );
-type MessageOrigin = NonNullable<UserMessage['origin']>;
-type ScheduledTaskOrigin = Extract<MessageOrigin, { kind: 'scheduled_task' }>;
-type LegacyAutomationOrigin = Extract<MessageOrigin, { kind: 'legacy_automation' }>;
-type GoalOrigin = Extract<MessageOrigin, { kind: 'goal' }>;
-type AgentGraphOrigin = Extract<MessageOrigin, { kind: 'agent_graph' }>;
-const SCHEDULED_TASK_ORIGIN_SHAPE = defineObjectShape<ScheduledTaskOrigin>()(
-  ['kind', 'scheduledTaskId'],
-  [],
-);
-const LEGACY_AUTOMATION_ORIGIN_SHAPE = defineObjectShape<LegacyAutomationOrigin>()(
-  ['kind', 'automationId'],
-  [],
-);
-const GOAL_ORIGIN_SHAPE = defineObjectShape<GoalOrigin>()(['kind', 'goalId'], []);
-const AGENT_GRAPH_ORIGIN_SHAPE = defineObjectShape<AgentGraphOrigin>()(
-  ['kind', 'graphId', 'wakeId', 'attemptId'],
-  [],
-);
-
 const SYSTEM_NOTE_KINDS = new Set([
   'session_start',
   'session_resume',
@@ -998,18 +1027,31 @@ const SYSTEM_NOTE_KINDS = new Set([
   'abort',
 ]);
 
-export function decodeStoredMessage(value: unknown): StoredMessage {
-  const message = decodeStoredMessageContent(value, decodeCanonicalToolResultContent);
+export function decodeCanonicalMessage(value: unknown): StoredMessage {
+  return decodeMessage(value, decodeCanonicalToolResultContent);
+}
+
+export function decodeStoredMessage(persisted: PersistedValue<StoredMessage>): StoredMessage {
+  return decodeMessage(persisted as unknown, (content) =>
+    decodePersistedToolResultContent(markPersisted<ToolResultContent>(content)),
+  );
+}
+
+function decodeMessage(
+  value: unknown,
+  decodeToolResultContent: (content: unknown) => ToolResultContent,
+): StoredMessage {
+  const message = decodeStoredMessageContent(value, decodeToolResultContent);
   if (!isRecord(message)) throw new Error('Invalid stored message schema');
   switch (message.type) {
     case 'user':
       if (
         hasExactShape(message, USER_MESSAGE_SHAPE) &&
         hasMessageEnvelope(message, true) &&
-        (message.origin === undefined || decodeMessageOrigin(message.origin) !== undefined)
+        (message.origin === undefined || decodeTurnOrigin(message.origin) !== undefined)
       ) {
         const { displayText, attachments, quotes, inlineReferences, origin, ...envelope } = message;
-        const decodedOrigin = origin === undefined ? undefined : decodeMessageOrigin(origin);
+        const decodedOrigin = origin === undefined ? undefined : decodeTurnOrigin(origin);
         try {
           return {
             ...envelope,
@@ -1164,49 +1206,6 @@ function isAssistantThinking(value: unknown): value is AssistantThinking {
   );
 }
 
-function isGoalOrigin(value: unknown): value is GoalOrigin {
-  return (
-    isRecord(value) &&
-    hasExactShape(value, GOAL_ORIGIN_SHAPE) &&
-    value.kind === 'goal' &&
-    typeof value.goalId === 'string'
-  );
-}
-
-function isAgentGraphOrigin(value: unknown): value is AgentGraphOrigin {
-  return (
-    isRecord(value) &&
-    hasExactShape(value, AGENT_GRAPH_ORIGIN_SHAPE) &&
-    value.kind === 'agent_graph' &&
-    typeof value.graphId === 'string' &&
-    typeof value.wakeId === 'string' &&
-    typeof value.attemptId === 'string'
-  );
-}
-
-function isScheduledTaskOrigin(value: unknown): value is ScheduledTaskOrigin {
-  return (
-    isRecord(value) &&
-    hasExactShape(value, SCHEDULED_TASK_ORIGIN_SHAPE) &&
-    value.kind === 'scheduled_task' &&
-    typeof value.scheduledTaskId === 'string'
-  );
-}
-
-function decodeMessageOrigin(value: unknown): MessageOrigin | undefined {
-  if (isScheduledTaskOrigin(value) || isGoalOrigin(value) || isAgentGraphOrigin(value))
-    return value;
-  if (
-    isRecord(value) &&
-    hasExactShape(value, LEGACY_AUTOMATION_ORIGIN_SHAPE) &&
-    (value.kind === 'automation' || value.kind === 'legacy_automation') &&
-    typeof value.automationId === 'string'
-  ) {
-    return { kind: 'legacy_automation', automationId: value.automationId };
-  }
-  return undefined;
-}
-
 function isOptionalFiniteDuration(value: unknown): boolean {
   return value === undefined || isFiniteNumber(value);
 }
@@ -1225,27 +1224,13 @@ function isToolActivityIdentity(value: Record<string, unknown>): boolean {
 export const STEP_LIMIT_NOTICE_TEXT =
   'Reached the configured step limit. The task may be incomplete. Send “continue” to resume.';
 
-/**
- * View-boundary facts for explaining a model selection without adding a
- * second persisted model authority. Assistant rows already record the actual
- * model used by each completed step, so the latest such row is the only
- * durable model fact the switcher needs.
- */
-export function deriveModelSwitchTranscript(messages: readonly StoredMessage[]): {
-  hasConversation: boolean;
-  lastUsedModel?: string;
-} {
-  let lastUsedModel: string | undefined;
+/** Latest actual model recorded by a completed assistant step. */
+export function latestAssistantModelId(messages: readonly StoredMessage[]): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.type !== 'assistant') continue;
-    lastUsedModel = message.modelId;
-    break;
+    if (message?.type === 'assistant') return message.modelId;
   }
-  return {
-    hasConversation: messages.length > 0,
-    ...(lastUsedModel ? { lastUsedModel } : {}),
-  };
+  return undefined;
 }
 
 export function deriveTurnRecords(messages: readonly StoredMessage[]): TurnRecord[] {

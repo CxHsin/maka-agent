@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { useEffect, useState } from 'react';
 import type { ConfigCategory } from '@maka/storage';
 import {
@@ -17,6 +36,7 @@ import { settingsActionErrorMessage } from './settings-error-copy';
 import { useActionGuard } from './use-action-guard';
 import { getDataSettingsCopy, type DataSettingsCopy } from '../locales/settings-data-copy';
 import { getSettingsSharedCopy } from '../locales/settings-shared-copy.js';
+import { useOptionalRuntimeHostSettingsTarget } from './runtime-host-settings-target.js';
 
 const CONFIG_CATEGORY_IDS: readonly ConfigCategory[] = ['connections', 'settings', 'memory', 'credentials'];
 
@@ -35,7 +55,11 @@ function summarizeImportResult(result: ConfigImportResult, copy: DataSettingsCop
   return parts.join(' · ') || copy.importSummary.empty;
 }
 
-export function DataSettingsPage() {
+export function DataSettingsPage(props: {
+  runtimeHostStatus: 'loading' | 'ready' | 'unavailable' | 'error';
+  onRetryRuntimeHost(): Promise<void>;
+}) {
+  const host = useOptionalRuntimeHostSettingsTarget();
   const locale = useUiLocale();
   const copy = getDataSettingsCopy(locale);
   const sharedCopy = getSettingsSharedCopy(locale);
@@ -50,10 +74,17 @@ export function DataSettingsPage() {
   );
   const [importStrategy, setImportStrategy] = useState<'skip' | 'overwrite'>('skip');
   const [configBusy, setConfigBusy] = useState<null | 'export' | 'import'>(null);
+  const runtimeHostAvailable = host !== undefined && props.runtimeHostStatus === 'ready';
+  const diagnosticTarget = host ? { profileId: host.profileId } : undefined;
 
   useEffect(() => {
+    if (!host) {
+      setInfo(null);
+      setInfoError(null);
+      return;
+    }
     let cancelled = false;
-    void window.maka.app.info().then((next) => {
+    void window.maka.app.info(host).then((next) => {
       if (!cancelled) {
         setInfo(next);
         setInfoError(null);
@@ -63,12 +94,12 @@ export function DataSettingsPage() {
       const message = settingsActionErrorMessage(error, locale);
       setInfo(null);
       setInfoError(message);
-      toast.error(copy.loadFailed, message);
+      toast.error(copy.loadFailed, message, undefined, diagnosticTarget);
     });
     return () => {
       cancelled = true;
     };
-  }, [locale, toast]);
+  }, [host, locale, toast]);
 
   async function runDataAction(action: string, run: () => Promise<void>) {
     if (!dataActionGuard.begin(action)) return;
@@ -90,17 +121,24 @@ export function DataSettingsPage() {
     if (!info) return;
     await runDataAction('workspace:open', async () => {
       try {
-        const result = await window.maka.app.openPath('workspace');
+        const result = await window.maka.app.openPath('workspace', undefined, host);
         if (!dataPageMountedRef.current) return;
         if (!result.ok) {
           toast.error(
             copy.openFailed(openPathActionLabel('workspace', locale)),
             openPathFailureCopy(result.reason, locale),
+            undefined,
+            diagnosticTarget,
           );
         }
       } catch (error) {
         if (dataPageMountedRef.current) {
-          toast.error(copy.openFailed(openPathActionLabel('workspace', locale)), settingsActionErrorMessage(error, locale));
+          toast.error(
+            copy.openFailed(openPathActionLabel('workspace', locale)),
+            settingsActionErrorMessage(error, locale),
+            undefined,
+            diagnosticTarget,
+          );
         }
       }
     });
@@ -141,7 +179,7 @@ export function DataSettingsPage() {
   }
 
   async function exportConfig() {
-    if (configBusy) return;
+    if (configBusy || !host) return;
     const categories = [...selectedCategories];
     if (categories.length === 0) {
       toast.error(copy.selectCategory);
@@ -149,34 +187,49 @@ export function DataSettingsPage() {
     }
     setConfigBusy('export');
     try {
-      const res = await window.maka.config.export({ categories });
+      const res = await window.maka.config.export({ categories }, host);
       if (res.ok) {
         toast.success(copy.exported, copy.exportedDetail(res.includedData));
       } else if (res.reason !== 'canceled') {
-        toast.error(copy.exportFailed, res.reason === 'no_categories' ? copy.noCategories : copy.tryAgain);
+        toast.error(
+          copy.exportFailed,
+          res.reason === 'no_categories' ? copy.noCategories : copy.tryAgain,
+          undefined,
+          diagnosticTarget,
+        );
       }
     } catch (error) {
-      toast.error(copy.exportFailed, settingsActionErrorMessage(error, locale));
+      toast.error(
+        copy.exportFailed,
+        settingsActionErrorMessage(error, locale),
+        undefined,
+        diagnosticTarget,
+      );
     } finally {
       setConfigBusy(null);
     }
   }
 
   async function importConfig() {
-    if (configBusy) return;
+    if (configBusy || !host) return;
     setConfigBusy('import');
     try {
-      const res = await window.maka.config.import({ strategy: importStrategy });
+      const res = await window.maka.config.import({ strategy: importStrategy }, host);
       if (res.ok) {
         toast.success(copy.imported, summarizeImportResult(res.result, copy));
       } else if (res.reason !== 'canceled') {
         const detail = res.message && (locale === 'zh' || !/[\u3400-\u9fff]/u.test(res.message))
           ? res.message
           : copy.invalidFile;
-        toast.error(copy.importFailed, detail);
+        toast.error(copy.importFailed, detail, undefined, diagnosticTarget);
       }
     } catch (error) {
-      toast.error(copy.importFailed, settingsActionErrorMessage(error, locale));
+      toast.error(
+        copy.importFailed,
+        settingsActionErrorMessage(error, locale),
+        undefined,
+        diagnosticTarget,
+      );
     } finally {
       setConfigBusy(null);
     }
@@ -184,6 +237,22 @@ export function DataSettingsPage() {
 
   return (
     <SettingsPage>
+      {!runtimeHostAvailable ? (
+        <Banner
+          status={props.runtimeHostStatus === 'error' ? 'error' : 'warning'}
+          title={props.runtimeHostStatus === 'loading'
+            ? sharedCopy.loading
+            : sharedCopy.runtimeHostUnavailable}
+          endContent={props.runtimeHostStatus === 'error' ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              label={sharedCopy.retry}
+              onClick={() => void props.onRetryRuntimeHost()}
+            />
+          ) : undefined}
+        />
+      ) : null}
       <SettingsSection
         title={sharedCopy.groups.dataLocation}
         description={sharedCopy.groups.dataLocationHelp}
@@ -251,7 +320,7 @@ export function DataSettingsPage() {
           other group now; the Switch's own label/description layout IS the
           row, so each one is a SettingsField (padded, divided) rather than
           a re-labeled SettingsRow. */}
-      <SettingsSection
+      {runtimeHostAvailable ? <SettingsSection
         title={copy.configTitle}
         description={copy.configHelp}
       >
@@ -306,7 +375,7 @@ export function DataSettingsPage() {
               secondary. Two filled buttons recommended neither. */}
           <Button variant="secondary" isDisabled={configBusy !== null} clickAction={() => importConfig()} label={copy.importConfig} />
         </SettingsActions>
-      </SettingsSection>
+      </SettingsSection> : null}
     </SettingsPage>
   );
 }

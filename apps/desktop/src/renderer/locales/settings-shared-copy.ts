@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type { UiCatalog, UiLocale } from '@maka/core/ui-locale';
 
 export type SettingsSharedCopy = {
@@ -16,6 +35,8 @@ export type SettingsSharedCopy = {
   failed: string;
   settingsLoadFailed: string;
   usageLoadFailed: string;
+  runtimeHost: string;
+  runtimeHostUnavailable: string;
   unknownError: string;
   unavailablePage: string;
   ready: string;
@@ -65,6 +86,8 @@ const SETTINGS_SHARED_COPY_BY_LOCALE = {
     failed: '失败',
     settingsLoadFailed: '载入设置失败',
     usageLoadFailed: '载入使用统计失败',
+    runtimeHost: 'Runtime Host',
+    runtimeHostUnavailable: '这个 Runtime Host 当前不可用。请选择其他 Host，或在“项目”中重试连接。',
     unknownError: '出现错误，请稍后重试。',
     unavailablePage: '该设置页已纳入 Maka 设置树，会随对应 runtime 能力一起工作。',
     showDetails: '展开详情',
@@ -105,6 +128,8 @@ const SETTINGS_SHARED_COPY_BY_LOCALE = {
     failed: 'Failed',
     settingsLoadFailed: 'Could not load settings',
     usageLoadFailed: 'Could not load usage statistics',
+    runtimeHost: 'Runtime Host',
+    runtimeHostUnavailable: 'This Runtime Host is unavailable. Choose another Host or retry the connection under Projects.',
     unknownError: 'Something went wrong. Try again.',
     unavailablePage: 'This page is part of the Maka settings tree and will activate with its runtime capability.',
     showDetails: 'Show details',

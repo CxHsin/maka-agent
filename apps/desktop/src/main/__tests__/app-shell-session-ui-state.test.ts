@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { SandboxBoundaryRequestEvent } from '@maka/core/events';
@@ -5,6 +24,7 @@ import type { SessionEventStreamSnapshot } from '@maka/core/session-event-health
 import type { SessionSummary } from '@maka/core/session';
 import { armLiveTurn, confirmLiveTurn } from '@maka/ui';
 import { settledSessionTransientIds } from '../../renderer/settled-session-transients.js';
+import { normalizeSessionSummaryForDisplay } from '../../renderer/session-status-presentation.js';
 import {
   clearAppShellSessionUiStateForSession,
   createAppShellSessionUiStateController,
@@ -54,6 +74,21 @@ function seededState(): AppShellSessionUiState {
     pendingSessionModelBySession: { drop: true, keep: true },
   };
 }
+
+describe('session live run display state', () => {
+  it('keeps persisted running as a fallback only while live state is unknown', () => {
+    const unknown = { id: 'unknown', status: 'running' } as SessionSummary;
+    const knownEmpty = {
+      id: 'known-empty',
+      status: 'running',
+      runningTurnIds: [],
+    } as unknown as SessionSummary;
+
+    assert.equal(normalizeSessionSummaryForDisplay(unknown).status, 'running');
+    assert.equal(normalizeSessionSummaryForDisplay(knownEmpty).status, 'active');
+  });
+
+});
 
 describe('app shell session UI state controller', () => {
   it('selects background terminal sessions without cutting off the active handoff', () => {
@@ -117,7 +152,7 @@ describe('app shell session UI state controller', () => {
 
   it('settles once the runtime reports no running turn, whatever the status says', () => {
     const sessions = [
-      { id: 'ended', status: 'active', runningTurnIds: [] as string[] },
+      { id: 'ended', status: 'running', runningTurnIds: [] as string[] },
     ] as SessionSummary[];
 
     assert.deepEqual(settledSessionTransientIds({
@@ -195,20 +230,6 @@ describe('app shell session UI state controller', () => {
     controller.clearSessionUiState('drop');
 
     assert.deepEqual(Object.keys(controller.sessionEventHealthBySessionRef.current), ['keep']);
-  });
-
-  it('drops every Host-scoped session projection when the target changes', () => {
-    const controller = createAppShellSessionUiStateController(seededState());
-    controller.setSessionEventHealthBySession(() => ({
-      drop: healthSnapshot('drop'),
-      keep: healthSnapshot('keep'),
-    }));
-
-    controller.clearAllSessionUiState();
-
-    assert.deepEqual(controller.getState(), createInitialAppShellSessionUiState());
-    assert.deepEqual(controller.sessionEventHealthBySessionRef.current, {});
-    assert.deepEqual(controller.liveTurnBySessionRef.current, {});
   });
 
   it('keeps the synchronous live-turn ref aligned with reducer updates', () => {

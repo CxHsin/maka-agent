@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { constants } from 'node:fs';
 import { access, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -185,7 +204,7 @@ async function probeCommandCapability(
     return unavailable(
       expectedSandboxType(input.platform),
       'selection',
-      input.platform === 'darwin' || input.platform === 'linux'
+      input.platform === 'darwin' || input.platform === 'linux' || input.platform === 'win32'
         ? 'backend_not_available'
         : 'unsupported_platform',
     );
@@ -219,7 +238,7 @@ async function probeCommandCapability(
         pathContext: {
           workspaceRoots: input.workspaceRoots,
           tmpdir: await canonicalPath(tmpdir()),
-          slashTmp: await canonicalPath('/tmp'),
+          ...(input.platform === 'win32' ? {} : { slashTmp: await canonicalPath('/tmp') }),
         },
       },
     });
@@ -381,6 +400,7 @@ function unavailable(
 function expectedSandboxType(platform: SandboxPlatform): SandboxType {
   if (platform === 'darwin') return 'macos-seatbelt';
   if (platform === 'linux') return 'linux';
+  if (platform === 'win32') return 'windows';
   return 'none';
 }
 

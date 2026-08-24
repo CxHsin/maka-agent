@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import type { SessionSummary } from '@maka/core/session';
@@ -34,7 +53,7 @@ function installWindow(calls: string[]): () => void {
           archive: async (id: string, options?: { revisionFamily?: boolean }) => { calls.push(`archive:${id}:${options?.revisionFamily === true}`); },
           unarchive: async (id: string, options?: { revisionFamily?: boolean }) => { calls.push(`unarchive:${id}:${options?.revisionFamily === true}`); },
           rename: async (id: string, name: string, options?: { revisionFamily?: boolean }) => { calls.push(`rename:${id}:${name}:${options?.revisionFamily === true}`); },
-          remove: async (id: string, options?: { revisionFamily?: boolean }) => { calls.push(`remove:${id}:${options?.revisionFamily === true}`); },
+          remove: async (id: string, options?: { revisionFamily?: boolean; requireArchived?: boolean }) => { calls.push(`remove:${id}:${options?.revisionFamily === true}:${options?.requireArchived === true}`); return 'removed' as const; },
         },
       },
     },
@@ -88,7 +107,9 @@ describe('revision-family session row actions', () => {
       'flag:version:true:true',
       'rename:branch:Independent branch:true',
       'archive:version:true',
-      'remove:root:true',
+      // `root` is not archived, so the delete states no archived premise —
+      // requiring one would refuse every delete from the rail.
+      'remove:root:true:false',
     ]);
     assert.deepEqual(selections, [undefined, undefined]);
     assert.deepEqual(cleared, ['root', 'version', 'root', 'version']);

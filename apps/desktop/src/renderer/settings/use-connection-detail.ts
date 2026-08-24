@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   type ConnectionTestResult,
@@ -7,6 +26,7 @@ import {
 } from '@maka/core/llm-connections';
 import { PROVIDER_DEFAULTS, connectionEnabledModelIds } from '@maka/core/llm-connections';
 import { buildConnectionModelCatalogEntries } from '@maka/core/model-catalog';
+import { isRetiredProvider } from '@maka/core/provider-registry';
 import {
   normalizeRelayModelProfiles,
   pruneRelayModelProfiles,
@@ -22,6 +42,7 @@ import { useMountedRef, useToast, useUiLocale } from '@maka/ui';
 import { getProviderSettingsCopy } from '../locales/settings-provider-copy';
 import { connectionChipStatus } from './provider-connection-status';
 import { relayProfileDraftReseedPlan, relayProfileDraftSeed } from './relay-profile-draft';
+import { applyBulkThinkingLevel, relayProfileWithThinkingLevels } from './relay-thinking-bulk';
 import { useKeyedActionGuard } from './use-action-guard';
 import type { OAuthLoginFlowBridge } from './use-oauth-login-flow';
 import {
@@ -31,27 +52,35 @@ import {
   type ConnectionsBridge,
   type CredentialPresenceStatus,
 } from './provider-panel-shared';
+import {
+  useRuntimeHostSettingsErrorReporter,
+  useRuntimeHostSettingsTarget,
+} from './runtime-host-settings-target.js';
+import { runtimeHostOAuthLoginBridge } from './runtime-host-settings-bridge.js';
 
 // Maps an OAuth model-connection provider type to the browser-assisted login
 // service that can re-run its authorization from inside the connection dialog. Only
 // the browser-assisted services (Codex and xAI) are one-button-drivable
-// here; Claude's paste-code flow and plain API-key providers return null so the
-// notice falls back to prose instead of rendering a dead button.
+// here; plain API-key providers return null so the notice falls back to
+// prose instead of rendering a dead button.
 export interface OAuthLoginService {
   bridge: OAuthLoginFlowBridge;
   display: { name: string; shortName: string };
 }
 
-export function oauthLoginServiceFor(providerType: ProviderType): OAuthLoginService | null {
+export function oauthLoginServiceFor(
+  providerType: ProviderType,
+  host: import('../../preload/bridge-contract.js').DesktopRuntimeHostRef,
+): OAuthLoginService | null {
   switch (providerType) {
     case 'openai-codex':
       return {
-        bridge: window.maka.openAiCodex as unknown as OAuthLoginFlowBridge,
+        bridge: runtimeHostOAuthLoginBridge(window.maka.openAiCodex, host),
         display: { name: 'OpenAI Codex', shortName: 'Codex' },
       };
     case 'xai-oauth':
       return {
-        bridge: window.maka.xaiOAuth as unknown as OAuthLoginFlowBridge,
+        bridge: runtimeHostOAuthLoginBridge(window.maka.xaiOAuth, host),
         display: { name: 'xAI Grok', shortName: 'SuperGrok / X Premium' },
       };
     default:
@@ -76,6 +105,7 @@ export interface ConnectionDetailProps {
 // the guard, lifecycle gate, and cross-calls (save auto-fetches models) stay in
 // one place with zero behavior change.
 export function useConnectionDetail(props: ConnectionDetailProps) {
+  const host = useRuntimeHostSettingsTarget();
   const locale = useUiLocale();
   const copy = getProviderSettingsCopy(locale).detail;
   const { connection } = props;
@@ -106,9 +136,17 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
   const connectionDetailMountedRef = useMountedRef();
   const connectionDetailLifecycleRef = useRef(0);
   const toast = useToast();
+  const reportHostError = useRuntimeHostSettingsErrorReporter();
   const supportsApiKey = providerAuthSupportsApiKey(connection.providerType);
   const needsOAuth = defaults.authKind === 'oauth_token';
-  const oauthLoginService = needsOAuth ? oauthLoginServiceFor(connection.providerType) : null;
+  // A retired provider still has its credential on disk, so `hasSecret` is true
+  // and the generic notice told these users to "reauthorize under account
+  // connections" — an instruction whose only destination is the retirement
+  // notice itself.
+  const retired = isRetiredProvider(connection.providerType);
+  const oauthLoginService = needsOAuth && !retired
+    ? oauthLoginServiceFor(connection.providerType, host)
+    : null;
   const usesGitHubCopilotLogin = connection.providerType === 'github-copilot';
   const supportsRemoteDiscovery = providerSupportsModelDiscovery(connection.providerType);
   const requiresCredential = providerAuthRequiresSecret(connection.providerType);
@@ -175,9 +213,12 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       .catch((error) => {
         if (!isConnectionDetailCurrent(lifecycle)) return;
         setHasSecret('error');
-        toast.error(copy.credentialReadFailed, providerPanelActionErrorMessage(error, locale));
+        reportHostError(
+          copy.credentialReadFailed,
+          providerPanelActionErrorMessage(error, locale),
+        );
       });
-  }, [props.bridge, connection.slug, probesCredential, toast]);
+  }, [props.bridge, connection.slug, probesCredential, reportHostError]);
 
   useEffect(() => {
     const nextSnapshot = connectionDetailSnapshot(connection, defaults.baseUrl);
@@ -230,6 +271,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       slug: connection.slug,
       providerType: connection.providerType,
       defaultModel: connection.defaultModel,
+      enabledModelIds,
       models: modelSource === 'fetched' || models.length > 0 ? models : undefined,
       modelSource,
       modelsFetchedAt: connection.modelsFetchedAt,
@@ -284,7 +326,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       if (saved && probesCredential) {
         setHasSecret('error');
       }
-      toast.error(
+      reportHostError(
         saved ? copy.refreshFailed : copy.saveFailed,
         providerPanelActionErrorMessage(error, locale),
       );
@@ -318,7 +360,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     } catch (error) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
       if (!saved) setEnabledModelIds(previous);
-      toast.error(
+      reportHostError(
         saved ? copy.refreshFailed : copy.saveModelsFailed,
         providerPanelActionErrorMessage(error, locale),
       );
@@ -328,7 +370,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     }
   }
 
-  // Per-model profile declarations for openai-compatible relays, edited as a
+  // Per-model profile declarations for custom OpenAI relays, edited as a
   // LOCAL DRAFT and committed by an explicit 保存 button — never keystroke by
   // keystroke. A draft is `Record<modelId, RelayModelProfile>` seeded from the
   // saved table; entries a user empties fully drop out of the map, and the
@@ -363,16 +405,24 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
 
   // One shape for all three fields: the field setter pins or removes its key,
   // and an entry with no keys left IS the undeclared state — storing it would
-  // keep the row looking edited after the user emptied every field.
+  // keep the row looking edited after the user emptied every field. The rule
+  // lives in relay-thinking-bulk so the row setter and the bulk control
+  // cannot drift on what an emptied declaration collapses to.
   function setDraftThinkingLevels(modelId: string, levels: ThinkingLevel[] | undefined): void {
-    updateRelayProfileDraft(modelId, (current) => {
-      if (levels === undefined || levels.length === 0) {
-        if (!current) return current;
-        const { thinkingLevels: _dropped, ...rest } = current;
-        return Object.keys(rest).length > 0 ? rest : undefined;
-      }
-      return { ...(current ?? {}), thinkingLevels: levels };
-    });
+    updateRelayProfileDraft(modelId, (current) => relayProfileWithThinkingLevels(current, levels));
+  }
+
+  // The same edit across every enabled model, as ONE state update rather than
+  // a loop of per-model setters: a bulk tick is a single user gesture, and
+  // committing it in N steps would let a re-render land mid-way and paint a
+  // half-applied table.
+  function setDraftThinkingLevelForAll(
+    modelIds: readonly string[],
+    level: ThinkingLevel,
+    checked: boolean,
+  ): void {
+    setRelayProfilesDirty(true);
+    setRelayProfileDrafts((current) => applyBulkThinkingLevel(modelIds, current, level, checked));
   }
 
   // Tri-state vision: undefined = Auto (relay/metadata decides), true/false
@@ -396,6 +446,17 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
         return Object.keys(rest).length > 0 ? rest : undefined;
       }
       return { ...(current ?? {}), contextWindow };
+    });
+  }
+
+  function setDraftServiceTier(modelId: string, serviceTier: 'fast' | undefined): void {
+    updateRelayProfileDraft(modelId, (current) => {
+      if (serviceTier === undefined) {
+        if (!current) return current;
+        const { serviceTier: _dropped, ...rest } = current;
+        return Object.keys(rest).length > 0 ? rest : undefined;
+      }
+      return { ...(current ?? {}), serviceTier };
     });
   }
 
@@ -451,12 +512,79 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       return true;
     } catch (error) {
       if (!isConnectionDetailCurrent(lifecycle)) return false;
-      toast.error(copy.saveFailed, providerPanelActionErrorMessage(error, locale));
+      reportHostError(
+        copy.saveFailed,
+        providerPanelActionErrorMessage(error, locale),
+      );
       return false;
     } finally {
       releaseSave();
       if (isConnectionDetailCurrent(lifecycle)) setBusy(false);
     }
+  }
+
+  /**
+   * Introduce a model the provider's catalog does not list.
+   *
+   * Only offered where refresh cannot help: a provider with no model-list
+   * endpoint replays the array this build shipped, so a model the user's plan
+   * serves but Maka has never heard of has no other way in (#1584).
+   *
+   * The id enters `enabledModelIds` — the same user-selection authority a
+   * catalogued model uses, so nothing here pretends the provider advertised
+   * it — and the context window enters `relayModelProfiles`, which is where a
+   * user states a fact no other source knows. Both go in ONE write: the store
+   * requires every declaration to key an enabled model, so a table written
+   * ahead of its id would be rejected.
+   *
+   * The saved table is the base, not the unsaved draft: adding a model must
+   * not silently commit edits the user has open in the capability section.
+   * The draft is then caught up by hand, because a dirty draft deliberately
+   * does not reseed from props — see `relayProfileDraftReseedPlan`.
+   */
+  async function addDeclaredModel(id: string, contextWindow: number): Promise<boolean> {
+    const modelId = id.trim();
+    if (!modelId || enabledModelIds.includes(modelId)) return false;
+    if (connectionDetailActionGuard.has('save-enabled-models') || detailActionBusy) return false;
+    const next = [...enabledModelIds, modelId];
+    const previous = enabledModelIds;
+    const lifecycle = connectionDetailLifecycleRef.current;
+    const releaseSaveModels = connectionDetailActionGuard.begin('save-enabled-models');
+    if (!releaseSaveModels) return false;
+    setSavingEnabledModels(true);
+    setEnabledModelIds(next);
+    let saved = false;
+    try {
+      await props.bridge.update(connection.slug, {
+        enabledModelIds: next,
+        relayModelProfiles: { ...(savedRelayProfiles ?? {}), [modelId]: { contextWindow } },
+      });
+      saved = true;
+      if (!isConnectionDetailCurrent(lifecycle)) return saved;
+      // The editor's draft is a second copy of this table, and while it is
+      // dirty it does not reseed from props — that is what keeps an unrelated
+      // reload from discarding typed work. So the declaration just written has
+      // to be merged in here. Without it the draft is a table that no longer
+      // contains this model, the capability-save button lights up on that
+      // difference, and its whole-table replace drops the context window the
+      // user just declared — silently, back to the unknown-model default.
+      setRelayProfileDrafts((current) => ({ ...current, [modelId]: { contextWindow } }));
+      await props.onChanged();
+    } catch (error) {
+      if (!isConnectionDetailCurrent(lifecycle)) return saved;
+      if (!saved) setEnabledModelIds(previous);
+      reportHostError(
+        saved ? copy.refreshFailed : copy.saveModelsFailed,
+        providerPanelActionErrorMessage(error, locale),
+      );
+    } finally {
+      releaseSaveModels();
+      if (isConnectionDetailCurrent(lifecycle)) setSavingEnabledModels(false);
+    }
+    // Whether the write landed. The dialog holds the typed id and context
+    // window until it did: a rejected write leaves nothing to retype from, and
+    // an exact model id is not something a user can reproduce from memory.
+    return saved;
   }
 
   async function runTest() {
@@ -480,7 +608,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
           `${result.modelTested} · ${result.latencyMs} ms`,
         );
       } else {
-        toast.error(
+        reportHostError(
           copy.connectionFailed(connection.name),
           connectionTestFailureMessage(result, {
             auth: copy.authTroubleshooting(credentialTroubleshootingCopy),
@@ -491,7 +619,10 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     } catch (error) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
       const message = providerPanelActionErrorMessage(error, locale);
-      toast.error(copy.connectionTestError(connection.name), message);
+      reportHostError(
+        copy.connectionTestError(connection.name),
+        message,
+      );
     } finally {
       releaseTest();
       if (isConnectionDetailCurrent(lifecycle)) setTesting(false);
@@ -531,9 +662,12 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       // means whatever's on screen is not from the latest probe.
       if (!fetched && models.length === 0) setModelSource('fallback');
       if (fetched) {
-        toast.error(copy.refreshFailed, message);
+        reportHostError(
+          copy.refreshFailed,
+          message,
+        );
       } else {
-        toast.error(
+        reportHostError(
           copy.modelsFetchFailed(connection.name),
           copy.modelsFetchFailedDetail(message, credentialTroubleshootingCopy),
         );
@@ -571,7 +705,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
       await props.onDeleted();
     } catch (error) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
-      toast.error(
+      reportHostError(
         deleted ? copy.refreshFailed : copy.deleteFailed,
         providerPanelActionErrorMessage(error, locale),
       );
@@ -593,7 +727,10 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     } catch (error) {
       if (!isConnectionDetailCurrent(lifecycle)) return;
       setHasSecret('error');
-      toast.error(copy.credentialReadFailed, providerPanelActionErrorMessage(error, locale));
+      reportHostError(
+        copy.credentialReadFailed,
+        providerPanelActionErrorMessage(error, locale),
+      );
     }
     await props.onChanged();
   }
@@ -613,6 +750,7 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     detailActionBusy,
     supportsApiKey,
     needsOAuth,
+    retired,
     usesGitHubCopilotLogin,
     oauthLoginService,
     supportsRemoteDiscovery,
@@ -627,12 +765,15 @@ export function useConnectionDetail(props: ConnectionDetailProps) {
     lastTestAtMs,
     save,
     updateEnabledModels,
+    addDeclaredModel,
     relayProfileDraft: relayProfileDrafts,
     relayProfilesDirty,
     hasRelayProfileChanges,
     setDraftThinkingLevels,
+    setDraftThinkingLevelForAll,
     setDraftVision,
     setDraftContextWindow,
+    setDraftServiceTier,
     saveRelayProfiles,
     runTest,
     refreshModels,
@@ -685,6 +826,7 @@ function modelListsEqual(left: ModelInfo[], right: ModelInfo[]): boolean {
     if (leftModel.capabilities?.vision !== rightModel.capabilities?.vision) return false;
     if (leftModel.capabilities?.reasoning !== rightModel.capabilities?.reasoning) return false;
     if (leftModel.capabilities?.functionCalling !== rightModel.capabilities?.functionCalling) return false;
+    if (leftModel.capabilities?.parallelToolCalls !== rightModel.capabilities?.parallelToolCalls) return false;
     if (leftModel.capabilities?.imageGeneration !== rightModel.capabilities?.imageGeneration) return false;
   }
   return true;

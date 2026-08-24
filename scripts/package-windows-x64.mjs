@@ -1,5 +1,24 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { spawn } from 'node:child_process';
-import { access, readFile, rm } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { npmSpawnOptions } from './npm-spawn.mjs';
@@ -8,6 +27,24 @@ const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const desktopRoot = join(repoRoot, 'apps', 'desktop');
 const releaseDirectory = join(desktopRoot, 'release');
 const electronDistributionDirectory = join(repoRoot, 'node_modules', 'electron', 'dist');
+const sandboxManifestPath = join(
+  repoRoot,
+  'experiments',
+  'windows-sandbox',
+  'launcher',
+  'Cargo.toml',
+);
+const sandboxBinaryPath = join(
+  repoRoot,
+  'experiments',
+  'windows-sandbox',
+  'launcher',
+  'target',
+  'release',
+  'maka-windows-sandbox.exe',
+);
+const sandboxResourceDirectory = join(desktopRoot, 'resources', 'windows-sandbox');
+const sandboxResourcePath = join(sandboxResourceDirectory, 'maka-windows-sandbox.exe');
 const requiredElectronLicensePaths = [
   join(electronDistributionDirectory, 'LICENSE'),
   join(electronDistributionDirectory, 'LICENSES.chromium.html'),
@@ -66,7 +103,10 @@ export async function packageWindowsX64({
 
   await run('npm', ['run', 'clean']);
   await run('npm', ['run', 'build']);
-  await run('npm', ['run', 'prepare:bundled-git']);
+  await run('cargo', ['build', '--manifest-path', sandboxManifestPath, '--release', '--locked']);
+  await run('npm', ['run', 'check:windows-cargo-notices']);
+  await mkdir(sandboxResourceDirectory, { recursive: true });
+  await copyFile(sandboxBinaryPath, sandboxResourcePath);
   await run('npm', ['run', 'check:release']);
   await remove(releaseDirectory, { recursive: true, force: true });
   await run('npm', ['--workspace', '@maka/desktop', 'run', 'package:windows-x64']);

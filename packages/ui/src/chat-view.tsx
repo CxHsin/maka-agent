@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ICON_SIZE,
@@ -33,7 +52,7 @@ import { useTurnVirtualizer } from './use-turn-virtualizer.js';
 import { placeChatConversationItems } from './chat-conversation-items.js';
 import { useUiLocale } from './locale-context.js';
 import { getConversationCopy } from './conversation-copy.js';
-import { SessionContextLayer } from './session-context-layer.js';
+import { SessionContextLayer, type SessionContextGoal } from './session-context-layer.js';
 
 export interface LiveContentActivationSnapshot {
   turnId: string;
@@ -104,17 +123,13 @@ export function ChatView(props: {
   }>;
   /**
    * Active autonomous-goal indicator for the session, or undefined when no
-   * goal is running. Surfaces the loop (turn counter) with a one-click clear
-   * affordance so a token-burning goal is never invisible or unstoppable —
-   * this IS the desktop kill switch. `onClear` stops autonomous continuation.
+   * goal is running. Surfaces the loop (turn counter, elapsed, tokens) with
+   * pause/resume/clear affordances so a token-burning goal is never invisible
+   * or uncontrollable — this IS the desktop kill switch. `onClear` stops
+   * autonomous continuation; `onPause`/`onResume` control it without a model
+   * turn.
    */
-  goalIndicator?: {
-    condition: string;
-    status: string;
-    iterations: number;
-    maxIterations: number;
-    onClear: () => void;
-  };
+  goalIndicator?: SessionContextGoal;
   /** Error from loading the active session's persisted message log. */
   messageLoadError?: string;
   messageLoadRetryPending?: boolean;
@@ -218,6 +233,8 @@ export function ChatView(props: {
    * reconciliation on the hot streaming path (ChatView also ref-wraps this).
    */
   onOpenLinkedSession?(sessionId: string): void;
+  /** Resolve a requires-bypass tool refusal, then regenerate its owning turn. */
+  onSwitchToBypassAndRetry?(turnId: string): void | Promise<void>;
   onNew(): void;
   onPromptSuggestion?(prompt: string): void;
   /**
@@ -236,7 +253,8 @@ export function ChatView(props: {
    */
   onAskAboutSelection?(input: { text: string; turnId: string }): void;
 }) {
-  const conversationCopy = getConversationCopy(useUiLocale());
+  const locale = useUiLocale();
+  const conversationCopy = getConversationCopy(locale);
   const copy = conversationCopy.chat;
   // chat survives for the empty-state path; the main message log is driven by
   // `turns` (per @kenji UI-04 turn-grouping projection).
@@ -253,13 +271,14 @@ export function ChatView(props: {
       : props.messages,
     [drainingMessageIds, props.messages],
   );
-  const chat = useMemo(() => materializeChat(visibleMessages), [visibleMessages]);
+  const chat = useMemo(() => materializeChat(visibleMessages, locale), [visibleMessages, locale]);
   // The projection owns the derived turns, so a turn nothing said anything
   // about keeps its object identity and its memoized TurnView skips — across
   // deltas AND across the message refreshes that fire at every step/tool
   // boundary (#2030).
   const turns = useTranscriptProjection({
     sessionId: props.activeSession?.id,
+    locale,
     messages: visibleMessages,
     liveTurn: props.liveTurn,
     shellRunUpdates: props.shellRunUpdates,
@@ -388,6 +407,12 @@ export function ChatView(props: {
     (sessionId: string) => onOpenLinkedSessionRef.current?.(sessionId),
     [],
   );
+  const onSwitchToBypassAndRetryRef = useRef(props.onSwitchToBypassAndRetry);
+  onSwitchToBypassAndRetryRef.current = props.onSwitchToBypassAndRetry;
+  const stableSwitchToBypassAndRetry = useCallback(
+    (turnId: string) => onSwitchToBypassAndRetryRef.current?.(turnId),
+    [],
+  );
   const turnIds = useMemo(() => new Set(turns.map((turn) => turn.turnId)), [turns]);
   const conversationItemPlacement = useMemo(() => placeChatConversationItems(
     (props.conversationItems ?? []).map((item) => ({
@@ -465,7 +490,11 @@ export function ChatView(props: {
       <EmptyChatHero onPromptSuggestion={props.onPromptSuggestion} userLabel={props.userLabel} />
     );
     return (
-      <main className="maka-main agents-chat-panel agents-chat-view-root">
+      <section
+        className="maka-main agents-chat-panel agents-chat-view-root"
+        role="region"
+        aria-label={conversationCopy.empty.surfaceAriaLabel}
+      >
         {/* PR-REMOVE-CHAT-TAB (WAWQAQ msg d401938d 2026-06-23): the
             browser-style session tab + the duplicate "新建对话" plus
             button were removed. The session name lives in the sidebar;
@@ -483,8 +512,6 @@ export function ChatView(props: {
             owns. */}
         <ChatMessageList
           className="maka-chat-message-list maka-chatContent"
-          density="compact"
-          gap={4}
           emptyState={conversationItems.length === 0 ? emptyContent : undefined}
         >
           {conversationItems.length > 0 ? (
@@ -494,7 +521,7 @@ export function ChatView(props: {
             </>
           ) : null}
         </ChatMessageList>
-      </main>
+      </section>
     );
   }
 
@@ -537,7 +564,11 @@ export function ChatView(props: {
         );
 
   return (
-    <main className="maka-main agents-chat-panel agents-chat-view-root">
+    <section
+      className="maka-main agents-chat-panel agents-chat-view-root"
+      role="region"
+      aria-label={copy.conversationAriaLabel(props.activeSession.name)}
+    >
       {props.returnToLatest ? (
         <div className="maka-transcript-history-controls">
           <Button
@@ -585,8 +616,6 @@ export function ChatView(props: {
         <ChatMessageList
           className="maka-chat-message-list maka-chatContent"
           data-turn-source-count={turns.length}
-          density="compact"
-          gap={4}
           isStreaming={streamingActive}
           emptyState={showEmptyState ? emptyContent : undefined}
         >
@@ -627,6 +656,11 @@ export function ChatView(props: {
                       onReadAttachmentBytes={props.onReadAttachmentBytes}
                       onOpenLinkedSession={
                         props.onOpenLinkedSession ? stableOpenLinkedSession : undefined
+                      }
+                      onSwitchToBypassAndRetry={
+                        props.onSwitchToBypassAndRetry
+                          ? stableSwitchToBypassAndRetry
+                          : undefined
                       }
                       searchHighlighted={highlightedTurnId === turn.turnId}
                       liveStreaming={
@@ -743,7 +777,7 @@ export function ChatView(props: {
           )
         ) : null}
       </div>
-    </main>
+    </section>
   );
 }
 

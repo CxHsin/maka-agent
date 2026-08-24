@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type { SessionSummary, StoredMessage } from '@maka/core/session';
 import type { UiLocale } from '@maka/core/ui-locale';
 import { getShellCopy, localizedShellErrorMessage } from './locales/shell-copy.js';
@@ -5,9 +24,17 @@ import { revisionFamilySessionIds } from '@maka/core/session-revisions';
 
 type RefBox<T> = { current: T };
 
+/** What `sessions.remove` settled on. `restored` means the task is still there. */
+type SessionRemoveDisposition = 'removed' | 'restored';
+
 type ToastApi = {
   success(title: string, description?: string): void;
-  error(title: string, description?: string): void;
+  error(
+    title: string,
+    description?: string,
+    diagnosticDetails?: string,
+    diagnosticTarget?: { sessionId: string },
+  ): void;
   confirm(options: {
     title: string;
     description: string;
@@ -26,9 +53,17 @@ export interface SessionPurgeOutcome {
   removed: number;
   /** Tasks the catalog still reports. Empty when `verified` is false. */
   remaining: string[];
+  /**
+   * Tasks restored while the sweep was reaching them. Neither removed nor
+   * failed: the deletion was called off because its premise was gone.
+   */
+  restored: string[];
   verified: boolean;
-  /** First rejection, so the caller can show a reason rather than a count. */
-  firstError: unknown;
+  /** First rejection and the Session whose Host produced it. */
+  firstFailure?: {
+    error: unknown;
+    sessionId: string;
+  };
 }
 
 export interface AppShellSessionRowActions {
@@ -77,7 +112,12 @@ export function createAppShellSessionRowActions(deps: {
     try {
       await action();
     } catch (error) {
-      toastApi.error(errorTitle, localizedShellErrorMessage(error, copy.actionFallback, uiLocale));
+      toastApi.error(
+        errorTitle,
+        localizedShellErrorMessage(error, copy.actionFallback, uiLocale),
+        undefined,
+        { sessionId },
+      );
     } finally {
       pendingSessionRowActionsRef.current.delete(key);
     }
@@ -129,9 +169,14 @@ export function createAppShellSessionRowActions(deps: {
         destructive: true,
       });
       if (!ok) return;
-      await removeSessionFamily(sessionId);
+      // The confirm named an archived task, so a restore revokes it. An active
+      // task has no such premise to lose.
+      const disposition = await removeSessionFamily(sessionId, {
+        requireArchived: session?.isArchived === true,
+      });
       await refreshSessions();
-      toastApi.success(copy.deletedTitle(name));
+      if (disposition === 'restored') toastApi.success(copy.deleteRestoredTitle(name));
+      else toastApi.success(copy.deletedTitle(name));
     });
   }
 
@@ -139,27 +184,42 @@ export function createAppShellSessionRowActions(deps: {
    * Removes one task's whole revision family and drops what the renderer was
    * holding for it. A resolved `remove` means the IPC both committed the
    * deletion and released those resources, so the cleanup below is only ever
-   * reached for a task that is really gone.
+   * reached for a task that is really gone — and `restored` means it was never
+   * deleted, so there is nothing to drop.
    */
-  async function removeSessionFamily(sessionId: string): Promise<void> {
+  async function removeSessionFamily(
+    sessionId: string,
+    options: { requireArchived: boolean },
+  ): Promise<SessionRemoveDisposition> {
     // Read before the write: the family comes off the live catalog, which no
     // longer lists it afterwards.
     const familyIds = revisionFamilySessionIds(sessionsRef.current, sessionId);
-    await window.maka.sessions.remove(sessionId, { revisionFamily: true });
+    const disposition = await window.maka.sessions.remove(sessionId, {
+      revisionFamily: true,
+      requireArchived: options.requireArchived,
+    });
+    if (disposition === 'restored') return disposition;
     if (activeIdRef.current && familyIds.includes(activeIdRef.current)) {
       setActiveId(undefined);
       setMessages([]);
     }
     for (const id of familyIds) clearSessionRendererState(id);
+    return disposition;
   }
 
   /**
    * Deletes a set of archived tasks in one sweep.
    *
-   * Only tasks still archived when the sweep reaches them are touched: the
-   * caller named a set to a person, and one restored while that dialog was up
-   * has left it. Ids with a row action already in flight are skipped for the
-   * same reason single-row actions skip each other.
+   * Every id takes one path and lands in exactly one outcome. A task still
+   * archived is removed; one restored meanwhile answers `restored` and is kept;
+   * one already gone elsewhere rejects and settles as removed against the
+   * catalog; anything else is an error to explain. The archived premise is
+   * asserted where it can be held — inside the Host's compare-and-set (#3050) —
+   * rather than against a renderer snapshot that a second window can outdate
+   * between the check and the write.
+   *
+   * Ids with a row action already in flight are skipped for the same reason
+   * single-row actions skip each other.
    *
    * A rejection is not evidence the task survived — the delete IPC commits the
    * removal before it releases renderer resources — so the rejected ids, and
@@ -173,20 +233,10 @@ export function createAppShellSessionRowActions(deps: {
    */
   async function purgeSessions(sessionIds: readonly string[]): Promise<SessionPurgeOutcome> {
     const unsettled: string[] = [];
-    let firstError: unknown;
+    const restored: string[] = [];
+    let firstFailure: SessionPurgeOutcome['firstFailure'];
     let removed = 0;
     for (const sessionId of sessionIds) {
-      // Read the catalog as the sweep reaches each task, not once up front. A
-      // sweep is serial, and a task restored from another window while it runs
-      // has left the set the confirm named; a snapshot taken at the start would
-      // delete it anyway.
-      //
-      // This narrows the window, it does not close it: nothing here can stop a
-      // restore that lands between this check and the removal. Two calls cannot
-      // be made atomic by the side that makes them — only the Host, which owns
-      // the lifecycle, can require the task to still be archived as it removes
-      // it (#3050).
-      if (!sessionsRef.current.some((s) => s.id === sessionId && s.isArchived)) continue;
       const key = `${sessionId}:delete`;
       if (
         Array.from(pendingSessionRowActionsRef.current).some((pending) =>
@@ -198,18 +248,25 @@ export function createAppShellSessionRowActions(deps: {
       }
       pendingSessionRowActionsRef.current.add(key);
       try {
-        await removeSessionFamily(sessionId);
-        removed += 1;
+        const disposition = await removeSessionFamily(sessionId, { requireArchived: true });
+        if (disposition === 'restored') restored.push(sessionId);
+        else removed += 1;
       } catch (error) {
         unsettled.push(sessionId);
-        firstError ??= error;
+        firstFailure ??= { error, sessionId };
       } finally {
         pendingSessionRowActionsRef.current.delete(key);
       }
     }
     if (unsettled.length === 0) {
       await refreshSessions();
-      return { removed, remaining: [], verified: true, firstError };
+      return {
+        removed,
+        remaining: [],
+        restored,
+        verified: true,
+        firstFailure,
+      };
     }
     let listed: SessionSummary[] | undefined;
     try {
@@ -218,10 +275,24 @@ export function createAppShellSessionRowActions(deps: {
       listed = undefined;
     }
     await refreshSessions();
-    if (!listed) return { removed, remaining: [], verified: false, firstError };
+    if (!listed) {
+      return {
+        removed,
+        remaining: [],
+        restored,
+        verified: false,
+        firstFailure,
+      };
+    }
     const present = new Set(listed.map((session) => session.id));
     const remaining = unsettled.filter((sessionId) => present.has(sessionId));
-    return { removed: removed + (unsettled.length - remaining.length), remaining, verified: true, firstError };
+    return {
+      removed: removed + (unsettled.length - remaining.length),
+      remaining,
+      restored,
+      verified: true,
+      firstFailure,
+    };
   }
 
   return {

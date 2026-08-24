@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 /**
  * Onboarding service — main-process glue between the @maka/core
  * onboarding contract and the desktop stores/IPC (PR110b).
@@ -10,9 +29,8 @@
  *      and OAuth-subscription connections (Claude/Codex), and MUST be
  *      read-only — it must never refresh an OAuth token or otherwise
  *      mutate credential state just because onboarding status was
- *      read. See `hasConnectionSecret` in main.ts for the production
- *      wiring and why it deliberately does NOT reuse the send-path's
- *      refreshing `resolveConnectionSecret`.
+ *      read. Production wiring queries the Runtime Host credential
+ *      projection without resolving or refreshing credential material.
  *   3. SessionStore.list() (the runtime layer's listSessions handles
  *      this for us; we pass it in as a callback)
  *   4. SettingsStore.get() for milestones (already sanitized by
@@ -40,10 +58,8 @@ import {
 
 import { projectSessionSendOutcome, type SessionSendProjection } from '@maka/core/session-send-projection';
 
-import { type ChatModelChoice } from '@maka/core/chat-model-choice';
-
 import { type SessionSummary } from '@maka/core/session';
-import { buildChatModelChoices } from '@maka/core/chat-model-choice';
+import { buildChatModelChoices, type ChatModelChoice } from '@maka/core/chat-model-choice';
 import type { LlmConnection } from '@maka/core/llm-connections';
 
 export interface OnboardingSnapshot {
@@ -54,7 +70,7 @@ export interface OnboardingSnapshot {
    * without a separate `sessions:list` IPC.
    */
   sessions: SessionSummary[];
-  /** Connection list — bundled to avoid a separate `connections:list` + `getDefault` IPC. */
+  /** Default Host connection projection used to seed the shell. */
   connections: LlmConnection[];
   defaultSlug: string | null;
   chatModelChoices: ChatModelChoice[];
@@ -70,7 +86,6 @@ export interface OnboardingServiceDeps {
     id: OnboardingMilestoneId,
     status: 'completed' | 'skipped',
   ): Promise<OnboardingMilestone[]>;
-  clearMilestone(id: OnboardingMilestoneId): Promise<OnboardingMilestone[]>;
   /**
    * Whether `connection` has a usable credential — an API key OR (for
    * OAuth-subscription providers) a stored OAuth token. MUST be
@@ -86,7 +101,6 @@ export interface OnboardingService {
     id: unknown,
     status: unknown,
   ): Promise<OnboardingSnapshot>;
-  clearMilestone(id: unknown): Promise<OnboardingSnapshot>;
 }
 
 /**
@@ -151,36 +165,6 @@ export function createOnboardingService(deps: OnboardingServiceDeps): Onboarding
       // the user finished `first_chat_sent` while in `ready_empty`
       // → next derive should reflect new history). Re-using the
       // already-fetched milestones avoids a settings round-trip.
-      const [connections, defaultSlug, sessions] = await Promise.all([
-        deps.listConnections(),
-        deps.getDefaultSlug(),
-        deps.listSessions(),
-      ]);
-      const secretEntries = await Promise.all(
-        connections.map(async (connection) => {
-          try {
-            return [connection.slug, await deps.hasCredential(connection)] as const;
-          } catch {
-            return [connection.slug, false] as const;
-          }
-        }),
-      );
-      const secrets: Record<string, boolean> = Object.fromEntries(secretEntries);
-      const logicalSessions = collapseSessionRevisions(sessions);
-      const state = deriveOnboardingState({
-        connections,
-        defaultSlug: defaultSlug ?? undefined,
-        sessions: logicalSessions,
-        secrets,
-      });
-      return buildSnapshot(state, milestones, sessions, connections, defaultSlug, secrets);
-    },
-
-    async clearMilestone(id: unknown): Promise<OnboardingSnapshot> {
-      if (typeof id !== 'string' || !isOnboardingMilestoneId(id)) {
-        throw new Error('INVALID_MILESTONE_ID');
-      }
-      const milestones = await deps.clearMilestone(id);
       const [connections, defaultSlug, sessions] = await Promise.all([
         deps.listConnections(),
         deps.getDefaultSlug(),

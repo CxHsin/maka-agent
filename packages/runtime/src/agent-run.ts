@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import type {
   AgentRunEvent,
   AgentRunHeader,
@@ -27,6 +46,7 @@ import {
 import type {
   SessionBlockedReason,
   SessionHeader,
+  SessionHeaderPatch,
   SessionStatus,
   StoredMessage,
   SystemNoteMessage,
@@ -42,8 +62,6 @@ import type { SessionEvent } from '@maka/core/events';
 import type { AgentBackend, BackendSendInput } from '@maka/core/backend-types';
 import type { RunTraceEvent } from './run-trace.js';
 import type { StopSessionInput } from './session-manager.js';
-import type { ActiveFullCompactBlock } from './active-full-compact.js';
-import type { SemanticCompactBlock } from './semantic-compact.js';
 import type { HistoryCompactCheckpoint } from './history-compact-checkpoint.js';
 import { projectRuntimeEventsToStoredMessages } from './runtime-event-read-model.js';
 import {
@@ -89,7 +107,7 @@ export interface AgentRunHooks {
     run: AgentRun,
   ): Promise<AgentRunActiveSession>;
   unregisterRun(active: AgentRunActiveSession, run: AgentRun): void | Promise<void>;
-  updateHeader(sessionId: string, patch: Partial<SessionHeader>): Promise<SessionHeader>;
+  updateHeader(sessionId: string, patch: SessionHeaderPatch): Promise<SessionHeader>;
   updateStatus(
     sessionId: string,
     status: SessionStatus,
@@ -492,27 +510,6 @@ export class AgentRun {
     });
   }
 
-  recordActiveFullCompactBlock(block: ActiveFullCompactBlock): void {
-    if (!this.input.runStore || !this.runStoreAvailable) return;
-    this.enqueueRunStore('append active full compact block', async () => {
-      await this.input.runStore?.appendEvent(this.sessionId, this.runId, {
-        type: 'active_full_compact_block_recorded',
-        id: this.input.newId(),
-        runId: this.runId,
-        sessionId: this.sessionId,
-        turnId: block.turnId || this.turnId,
-        ts: this.input.now(),
-        data: {
-          blockId: block.blockId,
-          highWaterName: block.highWaterName,
-          highWaterSeq: block.highWaterSeq,
-          boundaryKind: 'activeFullCompact',
-          block,
-        },
-      });
-    });
-  }
-
   recordHistoryCompactCheckpoint(checkpoint: HistoryCompactCheckpoint): Promise<void> {
     if (!this.input.runStore) return Promise.reject(new Error('AgentRun store is not configured'));
     if (!this.runStoreAvailable) return Promise.reject(new Error('AgentRun store is unavailable'));
@@ -574,27 +571,6 @@ export class AgentRun {
         cause: error,
       });
     }
-  }
-
-  recordSemanticCompactBlock(block: SemanticCompactBlock): void {
-    if (!this.input.runStore || !this.runStoreAvailable) return;
-    this.enqueueRunStore('append semantic compact block', async () => {
-      await this.input.runStore?.appendEvent(this.sessionId, this.runId, {
-        type: 'semantic_compact_block_recorded',
-        id: this.input.newId(),
-        runId: this.runId,
-        sessionId: this.sessionId,
-        turnId: block.turnId || this.turnId,
-        ts: this.input.now(),
-        data: {
-          blockId: block.blockId,
-          highWaterName: block.highWaterName,
-          highWaterSeq: block.highWaterSeq,
-          boundaryKind: 'semanticCompact',
-          block,
-        },
-      });
-    });
   }
 
   async acceptMappedEvent(
@@ -1081,7 +1057,6 @@ export class AgentRun {
         : (this.finalStatus ?? { status: 'active' as const });
     try {
       await this.input.hooks.updateHeader(this.sessionId, {
-        lastUsedAt: lastTs,
         lastMessageAt: lastTs,
         hasUnread: true,
         ...buildStatusPatch(nextStatus.status, lastTs, nextStatus.blockedReason),

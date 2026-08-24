@@ -1,6 +1,54 @@
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+
 # Changelog
 
 ## Unreleased
+
+## 0.2.0 - Unreleased
+
+### Added
+
+- Added `/transcript` to browse long TUI sessions without depending on terminal
+  scrollback, with line, page, and first/last navigation.
+
+### Changed
+
+- Unified context management under one Runtime-owned policy. `MAKA_CONTEXT_*` environment overrides no longer tune or disable compaction and Tool Result pruning; model-visible archive placeholders are read on demand through bounded `ArchiveRead` calls instead of eager hydration. Previously supported overrides are ignored on upgrade: if Tool Result pruning was set to `off`, pruning is re-enabled, and there is currently no supported replacement opt-out.
+
+## 0.1.11 - 2026-08-18
+
+### Highlights
+
+- Expanded Runtime Host from a local execution service into the shared authority for multiple connected Hosts, remote project registration, live run state, and archived session lifecycle (#3097, #3145, #3079, #3074, #3151).
+- Added the installable Maka CLI package and its protected staged npm release pipeline, including cross-platform artifact and Eval validation (#3169, #3173, #3185, #3188, #3192, #3197, #3200, #3201).
+- Added brokered Windows AppContainer sandbox support and tightened local IPC ownership and ACL enforcement (#2961, #3179, #3182).
+- Added Work Board storage foundations, Host-scoped task creation, prompt-history completion, and first-run viewport containment (#3028, #3122, #1874, #3195).
+- Added native Desktop and TUI locale authorities and Qwen3.8 Max Token Plan support (#2686, #2691, #3157).
+
+### Reliability and developer experience
+
+- Preserved live turns across refresh and projected authoritative live execution state through Runtime Host (#3189, #3079).
+- Kept restored tasks safe from concurrent removal, queued busy-raced sends as steering, bounded summarizer inputs, and retired obsolete compact and compatibility paths (#3056, #3032, #3113, #3128, #2742).
+- Hardened MCP rediscovery, provider failure diagnostics, rate-limit handling, session stream completion, and scheduled-task ownership (#2989, #2675, #3115, #2682, #2655).
+- Added fair multi-arm Eval infrastructure and the DeepSeek Harness benchmark arm, while isolating subject metering from framework accounting (#2668, #2971, #3176).
+- Strengthened Windows installer, crash-recovery, remote service restart, and release artifact coverage (#2650, #2562, #3186, #2941).
 
 ### Fixed
 
@@ -8,6 +56,11 @@
   Windows Terminal sessions, where repeated OSC 9;4 updates can make Explorer's
   taskbar unresponsive. `MAKA_TASKBAR_PROGRESS=1` restores the prior behavior,
   while `MAKA_TASKBAR_PROGRESS=0` disables it explicitly.
+
+### Distribution
+
+- Ships for Apple Silicon macOS as a signed and notarized DMG and ZIP, and for Windows x64 as an unsigned NSIS installer and ZIP, built and verified in the same release run.
+- The bundled Computer Use skill ships with the app, but the Computer Use executor remains excluded from this release.
 
 ## 0.1.10 - 2026-08-10
 

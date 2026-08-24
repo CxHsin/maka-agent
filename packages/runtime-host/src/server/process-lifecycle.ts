@@ -1,7 +1,28 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import {
   RuntimeHostProcessTerminationRequiredError,
   type RuntimeHostKernel,
 } from './host-kernel.js';
+
+export const RUNTIME_HOST_RETIREMENT_EXIT_CODE = 3;
 
 export interface RuntimeHostProcessLifecycleOptions {
   closeOnDisconnect?: boolean;
@@ -9,7 +30,8 @@ export interface RuntimeHostProcessLifecycleOptions {
 }
 
 export async function runRuntimeHostProcessLifecycle(
-  host: Pick<RuntimeHostKernel, 'close' | 'closed'>,
+  host: Pick<RuntimeHostKernel, 'close' | 'closed'> &
+    Partial<Pick<RuntimeHostKernel, 'shutdownReason'>>,
   options: RuntimeHostProcessLifecycleOptions = {},
 ): Promise<void> {
   let closing = false;
@@ -26,7 +48,9 @@ export async function runRuntimeHostProcessLifecycle(
     options.onReady?.();
     await host.closed;
   } catch (error) {
-    if (error instanceof RuntimeHostProcessTerminationRequiredError) process.exit(1);
+    if (error instanceof RuntimeHostProcessTerminationRequiredError) {
+      process.exit(host.shutdownReason === 'retirement' ? RUNTIME_HOST_RETIREMENT_EXIT_CODE : 1);
+    }
     throw error;
   } finally {
     process.off('SIGINT', close);

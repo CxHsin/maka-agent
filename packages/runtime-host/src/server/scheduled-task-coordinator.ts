@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { randomUUID } from 'node:crypto';
 import { botDisplayLabel } from '@maka/core/bot-events';
 import { isBotDeliveryProvider } from '@maka/core/bot-chat-settings';
@@ -38,7 +57,6 @@ import {
 import type { ScheduledTaskOperationHandlerMap } from './operation-dispatcher.js';
 import type { RuntimeHostResidency } from './host-kernel.js';
 import type { HostedExecutionAuthority } from './hosted-execution-authority.js';
-import type { HostScheduledTaskChangeService } from './scheduled-task-change-service.js';
 import type { SessionCreateInput } from '../protocol/session-catalog.js';
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -47,6 +65,7 @@ const NATIVE_PROVIDER_RETRY_MS = 5_000;
 type ScheduledTaskSessions = Pick<ExecutionSessionWriter, 'readHeaderSnapshot'>;
 type ScheduledTaskRuntime = Pick<SessionManager, 'sendMessage'>;
 type ScheduledTaskRoot = Pick<HostedExecutionAuthority, 'admit'>;
+type HostScheduledTaskChangeServiceLike = HostScheduledTaskCoordinatorInput['changes'];
 
 interface ScheduledTaskNativeEffects {
   hasWorkspaceService(serviceId: string, version: string): boolean;
@@ -66,7 +85,9 @@ export interface HostScheduledTaskCoordinatorInput {
   readonly runtimePolicy: RuntimePolicyStoresWriter;
   readonly nativeEffects: ScheduledTaskNativeEffects;
   readonly createSession: (input: SessionCreateInput) => Promise<void>;
-  readonly changes: HostScheduledTaskChangeService;
+  readonly changes: {
+    publish(revision: number, reason: ScheduledTaskChangedReason, taskId: string): void;
+  };
   readonly acquireResidency: () => RuntimeHostResidency;
   readonly requestDrain: () => void;
   readonly now?: () => number;
@@ -99,7 +120,7 @@ export class HostScheduledTaskCoordinator implements ScheduledTaskToolAuthority 
   readonly #runtimePolicy: RuntimePolicyStoresWriter;
   readonly #nativeEffects: ScheduledTaskNativeEffects;
   readonly #createSession: HostScheduledTaskCoordinatorInput['createSession'];
-  readonly #changes: HostScheduledTaskChangeService;
+  readonly #changes: HostScheduledTaskChangeServiceLike;
   readonly #acquireResidency: () => RuntimeHostResidency;
   readonly #requestDrain: () => void;
   readonly #now: () => number;
@@ -210,7 +231,6 @@ export class HostScheduledTaskCoordinator implements ScheduledTaskToolAuthority 
     this.beginDrain();
     await this.#lane;
     this.#closed = true;
-    this.#store.close();
   }
 
   async create(input: {
@@ -666,7 +686,7 @@ export class HostScheduledTaskCoordinator implements ScheduledTaskToolAuthority 
       throw new Error('Session lifecycle is changing');
     }
     const header = await this.#sessions.readHeaderSnapshot(sessionId);
-    if (header.isArchived || header.status === 'archived') {
+    if (header.isArchived) {
       throw new Error('Archived Sessions cannot own session-bound ScheduledTasks');
     }
     return header;
@@ -780,7 +800,6 @@ function executionTemplateFromHeader(header: SessionHeader): ScheduledTaskExecut
   return {
     cwd: header.cwd,
     ...(header.projectId === undefined ? {} : { projectId: header.projectId }),
-    backend: header.backend,
     llmConnectionSlug: header.llmConnectionSlug,
     model: header.model,
     ...(header.thinkingLevel === undefined ? {} : { thinkingLevel: header.thinkingLevel }),

@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { strict as assert } from 'node:assert';
 import { describe, it } from 'node:test';
 import { createElement, type ReactNode } from 'react';
@@ -36,6 +55,14 @@ function createStateSetter<T>(initial: T): {
       value = updater(value);
     },
   };
+}
+
+async function waitFor(predicate: () => boolean, message: string): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) assert.fail(message);
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 function renderLiveTurn(liveTurn: LiveTurnProjection): string {
@@ -149,7 +176,7 @@ describe('single live-turn handoff', () => {
     assert.equal(markup.split(text).length - 1, 0);
   });
 
-  it('reduces events into the projection and settles only after committed history refreshes', async () => {
+  it('hands terminal streamed text to committed history without waiting for a render callback', async () => {
     const liveTurns = createStateSetter<Record<string, LiveTurnProjection>>({
       'session-1': armLiveTurn('turn-1'),
     });
@@ -166,7 +193,7 @@ describe('single live-turn handoff', () => {
       liveTurnBySessionRef,
       refreshMessages: async (sessionId, options) => {
         refreshes.push({ sessionId, required: options?.requiredAssistantMessageId });
-        return true;
+        return refreshes.length >= 3;
       },
       refreshSessions: async () => [],
       setLiveTurnBySession,
@@ -194,9 +221,15 @@ describe('single live-turn handoff', () => {
     assert.equal(terminal?.steps[0]?.tools[0]?.toolUseId, 'tool-1');
     assert.equal(terminal?.steps[0]?.text?.text, '答案');
 
-    await handlers.settleAssistantStreaming('session-1', 'assistant-1');
+    await waitFor(
+      () => liveTurns.get()['session-1'] === undefined,
+      'Timed out waiting for the durable transcript handoff',
+    );
     assert.equal(liveTurns.get()['session-1'], undefined);
-    assert.ok(refreshes.some((call) => call.required === 'assistant-1'));
+    assert.equal(
+      refreshes.filter((call) => call.required === 'assistant-1').length,
+      3,
+    );
   });
 
   it('publishes visible deltas at most once per animation frame', () => {

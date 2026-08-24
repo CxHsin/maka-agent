@@ -1,10 +1,33 @@
-import { spawn } from 'node:child_process';
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   candidateStartupFailureForExitCode,
-  type CandidateStartupFailure,
+  type CandidateStartupFailureReport,
 } from '../candidate-startup-failure.js';
+import { RUNTIME_HOST_STDERR_PIPE_ENV } from '../process-diagnostics.js';
+
+const CANDIDATE_STDERR_MAX_BYTES = 4 * 1024;
 
 export interface DetachedCandidateInput {
   rootPath: string;
@@ -20,7 +43,16 @@ export interface DetachedCandidateInput {
 
 export interface DetachedCandidateAttempt {
   pid: number;
-  startupFailure?: Promise<CandidateStartupFailure | undefined>;
+  startupAttemptId?: string;
+  exited?: Promise<CandidateProcessExit>;
+  startupFailure?: Promise<CandidateStartupFailureReport | undefined>;
+}
+
+export interface CandidateProcessExit {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stderr: string;
+  readonly stderrTruncated: boolean;
 }
 
 export interface OwnedCandidateAttempt extends DetachedCandidateAttempt {
@@ -37,11 +69,13 @@ export type CandidateLauncher = (input: DetachedCandidateInput) => DetachedCandi
 export function launchDetachedRuntimeHostCandidate(
   input: DetachedCandidateInput,
 ): DetachedCandidateLaunch {
-  const child = spawnCandidate(input, true);
-  const startupFailure = readStartupFailure(child);
+  const startupAttemptId = randomUUID();
+  const child = spawnCandidate(input, true, startupAttemptId);
+  const exited = observeCandidateExit(child);
+  const startupFailure = readStartupFailure(exited, startupAttemptId);
   const spawned = spawnedPid(child).then(({ pid }) => {
     child.unref();
-    return { pid, startupFailure };
+    return { pid, startupAttemptId, exited, startupFailure };
   });
   return { spawned };
 }
@@ -49,14 +83,15 @@ export function launchDetachedRuntimeHostCandidate(
 export function launchOwnedRuntimeHostCandidate(input: DetachedCandidateInput): {
   readonly spawned: Promise<OwnedCandidateAttempt>;
 } {
-  const child = spawnCandidate(input, false);
-  const startupFailure = readStartupFailure(child);
-  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-    child.once('exit', (code, signal) => resolve({ code, signal }));
-  });
+  const startupAttemptId = randomUUID();
+  const child = spawnCandidate(input, false, startupAttemptId);
+  const exited = observeCandidateExit(child);
+  const startupFailure = readStartupFailure(exited, startupAttemptId);
   return {
     spawned: spawnedPid(child).then(({ pid }) => ({
       pid,
+      startupAttemptId,
+      exited,
       startupFailure,
       releaseToEnvironment(): void {
         child.unref();
@@ -72,7 +107,11 @@ export function launchOwnedRuntimeHostCandidate(input: DetachedCandidateInput): 
   };
 }
 
-function spawnCandidate(input: DetachedCandidateInput, detached: boolean) {
+function spawnCandidate(
+  input: DetachedCandidateInput,
+  detached: boolean,
+  startupAttemptId: string,
+): ChildProcess {
   const executable = input.executable ?? process.execPath;
   const args = [
     typeof input.entrypoint === 'string' ? input.entrypoint : fileURLToPath(input.entrypoint),
@@ -80,6 +119,8 @@ function spawnCandidate(input: DetachedCandidateInput, detached: boolean) {
     input.rootPath,
     '--expected-root-id',
     input.expectedRootId,
+    '--startup-attempt-id',
+    startupAttemptId,
   ];
   appendArgument(args, '--initial-connection-timeout-ms', input.initialConnectionTimeoutMs);
   appendArgument(args, '--idle-grace-ms', input.idleGraceMs);
@@ -90,14 +131,17 @@ function spawnCandidate(input: DetachedCandidateInput, detached: boolean) {
   const child = spawn(executable, args, {
     cwd: dirname(isAbsolute(executable) ? executable : process.execPath),
     detached,
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'pipe'],
     windowsHide: true,
     env: {
       ...process.env,
       ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
       ...input.env,
+      [RUNTIME_HOST_STDERR_PIPE_ENV]: '1',
     },
   });
+  const stderr = child.stderr as (NodeJS.ReadableStream & { unref?: () => void }) | null;
+  stderr?.unref?.();
   return child;
 }
 
@@ -122,11 +166,42 @@ function spawnedPid(child: ReturnType<typeof spawn>): Promise<{ pid: number }> {
 }
 
 function readStartupFailure(
-  child: ReturnType<typeof spawn>,
-): Promise<CandidateStartupFailure | undefined> {
+  exited: Promise<CandidateProcessExit>,
+  startupAttemptId: string,
+): Promise<CandidateStartupFailureReport | undefined> {
+  return exited.then(({ code }) => {
+    const failure = candidateStartupFailureForExitCode(code);
+    return failure ? { ...failure, startupAttemptId } : undefined;
+  });
+}
+
+function observeCandidateExit(child: ChildProcess): Promise<CandidateProcessExit> {
+  let stderr: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  let stderrTruncated = false;
+  child.stderr?.on('data', (value: Buffer | string) => {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    if (chunk.length > CANDIDATE_STDERR_MAX_BYTES) {
+      stderr = chunk.subarray(chunk.length - CANDIDATE_STDERR_MAX_BYTES);
+      stderrTruncated = true;
+      return;
+    }
+    const combined = Buffer.concat([stderr, chunk]);
+    if (combined.length > CANDIDATE_STDERR_MAX_BYTES) {
+      stderr = combined.subarray(combined.length - CANDIDATE_STDERR_MAX_BYTES);
+      stderrTruncated = true;
+    } else {
+      stderr = combined;
+    }
+  });
   return new Promise((resolve) => {
-    child.once('exit', (code) => resolve(candidateStartupFailureForExitCode(code)));
-    child.once('error', () => resolve(undefined));
+    child.once('close', (code, signal) => {
+      resolve({
+        code,
+        signal,
+        stderr: stderr.toString('utf8'),
+        stderrTruncated,
+      });
+    });
   });
 }
 

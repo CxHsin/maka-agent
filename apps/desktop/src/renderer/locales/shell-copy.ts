@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { generalizedErrorMessage, generalizedErrorMessageChinese } from '@maka/core/redaction';
 
 import { type UiCatalog, type UiLocale } from '@maka/core/ui-locale';
@@ -9,6 +28,7 @@ import { type ChatDefaultPermissionMode, type SettingsSection } from '@maka/core
 import { type SlashCommandIdForSurface } from '@maka/core/slash-command-catalog';
 
 import { type ThinkingLevel } from '@maka/core/model-thinking';
+import { type GoalStatus } from '@maka/core/goal';
 
 export const STATIC_COMMAND_IDS = [
   'action:new-chat',
@@ -33,7 +53,7 @@ export const STATIC_COMMAND_IDS = [
   'diag:copy-today-daily-review',
   'diag:paste-today-daily-review',
   'diag:save-today-daily-review',
-  'diag:copy-env-summary',
+  'diag:copy-diagnostics',
   'diag:test-network-proxy',
   'diag:open-local-memory',
 ] as const;
@@ -102,15 +122,18 @@ const STATIC_COMMAND_KEYWORDS: Record<StaticCommandId, readonly string[]> = {
     '文件',
     '导出',
   ],
-  'diag:copy-env-summary': [
+  'diag:copy-diagnostics': [
     'env',
     'environment',
     'version',
+    'diagnostics',
+    'logs',
     'about',
     'bug',
     'report',
     '环境',
     '版本',
+    '日志',
     '关于',
     '诊断',
     '汇报',
@@ -166,6 +189,19 @@ type ShellCopy = {
     directorySwitchedTitle: string;
     projectUpdateFailedTitle: string;
     projectUpdateFailedFallback: string;
+    catalogUnavailable: string;
+    retryCatalog: string;
+    remoteDirectoryTitle(host: string): string;
+    remoteDirectoryBreadcrumbs: string;
+    remoteDirectoryHome: string;
+    remoteDirectoryEmpty: string;
+    remoteDirectorySelect: string;
+    remoteDirectoryCancel: string;
+    remoteDirectoryRetry: string;
+    remoteDirectoryLoading: string;
+    remoteDirectoryShowHidden: string;
+    remoteDirectoryHideHidden: string;
+    runtimeHostReadiness: Record<'connecting' | 'reconnecting' | 'unavailable', string>;
     openFailedTitle(path: string): string;
     openPathLabels: Record<'workspace' | 'skills' | 'memory' | 'project', string>;
     openPathFailures: Record<
@@ -208,7 +244,8 @@ type ShellCopy = {
     reviewSaveFallback: string;
     pasteFailedTitle: string;
     reviewUnavailable: string;
-    environmentCopiedTitle: string;
+    diagnosticsCopiedTitle: string;
+    diagnosticsCopiedDescription: string;
     clipboardDenied: string;
     networkPassedTitle: string;
     networkFailedTitle: string;
@@ -229,6 +266,8 @@ type ShellCopy = {
     deleteLabel: string;
     cancelLabel: string;
     deletedTitle(name: string): string;
+    /** The task was restored elsewhere, so the delete was called off. */
+    deleteRestoredTitle(name: string): string;
   };
   skillActions: {
     refreshSkillsFailedTitle: string;
@@ -304,6 +343,33 @@ type ShellCopy = {
     thinkingFailedTitle: string;
     thinkingFallback: string;
   };
+  /**
+   * The Goal dialog. A Goal spends tokens without further prompting, so the
+   * wording states what it does and names the two budgets that stop it —
+   * silence here reads as "nothing happens until I press something else".
+   */
+  goalDialog: {
+    title: string;
+    description: string;
+    conditionLabel: string;
+    conditionDescription: string;
+    conditionPlaceholder: string;
+    maxIterationsLabel: string;
+    maxIterationsDescription: string;
+    maxIterationsInvalid(max: number): string;
+    tokenBudgetLabel: string;
+    tokenBudgetDescription: string;
+    tokenBudgetInvalid(min: number): string;
+    cancel: string;
+    close: string;
+    submit: string;
+    failedFallback: string;
+    statusLabels: Record<GoalStatus, string>;
+    reconciledMatching(condition: string, status: string): string;
+    reconciledDifferent(condition: string, status: string): string;
+    reconciledNoGoal: string;
+    reconciliationUnavailable: string;
+  };
   errorBoundary: {
     copyPending: string;
     copied: string;
@@ -371,6 +437,12 @@ type ShellCopy = {
     loadingWorkbar: string;
     useSkillPrompt(skillName: string): string;
     newConversation: string;
+    compactSuccessTitle: string;
+    compactSuccessDescription: string;
+    compactStartedTitle: string;
+    compactStartedDescription: string;
+    compactUnchangedTitle: string;
+    compactUnchangedDescription: string;
     compactErrorTitle: string;
     compactErrorFallback: string;
     slashCommands: Record<SlashCommandIdForSurface<'desktop'>, {
@@ -387,12 +459,17 @@ type ShellCopy = {
     resumeFailedFallback: string;
     goalClearFailedTitle: string;
     goalClearFailedFallback: string;
+    goalPauseFailedTitle: string;
+    goalPauseFailedFallback: string;
+    goalResumeFailedTitle: string;
+    goalResumeFailedFallback: string;
     appearanceLoadErrorTitle: string;
     appearanceLoadErrorFallback: string;
     memoryRefreshErrorTitle: string;
     memoryLoadErrorTitle: string;
     memoryErrorFallback: string;
     openModelSettings: string;
+    configureModelsOnHost(hostName: string): string;
     sidebarCollapsed: string;
     resizeConversationList: string;
     skipErrorTitle: string;
@@ -416,36 +493,37 @@ type ShellCopy = {
     permissionModeStreaming: string;
     permissionModeRunning: string;
     permissionModeWaiting: string;
-    planModeChanging: string;
-    planModeStreaming: string;
-    planModeRunning: string;
-    planModeWaiting: string;
+    /** The one mode control locks for the same four reasons, worded once. */
+    /** The Session summary has not arrived, so its mode is not known yet. */
+    modeChangeLoading: string;
+    modeChanging: string;
+    modeChangeStreaming: string;
+    modeChangeRunning: string;
+    modeChangeWaiting: string;
+    /**
+     * Why the ＋ menu's Goal entry is unavailable right now. A Goal takes hold
+     * on the next Turn, so arming one mid-Turn would look like it did nothing;
+     * saying so is better than letting the user find that out afterwards.
+     */
+    goalTurnActive: string;
     planModeFailedTitle: string;
     planModeFallback: string;
+    orchestrationModeFailedTitle: string;
+    orchestrationModeFallback: string;
     planModeExitPendingTitle: string;
     planModeExitPendingDescription(title: string): string;
     planModeExitConfirm: string;
     planModeExitCancel: string;
     planModeExecutionActiveTitle: string;
     planModeExecutionActiveDescription: string;
-    swarmModeChanging: string;
-    swarmModeStreaming: string;
-    swarmModeRunning: string;
-    swarmModeWaiting: string;
-    swarmModeFailedTitle: string;
-    swarmModeFallback: string;
     swarmModeEnabledTitle: string;
     swarmModeDisabledTitle: string;
     swarmModeStatusDescription: string;
-    graphModeChanging: string;
-    graphModeStreaming: string;
-    graphModeRunning: string;
-    graphModeWaiting: string;
-    graphModeFailedTitle: string;
-    graphModeFallback: string;
     graphModeEnabledTitle: string;
     graphModeDisabledTitle: string;
     graphModeStatusDescription: string;
+    graphHistoryTitle: string;
+    graphHistoryDescription: string;
     resizeWorkbar: string;
   };
 };
@@ -517,9 +595,9 @@ const ZH_STATIC_COMMANDS: Record<StaticCommandId, CommandCopy> = {
     hint: '用系统保存对话框',
     group: '诊断',
   },
-  'diag:copy-env-summary': {
-    label: '复制环境信息',
-    hint: 'Markdown · bug report 友好',
+  'diag:copy-diagnostics': {
+    label: '复制诊断信息',
+    hint: '⇧⌘D · 脱敏日志 · 仅写入剪贴板',
     group: '诊断',
   },
   'diag:test-network-proxy': {
@@ -613,9 +691,9 @@ const EN_STATIC_COMMANDS: Record<StaticCommandId, CommandCopy> = {
     hint: 'Use the system save dialog',
     group: 'Diagnostics',
   },
-  'diag:copy-env-summary': {
-    label: 'Copy environment information',
-    hint: 'Markdown · ready for bug reports',
+  'diag:copy-diagnostics': {
+    label: 'Copy diagnostics',
+    hint: '⇧⌘D · Redacted logs · clipboard only',
     group: 'Diagnostics',
   },
   'diag:test-network-proxy': {
@@ -715,6 +793,23 @@ const SHELL_COPY_BY_LOCALE = {
       directorySwitchedTitle: '已切换工作目录',
       projectUpdateFailedTitle: '项目操作失败',
       projectUpdateFailedFallback: '暂时无法更新项目，请稍后重试。',
+      catalogUnavailable: 'Runtime Host 暂时不可用',
+      retryCatalog: '重试加载',
+      remoteDirectoryTitle: (host: string) => `在 ${host} 上添加项目`,
+      remoteDirectoryBreadcrumbs: '当前文件夹',
+      remoteDirectoryHome: '主目录',
+      remoteDirectoryEmpty: '此文件夹中没有子文件夹',
+      remoteDirectorySelect: '添加此文件夹',
+      remoteDirectoryCancel: '取消',
+      remoteDirectoryRetry: '重试',
+      remoteDirectoryLoading: '正在读取文件夹…',
+      remoteDirectoryShowHidden: '显示隐藏目录',
+      remoteDirectoryHideHidden: '不显示隐藏目录',
+      runtimeHostReadiness: {
+        connecting: '连接中',
+        reconnecting: '正在重连',
+        unavailable: '不可用',
+      },
       openFailedTitle: (path: string) => `无法打开${path}`,
       openPathLabels: {
         workspace: '工作区目录',
@@ -774,7 +869,8 @@ const SHELL_COPY_BY_LOCALE = {
       reviewSaveFallback: '保存每日回顾失败，请稍后重试。',
       pasteFailedTitle: '粘贴失败',
       reviewUnavailable: '今日回顾暂时不可用，请稍后重试。',
-      environmentCopiedTitle: '已复制环境信息',
+      diagnosticsCopiedTitle: '已复制诊断信息',
+      diagnosticsCopiedDescription: '检查内容后，可直接粘贴到问题报告',
       clipboardDenied: '剪贴板不可用或被系统拒绝',
       networkPassedTitle: '网络代理测试通过',
       networkFailedTitle: '网络代理测试失败',
@@ -795,6 +891,7 @@ const SHELL_COPY_BY_LOCALE = {
       deleteLabel: '删除',
       cancelLabel: '取消',
       deletedTitle: (name: string) => `已删除 ${name}`,
+      deleteRestoredTitle: (name: string) => `${name} 已被恢复，未删除`,
     },
     skillActions: {
       refreshSkillsFailedTitle: '刷新技能失败',
@@ -890,7 +987,6 @@ const SHELL_COPY_BY_LOCALE = {
       permissionDescriptions: {
         explore: '只读：只读取和搜索，写入文件和访问网络会先来问你。',
         ask: '自动：在 Maka 的保护层内执行；需要超出当前权限范围时会先来问你。',
-        execute: '兼容模式：等同于自动。',
         bypass: '本地工具直接访问你的文件和网络，不经 Maka 的保护层。',
       },
       bypassConfirmTitle: '切换到完全权限？',
@@ -918,6 +1014,40 @@ const SHELL_COPY_BY_LOCALE = {
       },
       thinkingFailedTitle: '切换思考级别失败',
       thinkingFallback: '思考级别暂时无法切换，请稍后重试。',
+    },
+    goalDialog: {
+      title: '设定 Goal',
+      description: 'Goal 会在每轮结束后自动续行，直到达成、判定不可行，或触及下面的预算。随时可在输入框上方停止。',
+      conditionLabel: '达成条件',
+      conditionDescription: '用一句话说明什么算做完；Maka 每轮都据此判断。',
+      conditionPlaceholder: '例如：所有测试通过，且 lint 无告警',
+      maxIterationsLabel: '最多轮数',
+      maxIterationsDescription: '留空使用默认值。',
+      maxIterationsInvalid: (max) => `请填 1 到 ${max} 之间的整数，或留空。`,
+      tokenBudgetLabel: 'Token 预算',
+      tokenBudgetDescription: '留空表示不设 token 上限。',
+      tokenBudgetInvalid: (min) => `请填不小于 ${min} 的整数，或留空。`,
+      cancel: '取消',
+      close: '关闭',
+      submit: '开始',
+      failedFallback: '无法设定 Goal，请稍后重试。',
+      statusLabels: {
+        active: '进行中',
+        waiting: '等待中',
+        paused: '已暂停',
+        achieved: '已达成',
+        impossible: '不可行',
+        cleared: '已清除',
+        stalled: '已停滞',
+        budget_limited: '已达到 Token 预算',
+        max_iterations: '已达到最多轮数',
+      },
+      reconciledMatching: (condition, status) =>
+        `已重新读取当前 Goal：“${condition}”（${status}）。它符合你的请求，但无法确认刚才的操作是否提交。`,
+      reconciledDifferent: (condition, status) =>
+        `已重新读取当前 Goal：“${condition}”（${status}）。它与本次请求不同。`,
+      reconciledNoGoal: '已重新读取当前状态：当前未读到 Goal。',
+      reconciliationUnavailable: '连接中断后暂时无法确认当前 Goal 状态。请关闭后重新打开再检查；此窗口不会重复提交。',
     },
     errorBoundary: {
       copyPending: '复制中…',
@@ -958,10 +1088,6 @@ const SHELL_COPY_BY_LOCALE = {
       permissionModes: {
         explore: { label: '权限 · 只读', hint: '读取和搜索直通，写入和网络仍需确认' },
         ask: { label: '权限 · 自动', hint: '在 Maka 的保护层内运行；需要超出当前权限范围时再询问' },
-        execute: {
-          label: '权限 · 自动执行',
-          hint: '常见工具直通，破坏性操作仍确认',
-        },
         bypass: {
           label: '权限 · 完全权限',
           hint: '不经 Maka 的保护层，直接访问你的文件和网络',
@@ -996,6 +1122,10 @@ const SHELL_COPY_BY_LOCALE = {
             { keys: ['?'], description: '打开 / 关闭此快捷键面板' },
             { keys: ['⌘', 'N'], description: '新建任务' },
             { keys: ['⌘', ','], description: '打开设置' },
+            {
+              keys: ['⌘', 'Shift', 'D'],
+              description: '复制当前上下文的诊断信息',
+            },
             { keys: ['Esc'], description: '关闭当前模态框' },
           ],
         },
@@ -1051,6 +1181,12 @@ const SHELL_COPY_BY_LOCALE = {
       loadingWorkbar: '正在加载任务工作栏…',
       useSkillPrompt: (skillName: string) => `使用 ${skillName} 技能：`,
       newConversation: '新建任务',
+      compactSuccessTitle: '上下文已压缩',
+      compactSuccessDescription: '较早的上下文已替换为检查点摘要。',
+      compactStartedTitle: '正在压缩上下文',
+      compactStartedDescription: '正在将较早的上下文整理为检查点摘要。',
+      compactUnchangedTitle: '无需压缩',
+      compactUnchangedDescription: '任务已使用最新的检查点。',
       compactErrorTitle: '压缩失败',
       compactErrorFallback: '任务暂时无法压缩，请稍后重试。',
       slashCommands: {
@@ -1070,12 +1206,18 @@ const SHELL_COPY_BY_LOCALE = {
       resumeFailedFallback: '无法启动安全恢复，请检查任务状态后重试。',
       goalClearFailedTitle: '停止目标失败',
       goalClearFailedFallback: '目标仍可能继续运行，请立即重试。',
+      goalPauseFailedTitle: '暂停目标失败',
+      goalPauseFailedFallback: '目标可能仍在自动续行，请立即重试。',
+      goalResumeFailedTitle: '恢复目标失败',
+      goalResumeFailedFallback: '目标仍处于暂停状态，请重试。',
       appearanceLoadErrorTitle: '载入外观设置失败',
       appearanceLoadErrorFallback: '外观设置暂时无法载入，请稍后重试。',
       memoryRefreshErrorTitle: '刷新本地记忆状态失败',
       memoryLoadErrorTitle: '载入本地记忆状态失败',
       memoryErrorFallback: '本地记忆状态暂时无法刷新，请稍后重试。',
       openModelSettings: '打开设置 · 模型',
+      configureModelsOnHost: (hostName: string) =>
+        `请先在 ${hostName} 上配置模型连接。`,
       sidebarCollapsed: '侧边栏已收起',
       resizeConversationList: '调整任务列表宽度',
       skipErrorTitle: '跳过失败',
@@ -1099,12 +1241,16 @@ const SHELL_COPY_BY_LOCALE = {
       permissionModeStreaming: '当前任务正在流式输出，等结束后再切换权限模式。',
       permissionModeRunning: '当前任务正在运行，等结束后再切换权限模式。',
       permissionModeWaiting: '当前有工具调用正在等待确认，处理后再切换权限模式。',
-      planModeChanging: 'Plan Mode 正在切换，完成后再继续操作。',
-      planModeStreaming: '当前任务正在流式输出，等结束后再切换 Plan Mode。',
-      planModeRunning: '当前任务正在运行，等结束后再切换 Plan Mode。',
-      planModeWaiting: '当前有工具调用正在等待确认，处理后再切换 Plan Mode。',
-      planModeFailedTitle: '切换 Plan Mode 失败',
-      planModeFallback: 'Plan Mode 暂时无法切换，请稍后重试。',
+      modeChangeLoading: '会话还在载入，稍候即可切换模式。',
+      modeChanging: '模式正在切换，完成后再继续操作。',
+      modeChangeStreaming: '当前任务正在流式输出，等结束后再切换模式。',
+      modeChangeRunning: '当前任务正在运行，等结束后再切换模式。',
+      modeChangeWaiting: '当前有工具调用正在等待确认，处理后再切换模式。',
+      goalTurnActive: 'Goal 从下一轮开始生效。等当前这一轮结束后再设定。',
+      planModeFailedTitle: '切换 Plan 模式失败',
+      planModeFallback: 'Plan 模式暂时无法切换，请稍后重试。',
+      orchestrationModeFailedTitle: '切换编排模式失败',
+      orchestrationModeFallback: '编排模式暂时无法切换，请稍后重试。',
       planModeExitPendingTitle: '放弃当前方案？',
       planModeExitPendingDescription: (title: string) =>
         `「${title}」尚未审批。退出 Plan Mode 后，该方案会标记为已放弃，但历史记录仍会保留。`,
@@ -1112,24 +1258,14 @@ const SHELL_COPY_BY_LOCALE = {
       planModeExitCancel: '继续规划',
       planModeExecutionActiveTitle: '计划仍在执行',
       planModeExecutionActiveDescription: '请先中断当前执行，再进入 Plan Mode 调整方案。',
-      swarmModeChanging: 'Swarm Mode 正在切换，完成后再继续操作。',
-      swarmModeStreaming: '当前任务正在流式输出，等结束后再切换 Swarm Mode。',
-      swarmModeRunning: '当前任务正在运行，等结束后再切换 Swarm Mode。',
-      swarmModeWaiting: '当前有工具调用正在等待确认，处理后再切换 Swarm Mode。',
-      swarmModeFailedTitle: '切换 Swarm Mode 失败',
-      swarmModeFallback: 'Swarm Mode 暂时无法切换，请稍后重试。',
       swarmModeEnabledTitle: 'Swarm Mode 已开启',
       swarmModeDisabledTitle: 'Swarm Mode 未开启',
       swarmModeStatusDescription: '使用 /swarm on、/swarm off，或 /swarm <任务> 单次运行。',
-      graphModeChanging: 'Graph Mode 正在切换，完成后再继续操作。',
-      graphModeStreaming: '当前任务正在流式输出，等结束后再切换 Graph Mode。',
-      graphModeRunning: '当前任务正在运行，等结束后再切换 Graph Mode。',
-      graphModeWaiting: '当前有工具调用正在等待确认，处理后再切换 Graph Mode。',
-      graphModeFailedTitle: '切换 Graph Mode 失败',
-      graphModeFallback: 'Graph Mode 暂时无法切换，请稍后重试。',
       graphModeEnabledTitle: 'Graph Mode 已开启',
       graphModeDisabledTitle: 'Graph Mode 未开启',
       graphModeStatusDescription: '使用 /graph on、/graph off，或 /graph <任务> 单次运行。',
+      graphHistoryTitle: 'Graph 历史',
+      graphHistoryDescription: '请在 Agent Graph 面板的运行轮次菜单中查看历史记录。',
       resizeWorkbar: '调整任务工作栏宽度',
     },
   },
@@ -1181,6 +1317,23 @@ const SHELL_COPY_BY_LOCALE = {
       directorySwitchedTitle: 'Working directory changed',
       projectUpdateFailedTitle: 'Could not update project',
       projectUpdateFailedFallback: 'The project could not be updated. Try again later.',
+      catalogUnavailable: 'Runtime Hosts unavailable',
+      retryCatalog: 'Retry loading',
+      remoteDirectoryTitle: (host: string) => `Add a project on ${host}`,
+      remoteDirectoryBreadcrumbs: 'Current folder',
+      remoteDirectoryHome: 'Home',
+      remoteDirectoryEmpty: 'No folders here',
+      remoteDirectorySelect: 'Add this folder',
+      remoteDirectoryCancel: 'Cancel',
+      remoteDirectoryRetry: 'Retry',
+      remoteDirectoryLoading: 'Loading folders…',
+      remoteDirectoryShowHidden: 'Show hidden folders',
+      remoteDirectoryHideHidden: 'Hide hidden folders',
+      runtimeHostReadiness: {
+        connecting: 'Connecting',
+        reconnecting: 'Reconnecting',
+        unavailable: 'Unavailable',
+      },
       openFailedTitle: (path: string) => `Could not open ${path}`,
       openPathLabels: {
         workspace: 'workspace folder',
@@ -1240,7 +1393,8 @@ const SHELL_COPY_BY_LOCALE = {
       reviewSaveFallback: 'The Daily Review could not be saved. Try again later.',
       pasteFailedTitle: 'Paste failed',
       reviewUnavailable: "Today's review is temporarily unavailable. Try again later.",
-      environmentCopiedTitle: 'Environment information copied',
+      diagnosticsCopiedTitle: 'Diagnostics copied',
+      diagnosticsCopiedDescription: 'Review the contents, then paste them into the issue report',
       clipboardDenied: 'The clipboard is unavailable or was denied',
       networkPassedTitle: 'Network proxy test passed',
       networkFailedTitle: 'Network proxy test failed',
@@ -1262,6 +1416,7 @@ const SHELL_COPY_BY_LOCALE = {
       deleteLabel: 'Delete',
       cancelLabel: 'Cancel',
       deletedTitle: (name: string) => `Deleted ${name}`,
+      deleteRestoredTitle: (name: string) => `${name} was restored, so it was kept`,
     },
     skillActions: {
       refreshSkillsFailedTitle: 'Could not refresh Skills',
@@ -1358,7 +1513,6 @@ const SHELL_COPY_BY_LOCALE = {
       permissionDescriptions: {
         explore: 'Read only: reads and searches only; writing files and network access ask you first.',
         ask: "Auto: runs inside Maka's protection layer and asks before anything goes beyond the current permissions.",
-        execute: 'Compatibility mode: same as Auto.',
         bypass: "Local tools reach your files and your network directly, outside Maka's protection layer.",
       },
       bypassConfirmTitle: 'Switch to full access?',
@@ -1386,6 +1540,40 @@ const SHELL_COPY_BY_LOCALE = {
       },
       thinkingFailedTitle: 'Could not change thinking level',
       thinkingFallback: 'The thinking level could not be changed. Try again later.',
+    },
+    goalDialog: {
+      title: 'Set a goal',
+      description: 'Maka continues on its own after each turn until the goal is met, judged impossible, or a budget below is reached. You can stop it any time from above the composer.',
+      conditionLabel: 'Completion condition',
+      conditionDescription: 'One sentence for what counts as done; Maka checks it after every turn.',
+      conditionPlaceholder: 'e.g. all tests pass and lint reports no warnings',
+      maxIterationsLabel: 'Maximum turns',
+      maxIterationsDescription: 'Leave empty to use the default.',
+      maxIterationsInvalid: (max) => `Enter a whole number from 1 to ${max}, or leave it empty.`,
+      tokenBudgetLabel: 'Token budget',
+      tokenBudgetDescription: 'Leave empty for no token ceiling.',
+      tokenBudgetInvalid: (min) => `Enter a whole number of at least ${min}, or leave it empty.`,
+      cancel: 'Cancel',
+      close: 'Close',
+      submit: 'Start',
+      failedFallback: 'The goal could not be set. Try again.',
+      statusLabels: {
+        active: 'Active',
+        waiting: 'Waiting',
+        paused: 'Paused',
+        achieved: 'Achieved',
+        impossible: 'Impossible',
+        cleared: 'Cleared',
+        stalled: 'Stalled',
+        budget_limited: 'Token budget reached',
+        max_iterations: 'Maximum turns reached',
+      },
+      reconciledMatching: (condition, status) =>
+        `Current Goal after reconnect: “${condition}” (${status}). It matches your request, but this does not prove that the interrupted operation committed.`,
+      reconciledDifferent: (condition, status) =>
+        `Current Goal after reconnect: “${condition}” (${status}). It differs from this request.`,
+      reconciledNoGoal: 'Current state after reconnect: no Goal was found.',
+      reconciliationUnavailable: 'The connection was interrupted and the current Goal cannot be confirmed yet. Close and reopen to check again; this dialog will not submit twice.',
     },
     errorBoundary: {
       copyPending: 'Copying…',
@@ -1432,10 +1620,6 @@ const SHELL_COPY_BY_LOCALE = {
           label: 'Permissions · Auto',
           hint: "Run inside Maka's protection layer; ask before going beyond the current permissions",
         },
-        execute: {
-          label: 'Permissions · Auto execute',
-          hint: 'Run common tools; confirm destructive actions',
-        },
         bypass: {
           label: 'Permissions · Full access',
           hint: "Reach your files and your network directly, outside Maka's protection layer",
@@ -1470,6 +1654,10 @@ const SHELL_COPY_BY_LOCALE = {
             { keys: ['?'], description: 'Open or close this shortcuts panel' },
             { keys: ['⌘', 'N'], description: 'Create a new task' },
             { keys: ['⌘', ','], description: 'Open Settings' },
+            {
+              keys: ['⌘', 'Shift', 'D'],
+              description: 'Copy diagnostics for the current context',
+            },
             { keys: ['Esc'], description: 'Close the current dialog' },
           ],
         },
@@ -1558,6 +1746,12 @@ const SHELL_COPY_BY_LOCALE = {
       loadingWorkbar: 'Loading task workbar…',
       useSkillPrompt: (skillName: string) => `Use the ${skillName} skill: `,
       newConversation: 'New task',
+      compactSuccessTitle: 'Context compacted',
+      compactSuccessDescription: 'Older context was replaced with a checkpoint summary.',
+      compactStartedTitle: 'Compacting context',
+      compactStartedDescription: 'Summarizing older context into a checkpoint.',
+      compactUnchangedTitle: 'Nothing to compact',
+      compactUnchangedDescription: 'The task already uses the latest checkpoint.',
       compactErrorTitle: 'Compaction failed',
       compactErrorFallback: 'The task could not be compacted. Try again later.',
       slashCommands: {
@@ -1578,12 +1772,18 @@ const SHELL_COPY_BY_LOCALE = {
       resumeFailedFallback: 'Safe recovery could not start. Check the task state and try again.',
       goalClearFailedTitle: 'Could not stop the goal',
       goalClearFailedFallback: 'The goal may still be running. Try again now.',
+      goalPauseFailedTitle: 'Could not pause the goal',
+      goalPauseFailedFallback: 'The goal may still be continuing. Try again now.',
+      goalResumeFailedTitle: 'Could not resume the goal',
+      goalResumeFailedFallback: 'The goal is still paused. Try again.',
       appearanceLoadErrorTitle: 'Could not load appearance settings',
       appearanceLoadErrorFallback: 'Appearance settings are temporarily unavailable. Try again later.',
       memoryRefreshErrorTitle: 'Could not refresh local memory status',
       memoryLoadErrorTitle: 'Could not load local memory status',
       memoryErrorFallback: 'Local memory status could not be refreshed. Try again later.',
       openModelSettings: 'Open Settings · Models',
+      configureModelsOnHost: (hostName: string) =>
+        `Configure a model connection on ${hostName} before starting a task.`,
       sidebarCollapsed: 'Sidebar is collapsed',
       resizeConversationList: 'Resize task list',
       skipErrorTitle: 'Could not skip onboarding',
@@ -1609,12 +1809,17 @@ const SHELL_COPY_BY_LOCALE = {
         'This task is streaming. Wait for it to finish before changing the permission mode.',
       permissionModeRunning: 'This task is running. Wait for it to finish before changing the permission mode.',
       permissionModeWaiting: 'A tool call is waiting for confirmation. Respond before changing the permission mode.',
-      planModeChanging: 'Plan Mode is changing. Wait for it to finish before continuing.',
-      planModeStreaming: 'This task is streaming. Wait for it to finish before changing Plan Mode.',
-      planModeRunning: 'This task is running. Wait for it to finish before changing Plan Mode.',
-      planModeWaiting: 'A tool call is waiting for confirmation. Respond before changing Plan Mode.',
-      planModeFailedTitle: 'Could not change Plan Mode',
-      planModeFallback: 'Plan Mode could not be changed. Try again later.',
+      modeChangeLoading: 'This session is still loading. Its mode can be changed in a moment.',
+      modeChanging: 'The mode is changing. Wait for it to finish before continuing.',
+      modeChangeStreaming: 'This task is streaming. Wait for it to finish before changing the mode.',
+      modeChangeRunning: 'This task is running. Wait for it to finish before changing the mode.',
+      modeChangeWaiting: 'A tool call is waiting for confirmation. Respond before changing the mode.',
+      goalTurnActive:
+        'A goal takes hold on the next turn. Wait for this one to finish before setting one.',
+      planModeFailedTitle: 'Could not change Plan mode',
+      planModeFallback: 'Plan mode could not be changed. Try again later.',
+      orchestrationModeFailedTitle: 'Could not change the orchestration mode',
+      orchestrationModeFallback: 'The orchestration mode could not be changed. Try again later.',
       planModeExitPendingTitle: 'Abandon the current plan?',
       planModeExitPendingDescription: (title: string) =>
         `“${title}” has not been approved. Leaving Plan Mode will mark it as abandoned while preserving its history.`,
@@ -1622,24 +1827,14 @@ const SHELL_COPY_BY_LOCALE = {
       planModeExitCancel: 'Keep planning',
       planModeExecutionActiveTitle: 'The plan is still running',
       planModeExecutionActiveDescription: 'Interrupt the active execution before entering Plan Mode to revise it.',
-      swarmModeChanging: 'Swarm Mode is changing. Wait for it to finish before continuing.',
-      swarmModeStreaming: 'This task is streaming. Wait for it to finish before changing Swarm Mode.',
-      swarmModeRunning: 'This task is running. Wait for it to finish before changing Swarm Mode.',
-      swarmModeWaiting: 'A tool call is waiting for confirmation. Respond before changing Swarm Mode.',
-      swarmModeFailedTitle: 'Could not change Swarm Mode',
-      swarmModeFallback: 'Swarm Mode could not be changed. Try again later.',
       swarmModeEnabledTitle: 'Swarm Mode is on',
       swarmModeDisabledTitle: 'Swarm Mode is off',
       swarmModeStatusDescription: 'Use /swarm on, /swarm off, or /swarm <task> for one turn.',
-      graphModeChanging: 'Graph Mode is changing. Wait for it to finish before continuing.',
-      graphModeStreaming: 'This task is streaming. Wait for it to finish before changing Graph Mode.',
-      graphModeRunning: 'This task is running. Wait for it to finish before changing Graph Mode.',
-      graphModeWaiting: 'A tool call is waiting for confirmation. Respond before changing Graph Mode.',
-      graphModeFailedTitle: 'Could not change Graph Mode',
-      graphModeFallback: 'Graph Mode could not be changed. Try again later.',
       graphModeEnabledTitle: 'Graph Mode is on',
       graphModeDisabledTitle: 'Graph Mode is off',
       graphModeStatusDescription: 'Use /graph on, /graph off, or /graph <task> for one turn.',
+      graphHistoryTitle: 'Graph history',
+      graphHistoryDescription: 'Use the run menu in the Agent Graph panel to inspect history.',
       resizeWorkbar: 'Resize task workbar',
     },
   },

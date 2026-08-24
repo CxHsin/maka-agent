@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { createHash } from 'node:crypto';
 import { userInfo } from 'node:os';
 import type { ShellRunSnapshotResult, ShellRunUpdate, ToolResultContent } from '@maka/core/events';
@@ -13,7 +32,7 @@ import {
   isShellRunResourceRef,
 } from '@maka/runtime/shell-run-contract';
 import { type ShellRunLauncher } from '@maka/runtime/shell-tools';
-import { defaultShellPlan } from '@maka/runtime/shell-detect';
+import { defaultShellPlan, ShellPreferenceError, type ShellPlan } from '@maka/runtime/shell-detect';
 import { isSessionNotFoundError } from '@maka/storage/execution-stores';
 import {
   decodeRuntimeResourceControllerAcquireResult,
@@ -59,7 +78,6 @@ interface RuntimeResourceSessionReader {
 interface RuntimeResourceHeaderReader {
   readHeader(sessionId: string): Promise<{
     readonly cwd: string;
-    readonly status: string;
     readonly isArchived: boolean;
   }>;
 }
@@ -82,6 +100,13 @@ export interface HostRuntimeResourceCoordinatorInput {
   readonly acquireResidency: () => RuntimeHostResidency;
   readonly requestDrain: () => void;
   readonly onProjectionChanged?: (update: ShellRunUpdate) => void;
+  /**
+   * Fallback shell resolution for callers that do not carry a plan (e.g.
+   * integrated terminal launches, which capture their plan at launch). A
+   * caller-supplied plan — the turn's admission-time resolution — always
+   * wins, so a mid-turn settings change cannot split guidance from execution.
+   */
+  readonly resolveShell?: () => Promise<ShellPlan> | ShellPlan;
 }
 
 interface ControllerState {
@@ -119,6 +144,7 @@ export class HostRuntimeResourceCoordinator
   readonly #acquireResidency: () => RuntimeHostResidency;
   readonly #requestDrain: () => void;
   readonly #onProjectionChanged: (update: ShellRunUpdate) => void;
+  readonly #resolveShell: () => Promise<ShellPlan> | ShellPlan;
   readonly #resourceQueue = new ResourceSerialQueue();
   readonly #controllers = new Map<string, ControllerState>();
   readonly #controllerResources = new Map<string, string>();
@@ -134,6 +160,7 @@ export class HostRuntimeResourceCoordinator
     this.#acquireResidency = input.acquireResidency;
     this.#requestDrain = input.requestDrain;
     this.#onProjectionChanged = input.onProjectionChanged ?? (() => undefined);
+    this.#resolveShell = input.resolveShell ?? defaultShellPlan;
   }
 
   async runForegroundBash(
@@ -146,7 +173,9 @@ export class HostRuntimeResourceCoordinator
         if (this.#draining) throw new Error('Runtime resources are draining');
         await this.#assertActiveSession(input.sessionId);
         if (this.#draining) throw new Error('Runtime resources are draining');
-        return { execution: this.#manager.runForegroundBash(input) };
+        const shell = input.shell ?? (await this.#resolveShell());
+        if (this.#draining) throw new Error('Runtime resources are draining');
+        return { execution: this.#manager.runForegroundBash({ ...input, shell }) };
       });
       return await execution;
     } finally {
@@ -171,8 +200,12 @@ export class HostRuntimeResourceCoordinator
     };
     try {
       return await this.#sessionAdmission.run(input.sessionId, async () => {
+        if (this.#draining) throw new Error('Runtime resources are draining');
         await this.#assertActiveSession(input.sessionId);
-        return this.#manager.runBackgroundBash({ ...input, onCompletion: complete });
+        if (this.#draining) throw new Error('Runtime resources are draining');
+        const shell = input.shell ?? (await this.#resolveShell());
+        if (this.#draining) throw new Error('Runtime resources are draining');
+        return this.#manager.runBackgroundBash({ ...input, shell, onCompletion: complete });
       });
     } catch (error) {
       complete({ successful: false });
@@ -328,10 +361,20 @@ export class HostRuntimeResourceCoordinator
     if (unavailable) return mutationFailure('runtime.resource.start', unavailable);
     try {
       const header = await this.#sessionHeaders.readHeader(input.sessionId);
-      const shell = defaultShellPlan();
+      const shell = await this.#resolveShell();
       const env = { ...process.env };
       let command: string;
-      if (shell.kind === 'posix') {
+      if (shell.kind === 'git-bash') {
+        env.SHELL = shell.exe;
+        env.CHERE_INVOKING = '1';
+        env.DISABLE_AUTO_UPDATE = 'true';
+        env.DISABLE_UPDATE_PROMPT = 'true';
+        command = 'exec "$SHELL" -l';
+      } else if (shell.kind === 'legacy-wsl-bash') {
+        env.DISABLE_AUTO_UPDATE = 'true';
+        env.DISABLE_UPDATE_PROMPT = 'true';
+        command = 'exec bash -l';
+      } else if (shell.kind === 'posix') {
         env.SHELL ||= userInfo().shell || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/sh');
         env.DISABLE_AUTO_UPDATE = 'true';
         env.DISABLE_UPDATE_PROMPT = 'true';
@@ -362,6 +405,12 @@ export class HostRuntimeResourceCoordinator
         }),
       };
     } catch (error) {
+      if (error instanceof ShellPreferenceError) {
+        return mutationFailure('runtime.resource.start', {
+          code: 'invalid_request',
+          message: error.message,
+        });
+      }
       return this.#resourceFailure('runtime.resource.start', error);
     }
   }
@@ -596,7 +645,7 @@ export class HostRuntimeResourceCoordinator
 
   async #assertActiveSession(sessionId: string): Promise<void> {
     const header = await this.#sessionHeaders.readHeader(sessionId);
-    if (header.isArchived || header.status === 'archived') {
+    if (header.isArchived) {
       throw new Error('Session is archived');
     }
   }
@@ -608,7 +657,7 @@ export class HostRuntimeResourceCoordinator
   > {
     try {
       const header = await this.#sessionHeaders.readHeader(sessionId);
-      return header.isArchived || header.status === 'archived'
+      return header.isArchived
         ? { code: 'session_archived', message: 'Session is archived' }
         : undefined;
     } catch (error) {

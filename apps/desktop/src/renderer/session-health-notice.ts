@@ -1,14 +1,34 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 /**
  * Derivation of the session health notice shown above the composer.
  *
  * #1038 — the notice answers exactly one question: "will the next send
  * fail for a recoverable connection/session reason, and where should the
- * user go?". The answer comes from `projectSessionSendOutcome` — the
- * same core projection the main-process send gate delegates to, already
- * resolved by main and carried in the onboarding snapshot. The renderer
- * only maps that authoritative outcome to copy:
+ * user go?". The answer comes from `projectSessionSendOutcome`, already
+ * resolved by main and carried in the onboarding snapshot. Runtime Host
+ * remains the submission authority; the renderer only maps this
+ * compatibility projection to copy:
  *
- *   - `ready` / `rebind` → no notice (silent rebind stays silent, #1032).
+ *   - `ready` / `rebind` → no notice (`rebind` supplies a compatible
+ *     target for renderer readiness checks, #1032).
  *   - `blocked` → destructive notice whose copy names the failing
  *     connection and points at the matching Settings section.
  *
@@ -17,8 +37,9 @@
  * must never claim send is blocked either: it renders only as a
  * `warning`, only when the projection says the session's own connection
  * will serve the next send (`ready`), and its copy states plainly that
- * the send is not intercepted. When the projection rebinds away from the
- * connection, the reminder is noise and stays silent.
+ * the send is not intercepted. When the projection selects a compatibility
+ * target instead, the reminder about the stored connection is noise and
+ * stays silent.
  */
 
 import { type LlmConnection } from '@maka/core/llm-connections';

@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 import { useEffect, useEffectEvent, useLayoutEffect } from 'react';
 import { useHotkeys } from '@astryxdesign/core/hooks';
 import type { ConnectionEvent } from '@maka/core/connections';
@@ -9,28 +28,26 @@ import type { UiLocale } from '@maka/core/ui-locale';
 import { generalizedErrorMessageChinese } from '@maka/core/redaction';
 import { sessionExpectsEventStream } from '@maka/core/session-event-health';
 import { type ShellRunUpdate } from '@maka/core/events';
-import type { LiveTurnProjection, NavSelection } from '@maka/ui';
+import type { LiveTurnProjection, NavSelection, SessionViewMode } from '@maka/ui';
 import { messageReadErrorMessage } from './app-shell-copy';
 import { getDesktopConversationCopy } from './locales/conversation-copy.js';
 import { getShellRemainingCopy } from './locales/shell-remaining-copy.js';
 import { applyTheme, applyThemePalette } from './theme';
+import { startTitlebarModalSync } from './titlebar-modal-sync';
 import { safeLocalStorageSet } from './browser-storage';
 import type { NavigationState } from './nav-selection.js';
+import { writeSessionListViewMode } from './session-list-layout.js';
 import {
   createSessionEventStreamSubscription,
   evaluateSessionEventStreamSnapshot,
   recordSessionEventStreamChange,
   recordSessionEventStreamEvent,
 } from './session-event-health';
-import { settledSessionTransientIds } from './settled-session-transients.js';
-import {
-  persistableSessionWorkbarPanels,
-  type SessionWorkbarPanelsState,
-} from './session-workbar-tabs.js';
 import type {
   DesktopRuntimeHostProfileChangedEvent,
   WindowCommand,
 } from '../preload/bridge-contract.js';
+import { parseDesktopSessionKey } from '../shared/runtime-host-identity.js';
 import {
   mergeShellRunNotification,
   mergeShellRunUpdates,
@@ -51,7 +68,12 @@ type SessionEventHealthUpdater = (
 ) => void;
 
 type ToastApi = {
-  error(title: string, description?: string): void;
+  error(
+    title: string,
+    description?: string,
+    diagnosticDetails?: string,
+    diagnosticTarget?: { sessionId: string },
+  ): void;
   info(title: string, description?: string): void;
   toast(options: {
     title: string;
@@ -68,11 +90,7 @@ export function useAppShellNavRefSync(options: { navSelection: NavSelection; nav
   }, [options.navSelection]);
 }
 
-export function useAppShellHostEffects(options: {
-  activeId: string | undefined;
-  hasModalOpen: boolean;
-  setLiveBrowserSessionIds: (sessionIds: string[]) => void;
-}) {
+export function useAppShellHostEffects() {
   // Tag the document with the host OS so glass-material CSS rules
   // (sidebar vibrancy passthrough)
   // can light up only on macOS, where `BrowserWindow({ vibrancy: 'sidebar' })`
@@ -94,35 +112,18 @@ export function useAppShellHostEffects(options: {
     };
   }, []);
 
-  // P3 embedded browser: track which sessions have a live view (panel mounts
-  // only for those) and tell main which session this window shows (so it can
-  // validate browser:* IPC targets).
-  useEffect(() => {
-    const off = window.maka.browser.onLive((payload) => options.setLiveBrowserSessionIds(payload.sessionIds));
-    return off;
-  }, []);
-
-  useEffect(() => {
-    window.maka.browser.setActiveSession(options.activeId ?? null);
-  }, [options.activeId]);
-
-  useEffect(() => {
-    void window.maka.appWindow.setTitlebarControlsVisible(!options.hasModalOpen).catch(() => {});
-    return () => {
-      void window.maka.appWindow.setTitlebarControlsVisible(true).catch(() => {});
-    };
-  }, [options.hasModalOpen]);
+  // Modal-open titlebar dimming/hiding is driven by observing the top layer
+  // (`dialog:modal`) rather than the shell's own modal state, so dialogs
+  // mounted deep in module pages — the scheduled-task form above all — are
+  // covered too. See titlebar-modal-sync.ts.
+  useEffect(() => startTitlebarModalSync(), []);
 }
 
 export function useAppShellPersistenceEffects(options: {
   navigationState: NavigationState;
   sessionListCollapsed: boolean;
   sessionListWidth: number;
-  workbarCollapsed: boolean;
-  workbarWidth: number;
-  bottomPanelOpen: boolean;
-  bottomPanelHeight: number;
-  workbarPanelsState: SessionWorkbarPanelsState;
+  sessionListViewMode: SessionViewMode;
   themePalette: ThemePalette;
   themePref: ThemePreference;
 }) {
@@ -162,39 +163,8 @@ export function useAppShellPersistenceEffects(options: {
   }, [options.sessionListCollapsed]);
 
   useEffect(() => {
-    const handle = window.setTimeout(() => {
-      safeLocalStorageSet('maka-session-workbar-width-v1', String(options.workbarWidth));
-    }, LAYOUT_PERSIST_DEBOUNCE_MS);
-    return () => window.clearTimeout(handle);
-  }, [options.workbarWidth]);
-
-  useEffect(() => {
-    safeLocalStorageSet('maka-session-workbar-collapsed-v1', options.workbarCollapsed ? 'true' : 'false');
-  }, [options.workbarCollapsed]);
-
-  useEffect(() => {
-    const handle = window.setTimeout(() => {
-      safeLocalStorageSet(
-        'maka-session-bottom-panel-height-v1',
-        String(options.bottomPanelHeight),
-      );
-    }, LAYOUT_PERSIST_DEBOUNCE_MS);
-    return () => window.clearTimeout(handle);
-  }, [options.bottomPanelHeight]);
-
-  useEffect(() => {
-    safeLocalStorageSet(
-      'maka-session-bottom-panel-open-v1',
-      options.bottomPanelOpen ? 'true' : 'false',
-    );
-  }, [options.bottomPanelOpen]);
-
-  useEffect(() => {
-    safeLocalStorageSet(
-      'maka-session-workbar-panels-v3',
-      JSON.stringify(persistableSessionWorkbarPanels(options.workbarPanelsState)),
-    );
-  }, [options.workbarPanelsState]);
+    writeSessionListViewMode(options.sessionListViewMode);
+  }, [options.sessionListViewMode]);
 
   // Persist the active destination and each hub's last selected module.
   // Strict localStorage availability check — Vite dev sometimes runs through
@@ -213,7 +183,6 @@ export function useAppShellBootstrapSubscriptions(options: {
   /** Releases a send's pending claim once the authority names that turn. */
   confirmLiveTurn: (sessionId: string, turnId: string) => void;
   clearSessionRendererState: (sessionId: string) => void;
-  clearRuntimeHostRendererState: () => void;
   createSession: () => Promise<void> | void;
   handleConnectionEvent: (event: ConnectionEvent) => void;
   openHelp: () => void;
@@ -224,7 +193,6 @@ export function useAppShellBootstrapSubscriptions(options: {
   pendingTurnActionsRef: RefBox<Set<string>>;
   projectPickerPendingRef: RefBox<boolean>;
   projectPickerRequestRef: RefBox<number>;
-  refreshAppInfo: () => Promise<void>;
   refreshConnections: () => Promise<void>;
   refreshMemoryActive: (failureContext?: 'load') => Promise<void>;
   refreshMessages: (sessionId: string) => Promise<boolean>;
@@ -243,8 +211,7 @@ export function useAppShellBootstrapSubscriptions(options: {
   toastApi: ToastApi;
 }) {
   const runDeferredStartupRefreshes = useEffectEvent(() => {
-    void options.refreshAppInfo();
-    void options.refreshMemoryActive('load');
+    void options.refreshSessions();
     void options.refreshSkills();
     void options.refreshManagedSkillSources();
     void options.refreshBundledSkillCatalog();
@@ -255,10 +222,18 @@ export function useAppShellBootstrapSubscriptions(options: {
     options.handleConnectionEvent(event);
   });
   const handleRuntimeHostChange = useEffectEvent((event: DesktopRuntimeHostProfileChangedEvent) => {
-    if (event.targetChanged) options.clearRuntimeHostRendererState();
-    if (event.readiness !== 'ready') return;
-    void options.refreshProjects();
+    if ((event.removed || event.readiness === 'unavailable') && event.hostId) {
+      const activeSessionId = options.activeIdRef.current;
+      if (activeSessionId && desktopSessionHostId(activeSessionId) === event.hostId) {
+        options.setActiveId(undefined);
+        options.setMessages([]);
+        options.clearSessionRendererState(activeSessionId);
+      }
+    }
     void options.refreshSessions();
+    if (event.readiness !== 'ready') return;
+    if (!event.isDefault) return;
+    void options.refreshProjects();
     void options.refreshConnections();
     void options.refreshMemoryActive('load');
     void options.refreshSkills();
@@ -381,31 +356,40 @@ export function useAppShellBootstrapSubscriptions(options: {
   });
 
   useEffect(() => {
-    // Critical data: sessions + connections are seeded from the onboarding
-    // snapshot (see AppShell useEffect above).  `refreshShellSettings` is
+    // The default Host seeds sessions + connections through onboarding.
+    // `refreshSessions` below expands that seed across every ready Host.
+    // `refreshShellSettings` is
     // waited because it drives theme + locale before first paint settles.
     // Everything else is fire-and-forget on a rAF to keep the critical
     // render path as short as possible.
     void options.refreshShellSettings();
     // Non-critical: defer to next frame so the first paint isn't blocked.
-    requestAnimationFrame(runDeferredStartupRefreshes);
+    const startupFrame = requestAnimationFrame(runDeferredStartupRefreshes);
     const unsubscribeConnections = window.maka.connections.subscribeEvents(handleConnectionSubscriptionEvent);
     const unsubscribeRuntimeHostChanges =
       window.maka.runtimeHostProfiles.subscribeChanges(handleRuntimeHostChange);
-    const unsubscribeSettingsExternal = window.maka.settings.subscribeExternalChanged(() => {
+    const refreshRuntimeHostSettingsMirrors = () => {
       void options.refreshShellSettings();
       void options.refreshConnections();
-    });
+    };
+    const unsubscribeSettingsExternal = window.maka.settings.subscribeExternalChanged(
+      refreshRuntimeHostSettingsMirrors,
+    );
+    const unsubscribeClientSettings = window.maka.settings.subscribeClientChanged(
+      () => void options.refreshShellSettings(),
+    );
     const unsubscribeSessionChanges = window.maka.sessions.subscribeChanges(handleSessionChange);
     const unsubscribeScheduledTaskChanges = window.maka.scheduledTasks.subscribeChanges(handleScheduledTaskChange);
     const unsubscribeScheduledTaskDue = window.maka.scheduledTasks.subscribeDue(handleScheduledTaskDue);
     const unsubscribeWindowCommand = window.maka.appWindow.subscribeCommand(handleWindowCommand);
     markRendererMounted();
     return () => {
+      cancelAnimationFrame(startupFrame);
       cleanupPendingRefs();
       unsubscribeConnections();
       unsubscribeRuntimeHostChanges();
       unsubscribeSettingsExternal();
+      unsubscribeClientSettings();
       unsubscribeSessionChanges();
       unsubscribeScheduledTaskChanges();
       unsubscribeScheduledTaskDue();
@@ -414,12 +398,19 @@ export function useAppShellBootstrapSubscriptions(options: {
   }, []);
 }
 
+function desktopSessionHostId(sessionId: string): string | undefined {
+  try {
+    return parseDesktopSessionKey(sessionId).hostId;
+  } catch {
+    return undefined;
+  }
+}
+
 export function useActiveSessionEvents(options: {
   uiLocale: UiLocale;
   activeId: string | undefined;
   activeIdRef: RefBox<string | undefined>;
   handleEvent: (sessionId: string, event: SessionEvent) => void;
-  markSessionReadLocally: (sessionId: string, readMessages: readonly StoredMessage[]) => void;
   beginObservationSeed?: (sessionId: string) => number;
   completeObservationSeed?: (sessionId: string, generation?: number) => void;
   setMessageLoadErrorBySession: (updater: (current: Record<string, string>) => Record<string, string>) => void;
@@ -438,7 +429,6 @@ export function useActiveSessionEvents(options: {
     if (!isDisposed() && options.activeIdRef.current === sessionId) {
       const snapshot = store.snapshot();
       const next = [...snapshot.messages];
-      options.markSessionReadLocally(sessionId, next);
       options.setMessages(next);
       if (snapshot.ready) options.setMessageLoadPending(false);
     }
@@ -451,7 +441,12 @@ export function useActiveSessionEvents(options: {
         [sessionId]: message,
       }));
       options.setMessageLoadPending(false);
-      options.toastApi.error(getDesktopConversationCopy(options.uiLocale).actions.messageReadFailedTitle, message);
+      options.toastApi.error(
+        getDesktopConversationCopy(options.uiLocale).actions.messageReadFailedTitle,
+        message,
+        undefined,
+        { sessionId },
+      );
     }
   });
   const handleSessionEvent = useEffectEvent((sessionId: string, event: SessionEvent) => {
@@ -494,7 +489,7 @@ export function useActiveSessionEvents(options: {
     if (!activeId) return;
     const observationGeneration = beginObservationSeed(activeId);
     let disposed = false;
-    const transcript = new DesktopTranscriptRangeStore();
+    const transcript = new DesktopTranscriptRangeStore(activeId);
     const subscribedAt = Date.now();
     options.setMessageLoadErrorBySession((current) => {
       if (!current[activeId]) return current;
@@ -698,51 +693,4 @@ export function useSessionEventHealthPolling(options: {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [activeId, activeSession?.status, activeStreamingLive, hasInFlightLiveTools, activeInteraction?.requestId]);
-}
-
-// #646: transient live state is only
-// advanced and cleared by the ACTIVE session's SessionEvent stream (subscribeEvents
-// follows activeId only, with no replay of missed events). So any session that
-// reaches a terminal status while backgrounded — or whose terminal status only
-// lands after the user has switched back — leaves that transient frozen mid-turn,
-// surfacing a stuck Stop (via the ungated `activeStreamingLive`) and a half-streamed
-// bubble. Heal it against the authoritative status, not against an event or a switch
-// (both fire before the terminal status is known): whenever the sessions list
-// settles, drop the turn transient of every session that is no longer running /
-// waiting_for_user. Because it keys off the status landing in `sessions`, it closes
-// the hole regardless of which path or timing delivers that status.
-//
-// Except while a send is still awaiting its answer: an arm carries `unconfirmed`
-// until a `sessions:changed` names its turn back, and the pre-send status is
-// indistinguishable from the post-turn one. Reading a list refreshed in that
-// window as a settle would drop the arm the send just created
-// (settled-session-transients.ts).
-//
-// An active terminal projection is left to its text handoff callback, so this
-// reconcile cannot cut in front of the committed message landing. Background
-// terminal projections have no mounted streaming renderer and are safe to clear.
-// It drops ONLY the turn transient (`clearTurnTransientState`), never the
-// independently-scoped message-load-error / retry / pending-toggle / permission /
-// health state — those survive a mere settle. The clear is idempotent (referentially
-// stable when there's nothing to drop), so the common "terminal session with no
-// transient" case triggers no re-render.
-export function useSettledSessionTransientReconcile(options: {
-  activeId?: string;
-  sessions: readonly SessionSummary[];
-  liveTurnBySessionRef: RefBox<Record<string, LiveTurnProjection>>;
-  clearTurnTransientState: (sessionId: string) => void;
-}) {
-  const reconcile = useEffectEvent(() => {
-    const sessionIds = settledSessionTransientIds({
-      activeId: options.activeId,
-      sessions: options.sessions,
-      liveTurnBySession: options.liveTurnBySessionRef.current,
-    });
-    for (const sessionId of sessionIds) {
-      options.clearTurnTransientState(sessionId);
-    }
-  });
-  useEffect(() => {
-    reconcile();
-  }, [options.activeId, options.sessions]);
 }

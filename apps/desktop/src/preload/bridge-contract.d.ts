@@ -101,6 +101,8 @@ import type {
   DesktopTranscriptHandle,
 } from './transcript-contract.js';
 import type { PetPackManifestV1 } from '@maka/core/pet';
+import type { WorkBoardItem, WorkBoardListQuery, WorkBoardPage } from '@maka/core/work-board';
+import type { WorkBoardMutationOptions } from '@maka/storage/work-board-store';
 import type {
   OperationInput,
   OperationOutput,
@@ -149,6 +151,7 @@ export type AppIconImportResult =
     };
 
 export type { DesktopSessionSummary } from '../shared/desktop-session-projection.js';
+export type { WorkBoardChangedEvent, WorkBoardIpcResult } from '../shared/work-board-ipc.js';
 import type { DesktopConnectionSnapshot } from '../shared/desktop-connection-snapshot.js';
 import type { DesktopExternalSessionCatalogItem } from './external-session-catalog.js';
 import type { DesktopDiagnosticInput } from './diagnostics-contract.js';
@@ -169,7 +172,7 @@ import type {
 import type { BotStatus, WechatBridgeQrCodeResult } from '@maka/runtime/bots';
 import type { ShellRunPtyDataEvent, ShellRunPtySnapshot } from '@maka/runtime/shell-run-contract';
 import type { BundledSkillCatalogEntry, ManagedSkillSourceEntry, ManagedSkillUpdatePreview, SkillEntry } from '@maka/ui';
-import type { ConfigCategory } from '@maka/storage';
+import type { ConfigCategory } from '@maka/storage/config-transfer';
 import type { OnboardingMilestone, OnboardingMilestoneId, OnboardingState } from '@maka/core/onboarding';
 import type {
   RemoteRuntimeHostProfile,
@@ -199,6 +202,10 @@ export type DesktopBranchFromTurnInput = BranchFromTurnInput & {
   /** Stable target identity for retrying one Desktop copy action. */
   copyId: string;
 };
+
+export type DesktopSideConversationBranchResult =
+  | { ok: true; session: DesktopSessionSummary }
+  | { ok: false; reason: 'session_busy' | 'operation_unavailable' };
 
 export type DesktopReviseBeforeTurnInput = ReviseBeforeTurnInput & {
   /** Stable target identity for retrying one Desktop copy action. */
@@ -390,6 +397,7 @@ export interface DesktopRuntimeHostOnboardingInput {
 }
 
 export type DesktopRuntimeHostOnboardingPhase =
+  | 'preparing_cli'
   | 'connecting_ssh'
   | RuntimeHostSetupPhase
   | 'connecting_host';
@@ -424,12 +432,15 @@ export type DesktopRuntimeHostManagementResult = Extract<
   RuntimeHostServiceManagementFrame,
   { kind: 'result' }
 > & {
+  readonly action: DesktopRuntimeHostManagementAction | 'update';
   readonly accessManagementAvailable: boolean;
 };
 
 export type DesktopRuntimeHostManagementResponse =
   | DesktopRuntimeHostManagementResult
-  | Extract<RuntimeHostServiceManagementFrame, { kind: 'error' }>
+  | (Extract<RuntimeHostServiceManagementFrame, { kind: 'error' }> & {
+      readonly action: DesktopRuntimeHostManagementAction | 'update';
+    })
   | {
       readonly kind: 'uninstalled';
       readonly retainedStateRoot: string;
@@ -437,8 +448,44 @@ export type DesktopRuntimeHostManagementResponse =
 
 export interface DesktopRuntimeHostManagementProgress {
   readonly profileId: string;
-  readonly phase: import('@maka/runtime-host/operator').RuntimeHostServiceUpdatePhase;
+  readonly phase:
+    | 'preparing_cli'
+    | import('@maka/runtime-host/operator').RuntimeHostServiceUpdatePhase;
 }
+
+type RuntimeHostUpdatePolicyResult = Extract<
+  RuntimeHostServiceManagementFrame,
+  { kind: 'result'; action: 'update_policy' }
+>;
+
+type RuntimeHostUpdateReconciliationResult = Extract<
+  RuntimeHostServiceManagementFrame,
+  { kind: 'result'; action: 'reconcile_update' }
+>;
+
+export type DesktopRuntimeHostUpdateSchedulingState =
+  | 'unsupported'
+  | import('@maka/runtime-host/operator').RuntimeHostUpdateSchedulerState;
+
+export type DesktopRuntimeHostUpdatePolicySnapshot =
+  RuntimeHostUpdatePolicyResult['updatePolicy'] & {
+    readonly schedulingState: DesktopRuntimeHostUpdateSchedulingState;
+  };
+
+export type DesktopRuntimeHostUpdateReconciliationOutcome =
+  RuntimeHostUpdateReconciliationResult['reconciliation'];
+
+export type DesktopRuntimeHostUpdateReconciliationResponse =
+  | {
+      readonly kind: 'error';
+      readonly error: { readonly code: string; readonly message: string };
+    }
+  | {
+      readonly kind: 'result';
+      readonly updatePolicy: DesktopRuntimeHostUpdatePolicySnapshot;
+      readonly reconciliation: DesktopRuntimeHostUpdateReconciliationOutcome;
+      readonly service?: NonNullable<RuntimeHostUpdateReconciliationResult['service']>;
+    };
 
 export interface DesktopRuntimeHostAccessCredential {
   readonly credentialId: string;
@@ -572,6 +619,12 @@ export interface MakaBridge {
     subscribeProgress(
       handler: (progress: DesktopRuntimeHostManagementProgress) => void,
     ): () => void;
+    getUpdatePolicy(profileId: string): Promise<DesktopRuntimeHostUpdatePolicySnapshot>;
+    setUpdatePolicy(
+      profileId: string,
+      policy: import('@maka/runtime-host/operator').RuntimeHostManagedUpdatePolicy,
+    ): Promise<DesktopRuntimeHostUpdatePolicySnapshot>;
+    reconcileUpdate(profileId: string): Promise<DesktopRuntimeHostUpdateReconciliationResponse>;
     listCredentials(profileId: string): Promise<DesktopRuntimeHostAccessSnapshot>;
     rotateCredential(profileId: string): Promise<DesktopRuntimeHostAccessSnapshot>;
     revokeCredential(
@@ -654,6 +707,26 @@ export interface MakaBridge {
     subscribeChanges(handler: (event: PetPackChangedEvent) => void): () => void;
   };
 
+  workBoard: {
+    list(query?: WorkBoardListQuery): Promise<WorkBoardIpcResult<WorkBoardPage>>;
+    create(item: unknown): Promise<WorkBoardIpcResult<WorkBoardItem>>;
+    update(
+      id: string,
+      patch: unknown,
+      options?: WorkBoardMutationOptions,
+    ): Promise<WorkBoardIpcResult<WorkBoardItem>>;
+    archive(
+      id: string,
+      options?: WorkBoardMutationOptions,
+    ): Promise<WorkBoardIpcResult<WorkBoardItem>>;
+    unarchive(
+      id: string,
+      options?: WorkBoardMutationOptions,
+    ): Promise<WorkBoardIpcResult<WorkBoardItem>>;
+    remove(id: string, options?: WorkBoardMutationOptions): Promise<WorkBoardIpcResult<null>>;
+    subscribeChanges(handler: (event: WorkBoardChangedEvent) => void): () => void;
+  };
+
   tasks: {
     list(sessionId: string): Promise<Task[]>;
     subscribeChanges(handler: (event: TaskLedgerChangedEvent) => void): () => void;
@@ -680,8 +753,21 @@ export interface MakaBridge {
       handler: () => void,
     ): () => void;
   };
+  workHub: {
+    /** Resolve the active Runtime Host's stable coordination conversation. */
+    resolveCoordinationSession(): Promise<string>;
+    /** Create an ordinary Session on the exact Host owning the resolved conversation. */
+    createSession(
+      coordinationSessionId: string,
+      input: { name: string },
+    ): Promise<DesktopSessionSummary>;
+  };
   sessions: {
     list(filter?: SessionListFilter): Promise<DesktopSessionSummary[]>;
+    listWithCoverage(): Promise<{
+      sessions: DesktopSessionSummary[];
+      completeHostIds: string[];
+    }>;
     create(input?: CreateSessionRequestInput): Promise<DesktopSessionSummary>;
     send(
       sessionId: string,
@@ -746,6 +832,12 @@ export interface MakaBridge {
     }>;
     retractQueueEntry(sessionId: string, entryId: string): Promise<void>;
     promoteQueueEntry(sessionId: string, entryId: string): Promise<void>;
+    updateQueueEntry(
+      sessionId: string,
+      entryId: string,
+      expectedQueueRevision: number,
+      text: string,
+    ): Promise<void>;
     reorderQueueEntries(sessionId: string, entryIds: readonly string[]): Promise<void>;
     readExecutionBoundary(sessionId: string): Promise<ExecutionBoundaryReadModel>;
     listActiveInteractions(sessionId: string): Promise<ActiveInteractionRequestEvent[]>;
@@ -763,7 +855,14 @@ export interface MakaBridge {
       | { disposition: 'park'; rejectionReasons: string[]; diagnostics: unknown[] }
     >;
     regenerateTurn(sessionId: string, input: RegenerateTurnInput): Promise<void>;
-    branchFromTurn(sessionId: string, input: DesktopBranchFromTurnInput): Promise<DesktopSessionSummary>;
+    branchFromTurn(
+      sessionId: string,
+      input: DesktopBranchFromTurnInput & { sideConversation: true },
+    ): Promise<DesktopSideConversationBranchResult>;
+    branchFromTurn(
+      sessionId: string,
+      input: DesktopBranchFromTurnInput & { sideConversation?: false },
+    ): Promise<DesktopSessionSummary>;
     reviseBeforeTurn(sessionId: string, input: DesktopReviseBeforeTurnInput): Promise<DesktopSessionSummary>;
     respondToSandboxBoundary(sessionId: string, response: SandboxBoundaryResponse): Promise<void>;
     respondToUserQuestion(sessionId: string, response: UserQuestionResponse): Promise<void>;

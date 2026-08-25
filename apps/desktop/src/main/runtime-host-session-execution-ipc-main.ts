@@ -26,7 +26,6 @@ import {
   type SessionChangedEvent,
   type SessionChangedReason,
 } from '@maka/core/session';
-import { SIDE_CONVERSATION_SESSION_LABEL } from '@maka/core/side-conversation';
 import { type ActiveInteractionRequestEvent, type AttachmentRef } from '@maka/core/events';
 import { type PermissionMode } from '@maka/core/permission';
 import { type SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
@@ -60,6 +59,10 @@ import type { DesktopTranscriptRangeRequest } from '../preload/transcript-contra
 import { toDesktopHostSessionSummary } from "./runtime-host-session-catalog-ipc-main.js";
 import { mergeWorkspaceFileInlineReferences } from "./session-workspace-inline-references.js";
 
+type SideConversationBranchResult =
+  | { readonly ok: true; readonly session: ReturnType<typeof toDesktopHostSessionSummary> }
+  | { readonly ok: false; readonly reason: 'session_busy' | 'operation_unavailable' };
+
 type RuntimeHostSessionExecutionClient = Pick<
   DesktopRuntimeHostClient,
   | "answerInteraction"
@@ -75,6 +78,7 @@ type RuntimeHostSessionExecutionClient = Pick<
   | "regenerateTurn"
   | "retractQueueEntry"
   | "promoteQueueEntry"
+  | "updateQueueEntry"
   | "reorderQueueEntries"
   | "setSessionReadMarker"
   | "startTurn"
@@ -295,7 +299,9 @@ export function registerRuntimeHostSessionExecutionIpc(
         }
         const submitted = await deps.client.submitMessage({
           sessionId,
-          messageId: newId(),
+          // Preserve the renderer's command identity in the durable message so
+          // a lost IPC reply can be reconciled as root-vs-steering later.
+          messageId: turnId,
           content: startInput.content,
           placement: "current_turn",
         });
@@ -468,6 +474,25 @@ export function registerRuntimeHostSessionExecutionIpc(
     },
   );
   ipcMain.handle(
+    "sessions:updateQueueEntry",
+    async (
+      _event,
+      sessionId: unknown,
+      entryId: unknown,
+      expectedQueueRevision: unknown,
+      text: unknown,
+    ) => {
+      const normalizedText = requiredText(text, "Queued message").trim();
+      await deps.client.updateQueueEntry({
+        sessionId: requiredId(sessionId, "Session"),
+        entryId: requiredId(entryId, "Queue entry"),
+        updateId: newId(),
+        expectedQueueRevision: requiredSequence(expectedQueueRevision, "Queue"),
+        text: normalizedText,
+      });
+    },
+  );
+  ipcMain.handle(
     "sessions:reorderQueueEntries",
     async (_event, sessionId: string, entryIds: unknown) => {
       if (
@@ -604,36 +629,47 @@ export function registerRuntimeHostSessionExecutionIpc(
           sourceSessionId: sessionId,
           targetSessionId: normalized.copyId,
           sourceTurnId: normalized.sourceTurnId,
+          ...(normalized.sideConversation ? { intent: 'side_conversation' as const } : {}),
         });
-      let branch = normalized.sideConversation
-        ? await deps.sessionCopyCleanup.ownCreation(
-            {
-              sessionId: normalized.copyId,
-              kind: 'branch',
-              sourceSessionId: sessionId,
-              sourceTurnId: normalized.sourceTurnId,
-              ownerId: bindCopyOwner(event),
-            },
-            createBranch,
-          )
-        : await createBranch();
-      if (normalized.name || normalized.sideConversation) {
+      let branch;
+      try {
+        branch = normalized.sideConversation
+          ? await deps.sessionCopyCleanup.ownCreation(
+              {
+                sessionId: normalized.copyId,
+                kind: 'branch',
+                sourceSessionId: sessionId,
+                sourceTurnId: normalized.sourceTurnId,
+                intent: 'side_conversation',
+                ownerId: bindCopyOwner(event),
+              },
+              createBranch,
+            )
+          : await createBranch();
+      } catch (error) {
+        if (
+          normalized.sideConversation &&
+          error instanceof RuntimeHostOperationError &&
+          (error.code === 'session_busy' || error.code === 'operation_unavailable')
+        ) {
+          await deps.sessionCopyCleanup.rejectCreation(normalized.copyId);
+          return {
+            ok: false,
+            reason: error.code,
+          } satisfies SideConversationBranchResult;
+        }
+        throw error;
+      }
+      if (normalized.name) {
         branch = await deps.client.updateSessionMetadata(branch.id, {
-          ...(normalized.name ? { name: normalized.name } : {}),
-          ...(normalized.sideConversation
-            ? {
-                labels: [
-                  ...new Set([
-                    ...branch.labels,
-                    SIDE_CONVERSATION_SESSION_LABEL,
-                  ]),
-                ],
-              }
-            : {}),
+          name: normalized.name,
         });
       }
       deps.emitSessionsChanged("created", branch.id);
-      return toDesktopHostSessionSummary(branch);
+      const summary = toDesktopHostSessionSummary(branch);
+      return normalized.sideConversation
+        ? ({ ok: true, session: summary } satisfies SideConversationBranchResult)
+        : summary;
     },
   );
   ipcMain.handle(
@@ -745,6 +781,17 @@ async function requireInteraction(
 function requiredId(value: unknown, label: string): string {
   if (typeof value !== "string" || value.length === 0 || value.length > 256) {
     throw new Error(`Invalid ${label} identity`);
+  }
+  return value;
+}
+
+function requiredText(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    Buffer.byteLength(value, "utf8") > 48 * 1024
+  ) {
+    throw new Error(`Invalid ${label} text`);
   }
   return value;
 }

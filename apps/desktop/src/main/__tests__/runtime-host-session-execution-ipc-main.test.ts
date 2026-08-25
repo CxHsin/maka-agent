@@ -201,13 +201,15 @@ test("retries committed Branch and Revision copies with the renderer-owned ident
   assert.equal(committed.size, 3);
 });
 
-test("marks Runtime Host Branch copies as side conversations", async () => {
+test("sends Side Conversation intent and metadata atomically to Runtime Host", async () => {
+  const copyInputs: unknown[] = [];
   const metadataUpdates: unknown[] = [];
   const abandonedOwners: string[] = [];
   const backgroundErrors: unknown[] = [];
   const ipc = ipcHarness();
   const sessionCopyCleanup = {
     ownCreation: <T>(_creation: unknown, operation: () => Promise<T>) => operation(),
+    async rejectCreation() {},
     async cleanup() {},
     async schedule() {},
     async abandonOwner(ownerId: string) {
@@ -221,17 +223,20 @@ test("marks Runtime Host Branch copies as side conversations", async () => {
   registerExecutionIpc(
     {
       client: executionClient({
-        copySession: async (_kind, input) => ({
-          ...session(),
-          id: input.targetSessionId,
-          labels: ["source-label"],
-        }),
+        copySession: async (_kind, input) => {
+          copyInputs.push(input);
+          return {
+            ...session(),
+            id: input.targetSessionId,
+            labels: ["source-label", SIDE_CONVERSATION_SESSION_LABEL],
+          };
+        },
         updateSessionMetadata: async (sessionId, patch) => {
           metadataUpdates.push({ sessionId, patch });
           return {
             ...session(),
             id: sessionId,
-            labels: patch.labels ?? [],
+            labels: patch.labels ?? ['source-label', SIDE_CONVERSATION_SESSION_LABEL],
           };
         },
       }),
@@ -247,23 +252,26 @@ test("marks Runtime Host Branch copies as side conversations", async () => {
     ipc,
   );
 
-  const branch = (await ipc.invoke("sessions:branchFromTurn", "source-session", {
+  const branchResult = (await ipc.invoke("sessions:branchFromTurn", "source-session", {
     sourceTurnId: "source-turn",
     copyId: "side-copy",
     name: "Side chat",
     sideConversation: true,
-  })) as { labels: string[] };
+  })) as { ok: true; session: { labels: string[] } };
 
-  assert.deepEqual(metadataUpdates, [
+  assert.deepEqual(copyInputs, [
     {
-      sessionId: "side-copy",
-      patch: {
-        name: "Side chat",
-        labels: ["source-label", SIDE_CONVERSATION_SESSION_LABEL],
-      },
+      sourceSessionId: 'source-session',
+      targetSessionId: 'side-copy',
+      sourceTurnId: 'source-turn',
+      intent: 'side_conversation',
     },
   ]);
-  assert.deepEqual(branch.labels, [
+  assert.deepEqual(metadataUpdates, [
+    { sessionId: 'side-copy', patch: { name: 'Side chat' } },
+  ]);
+  assert.equal(branchResult.ok, true);
+  assert.deepEqual(branchResult.session.labels, [
     "source-label",
     SIDE_CONVERSATION_SESSION_LABEL,
   ]);
@@ -274,6 +282,50 @@ test("marks Runtime Host Branch copies as side conversations", async () => {
   assert.deepEqual(backgroundErrors.map((error) => (error as Error).message), [
     'cleanup unavailable',
   ]);
+});
+
+test('returns structured Side Conversation setup failures across IPC', async () => {
+  for (const reason of ['session_busy', 'operation_unavailable'] as const) {
+    const ipc = ipcHarness();
+    const rejectedCreations: string[] = [];
+    registerExecutionIpc(
+      {
+        client: executionClient({
+          copySession: async () => {
+            throw new RuntimeHostOperationError(
+              'session.branch.create',
+              reason,
+              'Side Conversation setup failed',
+            );
+          },
+        }),
+        observer: unusedObserver(),
+        attachmentApprovals: createAttachmentApprovalRegistry(),
+        emitSessionsChanged() {},
+        stat: async () => ({ size: 0 }),
+        resizeImage: async (bytes) => bytes,
+        beforeStop() {},
+        newId: () => 'id-1',
+        sessionCopyCleanup: {
+          ...unusedSessionCopyCleanup(),
+          async rejectCreation(sessionId) {
+            rejectedCreations.push(sessionId);
+          },
+        },
+      },
+      ipc,
+    );
+
+    assert.deepEqual(
+      await ipc.invoke('sessions:branchFromTurn', 'source-session', {
+        sourceTurnId: 'source-turn',
+        copyId: `side-copy-${reason}`,
+        sideConversation: true,
+      }),
+      { ok: false, reason },
+    );
+    assert.deepEqual(rejectedCreations, [`side-copy-${reason}`]);
+  }
 });
 
 test("sends canonical content and uploads owned Attachment bytes through the Host", async () => {
@@ -557,7 +609,7 @@ test("queues a mid-turn send as steering when the Host reports the session busy"
   assert.deepEqual(submits, [
     {
       sessionId: "session-1",
-      messageId: "id-1",
+      messageId: "turn-1",
       content: { text: "also check the tests", inlineReferences: [] },
       placement: "current_turn",
     },
@@ -577,6 +629,7 @@ test("queues a mid-turn send as steering when the Host reports the session busy"
 
 test("starts the turn from the queued message when the busy race resolves idle", async () => {
   const changes: unknown[] = [];
+  const submits: unknown[] = [];
   const ipc = ipcHarness();
   registerExecutionIpc(
     {
@@ -589,10 +642,13 @@ test("starts the turn from the queued message when the busy race resolves idle",
             "Session already has an active root Turn",
           );
         },
-        submitMessage: async () => ({
-          disposition: "turn_started",
-          turnId: "turn-9",
-        }),
+        submitMessage: async (input) => {
+          submits.push(input);
+          return {
+            disposition: "turn_started",
+            turnId: "turn-9",
+          };
+        },
       }),
       observer: unusedObserver(),
       attachmentApprovals: createAttachmentApprovalRegistry(),
@@ -619,6 +675,12 @@ test("starts the turn from the queued message when the busy race resolves idle",
     inlineReferences: [],
     skillInvocation: { loaded: [], failed: [], receipts: [] },
   });
+  assert.deepEqual(submits, [{
+    sessionId: "session-1",
+    messageId: "turn-1",
+    content: { text: "also check the tests", inlineReferences: [] },
+    placement: "current_turn",
+  }]);
   assert.deepEqual(changes, [
     { reason: "status-change", sessionId: "session-1", turnId: "turn-9" },
   ]);
@@ -781,9 +843,13 @@ test("routes per-entry queue mutations to the Runtime Host", async () => {
           calls.push({ operation: "promote", ...input });
           return { queueRevision: 4 };
         },
+        updateQueueEntry: async (input) => {
+          calls.push({ operation: "update", ...input });
+          return { queueRevision: 5 };
+        },
         reorderQueueEntries: async (input) => {
           calls.push({ operation: "reorder", ...input });
-          return { queueRevision: 5 };
+          return { queueRevision: 6 };
         },
       }),
       observer: unusedObserver(),
@@ -799,6 +865,13 @@ test("routes per-entry queue mutations to the Runtime Host", async () => {
 
   assert.equal(await ipc.invoke("sessions:retractQueueEntry", "session-1", "entry-1"), undefined);
   await ipc.invoke("sessions:promoteQueueEntry", "session-1", "entry-2");
+  await ipc.invoke(
+    "sessions:updateQueueEntry",
+    "session-1",
+    "entry-2",
+    4,
+    " revised ",
+  );
   await ipc.invoke("sessions:reorderQueueEntries", "session-1", ["entry-3", "entry-2"]);
 
   assert.deepEqual(calls, [
@@ -815,13 +888,25 @@ test("routes per-entry queue mutations to the Runtime Host", async () => {
       promoteId: "id-2",
     },
     {
+      operation: "update",
+      sessionId: "session-1",
+      entryId: "entry-2",
+      updateId: "id-3",
+      expectedQueueRevision: 4,
+      text: "revised",
+    },
+    {
       operation: "reorder",
       sessionId: "session-1",
-      reorderId: "id-3",
+      reorderId: "id-4",
       entryIds: ["entry-3", "entry-2"],
     },
   ]);
 
+  await assert.rejects(
+    () => ipc.invoke("sessions:updateQueueEntry", "session-1", "entry-1", 4, " "),
+    /Invalid Queued message text/,
+  );
   await assert.rejects(
     () => ipc.invoke("sessions:promoteQueueEntry", "session-1", 42),
     /Invalid queue entry identity/,
@@ -933,6 +1018,7 @@ function executionClient(overrides: Partial<ExecutionClient>): ExecutionClient {
     regenerateTurn: unavailable,
     retractQueueEntry: unavailable,
     promoteQueueEntry: unavailable,
+    updateQueueEntry: unavailable,
     reorderQueueEntries: unavailable,
     setSessionReadMarker: unavailable,
     startTurn: unavailable,
@@ -1065,6 +1151,7 @@ function registerExecutionIpc(
 function unusedSessionCopyCleanup(): RuntimeHostSessionExecutionIpcDeps['sessionCopyCleanup'] {
   return {
     ownCreation: async (_creation, operation) => operation(),
+    async rejectCreation() {},
     async cleanup() {},
     async schedule() {},
     async abandonOwner() {},

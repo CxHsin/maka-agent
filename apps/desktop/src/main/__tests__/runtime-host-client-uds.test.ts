@@ -372,6 +372,7 @@ test('drives the renderer Session catalog facade through real UDS framing', asyn
       completeComputerUseTurn() {},
       createSessionCopyCleanup: () => ({
         ownCreation: (_creation, operation) => operation(),
+        rejectCreation: async () => undefined,
         cleanup: async () => undefined,
         schedule: async () => undefined,
         abandonOwner: async () => undefined,
@@ -686,6 +687,7 @@ function ipcHarness() {
 function unusedSessionCopyCleanup() {
   return {
     ownCreation: async <T>(_creation: unknown, operation: () => Promise<T>) => operation(),
+    async rejectCreation() {},
     async cleanup() {},
     async schedule() {},
     async abandonOwner() {},

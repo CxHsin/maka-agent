@@ -305,20 +305,21 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
     query: ExternalSourceCatalogQuery,
   ): Promise<CodexCatalogEntry[]> {
     if (query.limit !== undefined && query.limit <= 0) return [];
+    const candidateBudget = { remaining: CODEX_CATALOG_CANDIDATE_LIMIT };
     const activeCandidates = await walkRolloutFiles(
       join(this.codexHome, 'sessions'),
       false,
       undefined,
       {
-        maxCandidates: CODEX_CATALOG_CANDIDATE_LIMIT,
+        candidateBudget,
         maxAgeMs: query.maxAgeMs,
         nowMs: query.nowMs,
       },
     );
     const archivedCandidates =
-      query.includeArchived && activeCandidates.length < CODEX_CATALOG_CANDIDATE_LIMIT
+      query.includeArchived && candidateBudget.remaining > 0
         ? await walkRolloutFiles(join(this.codexHome, 'archived_sessions'), true, undefined, {
-            maxCandidates: CODEX_CATALOG_CANDIDATE_LIMIT - activeCandidates.length,
+            candidateBudget,
             maxAgeMs: query.maxAgeMs,
             nowMs: query.nowMs,
           })
@@ -375,6 +376,7 @@ interface RolloutCandidate {
 }
 
 interface RolloutWalkOptions {
+  candidateBudget?: { remaining: number };
   maxCandidates?: number;
   maxAgeMs?: number;
   nowMs?: number;
@@ -912,7 +914,10 @@ async function walkRolloutFiles(
     // fallback cannot globally order by mtime without an unbounded metadata
     // scan, so directory/name order defines this bounded candidate window.
     for (const entry of entries.sort((left, right) => right.name.localeCompare(left.name))) {
-      if (options.maxCandidates !== undefined && inspectedCandidates >= options.maxCandidates) {
+      if (
+        (options.maxCandidates !== undefined && inspectedCandidates >= options.maxCandidates) ||
+        (options.candidateBudget !== undefined && options.candidateBudget.remaining <= 0)
+      ) {
         return;
       }
       const path = join(directory, entry.name);
@@ -925,6 +930,7 @@ async function walkRolloutFiles(
         (expectedId === undefined || rolloutFilenameMatchesId(entry.name, expectedId))
       ) {
         inspectedCandidates += 1;
+        if (options.candidateBudget !== undefined) options.candidateBudget.remaining -= 1;
         try {
           const mtimeMs = (await stat(path)).mtimeMs;
           if (

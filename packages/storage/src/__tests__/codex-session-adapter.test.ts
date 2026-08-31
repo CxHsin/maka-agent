@@ -585,15 +585,17 @@ describe('CodexSessionAdapter', () => {
       }
       await seedMinimalRollout(
         codexHome,
-        'codex-fallback-fresh-target',
-        false,
+        'codex-fallback-archived-target',
+        true,
         '/workspace/fresh',
         'Fresh target',
       );
 
       const adapter = new CodexSessionAdapter({ codexHome });
       assert.deepEqual(
-        (await adapter.listSessions({ maxAgeMs: 1_000, nowMs })).map((session) => session.id),
+        (await adapter.listSessions({ includeArchived: true, maxAgeMs: 1_000, nowMs })).map(
+          (session) => session.id,
+        ),
         [],
       );
     });

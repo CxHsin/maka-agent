@@ -120,10 +120,10 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
    * Summaries already derived from a transcript, keyed by path and invalidated
    * by the file's own mtime and size.
    *
-   * Listing reads and parses every transcript: 1128 of them take about a
-   * second here, and the catalog is listed once per search term. Without this,
-   * a pause in typing starts another full parse of files that have not changed
-   * since the last one — the cost is paid again for an answer already known.
+   * Listing reads transcripts until its bounded matching page is full, and the
+   * catalog is listed once per search term. Without this, a pause in typing
+   * starts another parse of files that have not changed since the last one —
+   * the cost is paid again for an answer already known.
    *
    * Keyed on what the filesystem reports rather than a timer: a transcript
    * that Claude Code appended to must be re-read, and one that did not change
@@ -241,6 +241,7 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
       return [];
     }
     const cursor = query.cursor ?? 0;
+    const pageEnd = query.limit === undefined ? undefined : cursor + query.limit;
     const summaries: ClaudeCodeSummary[] = [];
     const files = await this.#transcriptFiles({
       maxCandidates: CLAUDE_CATALOG_CANDIDATE_LIMIT,
@@ -252,14 +253,14 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
         const summary = await this.#summaryOf(file.path, file.sessionId);
         if (!summary || !externalSessionMatchesQuery(summary, query)) continue;
         summaries.push(summary);
+        if (pageEnd !== undefined && summaries.length >= pageEnd) break;
       }
     } finally {
       await this.#pruneSummaryCache();
     }
-    summaries.sort(
-      (left, right) =>
-        right.updatedAt - left.updatedAt || left.transcriptPath.localeCompare(right.transcriptPath),
-    );
+    // Preserve #transcriptFiles() order. Re-sorting a partial prefix by a
+    // timestamp found inside each transcript makes cursor pages overlap when
+    // the next request opens a longer prefix.
     return query.limit === undefined
       ? summaries.slice(cursor)
       : summaries.slice(cursor, cursor + query.limit);

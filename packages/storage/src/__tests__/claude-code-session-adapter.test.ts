@@ -426,6 +426,43 @@ describe('ClaudeCodeSessionAdapter', () => {
     });
   });
 
+  test('stops opening Claude transcripts once the requested page is full', async () => {
+    await withClaudeHome(async (home) => {
+      const directory = join(home, 'projects', CWD.replace(/\//gu, '-'));
+      const ids = Array.from(
+        { length: 4 },
+        (_, index) => `aaaaaaaa-0000-4000-8000-${String(200 + index).padStart(12, '0')}`,
+      );
+      const baseTime = Date.now() - 60_000;
+      for (const [index, id] of ids.entries()) {
+        await seed(home, id, [
+          userRecord(index === ids.length - 1 ? 'old tail' : `page ${index}`),
+          assistantRecord({ text: 'ok', stopReason: 'end_turn' }),
+        ]);
+        const path = join(directory, `${id}.jsonl`);
+        const time = new Date(baseTime - index * 10_000);
+        await utimes(path, time, time);
+      }
+
+      const adapter = new ClaudeCodeSessionAdapter({ claudeHome: home });
+      assert.equal((await adapter.listSessions({ limit: 2 })).length, 2);
+
+      const tailPath = join(directory, `${ids.at(-1)}.jsonl`);
+      const originalTimes = await stat(tailPath);
+      await rm(tailPath);
+      await seed(home, ids.at(-1)!, [
+        userRecord('new tail'),
+        assistantRecord({ text: 'ok', stopReason: 'end_turn' }),
+      ]);
+      await utimes(tailPath, originalTimes.atime, originalTimes.mtime);
+
+      assert.deepEqual(
+        (await adapter.listSessions({ text: 'new tail', limit: 1 })).map((session) => session.name),
+        ['new tail'],
+      );
+    });
+  });
+
   test('a project query tolerates a trailing separator', async () => {
     // The adapter compared raw strings, so the same project reached with a
     // trailing slash answered "no such project". Both sources now share one

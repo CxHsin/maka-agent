@@ -330,6 +330,44 @@ test('omits optional MCP tools that would exceed the complete manifest byte limi
   );
 });
 
+test('accounts for services when omitting optional MCP tools for the manifest budget', () => {
+  const diagnostics: Error[] = [];
+  const provider = createDesktopNativeCapabilityProvider(
+    {
+      browserTools: [],
+      releaseBrowserSession() {},
+      computerUseTools: computerTools(),
+      releaseComputerUseSession() {},
+      additionalGroups: () => [
+        optionalMcpGroupWithTools('desktop_mcp', 'mcp_tool', 25 * 1024, 2),
+      ],
+      additionalServices: () =>
+        Array.from({ length: 32 }, (_, index) => ({
+          serviceId: `service_${index}_${'x'.repeat(112)}`,
+          version: 'v'.repeat(64),
+          async call() {
+            return {};
+          },
+        })),
+    },
+    {
+      targetScope: { hostId: 'host-1', targetEpoch: 'epoch-1' },
+      onInvalidTool: (error) => diagnostics.push(error),
+    },
+  );
+
+  assert.deepEqual(provider.offers()[0]?.tools.map(({ name }) => name), ['mcp_tool_1']);
+  assert.equal(diagnostics.length, 1);
+  assert.match(diagnostics[0]?.message ?? '', /desktop_mcp\/mcp_tool_2/u);
+  assert.doesNotThrow(() =>
+    decodeClientCapabilityReplaceInput({
+      registrationId: 'registration-1',
+      offers: provider.offers(),
+      services: provider.services?.(),
+    }),
+  );
+});
+
 test('publishes and admits additional Desktop native-effect services', async () => {
   let admitted = false;
   const provider = createDesktopNativeCapabilityProvider(
@@ -1058,27 +1096,34 @@ function tool<P, R>(
 }
 
 function optionalMcpGroup(offerId: string, name: string, schemaDescriptionLength: number) {
+  return optionalMcpGroupWithTools(offerId, name, schemaDescriptionLength, 1);
+}
+
+function optionalMcpGroupWithTools(
+  offerId: string,
+  name: string,
+  schemaDescriptionLength: number,
+  toolCount: number,
+) {
   return {
     offerId,
     label: 'MCP',
     description: 'MCP tools',
     invalidToolPolicy: 'omit' as const,
-    tools: [
-      {
-        name,
-        displayName: name,
-        description: `${name} description`,
-        parameters: {
-          jsonSchema: {
-            type: 'object',
-            description: 'x'.repeat(schemaDescriptionLength),
-          },
+    tools: Array.from({ length: toolCount }, (_, index) => ({
+      name: toolCount === 1 ? name : `${name}_${index + 1}`,
+      displayName: toolCount === 1 ? name : `${name}_${index + 1}`,
+      description: `${toolCount === 1 ? name : `${name}_${index + 1}`} description`,
+      parameters: {
+        jsonSchema: {
+          type: 'object',
+          description: 'x'.repeat(schemaDescriptionLength),
         },
-        async impl() {
-          return 'ok';
-        },
-      } as MakaTool,
-    ],
+      },
+      async impl() {
+        return 'ok';
+      },
+    }) as MakaTool),
   };
 }
 

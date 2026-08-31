@@ -449,11 +449,12 @@ describe('ClaudeCodeSessionAdapter', () => {
 
       const tailPath = join(directory, `${ids.at(-1)}.jsonl`);
       const originalTimes = await stat(tailPath);
-      await rm(tailPath);
-      await seed(home, ids.at(-1)!, [
-        userRecord('new tail'),
-        assistantRecord({ text: 'ok', stopReason: 'end_turn' }),
-      ]);
+      await writeFile(
+        tailPath,
+        [userRecord('new tail'), assistantRecord({ text: 'ok', stopReason: 'end_turn' })]
+          .map((record) => JSON.stringify({ ...record, cwd: CWD }))
+          .join('\n') + '\n',
+      );
       await utimes(tailPath, originalTimes.atime, originalTimes.mtime);
 
       assert.deepEqual(

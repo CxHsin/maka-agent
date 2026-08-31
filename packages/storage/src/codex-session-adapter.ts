@@ -23,17 +23,18 @@ import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import type { StoredMessage } from '@maka/core/session';
 import {
+  CODEX_SUPPORTED_THREAD_SOURCES,
   FOREIGN_SESSION_DIGEST_MAX_READ_BYTES,
   FOREIGN_SESSION_SCAN_MAX_SESSIONS,
   codexRolloutMessage,
   createDigestAccumulator,
   finishDigest,
+  isSupportedCodexThreadSource,
   pushDigestMessage,
   sanitizeForeignTitle,
   type ForeignSessionDigest,
   type ForeignSessionSummary,
 } from '@maka/core/foreign-session';
-import { isSupportedCodexThreadSource } from '@maka/core/foreign-session';
 import type {
   ExternalMakaSession,
   ExternalSessionAdapter,
@@ -57,14 +58,6 @@ const CODEX_CATALOG_CANDIDATE_LIMIT = FOREIGN_SESSION_SCAN_MAX_SESSIONS;
 const CODEX_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const CODEX_UNSAFE_PATH_CHARS =
   /[\u0000-\u001F\u007F\u0080-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
-const CODEX_SUPPORTED_SOURCE_SQL_VALUES = [
-  'cli',
-  'exec',
-  'vscode',
-  'atlas',
-  'chatgpt',
-];
-
 export interface CodexSessionAdapterOptions {
   /** Codex's state root. Defaults to `$CODEX_HOME`, then `~/.codex`. */
   codexHome?: string;
@@ -829,7 +822,7 @@ async function readCodexThreadRows(
         where.push('(archived IS NULL OR archived = 0)');
       }
       if (columns.has('source')) {
-        const placeholders = CODEX_SUPPORTED_SOURCE_SQL_VALUES.map(() => '?').join(', ');
+        const placeholders = CODEX_SUPPORTED_THREAD_SOURCES.map(() => '?').join(', ');
         where.push(
           `(
             source IS NULL
@@ -840,8 +833,8 @@ async function readCodexThreadRows(
           )`,
         );
         params.push(
-          ...CODEX_SUPPORTED_SOURCE_SQL_VALUES,
-          ...CODEX_SUPPORTED_SOURCE_SQL_VALUES,
+          ...CODEX_SUPPORTED_THREAD_SOURCES,
+          ...CODEX_SUPPORTED_THREAD_SOURCES,
         );
       }
       if (query.cwd !== undefined && columns.has('cwd')) {

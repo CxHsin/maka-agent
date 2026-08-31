@@ -41,13 +41,26 @@ function createBridgeRecorder(): {
     'artifacts.subscribeChanges',
     'inspector.subscribeUsageChanges',
   ]);
+  // Adapters that reshape a bridge answer need one to reshape.
+  const answers = new Map<string, unknown>([
+    [
+      'sessions.submitMessage',
+      {
+        ok: true,
+        disposition: 'steering',
+        attachments: [],
+        inlineReferences: [],
+        skillInvocation: { loaded: [], failed: [], receipts: [] },
+      },
+    ],
+  ]);
   const domain = (name: string) =>
     new Proxy({}, {
       get: (_target, property) => (...args: unknown[]) => {
         const callName = `${name}.${String(property)}`;
         calls.push({ name: callName, args });
         if (syncMethods.has(callName)) return () => undefined;
-        return Promise.resolve(undefined);
+        return Promise.resolve(answers.get(callName));
       },
     });
 
@@ -69,6 +82,24 @@ function createBridgeRecorder(): {
 }
 
 describe('createDesktopWorkbarServices', () => {
+  it('preserves the Side Conversation Stop identity kind', async () => {
+    const { bridge, calls } = createBridgeRecorder();
+    const services = createDesktopWorkbarServices(bridge, {
+      readSettledMessages: async () => ({ messages: [], settled: true }),
+    });
+
+    await services.sideChat.stop('fork', { kind: 'admission', messageId: 'message-1' });
+    await services.sideChat.stop('fork', { kind: 'turn', turnId: 'turn-1' });
+
+    assert.deepEqual(
+      calls.filter((call) => call.name === 'sessions.stop').map((call) => call.args),
+      [
+        ['fork', { source: 'stop_button', expectedAdmissionId: 'message-1' }],
+        ['fork', { source: 'stop_button', expectedTurnId: 'turn-1' }],
+      ],
+    );
+  });
+
   it('maps every Workbar capability to the existing Desktop bridge', async () => {
     const { bridge, calls } = createBridgeRecorder();
     const settledReads: unknown[][] = [];
@@ -197,7 +228,7 @@ describe('createDesktopWorkbarServices', () => {
         'sessions.abandonSessionCopy',
         'sessions.send',
         'sessions.stop',
-        'sessions.steer',
+        'sessions.submitMessage',
         'sessions.setPermissionMode',
         'sessions.regenerateTurn',
         'sessions.respondToSandboxBoundary',

@@ -20,6 +20,11 @@
 import { startLocalIpcRuntimeHostListener } from './local-ipc-listener.js';
 import type { RuntimeHostMessageTransport } from '../transport/message-transport.js';
 import type { RuntimeHostConnectionAuthority } from './connection-authority.js';
+import type { RuntimeHostAccessAuthority } from './access-authority.js';
+import {
+  startRuntimeHostPeerListener,
+  type RuntimeHostPeerListenerEndpointOptions,
+} from './peer-listener.js';
 import {
   startRuntimeHostWebSocketListener,
   type StartRuntimeHostWebSocketListenerOptions,
@@ -37,12 +42,24 @@ export interface RuntimeHostListener {
   cleanup(): Promise<void>;
 }
 
-export type RuntimeHostListenerKind = 'local_ipc' | 'websocket';
+export interface RuntimeHostPeerListener extends RuntimeHostListener {
+  readonly kind: 'libp2p_direct';
+  readonly peerId: string;
+  readonly listenAddresses: readonly string[];
+}
+
+export interface RuntimeHostPeerListenerDescriptor {
+  readonly peerId: string;
+  readonly listenAddresses: readonly string[];
+}
+
+export type RuntimeHostListenerKind = 'local_ipc' | 'websocket' | 'libp2p_direct';
 
 export interface RuntimeHostListenerSet {
   readonly listeners: readonly RuntimeHostListener[];
   readonly localEndpoint: string;
   readonly websocketEndpoints: readonly string[];
+  readonly peerListeners: readonly RuntimeHostPeerListenerDescriptor[];
   closeAdmission(): Promise<void>;
   cleanup(): Promise<void>;
 }
@@ -65,19 +82,40 @@ export async function startLocalRuntimeHostListenerSet(
   return createRuntimeHostListenerSet(local);
 }
 
-export async function startRuntimeHostServiceListenerSet(
+export async function startRuntimeHostAuthenticatedListenerSet(
   input: RuntimeHostListenerSetFactoryInput,
-  websocket: Omit<StartRuntimeHostWebSocketListenerOptions, 'accept' | 'isReady'>,
+  options: {
+    readonly websocket?: Omit<StartRuntimeHostWebSocketListenerOptions, 'accept' | 'isReady'>;
+    readonly peer?: RuntimeHostPeerListenerEndpointOptions & {
+      readonly accessAuthority: RuntimeHostAccessAuthority;
+    };
+  },
 ): Promise<RuntimeHostListenerSet> {
   const local = await startLocalIpcRuntimeHostListener(input);
+  const additional: RuntimeHostListener[] = [];
   try {
-    const remote = await startRuntimeHostWebSocketListener({
-      ...websocket,
-      accept: input.accept,
-      isReady: input.isReady,
-    });
-    return createRuntimeHostListenerSet(local, [remote]);
+    if (options.websocket) {
+      additional.push(
+        await startRuntimeHostWebSocketListener({
+          ...options.websocket,
+          accept: input.accept,
+          isReady: input.isReady,
+        }),
+      );
+    }
+    if (options.peer) {
+      additional.push(
+        startRuntimeHostPeerListener({
+          ...options.peer,
+          accept: input.accept,
+        }),
+      );
+    }
+    return createRuntimeHostListenerSet(local, additional);
   } catch (error) {
+    await settleListeners([...additional].reverse(), (listener) => listener.cleanup()).catch(
+      () => undefined,
+    );
     await local.closeAdmission().catch(() => undefined);
     await local.cleanup().catch(() => undefined);
     throw error;
@@ -97,9 +135,23 @@ export function createRuntimeHostListenerSet(
         .filter((listener) => listener.kind === 'websocket')
         .map((listener) => listener.endpoint),
     ),
+    peerListeners: Object.freeze(
+      additional.filter(isRuntimeHostPeerListener).map((listener) =>
+        Object.freeze({
+          peerId: listener.peerId,
+          listenAddresses: Object.freeze([...listener.listenAddresses]),
+        }),
+      ),
+    ),
     closeAdmission: () => settleListeners(listeners, (listener) => listener.closeAdmission()),
     cleanup: () => settleListeners([...listeners].reverse(), (listener) => listener.cleanup()),
   };
+}
+
+function isRuntimeHostPeerListener(
+  listener: RuntimeHostListener,
+): listener is RuntimeHostPeerListener {
+  return listener.kind === 'libp2p_direct';
 }
 
 async function settleListeners(

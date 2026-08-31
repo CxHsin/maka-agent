@@ -33,6 +33,7 @@ import {
   type ForeignSessionDigest,
   type ForeignSessionSummary,
 } from '@maka/core/foreign-session';
+import { isSupportedCodexThreadSource } from '@maka/core/foreign-session';
 import type {
   ExternalMakaSession,
   ExternalSessionAdapter,
@@ -56,11 +57,15 @@ const CODEX_CATALOG_CANDIDATE_LIMIT = FOREIGN_SESSION_SCAN_MAX_SESSIONS;
 const CODEX_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const CODEX_UNSAFE_PATH_CHARS =
   /[\u0000-\u001F\u007F\u0080-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
-const CODEX_ROOT_SOURCE_TOKENS = new Set(['cli', 'exec', 'vscode']);
-const CODEX_ROOT_SOURCE_SQL_VALUES = [
+const CODEX_SUPPORTED_SOURCE_SQL_VALUES = [
   'cli',
   'exec',
   'vscode',
+  'atlas',
+  'chatgpt',
+  '{"custom":"cli"}',
+  '{"custom":"exec"}',
+  '{"custom":"vscode"}',
   '{"custom":"atlas"}',
   '{"custom":"chatgpt"}',
 ];
@@ -285,7 +290,7 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
   ): Promise<CodexCatalogEntry | undefined> {
     if (!isSafeCodexSessionId(row.id)) return undefined;
     if (typeof row.rollout_path !== 'string' || row.rollout_path.length === 0) return undefined;
-    if (!isRootCodexSource(row.source)) return undefined;
+    if (!isSupportedCodexThreadSource(row.source)) return undefined;
 
     const rolloutPath = resolvePath
       ? await this.resolveRolloutPath(row.rollout_path, row.id)
@@ -758,7 +763,7 @@ function catalogEntryFromRolloutHead(
     const payload = asRecord(record.payload);
     if (!payload) continue;
     if (record.type === 'session_meta') {
-      if (!isRootCodexSource(payload.source)) return undefined;
+      if (!isSupportedCodexThreadSource(payload.source)) return undefined;
       id = stringField(payload, 'session_id') ?? stringField(payload, 'id') ?? id;
       cwd = safeCodexCwd(payload.cwd) || cwd;
       createdAt =
@@ -830,9 +835,9 @@ async function readCodexThreadRows(
       }
       if (columns.has('source')) {
         where.push(
-          `(source IS NULL OR source IN (${CODEX_ROOT_SOURCE_SQL_VALUES.map(() => '?').join(', ')}))`,
+          `(source IS NULL OR source IN (${CODEX_SUPPORTED_SOURCE_SQL_VALUES.map(() => '?').join(', ')}))`,
         );
-        params.push(...CODEX_ROOT_SOURCE_SQL_VALUES);
+        params.push(...CODEX_SUPPORTED_SOURCE_SQL_VALUES);
       }
       if (query.cwd !== undefined && columns.has('cwd')) {
         const variants = codexCwdSqlVariants(query.cwd);
@@ -974,21 +979,6 @@ function firstNonEmptyTitle(...values: unknown[]): string | undefined {
     if (title.length > 0) return title;
   }
   return undefined;
-}
-
-function isRootCodexSource(value: unknown): boolean {
-  if (value === undefined || value === null) return true;
-  if (typeof value === 'string') {
-    if (CODEX_ROOT_SOURCE_TOKENS.has(value)) return true;
-    if (!value.startsWith('{')) return false;
-    try {
-      return isRootCodexSource(JSON.parse(value) as unknown);
-    } catch {
-      return false;
-    }
-  }
-  if (!isRecord(value)) return false;
-  return value.custom === 'atlas' || value.custom === 'chatgpt';
 }
 
 function codexErrorAffectsTurnStatus(payload: JsonRecord): boolean {

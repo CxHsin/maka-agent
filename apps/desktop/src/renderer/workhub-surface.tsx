@@ -29,20 +29,32 @@ import type { UiLocale } from '@maka/core/ui-locale';
 import { ChatSurfaceLayout, Composer } from '@maka/ui';
 import type {
   WorkHubController,
+  WorkHubCoordinationTurn,
   WorkHubProjection,
-  WorkHubProjectedTurn,
   WorkHubSessionSummary,
   WorkHubSubmission,
   WorkHubSubmitInput,
 } from './workhub-controller.js';
-import { boundedWorkHubTimelineText } from './workhub-controller.js';
+import {
+  WorkHubSendLease,
+  type WorkHubSendAttempt,
+} from './workhub-send-lease.js';
+import { WorkHubCoordinationFailure } from './workhub-coordination-port.js';
 
 export interface WorkHubConversationTurn {
   requestId: string;
   text: string;
   state: 'routing' | 'settled' | 'failed';
   outcome?: WorkHubSubmission;
+  failure?: WorkHubSurfaceFailure;
 }
+
+export type WorkHubSurfaceFailure =
+  | 'candidates_changed'
+  | 'linked_correction_unavailable'
+  | 'target_waiting'
+  | 'action_changed'
+  | 'delivery_failed';
 
 export class WorkHubSurfaceRouteGate {
   #pending = false;
@@ -81,10 +93,51 @@ export function workHubSubmissionClearsDraft(
   return Boolean(result && result.kind !== 'waiting');
 }
 
-export function workHubSubmissionCanCorrect(
-  result: WorkHubSubmission,
-): result is Extract<WorkHubSubmission, { kind: 'submitted' }> {
-  return result.kind === 'submitted' && !result.steered;
+export function workHubSurfaceFailure(error: unknown): WorkHubSurfaceFailure {
+  if (error instanceof WorkHubCoordinationFailure) {
+    if (error.code === 'operation_conflict') return 'action_changed';
+    if (error.code === 'not_found' || error.code === 'session_archived') {
+      return 'candidates_changed';
+    }
+    if (error.code === 'session_busy') return 'target_waiting';
+    return 'delivery_failed';
+  }
+  const message = error instanceof Error ? error.message : '';
+  if (
+    /candidates changed|not in the admitted candidate set|source or target is not in/iu.test(
+      message,
+    )
+  ) {
+    return 'candidates_changed';
+  }
+  if (/linked correction requires persistent delegation support/iu.test(message)) {
+    return 'linked_correction_unavailable';
+  }
+  if (/waiting for user input/iu.test(message)) return 'target_waiting';
+  if (/identity belongs to a different proposal/iu.test(message)) {
+    return 'action_changed';
+  }
+  return 'delivery_failed';
+}
+
+export function visibleWorkHubConversation(
+  coordination: readonly WorkHubCoordinationTurn[],
+  local: readonly WorkHubConversationTurn[],
+): {
+  coordination: readonly WorkHubCoordinationTurn[];
+  local: readonly WorkHubConversationTurn[];
+} {
+  const localByRequestId = new Map(local.map((turn) => [turn.requestId, turn]));
+  const visibleCoordination = coordination.filter(
+    (turn) =>
+      localByRequestId.get(turn.turnId)?.outcome?.kind === 'discussion' ||
+      !localByRequestId.has(turn.turnId),
+  );
+  const coordinationTurnIds = new Set(coordination.map(({ turnId }) => turnId));
+  const visibleLocal = local.filter(
+    (turn) => turn.outcome?.kind !== 'discussion' || !coordinationTurnIds.has(turn.requestId),
+  );
+  return { coordination: visibleCoordination, local: visibleLocal };
 }
 
 export async function submitWorkHubSurfaceInput(input: {
@@ -94,77 +147,88 @@ export async function submitWorkHubSurfaceInput(input: {
   return input.controller.submit(input.input);
 }
 
-export function visibleWorkHubProjectedTurns(
-  projected: readonly WorkHubProjectedTurn[],
-  local: readonly WorkHubConversationTurn[],
-): WorkHubProjectedTurn[] {
-  const localTurnCounts = new Map<string, number>();
-  for (const turn of local) {
-    if (turn.outcome?.kind !== 'submitted') continue;
-    const key = projectedTurnKey(turn.outcome.target, turn.outcome.turnId, turn.text);
-    localTurnCounts.set(key, (localTurnCounts.get(key) ?? 0) + 1);
+export async function submitAndRecordWorkHubSurfaceInput(input: {
+  controller: WorkHubController;
+  request: WorkHubSubmitInput;
+  recordedUserText: string;
+  summary(result: Exclude<WorkHubSubmission, { kind: 'discussion' }>): string;
+  onSummaryError(): void;
+}): Promise<WorkHubSubmission> {
+  const result = await submitWorkHubSurfaceInput({
+    controller: input.controller,
+    input: input.request,
+  });
+  // Waiting is a local, retryable admission result: the request has not been
+  // accepted and must not consume the immutable Coordination summary owned by
+  // this action identity. A later same-identity retry may still be admitted.
+  // Delegations project directly from the Host's atomic delegation_assigned
+  // record. Only local clarification still needs the generic summary path.
+  if (
+    result.kind === 'discussion' ||
+    result.kind === 'waiting' ||
+    result.kind === 'submitted'
+  ) {
+    return result;
   }
-  const visible: WorkHubProjectedTurn[] = [];
-  for (let index = projected.length - 1; index >= 0; index -= 1) {
-    const turn = projected[index]!;
-    const key = projectedTurnKey(turn.target, turn.turnId, turn.text);
-    const remaining = localTurnCounts.get(key) ?? 0;
-    if (remaining > 0) {
-      localTurnCounts.set(key, remaining - 1);
-    } else {
-      visible.push(turn);
-    }
+  try {
+    await input.controller.recordConversationTurn({
+      turnId: input.request.requestId,
+      userText: input.recordedUserText,
+      assistantText: input.summary(result),
+      disposition: result.kind === 'clarification' ? 'clarify' : 'summary',
+    });
+  } catch (error) {
+    input.onSummaryError();
+    throw error;
   }
-  return visible.reverse();
+  return result;
 }
 
-function projectedTurnKey(
-  target: { sessionId: string },
-  turnId: string,
-  text: string,
-): string {
-  return JSON.stringify([
-    target.sessionId,
-    turnId,
-    boundedWorkHubTimelineText(text),
-  ]);
-}
-
-export function projectedWorkHubTurnPresentation(
-  state: WorkHubProjectedTurn['state'],
-  archived: boolean,
-  locale: UiLocale,
-): { heading: string; state: string } {
-  const copy = workHubCopy(locale);
-  return {
-    heading: archived ? copy.archivedSessionRecord : copy.sessionRecord,
-    state: copy.turnStates[state],
-  };
+export async function submitLeasedWorkHubSurfaceInput(input: {
+  lease: WorkHubSendLease;
+  text: string;
+  preserveDraft?: boolean;
+  submit(attempt: WorkHubSendAttempt): Promise<WorkHubSubmission | undefined>;
+}): Promise<boolean> {
+  const attempt = input.lease.acquireAttempt(input.text);
+  const result = await input.submit(attempt);
+  if (!result) return false;
+  const clearsDraft = input.lease.settle(
+    attempt.requestId,
+    attempt.text,
+    workHubSubmissionClearsDraft(result),
+  );
+  if (input.preserveDraft && clearsDraft) {
+    return false;
+  }
+  return clearsDraft;
 }
 
 /**
- * A transient conversation projection over ordinary Sessions.
- *
- * This surface deliberately does not persist its own transcript. Session and
- * Runtime remain authoritative; local turns only keep WorkHub conversational
- * while the surface is mounted.
+ * The persistent Coordination Session transcript is the primary conversation.
+ * Ordinary Sessions remain a read-only status/routing projection.
  */
 export function WorkHubSurface(props: {
   controller: WorkHubController;
+  leaseScope: string;
   locale: UiLocale;
   initialFocusSessionId?: string;
   onOpenSession(sessionId: string): void;
 }) {
   const copy = workHubCopy(props.locale);
   const [projection, setProjection] = useState<WorkHubProjection>({ sessions: [], turns: [] });
+  const [coordinationTurns, setCoordinationTurns] = useState<readonly WorkHubCoordinationTurn[]>([]);
   const [turns, setTurns] = useState<WorkHubConversationTurn[]>([]);
   const [pending, setPending] = useState(false);
   const [initialLoadSettled, setInitialLoadSettled] = useState(false);
+  const [conversationReady, setConversationReady] = useState(false);
   // React state paints the lock; the gate closes the same-frame window before
   // a rerender can disable Composer and clarification controls.
   const routeGate = useRef(new WorkHubSurfaceRouteGate()).current;
   const refreshGate = useRef(new WorkHubProjectionRefreshGate()).current;
+  const sendLease = useRef(new WorkHubSendLease({ scope: props.leaseScope })).current;
   const [loadError, setLoadError] = useState(false);
+  const [conversationError, setConversationError] = useState(false);
   const refresh = useCallback(async (focusSessionId?: string) => {
     const isLatest = refreshGate.begin();
     try {
@@ -192,32 +256,74 @@ export function WorkHubSurface(props: {
     };
   }, [props.controller, props.initialFocusSessionId, refresh, refreshGate]);
 
+  useEffect(() => {
+    let disposed = false;
+    let handle: { close(): Promise<void> } | undefined;
+    setConversationReady(false);
+    setConversationError(false);
+    void props.controller.openConversation(
+      (next) => {
+        if (disposed) return;
+        setCoordinationTurns(next);
+        setConversationReady(true);
+        setConversationError(false);
+      },
+      () => {
+        if (disposed) return;
+        setConversationReady(true);
+        setConversationError(true);
+      },
+    ).then((opened) => {
+      if (disposed) void opened.close().catch(() => undefined);
+      else handle = opened;
+    }).catch(() => undefined);
+    return () => {
+      disposed = true;
+      void handle?.close().catch(() => undefined);
+    };
+  }, [props.controller]);
+
   const route = useCallback(async (
     input: WorkHubSubmitInput,
+    localRequestId: string = input.requestId,
+    recordedUserText: string = input.text,
   ): Promise<WorkHubSubmission | undefined> => {
     return routeGate.run(async () => {
       setPending(true);
       setTurns((current) => current.map((turn) =>
-        turn.requestId === input.requestId
+        turn.requestId === localRequestId
           ? { ...turn, state: 'routing', outcome: undefined }
           : turn,
       ));
       try {
-        const result = await submitWorkHubSurfaceInput({
+        const result = await submitAndRecordWorkHubSurfaceInput({
           controller: props.controller,
-          input,
+          request: input,
+          recordedUserText,
+          summary: (result) => workHubCoordinationSummary(result, projection, copy),
+          // Clarification remains a local transcript write; delegated sends
+          // are projected directly from the Host-owned assignment record.
+          onSummaryError: () => setConversationError(true),
         });
         setTurns((current) => current.map((turn) =>
-          turn.requestId === input.requestId
+          turn.requestId === localRequestId
             ? { ...turn, state: 'settled', outcome: result }
             : turn,
         ));
         if (result.kind === 'submitted') await refresh();
         return result;
-      } catch {
+      } catch (error) {
+        if (isTerminalWorkHubSurfaceFailure(error)) {
+          sendLease.abandon(input.requestId);
+        }
         setTurns((current) => current.map((turn) =>
-          turn.requestId === input.requestId
-            ? { ...turn, state: 'failed', outcome: undefined }
+          turn.requestId === localRequestId
+            ? {
+                ...turn,
+                state: 'failed',
+                outcome: undefined,
+                failure: workHubSurfaceFailure(error),
+              }
             : turn,
         ));
         return undefined;
@@ -225,31 +331,45 @@ export function WorkHubSurface(props: {
         setPending(false);
       }
     });
-  }, [props.controller, refresh, routeGate]);
+  }, [copy, projection, props.controller, refresh, routeGate]);
 
   const send = useCallback(async (value: string) => {
     const text = value.trim();
-    if (!text || !initialLoadSettled || routeGate.pending) return false;
-    const requestId = crypto.randomUUID();
-    setTurns((current) => [...current, { requestId, text, state: 'routing' }]);
-    const result = await route({ requestId, text });
-    // Composer clears only accepted drafts. Waiting, delivery failures, and a
-    // ref-blocked duplicate keep the exact text available for retry.
-    return workHubSubmissionClearsDraft(result);
-  }, [initialLoadSettled, route, routeGate]);
-  const projectedTurns = visibleWorkHubProjectedTurns(projection.turns, turns);
-  const conversationEmpty = projectedTurns.length === 0 && turns.length === 0;
+    if (!text || !initialLoadSettled || !conversationReady || routeGate.pending) return false;
+    return submitLeasedWorkHubSurfaceInput({
+      lease: sendLease,
+      text,
+      submit: async (attempt) => {
+        const { requestId } = attempt;
+        setTurns((current) => current.some((turn) => turn.requestId === requestId)
+          ? current.map((turn) => turn.requestId === requestId
+            ? { requestId, text: attempt.text, state: 'routing' }
+            : turn)
+          : [...current, { requestId, text: attempt.text, state: 'routing' }]);
+        return route({
+          requestId,
+          text: attempt.text,
+          ...(attempt.retrying ? { retryAction: true as const } : {}),
+        });
+      },
+    });
+  }, [conversationReady, initialLoadSettled, route, routeGate, sendLease]);
+  const visible = visibleWorkHubConversation(coordinationTurns, turns);
+  const visibleCoordinationTurns = visible.coordination;
+  const visibleLocalTurns = visible.local;
+  const conversationEmpty = visibleCoordinationTurns.length === 0 && visibleLocalTurns.length === 0;
+  const surfaceReady = initialLoadSettled && conversationReady;
 
   return (
     <ChatSurfaceLayout
       className="workhub-surface"
-      conversationKey="workhub"
       composer={(
         <Composer
           draftKey="workhub"
+          draftPersistence={sendLease}
           onSend={send}
           onStop={() => {}}
-          sendBlocked={pending || !initialLoadSettled}
+          sendBlocked={pending || !surfaceReady}
           modelLabel="WorkHub"
         />
       )}
@@ -260,7 +380,7 @@ export function WorkHubSurface(props: {
             <h1>WorkHub</h1>
             <p>{copy.subtitle}</p>
           </div>
-          <span>{initialLoadSettled
+          <span>{surfaceReady
             ? copy.workCount(projection.sessions.length)
             : copy.loading}</span>
         </header>
@@ -272,51 +392,55 @@ export function WorkHubSurface(props: {
             gap={4}
             isStreaming={pending}
           >
-            {!initialLoadSettled ? (
+            {!surfaceReady ? (
               <WorkHubLoadingState label={copy.loading} />
-            ) : loadError ? (
-              <div className="workhub-empty" role="alert">{copy.loadFailed}</div>
-            ) : conversationEmpty ? (
+            ) : conversationEmpty && !loadError && !conversationError ? (
               <div className="workhub-empty">
                 <h2>{copy.emptyTitle}</h2>
                 <p>{copy.emptyBody(projection.sessions.length)}</p>
               </div>
             ) : (
               <div className="workhub-turns">
-                {projectedTurns.map((turn) => (
-                  <ProjectedWorkHubTurnView
-                    key={`${turn.target.sessionId}:${turn.messageId}`}
+                {loadError || conversationError ? (
+                  <div className="workhub-empty" role="alert">{copy.loadFailed}</div>
+                ) : null}
+                {visibleCoordinationTurns.map((turn) => (
+                  <WorkHubCoordinationTurnView
+                    key={turn.messageId}
                     turn={turn}
                     projection={projection}
-                    copy={copy}
+                    locale={props.locale}
                     onOpenSession={props.onOpenSession}
                   />
                 ))}
-                {turns.map((turn) => (
+                {visibleLocalTurns.map((turn) => (
                   <WorkHubTurnView
                     key={turn.requestId}
                     turn={turn}
                     projection={projection}
                     copy={copy}
                     pending={pending}
-                    onChoose={(target) => void route({
-                      requestId: turn.requestId,
-                      text: turn.text,
-                      explicitTarget: target,
-                      ...(turn.outcome?.kind === 'clarification' && turn.outcome.correction
-                        ? { correction: turn.outcome.correction }
-                        : {}),
-                    })}
-                    onCorrect={(from, target) => void route({
-                      requestId: turn.requestId,
-                      text: turn.text,
-                      explicitTarget: target,
-                      correction: {
-                        from: from.target,
-                        turnId: from.turnId,
-                        ...(from.steered ? { steered: true } : {}),
-                      },
-                    })}
+                    onChoose={(target) => {
+                      const selected = projection.sessions.find(
+                        (session) => session.target.sessionId === target.sessionId,
+                      );
+                      void submitLeasedWorkHubSurfaceInput({
+                        lease: sendLease,
+                        text: turn.text,
+                        preserveDraft: true,
+                        submit: (attempt) => route({
+                          requestId: attempt.requestId,
+                          text: attempt.text,
+                          explicitTarget: target,
+                          ...(attempt.retrying ? { retryAction: true as const } : {}),
+                          ...(turn.outcome?.kind === 'clarification' && turn.outcome.correction
+                            ? { correction: turn.outcome.correction }
+                            : {}),
+                        }, turn.requestId, copy.choseWork(
+                          selected?.sessionName ?? copy.sessionFallback,
+                        )),
+                      });
+                    }}
                     onOpenSession={props.onOpenSession}
                   />
                 ))}
@@ -326,6 +450,16 @@ export function WorkHubSurface(props: {
         </div>
       </main>
     </ChatSurfaceLayout>
+  );
+}
+
+function isTerminalWorkHubSurfaceFailure(error: unknown): boolean {
+  return (
+    error instanceof WorkHubCoordinationFailure &&
+    (error.code === 'operation_conflict' ||
+      error.code === 'not_found' ||
+      error.code === 'session_archived' ||
+      error.code === 'unauthorized')
   );
 }
 
@@ -340,7 +474,6 @@ export function WorkHubCoordinationStatus(props: {
   return (
     <ChatSurfaceLayout
       className="workhub-surface"
-      conversationKey="workhub-coordination-status"
       composer={(
         <Composer
           draftKey="workhub"
@@ -411,36 +544,71 @@ function WorkHubLoadingState(props: { label: string }) {
   );
 }
 
-function ProjectedWorkHubTurnView(props: {
-  turn: WorkHubProjectedTurn;
+/** @internal Presentational seam for durable Coordination turns. */
+export function WorkHubCoordinationTurnView(props: {
+  turn: WorkHubCoordinationTurn;
   projection: WorkHubProjection;
-  copy: ReturnType<typeof workHubCopy>;
+  locale: UiLocale;
   onOpenSession(sessionId: string): void;
 }) {
-  const session = props.projection.sessions.find(
-    (candidate) => candidate.target.sessionId === props.turn.target.sessionId,
-  );
-  const presentation = projectedWorkHubTurnPresentation(
-    props.turn.state,
-    session?.archived ?? false,
-    props.copy.locale,
-  );
+  const copy = workHubCopy(props.locale);
+  const assignment = props.turn.assignment;
+  const session = assignment
+    ? props.projection.sessions.find(
+        (candidate) => candidate.target.sessionId === assignment.targetSessionId,
+      )
+    : undefined;
   return (
-    <WorkHubMessageFrame text={props.turn.text} state="settled" projected>
-      <SubmittedWorkView
-        session={session}
-        correctedFrom={undefined}
-        targetSessionId={props.turn.target.sessionId}
-        heading={presentation.heading}
-        state={presentation.state}
-        result={props.turn.result}
-        copy={props.copy}
-        correctionOptions={[]}
-        pending={false}
-        onOpenSession={props.onOpenSession}
-      />
+    <WorkHubMessageFrame
+      text={props.turn.text}
+      state={assignment?.feedbackState ?? props.turn.state}
+      projected
+    >
+      {assignment ? (
+        <SubmittedWorkView
+          session={session}
+          targetSessionId={assignment.targetSessionId}
+          fallbackName={assignment.targetSessionName}
+          heading={copy.sentTo}
+          state={copy.delegationStates[assignment.feedbackState]}
+          result={undefined}
+          copy={copy}
+          onOpenSession={props.onOpenSession}
+        />
+      ) : props.turn.result ? (
+        <p className="workhub-result">{props.turn.result}</p>
+      ) : props.turn.state === 'running' ? (
+        <p className="workhub-status" role="status">{copy.answering}</p>
+      ) : (
+        <p className="workhub-error" role="alert">
+          {copy.turnStates[props.turn.state]}
+        </p>
+      )}
     </WorkHubMessageFrame>
   );
+}
+
+export function workHubCoordinationSummary(
+  result: Exclude<WorkHubSubmission, { kind: 'discussion' }>,
+  projection: WorkHubProjection,
+  copy: ReturnType<typeof workHubCopy>,
+): string {
+  if (result.kind === 'clarification') {
+    return `${copy.chooseWork} ${result.options.map(({ sessionName }) => sessionName).join('、')}`;
+  }
+  if (result.kind === 'waiting') {
+    return `${copy.waitingForDecision} ${copy.requestNotSent}`;
+  }
+  const target = projection.sessions.find(
+    (session) => session.target.sessionId === result.target.sessionId,
+  );
+  const name = target?.sessionName ?? copy.sessionFallback;
+  const state = target
+    ? target.archived
+      ? copy.archived
+      : copy.states[target.state]
+    : copy.accepted;
+  return `${copy.sentTo} ${name} · ${state}`;
 }
 
 function WorkHubTurnView(props: {
@@ -449,10 +617,6 @@ function WorkHubTurnView(props: {
   copy: ReturnType<typeof workHubCopy>;
   pending: boolean;
   onChoose(target: { sessionId: string }): void;
-  onCorrect(
-    from: Extract<WorkHubSubmission, { kind: 'submitted' }>,
-    target: { sessionId: string },
-  ): void;
   onOpenSession(sessionId: string): void;
 }) {
   const { turn, copy } = props;
@@ -466,7 +630,9 @@ function WorkHubTurnView(props: {
           {turn.state === 'routing' ? (
             <p className="workhub-status" role="status">{copy.routing}</p>
           ) : turn.state === 'failed' ? (
-            <p className="workhub-error" role="alert">{copy.submitFailed}</p>
+            <p className="workhub-error" role="alert">
+              {copy.submitFailures[turn.failure ?? 'delivery_failed']}
+            </p>
           ) : turn.outcome?.kind === 'clarification' ? (
             <>
               <p>{copy.chooseWork}</p>
@@ -500,12 +666,6 @@ function WorkHubTurnView(props: {
           ) : submitted ? (
             <SubmittedWorkView
               session={target}
-              correctedFrom={submitted.correctedFrom
-                ? props.projection.sessions.find(
-                    (session) =>
-                      session.target.sessionId === submitted.correctedFrom?.sessionId,
-                  )
-                : undefined}
               targetSessionId={submitted.target.sessionId}
               heading={copy.sentTo}
               state={target
@@ -513,15 +673,6 @@ function WorkHubTurnView(props: {
                 : copy.accepted}
               result={target?.latestResult}
               copy={copy}
-              correctionOptions={workHubSubmissionCanCorrect(submitted)
-                ? props.projection.sessions.filter(
-                    (session) =>
-                      !session.archived &&
-                      session.target.sessionId !== submitted.target.sessionId,
-                  )
-                : []}
-              pending={props.pending}
-              onCorrect={(target) => props.onCorrect(submitted, target)}
               onOpenSession={props.onOpenSession}
             />
           ) : null}
@@ -546,7 +697,11 @@ function WorkHubMessageFrame(props: {
         </ChatMessageBubble>
       </ChatMessage>
       <ChatMessage sender="assistant" density="compact" className="workhub-message">
-        <ChatMessageBubble variant="ghost" className="maka-chat-message-bubble maka-chat-message-bubble-assistant workhub-assistant-bubble">
+        <ChatMessageBubble
+          variant="ghost"
+          width="100%"
+          className="maka-chat-message-bubble maka-chat-message-bubble-assistant workhub-assistant-bubble"
+        >
           {props.children}
         </ChatMessageBubble>
       </ChatMessage>
@@ -556,59 +711,31 @@ function WorkHubMessageFrame(props: {
 
 function SubmittedWorkView(props: {
   session: WorkHubSessionSummary | undefined;
-  correctedFrom: WorkHubSessionSummary | undefined;
   targetSessionId: string;
+  fallbackName?: string;
   heading: string;
   state: string;
   result: string | undefined;
   copy: ReturnType<typeof workHubCopy>;
-  correctionOptions: WorkHubSessionSummary[];
-  pending: boolean;
-  onCorrect?(target: { sessionId: string }): void;
   onOpenSession(sessionId: string): void;
 }) {
   const { session, copy } = props;
+  const sessionName = session?.sessionName ?? props.fallbackName ?? copy.sessionFallback;
   return (
     <div className="workhub-submitted">
       <p>{props.heading}</p>
       <Button
-        label={`${session?.sessionName ?? copy.sessionFallback}, ${props.state}`}
+        label={`${sessionName}, ${props.state}`}
         variant="ghost"
         width="100%"
         onClick={() => props.onOpenSession(props.targetSessionId)}
         endContent={<span className="workhub-submitted-state">{props.state}</span>}>
         <span className="workhub-submitted-session">
-          <strong>{session?.sessionName ?? copy.sessionFallback}</strong>
+          <strong>{sessionName}</strong>
           {session?.projectName ? <small>{session.projectName}</small> : null}
         </span>
       </Button>
-      {props.correctedFrom ? (
-        <small className="workhub-correction-note">
-          {copy.correctedFrom(props.correctedFrom.sessionName)}
-        </small>
-      ) : null}
       {props.result ? <p className="workhub-result">{props.result}</p> : null}
-      {props.correctionOptions.length > 0 ? (
-        <details className="workhub-correction">
-          <summary>{copy.correctTarget}</summary>
-          <div>
-            {props.correctionOptions.map((option) => (
-              <Button
-                key={option.target.sessionId}
-                label={`${option.sessionName}, ${option.projectName}`}
-                variant="ghost"
-                width="100%"
-                isDisabled={props.pending}
-                onClick={() => props.onCorrect?.(option.target)}
-                endContent={
-                  <small className="workhub-option-project">{option.projectName}</small>
-                }>
-                <strong>{option.sessionName}</strong>
-              </Button>
-            ))}
-          </div>
-        </details>
-      ) : null}
     </div>
   );
 }
@@ -626,11 +753,9 @@ function workHubCopy(locale: UiLocale) {
       chooseWork: '这条输入可能与多项工作有关，请选择目标：',
       discussionStayed: '这条内容暂时保留在 WorkHub，没有创建或改动 Session。',
       discussionHint: '提出明确的执行目标后，我会把它交给对应的 Session。',
+      answering: '正在回答…',
+      choseWork: (name: string) => `选择“${name}”`,
       sentTo: '已交给：', accepted: '已接收', sessionFallback: '普通 Session',
-      sessionRecord: '来自 Session：',
-      archivedSessionRecord: '来自已归档 Session：',
-      correctTarget: '更正目标',
-      correctedFrom: (name: string) => `已从“${name}”更正`,
       waitingForDecision: '这项工作正在等待你的决定。',
       requestNotSent: '新请求尚未发送；处理原 Session 中的交互后可以再次发送。',
       routing: '正在判断应该交给哪个 Session…', loadFailed: '无法读取已有工作。',
@@ -639,8 +764,23 @@ function workHubCopy(locale: UiLocale) {
       coordinationFailedTitle: 'WorkHub 暂时无法启动',
       coordinationFailedBody: '请检查当前 Runtime Host 的默认模型配置，然后重试。',
       retry: '重试',
-      submitFailed: '输入未能送达，请重试。', scrollToBottom: '滚动到底部', archived: '已归档',
+      submitFailures: {
+        candidates_changed: '工作列表已变化，请重新发送以使用最新目标。',
+        linked_correction_unavailable: '跨 Session 更正将在持久委托关联完成后开放；请先打开原 Session 停止当前工作。',
+        target_waiting: '目标 Session 正在等待你的处理；请先打开并完成该交互。',
+        action_changed: '这次操作已发生变化，请重新发送。',
+        delivery_failed: '输入未能送达，请重试。',
+      }, scrollToBottom: '滚动到底部', archived: '已归档',
       states: { active: '活跃', running: '进行中', waiting_for_user: '等待你', blocked: '受阻', aborted: '已中止' },
+      delegationStates: {
+        accepted: '已接收',
+        running: '进行中',
+        waiting_for_user: '等待你',
+        completed: '已完成',
+        failed: '失败',
+        aborted: '已中止',
+        recovering: '正在恢复',
+      },
       turnStates: { running: '进行中', completed: '已完成', aborted: '已中止', failed: '失败' },
     } as const;
   }
@@ -655,11 +795,9 @@ function workHubCopy(locale: UiLocale) {
     chooseWork: 'This input may relate to more than one task. Choose a target:',
     discussionStayed: 'This stayed in WorkHub without creating or changing a Session.',
     discussionHint: 'State an executable goal and I will hand it to the owning Session.',
+    answering: 'Answering…',
+    choseWork: (name: string) => `Choose “${name}”`,
     sentTo: 'Sent to:', accepted: 'Accepted', sessionFallback: 'Ordinary Session',
-    sessionRecord: 'From Session:',
-    archivedSessionRecord: 'From archived Session:',
-    correctTarget: 'Correct target',
-    correctedFrom: (name: string) => `Corrected from “${name}”`,
     waitingForDecision: 'This work is waiting for your decision.',
     requestNotSent: 'The new request was not sent. Resolve the interaction in its Session, then send again.',
     routing: 'Choosing the right Session…', loadFailed: 'Could not read existing work.',
@@ -668,8 +806,23 @@ function workHubCopy(locale: UiLocale) {
     coordinationFailedTitle: 'WorkHub could not start',
     coordinationFailedBody: 'Check the default model for the current Runtime Host, then retry.',
     retry: 'Retry',
-    submitFailed: 'The input could not be delivered. Try again.', scrollToBottom: 'Scroll to bottom', archived: 'Archived',
+    submitFailures: {
+      candidates_changed: 'The work list changed. Send again to use the latest targets.',
+      linked_correction_unavailable: 'Cross-Session correction will be available with persistent delegation. Open the original Session to stop its current work first.',
+      target_waiting: 'The target Session needs your input. Open it and resolve that interaction first.',
+      action_changed: 'This action changed. Send it again.',
+      delivery_failed: 'The input could not be delivered. Try again.',
+    }, scrollToBottom: 'Scroll to bottom', archived: 'Archived',
     states: { active: 'Active', running: 'Running', waiting_for_user: 'Waiting for you', blocked: 'Blocked', aborted: 'Aborted' },
+    delegationStates: {
+      accepted: 'Accepted',
+      running: 'Running',
+      waiting_for_user: 'Waiting for you',
+      completed: 'Completed',
+      failed: 'Failed',
+      aborted: 'Aborted',
+      recovering: 'Recovering',
+    },
     turnStates: { running: 'Running', completed: 'Completed', aborted: 'Aborted', failed: 'Failed' },
   } as const;
 }

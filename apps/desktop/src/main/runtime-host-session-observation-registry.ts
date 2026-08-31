@@ -76,6 +76,7 @@ function requireTranscriptSource(
 
 interface SessionObservationRegistration {
   readonly sessionId: string;
+  readonly messageAdmissions: boolean;
   readonly target: RuntimeHostSessionObserverTarget;
   readonly destroyedListener: () => void;
   readonly ready: ObservationReadiness;
@@ -151,6 +152,7 @@ export class RuntimeHostSessionObservationRegistry {
             registration.sessionId,
             observerId,
             bindTarget(registration.target),
+            registration.messageAdmissions,
           );
           if (
             this.#source !== source ||
@@ -207,6 +209,37 @@ export class RuntimeHostSessionObservationRegistry {
     return [...new Set([...this.#registrations.values()].map((registration) => registration.sessionId))];
   }
 
+  trackedSessionIds(): string[] {
+    return [
+      ...new Set([
+        ...[...this.#registrations.values()].map((registration) => registration.sessionId),
+        ...[...this.#transcripts.values()].map((registration) => registration.sessionId),
+      ]),
+    ];
+  }
+
+  async forgetSession(sessionId: string): Promise<void> {
+    const source = this.#source;
+    const observations = [...this.#registrations].filter(
+      ([, registration]) => registration.sessionId === sessionId,
+    );
+    const transcripts = [...this.#transcripts].filter(
+      ([, registration]) => registration.sessionId === sessionId,
+    );
+    for (const [observerId, registration] of observations) {
+      this.#deleteRegistration(observerId, registration);
+    }
+    for (const [consumerId, registration] of transcripts) {
+      this.#deleteTranscript(consumerId, registration);
+    }
+    if (source) {
+      await Promise.allSettled([
+        ...observations.map(([observerId]) => source.unobserve(observerId)),
+        ...transcripts.map(([consumerId]) => source.closeTranscript?.(consumerId)),
+      ]);
+    }
+  }
+
   detach(source: SessionObservationSource): void {
     if (this.#source === source) {
       this.#source = undefined;
@@ -218,11 +251,16 @@ export class RuntimeHostSessionObservationRegistry {
     sessionId: string,
     observerId: string,
     target: RuntimeHostSessionObserverTarget,
+    messageAdmissions = false,
   ): Promise<void> {
     this.#assertOpen();
     const previous = this.#registrations.get(observerId);
     if (previous) {
-      if (previous.sessionId !== sessionId || previous.target.id !== target.id) {
+      if (
+        previous.sessionId !== sessionId ||
+        previous.target.id !== target.id ||
+        previous.messageAdmissions !== messageAdmissions
+      ) {
         throw new Error("Runtime Host Session observer identity was reused");
       }
       return previous.ready.promise;
@@ -235,6 +273,7 @@ export class RuntimeHostSessionObservationRegistry {
     void ready.promise.catch(() => undefined);
     const registration: SessionObservationRegistration = {
       sessionId,
+      messageAdmissions,
       target,
       destroyedListener,
       ready,
@@ -246,7 +285,12 @@ export class RuntimeHostSessionObservationRegistry {
     const source = this.#source;
     if (!source) return registration.ready.promise;
     try {
-      await source.observe(sessionId, observerId, this.#bindTarget(target));
+      await source.observe(
+        sessionId,
+        observerId,
+        this.#bindTarget(target),
+        messageAdmissions,
+      );
       if (
         this.#source === source &&
         this.#registrations.get(observerId) === registration

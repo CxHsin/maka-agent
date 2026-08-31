@@ -26,10 +26,15 @@ import type {
 import type { RuntimeEvent } from '@maka/core/runtime-event';
 import type { RuntimeEventStore } from '@maka/core/runtime-event-store';
 import type { StorageRef, ToolResultContent } from '@maka/core/events';
+import { parseAttachmentResourceRef } from '@maka/core/attachments';
 import { markPersisted } from '@maka/core/persisted-value';
 import type { StoredMessage } from '@maka/core/session';
 import { decodePersistedToolResultContent } from '@maka/core/tool-result-record-schema';
 import { isEmittedAgentRunEventType, isSessionInlineRun } from '@maka/core/agent-run';
+import {
+  decodeModelCallAttempt,
+  MODEL_CALL_ATTEMPT_EVENT_TYPE,
+} from '@maka/core/model-call-attempt';
 import { TOOL_RECOVERY_DECISION_FACT_KIND } from '@maka/core/tool-recovery-fact';
 import {
   buildHistoryCompactCheckpoint,
@@ -192,6 +197,12 @@ export function rewriteConversationCopyMessage(
   message: StoredMessage,
   references: ConversationCopyMessageReferenceMap,
 ): StoredMessage {
+  if (message.type === 'assistant' && references.mode === 'exact') {
+    return {
+      ...message,
+      text: rewriteAttachmentResourceRefs(message.text, references.artifactIds),
+    };
+  }
   if (message.type === 'user' && message.attachments) {
     return {
       ...message,
@@ -218,6 +229,17 @@ export function rewriteConversationCopyMessage(
     };
   }
   return message;
+}
+
+function rewriteAttachmentResourceRefs(
+  text: string,
+  artifactIds: ReadonlyMap<string, string>,
+): string {
+  return text.replace(/maka:\/\/runtime\/attachments\/[^\s)\]}>`'",;:!]+/g, (candidate) => {
+    const parsed = parseAttachmentResourceRef(candidate);
+    const artifactId = parsed ? artifactIds.get(parsed.artifactId) : undefined;
+    return artifactId ? `maka://runtime/attachments/${artifactId}` : candidate;
+  });
 }
 
 export async function prepareConversationRuntimeLedgerCopy(input: {
@@ -320,6 +342,7 @@ export async function cloneConversationRuntimeLedger(
     ),
   );
   const providerTraceIds = providerTraceIdMap(flattenedPlans, input.newId);
+  const logicalCallIds = logicalModelCallIdMap(flattenedPlans, input.newId);
   const operationIds = toolOperationIdMap(flattenedPlans, targetInvocationIds);
   const references: ConversationCopyReferenceMap = {
     ...input.referenceMap,
@@ -369,6 +392,7 @@ export async function cloneConversationRuntimeLedger(
         checkpointIds,
         operationalEventIds,
         providerTraceIds,
+        logicalCallIds,
       );
       return clonedEvent ? [clonedEvent] : [];
     });
@@ -629,6 +653,7 @@ function cloneAgentRunEvent(
   checkpointIds: Map<string, string>,
   operationalEventIds: ReadonlyMap<string, string>,
   providerTraceIds: ReadonlyMap<string, string>,
+  logicalCallIds: ReadonlyMap<string, string>,
 ): EmittedAgentRunEvent | null {
   if (event.type === 'event_corrupt') {
     throw new Error(`Cannot copy corrupt AgentRun event ${event.id}`);
@@ -648,6 +673,14 @@ function cloneAgentRunEvent(
       references,
       operationalEventIds,
       providerTraceIds,
+    );
+  } else if (event.type === MODEL_CALL_ATTEMPT_EVENT_TYPE) {
+    data = rewriteModelCallAttempt(
+      event,
+      { sessionId: ids.sessionId, runId: ids.runId, attemptId: ids.eventId },
+      references,
+      providerTraceIds,
+      logicalCallIds,
     );
   } else if (event.type === 'history_compact_checkpoint_recorded') {
     const sourceCheckpoint = event.data?.checkpoint;
@@ -760,6 +793,49 @@ function rewriteProviderRequestAttempt(
   };
 }
 
+function rewriteModelCallAttempt(
+  event: AgentRunEvent,
+  ids: {
+    readonly sessionId: string;
+    readonly runId: string;
+    readonly attemptId: string;
+  },
+  references: ConversationCopyReferenceMap,
+  providerTraceIds: ReadonlyMap<string, string>,
+  logicalCallIds: ReadonlyMap<string, string>,
+): Record<string, unknown> {
+  // A ModelCallAttempt is an accounting authority whose payload identity is its
+  // portable source of truth and must agree with the rewritten envelope. Leaving
+  // the source `sessionId`/`runId` in place makes the model-call projection
+  // reject the attempt as unreadable (its envelope now disagrees), and reusing
+  // the source `attemptId` — the ledger's global primary key — lets the copy
+  // overwrite the source session's own row. Rewrite the owned identity the same
+  // way the sibling provider-request rewriters do.
+  //
+  // Unlike those siblings, do NOT require `attempt.attemptId === event.id`. A
+  // well-formed writer emits them equal, but the pre-fix copy path had no
+  // rewriter for this event, so it rewrote the envelope id while leaving the
+  // nested payload at the source identity. Sessions copied before that fix carry
+  // attempts whose nested `attemptId` disagrees with their envelope; asserting
+  // the writer contract on the *source* would strand them — they could never be
+  // copied again. The rewrite below reassigns the identity wholesale, so a stale
+  // nested identity is repaired rather than trusted and the *output* still
+  // satisfies the `event.id === attemptId` contract. `decodeModelCallAttempt`
+  // still rejects a schema-invalid payload.
+  const attempt = decodeModelCallAttempt(event.data);
+  return {
+    ...attempt,
+    sessionId: ids.sessionId,
+    runId: ids.runId,
+    attemptId: ids.attemptId,
+    logicalCallId: requiredMappedId(logicalCallIds, attempt.logicalCallId, 'logical model call'),
+    traceId: requiredMappedId(providerTraceIds, attempt.traceId, 'provider trace'),
+    ...(attempt.captureArtifactId !== undefined
+      ? { captureArtifactId: rewriteOwnedArtifactId(attempt.captureArtifactId, references) }
+      : {}),
+  };
+}
+
 function providerRequestCapture(event: AgentRunEvent): Record<string, unknown> & {
   readonly traceId: string;
   readonly captureId: string;
@@ -838,12 +914,30 @@ function providerTraceIdMap(
     for (const event of operationalEvents) {
       if (
         event.type !== 'provider_request_captured' &&
-        event.type !== 'provider_request_attempt_recorded'
+        event.type !== 'provider_request_attempt_recorded' &&
+        event.type !== MODEL_CALL_ATTEMPT_EVENT_TYPE
       ) {
         continue;
       }
       const traceId = event.data?.traceId;
       if (typeof traceId === 'string' && !result.has(traceId)) result.set(traceId, newId());
+    }
+  }
+  return result;
+}
+
+function logicalModelCallIdMap(
+  plans: readonly { readonly operationalEvents: readonly AgentRunEvent[] }[],
+  newId: () => string,
+): Map<string, string> {
+  const result = new Map<string, string>();
+  for (const { operationalEvents } of plans) {
+    for (const event of operationalEvents) {
+      if (event.type !== MODEL_CALL_ATTEMPT_EVENT_TYPE) continue;
+      const logicalCallId = event.data?.logicalCallId;
+      if (typeof logicalCallId === 'string' && !result.has(logicalCallId)) {
+        result.set(logicalCallId, newId());
+      }
     }
   }
   return result;
@@ -995,13 +1089,20 @@ function rewriteRuntimeEventReferences(
   references: ConversationCopyReferenceMap,
 ): RuntimeEvent {
   const content =
-    event.content?.kind === 'text' && event.content.attachments
+    event.content?.kind === 'text'
       ? {
           ...event.content,
-          attachments: event.content.attachments.map((attachment) => ({
-            ...attachment,
-            ref: rewriteStorageRef(attachment.ref, references),
-          })),
+          ...(references.mode === 'exact'
+            ? { text: rewriteAttachmentResourceRefs(event.content.text, references.artifactIds) }
+            : {}),
+          ...(event.content.attachments
+            ? {
+                attachments: event.content.attachments.map((attachment) => ({
+                  ...attachment,
+                  ref: rewriteStorageRef(attachment.ref, references),
+                })),
+              }
+            : {}),
         }
       : event.content?.kind === 'function_response'
         ? {
@@ -1011,7 +1112,12 @@ function rewriteRuntimeEventReferences(
         : event.content;
   const refs = event.refs
     ? (() => {
-        const { operationId: _operationId, traceEventId: _traceEventId, ...preserved } = event.refs;
+        const {
+          operationId: _operationId,
+          parentOperationId: _parentOperationId,
+          traceEventId: _traceEventId,
+          ...preserved
+        } = event.refs;
         const traceEventId = event.refs.traceEventId
           ? references.agentRunEventIds.get(event.refs.traceEventId)
           : undefined;
@@ -1022,6 +1128,15 @@ function rewriteRuntimeEventReferences(
             ? {
                 operationId: rewriteOwnedId(
                   event.refs.operationId,
+                  references.operationIds,
+                  'tool operation',
+                ),
+              }
+            : {}),
+          ...(event.refs.parentOperationId
+            ? {
+                parentOperationId: rewriteOwnedId(
+                  event.refs.parentOperationId,
                   references.operationIds,
                   'tool operation',
                 ),
@@ -1395,8 +1510,20 @@ function rewriteStorageRef(
   ref: StorageRef,
   references: ConversationCopyArtifactReferenceMap,
 ): StorageRef {
+  if (ref.kind === 'session_context' && ref.sessionId === references.sourceSessionId) {
+    if (references.mode === 'preserve_external') return ref;
+    throw new Error('Conversation copy does not support Session context references yet');
+  }
   if (ref.kind !== 'session_file' || ref.sessionId !== references.sourceSessionId) return ref;
   if (references.mode === 'preserve_external') return ref;
+  const artifactId = references.artifactIds.get(ref.relativePath);
+  if (artifactId) {
+    return {
+      ...ref,
+      sessionId: references.targetSessionId,
+      relativePath: artifactId,
+    };
+  }
   const relativePath = references.relativePaths.get(ref.relativePath);
   if (!relativePath) {
     throw new Error(`Conversation copy is missing Session file ${ref.relativePath}`);

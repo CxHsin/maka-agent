@@ -88,6 +88,34 @@ describe('Runtime Host profile CLI', () => {
         expectedRootId: ROOT_ID,
       },
     );
+    assert.deepEqual(
+      parseRuntimeHostCommand([
+        'profile',
+        'set',
+        '--id',
+        'peer-lab',
+        '--name',
+        'Peer Lab',
+        '--peer-id',
+        '12D3KooWPeer',
+        '--peer-route',
+        '/ip4/192.0.2.10/udp/4001/quic-v1',
+        '--expected-root',
+        ROOT_ID,
+      ]),
+      {
+        kind: 'runtime-host-profile-set',
+        id: 'peer-lab',
+        name: 'Peer Lab',
+        transport: {
+          kind: 'libp2p-direct',
+          peerId: '12D3KooWPeer',
+          routeHints: ['/ip4/192.0.2.10/udp/4001/quic-v1'],
+          coordinationRelays: [],
+        },
+        expectedRootId: ROOT_ID,
+      },
+    );
     assert.equal(
       parseRuntimeHostCommand([
         'profile',
@@ -186,8 +214,8 @@ function createProfileCatalogCapture(): {
   catalog: RuntimeHostProfileCatalog;
   saved: Array<{ profile: RemoteRuntimeHostProfile; credential?: string }>;
 } {
-  const state = {
-    document: { schemaVersion: 1, profiles: [] } as RuntimeHostProfileDocument,
+  const state: { document: RuntimeHostProfileDocument } = {
+    document: { schemaVersion: 3, profiles: [] },
   };
   const saved: Array<{ profile: RemoteRuntimeHostProfile; credential?: string }> = [];
   const catalog: RuntimeHostProfileCatalog = {
@@ -197,7 +225,7 @@ function createProfileCatalogCapture(): {
     save: async (profile: RemoteRuntimeHostProfile, credential?: string) => {
       saved.push({ profile, credential });
       state.document = {
-        schemaVersion: 1,
+        schemaVersion: 3,
         profiles: [
           ...state.document.profiles.filter((candidate) => candidate.id !== profile.id),
           profile,

@@ -20,12 +20,13 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { ProjectRecord } from '@maka/core/project';
 import { formatCompactTimestamp } from '@maka/core/relative-time';
+import { runtimeHostProfileUsesHostWorkspace } from '@maka/runtime-host/profile-kind';
 import { Button, EmptyState, MoreMenu, useMountedRef, useToast, useUiLocale } from '@maka/ui';
 import { Archive, ICON_SIZE, Search } from '@maka/ui/icons';
 import { HStack, StackItem } from '@astryxdesign/core';
 import { List, ListItem } from '@astryxdesign/core/List';
 import { TextInput } from '@astryxdesign/core/TextInput';
-import type { SessionPurgeOutcome } from '../app-shell-session-row-actions.js';
+import type { SessionPurgeOutcome } from '../features/session-navigation';
 import type { DesktopSessionSummary } from '../../preload/bridge-contract.js';
 import { getSettingsSharedCopy } from '../locales/settings-shared-copy.js';
 import { getSettingsTasksCopy } from '../locales/settings-tasks-copy.js';
@@ -93,7 +94,7 @@ export function TasksSettingsPage(props: ArchivedTasksBridge) {
    */
   const projectLabelOf = useCallback(
     (session: DesktopSessionSummary): string | undefined => {
-      if (session.profileKind === 'remote') return session.profileName;
+      if (runtimeHostProfileUsesHostWorkspace(session.profileKind)) return session.profileName;
       return session.projectId ? projectNames.get(session.projectId) : copy.noProject;
     },
     [copy.noProject, projectNames],

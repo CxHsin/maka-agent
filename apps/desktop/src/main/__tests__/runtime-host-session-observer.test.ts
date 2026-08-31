@@ -511,7 +511,8 @@ test('fences transcript range failures to the current registration and Host sour
   });
   const request = (consumerId: string, generation: string) => ({
     consumerId,
-    generation,
+    sessionId: 'session-1',
+    hostEpoch: `host-${generation}`,
     anchorSequence: null,
     maxBytes: DESKTOP_TRANSCRIPT_FRAGMENT_MAX_BYTES,
   });
@@ -585,6 +586,8 @@ test('fences transcript range failures across same-source replica recovery', asy
           throughSequence: 1,
           rawBytes: 1,
           fragments: [],
+          rangeBoundarySequence: null,
+          protectedTurnSequence: null,
           nextCursor: 'older',
         };
         return runtimeHostSessionFixture({
@@ -593,6 +596,7 @@ test('fences transcript range failures across same-source replica recovery', asy
           events,
           transcriptBootstrap: {
             throughSequence: 1,
+            durableCoverage: 'complete',
             overlayMessageCount: 0,
             durable: bootstrap,
             overlay: { ...bootstrap, source: 'overlay', nextCursor: null },
@@ -620,9 +624,10 @@ test('fences transcript range failures across same-source replica recovery', asy
   const observations = new RuntimeHostSessionObservationRegistry();
   const batches: DesktopTranscriptBatch[] = [];
   const consumerId = 'consumer-replica-recovery';
-  const request = (generation: string) => ({
+  const request = (hostEpoch: string) => ({
     consumerId,
-    generation,
+    sessionId: 'session-1',
+    hostEpoch,
     anchorSequence: 1,
     maxBytes: DESKTOP_TRANSCRIPT_FRAGMENT_MAX_BYTES,
   });
@@ -644,7 +649,7 @@ test('fences transcript range failures across same-source replica recovery', asy
   };
   await observations.attach(observer);
   const opened = await observations.openTranscript('session-1', consumerId, target);
-  const staleLoad = observations.loadTranscriptBefore(request(opened.generation), target.id);
+  const staleLoad = observations.loadTranscriptBefore(request(opened.hostEpoch), target.id);
   await waitFor(() => staleRangeStarted);
 
   firstEvents.push({
@@ -658,9 +663,8 @@ test('fences transcript range failures across same-source replica recovery', asy
   staleRange.reject(new Error('stale replica rejected its range'));
   await assert.doesNotReject(staleLoad);
 
-  const generation = batches.at(-1)!.generation;
   await assert.rejects(
-    observations.loadTranscriptBefore(request(generation), target.id),
+    observations.loadTranscriptBefore(request(opened.hostEpoch), target.id),
     (error) => error === currentFailure,
   );
   await observations.close();
@@ -698,16 +702,16 @@ test('cancels a transcript consumer while its replica is still preparing', async
   await observer.close();
 });
 
-test('broadcasts transcript changes to every consumer and advances the read marker', async () => {
+test('broadcasts durable admission and transcript changes from the same message', async () => {
   const events = new AsyncFrameQueue();
   const markers: string[] = [];
   const message: StoredMessage = {
-    type: 'assistant',
-    id: 'assistant-1',
+    type: 'user',
+    id: 'ticket-1',
     turnId: 'turn-1',
     ts: 2,
-    text: 'Hi',
-    modelId: 'test-model',
+    text: 'Continue here',
+    steeringEventId: 'steering-event-1',
   };
   const observer = new RuntimeHostSessionObserver({
     client: {
@@ -724,6 +728,8 @@ test('broadcasts transcript changes to every consumer and advances the read mark
             throughSequence: 0,
             rawBytes: 1,
             fragments: [],
+            rangeBoundarySequence: null,
+            protectedTurnSequence: null,
             nextCursor: null,
           }),
           decodeTranscriptPage: async () => ({
@@ -741,6 +747,8 @@ test('broadcasts transcript changes to every consumer and advances the read mark
     },
     emitSessionsChanged() {},
   });
+  const eventConsumer = eventTarget(21);
+  await observer.observe('session-1', 'observer-1', eventConsumer, true);
   const transcriptBatches: DesktopTranscriptBatch[][] = [[], []];
   for (const [index, batches] of transcriptBatches.entries()) {
     const consumerId = `consumer-${index}`;
@@ -775,8 +783,14 @@ test('broadcasts transcript changes to every consumer and advances the read mark
     markers.length === 1 && transcriptBatches.every((batches) => batches.length > 0),
   );
 
-  assert.deepEqual(markers, ['assistant-1']);
+  assert.deepEqual(markers, ['ticket-1']);
   assert.deepEqual(transcriptBatches[1], transcriptBatches[0]);
+  assert.deepEqual(
+    eventConsumer.events
+      .filter((event) => event.type === 'message_admission')
+      .map((event) => ({ turnId: event.turnId, messageId: event.messageId })),
+    [{ turnId: 'turn-1', messageId: 'ticket-1' }],
+  );
   await observer.close();
 });
 
@@ -853,7 +867,7 @@ test('keeps a bounded transcript batch window in flight until the renderer ackno
   await observer.close();
 });
 
-test('finishes transcript open against a replacement that arrives while reset delivery waits', async () => {
+test('finishes transcript open and replays a stale range request after replacement', async () => {
   const firstEvents = new AsyncFrameQueue();
   const secondEvents = new AsyncFrameQueue();
   const message: StoredMessage = {
@@ -865,6 +879,8 @@ test('finishes transcript open against a replacement that arrives while reset de
     modelId: 'test-model',
   };
   let opens = 0;
+  let rangeLoads = 0;
+  const requestedAnchors: Array<number | null> = [];
   const observer = new RuntimeHostSessionObserver({
     client: {
       openSession: async () => {
@@ -874,6 +890,56 @@ test('finishes transcript open against a replacement that arrives while reset de
           snapshot: continuitySnapshot(),
           transcript: Promise.resolve([message]),
           events,
+          transcriptBootstrap: {
+            throughSequence: 0,
+            durableCoverage: 'complete',
+            overlayMessageCount: 0,
+            durable: {
+              kind: 'page',
+              sessionId: 'session-1',
+              source: 'durable',
+              direction: 'older',
+              throughSequence: 0,
+              rawBytes: 1,
+              fragments: [],
+              rangeBoundarySequence: null,
+              protectedTurnSequence: null,
+              nextCursor: 'older',
+            },
+            overlay: {
+              kind: 'page',
+              sessionId: 'session-1',
+              source: 'overlay',
+              direction: 'older',
+              throughSequence: null,
+              rawBytes: 0,
+              fragments: [],
+              rangeBoundarySequence: null,
+              protectedTurnSequence: null,
+              nextCursor: null,
+            },
+          },
+          loadTranscriptOverlay: async () => [],
+          decodeTranscriptPage: async (page) => ({
+            messages: page.rawBytes === 1 ? [{ identity: 0, message }] : [],
+            nextCursor: page.nextCursor,
+          }),
+          loadTranscriptPage: async (input) => {
+            rangeLoads += 1;
+            requestedAnchors.push(input.anchorSequence);
+            return {
+              kind: 'page',
+              sessionId: 'session-1',
+              source: input.source,
+              direction: input.direction,
+              throughSequence: input.throughSequence,
+              rawBytes: 0,
+              fragments: [],
+              rangeBoundarySequence: null,
+              protectedTurnSequence: null,
+              nextCursor: null,
+            };
+          },
           async close() {
             events.end();
           },
@@ -883,10 +949,21 @@ test('finishes transcript open against a replacement that arrives while reset de
     emitSessionsChanged() {},
   });
   const batches: DesktopTranscriptBatch[] = [];
+  let autoAcknowledge = false;
   const opening = observer.openTranscript('session-1', 'consumer-recovery', {
     id: 22,
     send(_channel, batch) {
       batches.push(batch);
+      if (autoAcknowledge) {
+        queueMicrotask(() =>
+          observer.acknowledgeTranscript(
+            'consumer-recovery',
+            batch.generation,
+            batch.deliverySequence,
+            22,
+          ),
+        );
+      }
     },
     once() {},
     off() {},
@@ -897,6 +974,7 @@ test('finishes transcript open against a replacement that arrives while reset de
   );
 
   await waitFor(() => batches.length === 4);
+  const staleGeneration = batches[0]!.generation;
   firstEvents.push({
     kind: 'subscription.closed',
     hostEpoch: 'host-1',
@@ -929,6 +1007,58 @@ test('finishes transcript open against a replacement that arrives while reset de
   const opened = await result;
   assert.equal(opened.error, undefined);
   assert.equal(opened.value?.generation, batches.at(-1)?.generation);
+  assert.notEqual(opened.value?.generation, staleGeneration);
+  rangeLoads = 0;
+  requestedAnchors.length = 0;
+  autoAcknowledge = true;
+  // The renderer dispatched this range request before the replacement replica
+  // was installed; the same Session and Host epoch continue the read against
+  // the current replica, and the requested slice is what the replica loads.
+  await assert.doesNotReject(() =>
+    observer.loadTranscriptBefore(
+      {
+        consumerId: 'consumer-recovery',
+        sessionId: 'session-1',
+        hostEpoch: 'host-1',
+        anchorSequence: 0,
+        maxBytes: DESKTOP_TRANSCRIPT_FRAGMENT_MAX_BYTES,
+      },
+      22,
+    ),
+  );
+  assert.equal(rangeLoads, 1);
+  assert.deepEqual(requestedAnchors, [0]);
+  // Durable sequence identity is Session- and Host-epoch-scoped: a request
+  // for a different Session or Host epoch must reject instead of silently
+  // reading a different slice of the transcript.
+  await assert.rejects(
+    () =>
+      observer.loadTranscriptBefore(
+        {
+          consumerId: 'consumer-recovery',
+          sessionId: 'session-1',
+          hostEpoch: 'other-host',
+          anchorSequence: 0,
+          maxBytes: DESKTOP_TRANSCRIPT_FRAGMENT_MAX_BYTES,
+        },
+        22,
+      ),
+    /Desktop transcript host epoch changed/,
+  );
+  await assert.rejects(
+    () =>
+      observer.loadTranscriptBefore(
+        {
+          consumerId: 'consumer-recovery',
+          sessionId: 'other-session',
+          hostEpoch: 'host-1',
+          anchorSequence: 0,
+          maxBytes: DESKTOP_TRANSCRIPT_FRAGMENT_MAX_BYTES,
+        },
+        22,
+      ),
+    /Desktop transcript consumer belongs to another session/,
+  );
   await observer.close();
 });
 
@@ -950,6 +1080,8 @@ test('coalesces transcript changes into one bounded delta while renderer deliver
             throughSequence: input.throughSequence,
             rawBytes: 1,
             fragments: [],
+            rangeBoundarySequence: null,
+            protectedTurnSequence: null,
             nextCursor: null,
           }),
           decodeTranscriptPage: async (page) => {
@@ -1050,6 +1182,8 @@ test('does not let one backpressured transcript consumer block another', async (
             throughSequence: input.throughSequence,
             rawBytes: 1,
             fragments: [],
+            rangeBoundarySequence: null,
+            protectedTurnSequence: null,
             nextCursor: null,
           }),
           decodeTranscriptPage: async (page) => {
@@ -1155,6 +1289,8 @@ test('keeps a transcript consumer available after a delivery fails', async () =>
             throughSequence: input.throughSequence,
             rawBytes: 1,
             fragments: [],
+            rangeBoundarySequence: null,
+            protectedTurnSequence: null,
             nextCursor: null,
           }),
           decodeTranscriptPage: async (page) => ({
@@ -1219,7 +1355,8 @@ test('keeps a transcript consumer available after a delivery fails', async () =>
     observer.loadTranscriptAround(
       {
         consumerId,
-        generation: opened.generation,
+        sessionId: opened.sessionId,
+        hostEpoch: opened.hostEpoch,
         anchorSequence: 0,
         maxBytes: DESKTOP_TRANSCRIPT_FRAGMENT_MAX_BYTES,
       },
@@ -1510,9 +1647,10 @@ test("abandons a watched Turn when the initial Host subscription fails", async (
   await observer.close();
 });
 
-test("abandons a watched Turn when the Session is removed", async () => {
+test("abandons a watched Turn and removes it from the catalog when Guest access ends", async () => {
   const events = new AsyncFrameQueue();
   const finishedTurns: Array<[string, "completed" | "abandoned"]> = [];
+  const sessionChanges: string[] = [];
   let closeCount = 0;
   const observer = new RuntimeHostSessionObserver({
     client: {
@@ -1527,7 +1665,9 @@ test("abandons a watched Turn when the Session is removed", async () => {
         },
       }),
     },
-    emitSessionsChanged() {},
+    emitSessionsChanged(reason) {
+      sessionChanges.push(reason);
+    },
     onWatchedTurnFinished: (sessionId, outcome) => {
       finishedTurns.push([sessionId, outcome]);
     },
@@ -1539,11 +1679,12 @@ test("abandons a watched Turn when the Session is removed", async () => {
     hostEpoch: "host-1",
     subscriptionId: "subscription-1",
     sequence: 1,
-    reason: "session_removed",
+    reason: "access_revoked",
   });
 
   await waitFor(() => closeCount === 1);
   assert.deepEqual(finishedTurns, [["session-1", "abandoned"]]);
+  assert.deepEqual(sessionChanges, ["deleted"]);
   await observer.close();
 });
 
@@ -1656,6 +1797,8 @@ test("recovers when transcript paging loses the active subscription", async () =
               throughSequence: 0,
               rawBytes: 0,
               fragments: [],
+              rangeBoundarySequence: null,
+              protectedTurnSequence: null,
               nextCursor: null,
             };
           },

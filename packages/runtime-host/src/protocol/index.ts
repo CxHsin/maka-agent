@@ -212,6 +212,8 @@ export const RUNTIME_HOST_COMPATIBILITY_EPOCH = 112 as const;
 // 79: Every `turn.message.submit` disposition carries the exact Skill
 // invocation outcome. Durable queued replays may omit the previous Host
 // Epoch's transient queue revision; older strict peers reject either shape.
+// 79: Client Capability manifests accept draft-07 tuple schemas through the
+// `additionalItems` keyword. Older peers reject the expanded keyword allowlist.
 // 78: OAuth login targets explicit create/existing Connection entities and
 // returns their canonical identity. Older peers reject both closed wire shapes.
 // 77: LLM and tool usage-log projections carry an optional `sessionTitle` (the

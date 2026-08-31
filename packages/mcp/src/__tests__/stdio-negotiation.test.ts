@@ -112,7 +112,10 @@ describe('McpClientManager stdio protocol negotiation', { concurrency: false }, 
     ]);
 
     await manager.close();
-    await waitForProcessExit(actualPid);
+    await waitForEvents(fixture.log, (current) =>
+      current.some((event) => event.event === 'exit' && event.pid === actualPid),
+    );
+    assert.equal(isPidAlive(actualPid), false);
   });
 
   test('an exact modern pin connects to a modern-only server without downgrade', async () => {
@@ -140,9 +143,11 @@ describe('McpClientManager stdio protocol negotiation', { concurrency: false }, 
     assert.equal(manager.status('fixture')?.state, 'error');
     assert.equal(manager.status('fixture')?.negotiatedProtocol, undefined);
     assert.deepEqual(manager.toolSnapshot().tools, []);
-    const events = await waitForEvents(fixture.log, (current) => uniquePids(current).length === 1);
+    const events = await waitForEvents(fixture.log, (current) =>
+      current.some((event) => event.event === 'exit'),
+    );
     assert.equal(uniquePids(events).length, 1);
-    await waitForProcessExit(uniquePids(events)[0]!);
+    assert.equal(isPidAlive(uniquePids(events)[0]!), false);
   });
 
   test('a pre-aborted auto connect starts no child', async () => {
@@ -175,9 +180,10 @@ describe('McpClientManager stdio protocol negotiation', { concurrency: false }, 
     assert.equal(manager.cancelConnect('fixture'), true);
     await sync;
 
-    const events = await waitForEvents(fixture.log, (current) => uniquePids(current).length === 1);
+    const events = await waitForEvents(fixture.log, (current) =>
+      current.some((event) => event.event === 'exit'),
+    );
     assert.equal(uniquePids(events).length, 1);
-    await waitForProcessExit(uniquePids(events)[0]!);
     assert.equal(manager.status('fixture')?.state, 'disconnected');
     assert.equal(manager.status('fixture')?.negotiatedProtocol, undefined);
     assert.deepEqual(manager.toolSnapshot().tools, []);
@@ -192,8 +198,6 @@ type StdioFixtureEvent = {
   argv?: string[];
   cwd?: string;
   fixtureEnv?: string | null;
-  predecessorPid?: number | null;
-  predecessorAlive?: boolean | null;
   era?: 'legacy' | 'modern';
 };
 
@@ -270,27 +274,13 @@ function assertProbeBeforeActual(events: StdioFixtureEvent[]): [number, number] 
   const pids = uniquePids(events);
   assert.equal(pids.length, 2, JSON.stringify(events));
   const [probePid, actualPid] = pids as [number, number];
-  const starts = events.filter((event) => event.event === 'start');
-  const actualStart = starts[1];
-  assert.equal(actualStart?.pid, actualPid, JSON.stringify(events));
-  assert.equal(actualStart?.predecessorPid, probePid, JSON.stringify(events));
-  assert.equal(actualStart?.predecessorAlive, false, JSON.stringify(events));
   const probeExit = events.findIndex((event) => event.event === 'exit' && event.pid === probePid);
-  const actualStartIndex = events.findIndex(
+  const actualStart = events.findIndex(
     (event) => event.event === 'start' && event.pid === actualPid,
   );
-  // POSIX fixtures also record their exit hook; Windows forced termination may not.
-  if (probeExit >= 0) assert.ok(probeExit < actualStartIndex, JSON.stringify(events));
+  assert.ok(probeExit >= 0, JSON.stringify(events));
+  assert.ok(probeExit < actualStart, JSON.stringify(events));
   return [probePid, actualPid];
-}
-
-async function waitForProcessExit(pid: number, timeoutMs = 5_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isPidAlive(pid)) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.fail(`timed out waiting for process ${pid} to exit`);
 }
 
 function isPidAlive(pid: number): boolean {

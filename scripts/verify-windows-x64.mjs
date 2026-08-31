@@ -27,7 +27,7 @@ import { assertPackagedUpdateConfiguration } from './desktop-update-contract.mjs
 import {
   resolveDesktopBuildVersion,
   resolveDesktopReleaseTarget,
-  resolveRuntimeHostSetupPackage as resolveBuildRuntimeHostSetupPackage,
+  resolveRuntimeHostSetupPackage,
 } from './desktop-nightly.mjs';
 import {
   assertMissing,
@@ -97,16 +97,6 @@ export async function verifyPackagedWindowsSandboxLifecycle(
   }
 }
 
-export function resolveRuntimeHostSetupPackage({
-  artifactContract,
-  productRuntimeHostSetupPackage,
-  expectedRuntimeHostSetupPackage,
-}) {
-  return artifactContract === 'current'
-    ? (expectedRuntimeHostSetupPackage ?? productRuntimeHostSetupPackage)
-    : undefined;
-}
-
 // The Windows build is unsigned, so the only architecture evidence in the
 // artifact is the PE header of the executable itself.
 export async function readPeMachine(path) {
@@ -139,7 +129,6 @@ export async function verifyPackagedWindowsApp(
     smokeRenderer = smokePackagedRenderer,
     workingDirectory = appDirectory,
     expectedVersion,
-    expectedRuntimeHostSetupPackage,
     artifactContract = 'current',
     environment = process.env,
     // Which channel the packaged client points at is the descriptor's to decide,
@@ -154,9 +143,6 @@ export async function verifyPackagedWindowsApp(
   }
   const requiresCurrentContract = artifactContract === 'current';
   const product = await readProductManifestIdentity();
-  const runtimeHostSetupPackage = requiresCurrentContract
-    ? (expectedRuntimeHostSetupPackage ?? resolveBuildRuntimeHostSetupPackage(product.version, environment))
-    : undefined;
   const resources = join(appDirectory, 'resources');
   const executable = join(appDirectory, executableName);
   const appAsar = join(resources, 'app.asar');
@@ -276,7 +262,9 @@ export async function verifyPackagedWindowsApp(
   const ptyProbe = makePtyProbe(
     process.env.ComSpec || 'cmd.exe',
     ['/c', 'echo', 'maka-node-pty-ok'],
-    runtimeHostSetupPackage,
+    requiresCurrentContract
+      ? resolveRuntimeHostSetupPackage(product.version, environment)
+      : undefined,
   );
   await run(executable, ['-e', ptyProbe, join(appAsar, 'package.json')], {
     env: {

@@ -218,6 +218,7 @@ test('keeps the Desktop candidate usable when an optional MCP tool has an invali
       onError: (error) => diagnostics.push(error),
       createSessionCopyCleanup: () => ({
         ownCreation: (_creation, operation) => operation(),
+        rejectCreation: async () => undefined,
         cleanup: async () => undefined,
         schedule: async () => undefined,
         abandonOwner: async () => undefined,

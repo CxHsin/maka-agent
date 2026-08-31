@@ -83,8 +83,7 @@ export async function packageWindowsAutoupdateNext({
   // `extraMetadata` only changes the packaged app manifest, so temporarily
   // update every source manifest for the build and restore them even when
   // electron-builder fails.
-  const [originalRootManifest, originalDesktopManifest, originalCliManifest] =
-    await Promise.all([
+  const [originalRootManifest, originalDesktopManifest, originalCliManifest] = await Promise.all([
     readFile(rootManifestPath),
     readFile(desktopManifestPath),
     readFile(cliManifestPath),

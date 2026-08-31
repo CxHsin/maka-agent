@@ -37,12 +37,7 @@ export interface ExternalSourceCatalogEntry {
   transcriptPath: string;
 }
 
-export interface ExternalSourceCatalogQuery extends ExternalSessionQuery {
-  /** Optional handoff retention window. Full import leaves this unset. */
-  maxAgeMs?: number;
-  nowMs?: number;
-  limit?: number;
-}
+export type ExternalSourceCatalogQuery = ExternalSessionQuery;
 
 export function matchesSourceCatalogQuery(
   entry: ExternalSourceCatalogEntry,
@@ -62,13 +57,6 @@ export function matchesSourceCatalogQuery(
     )
   )
     return false;
-  if (
-    query.maxAgeMs !== undefined &&
-    query.nowMs !== undefined &&
-    query.nowMs - entry.updatedAtMs > query.maxAgeMs
-  ) {
-    return false;
-  }
   return true;
 }
 

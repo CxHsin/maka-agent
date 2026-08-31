@@ -482,7 +482,7 @@ describe('CodexSessionAdapter', () => {
     });
   });
 
-  test('pages past invalid database rows before applying the catalog limit', async () => {
+  test('bounds invalid database rows before resolving rollout paths', async () => {
     await withCodexHome(async (codexHome) => {
       const targetId = 'codex-paged-target';
       const targetPath = await seedMinimalRollout(
@@ -519,7 +519,7 @@ describe('CodexSessionAdapter', () => {
       const adapter = new CodexSessionAdapter({ codexHome });
       assert.deepEqual(
         (await adapter.listCatalogEntries({ limit: 1 })).map((entry) => entry.id),
-        [targetId],
+        [],
       );
       const imported = await adapter.readSession(targetId);
       assert.equal(imported.sourceSessionId, targetId);

@@ -52,7 +52,7 @@ export const CODEX_SESSION_ADAPTER_ID = 'codex';
 export const CODEX_ROLLOUT_MAX_BYTES = 64 * 1024 * 1024;
 
 const CODEX_ROLLOUT_HEAD_BYTES = 512 * 1024;
-const CODEX_CATALOG_PAGE_SIZE = FOREIGN_SESSION_SCAN_MAX_SESSIONS * 2;
+const CODEX_CATALOG_CANDIDATE_LIMIT = FOREIGN_SESSION_SCAN_MAX_SESSIONS;
 const CODEX_SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const CODEX_UNSAFE_PATH_CHARS =
   /[\u0000-\u001F\u007F\u0080-\u009F\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
@@ -233,22 +233,31 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
     dbPath: string,
     query: ExternalSourceCatalogQuery,
   ): Promise<CodexCatalogEntry[] | undefined> {
-    const pageSize = CODEX_CATALOG_PAGE_SIZE;
+    const cursor = query.cursor ?? 0;
     const entries: CodexCatalogEntry[] = [];
-    let offset = 0;
-    for (;;) {
-      const rows = await readCodexThreadRows(dbPath, query, { limit: pageSize, offset });
-      if (rows === undefined) return undefined;
-      const pageEntries = await Promise.all(rows.map((row) => this.entryFromRow(row)));
-      for (const entry of pageEntries) {
-        if (entry && matchesSourceCatalogQuery(entry, query)) entries.push(entry);
-      }
-      if (query.limit !== undefined && entries.length >= query.limit) break;
-      if (rows.length < pageSize) break;
-      offset += rows.length;
+    let matched = 0;
+    const rows = await readCodexThreadRows(dbPath, query, {
+      limit: CODEX_CATALOG_CANDIDATE_LIMIT,
+    });
+    if (rows === undefined) return undefined;
+    const candidates: CodexCatalogEntry[] = [];
+    for (const row of rows) {
+      const entry = await this.entryFromRow(row, false);
+      if (entry && matchesSourceCatalogQuery(entry, query)) candidates.push(entry);
     }
-    entries.sort(compareCatalogEntries);
-    return query.limit === undefined ? entries : entries.slice(0, query.limit);
+    candidates.sort(compareCatalogEntries);
+    for (const entry of candidates) {
+      const transcriptPath = await this.resolveRolloutPath(entry.transcriptPath, entry.id);
+      if (!transcriptPath) continue;
+      if (matched < cursor) {
+        matched += 1;
+        continue;
+      }
+      entries.push({ ...entry, transcriptPath });
+      matched += 1;
+      if (query.limit !== undefined && entries.length >= query.limit) break;
+    }
+    return entries;
   }
 
   private async findRolloutEntry(sessionId: string): Promise<CodexCatalogEntry | undefined> {
@@ -270,12 +279,17 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
     return undefined;
   }
 
-  private async entryFromRow(row: CodexThreadRow): Promise<CodexCatalogEntry | undefined> {
+  private async entryFromRow(
+    row: CodexThreadRow,
+    resolvePath = true,
+  ): Promise<CodexCatalogEntry | undefined> {
     if (!isSafeCodexSessionId(row.id)) return undefined;
     if (typeof row.rollout_path !== 'string' || row.rollout_path.length === 0) return undefined;
     if (!isRootCodexSource(row.source)) return undefined;
 
-    const rolloutPath = await this.resolveRolloutPath(row.rollout_path, row.id);
+    const rolloutPath = resolvePath
+      ? await this.resolveRolloutPath(row.rollout_path, row.id)
+      : row.rollout_path;
     if (!rolloutPath) return undefined;
     const name =
       firstNonEmptyTitle(row.name, row.title, row.preview, row.first_user_message) ?? row.id;
@@ -298,28 +312,52 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
     query: ExternalSourceCatalogQuery,
   ): Promise<CodexCatalogEntry[]> {
     if (query.limit !== undefined && query.limit <= 0) return [];
-    const candidates = [
-      ...(await walkRolloutFiles(join(this.codexHome, 'sessions'), false)),
-      ...(query.includeArchived
-        ? await walkRolloutFiles(join(this.codexHome, 'archived_sessions'), true)
-        : []),
-    ].sort(compareRolloutCandidates);
-    const entries: CodexCatalogEntry[] = [];
-    const seenIds = new Set<string>();
+    const activeCandidates = await walkRolloutFiles(
+      join(this.codexHome, 'sessions'),
+      false,
+      undefined,
+      {
+        maxCandidates: CODEX_CATALOG_CANDIDATE_LIMIT,
+        maxAgeMs: query.maxAgeMs,
+        nowMs: query.nowMs,
+      },
+    );
+    const archivedCandidates =
+      query.includeArchived && activeCandidates.length < CODEX_CATALOG_CANDIDATE_LIMIT
+        ? await walkRolloutFiles(join(this.codexHome, 'archived_sessions'), true, undefined, {
+            maxCandidates: CODEX_CATALOG_CANDIDATE_LIMIT - activeCandidates.length,
+            maxAgeMs: query.maxAgeMs,
+            nowMs: query.nowMs,
+          })
+        : [];
+    const candidates = [...activeCandidates, ...archivedCandidates].sort(compareRolloutCandidates);
+    const matchedCandidates: CodexCatalogEntry[] = [];
     for (const candidate of candidates) {
       const head = await readUtf8Prefix(candidate.path, CODEX_ROLLOUT_HEAD_BYTES).catch(
         () => undefined,
       );
       if (head === undefined) continue;
       const entry = catalogEntryFromRolloutHead(head, candidate);
-      if (!entry || !matchesSourceCatalogQuery(entry, query)) continue;
-      if (seenIds.has(entry.id)) continue;
-      seenIds.add(entry.id);
-      const transcriptPath = await this.resolveRolloutPath(entry.transcriptPath, entry.id);
-      if (transcriptPath) entries.push({ ...entry, transcriptPath });
+      if (entry && matchesSourceCatalogQuery(entry, query)) matchedCandidates.push(entry);
     }
-    entries.sort(compareCatalogEntries);
-    return query.limit === undefined ? entries : entries.slice(0, query.limit);
+    matchedCandidates.sort(compareCatalogEntries);
+    const entries: CodexCatalogEntry[] = [];
+    const seenIds = new Set<string>();
+    let matched = 0;
+    const cursor = query.cursor ?? 0;
+    for (const entry of matchedCandidates) {
+      const transcriptPath = await this.resolveRolloutPath(entry.transcriptPath, entry.id);
+      if (!transcriptPath || seenIds.has(entry.id)) continue;
+      seenIds.add(entry.id);
+      if (matched < cursor) {
+        matched += 1;
+        continue;
+      }
+      entries.push({ ...entry, transcriptPath });
+      matched += 1;
+      if (query.limit !== undefined && entries.length >= query.limit) break;
+    }
+    return entries;
   }
 
   private async resolveRolloutPath(
@@ -345,10 +383,15 @@ interface RolloutCandidate {
   archived: boolean;
 }
 
+interface RolloutWalkOptions {
+  maxCandidates?: number;
+  maxAgeMs?: number;
+  nowMs?: number;
+}
+
 interface CodexThreadReadOptions {
   exactId?: string;
   limit?: number;
-  offset?: number;
 }
 
 function convertCodexRollout(
@@ -791,15 +834,19 @@ async function readCodexThreadRows(
         );
         params.push(...CODEX_ROOT_SOURCE_SQL_VALUES);
       }
-      // No cwd clause. `cwd IN (...)` enumerated spelling variants of the
-      // query, but SQLite compares them exactly: a row stored `C:\\Repo\\App`
-      // was discarded before `matchesQuery` could see that `c:/repo/app` names
-      // the same project. A prefilter that cannot express the matcher's own
-      // equivalence is not an optimization, it is a second, weaker rule — so
-      // the shared matcher below is the only authority on which project a row
-      // belongs to. The archived clause stays: that one is an exact boolean
-      // and agrees with the matcher by construction.
-      //
+      if (query.cwd !== undefined && columns.has('cwd')) {
+        const variants = codexCwdSqlVariants(query.cwd);
+        const placeholders = variants.map(() => '?').join(', ');
+        const clause = /^[A-Za-z]:[\\/]/u.test(query.cwd)
+          ? `(cwd IN (${placeholders}) OR LOWER(REPLACE(cwd, char(92), '/')) IN (${placeholders}))`
+          : `cwd IN (${placeholders})`;
+        where.push(clause);
+        params.push(...variants);
+        if (/^[A-Za-z]:[\\/]/u.test(query.cwd)) params.push(...variants);
+      }
+      // Keep the coarse cwd prefilter in SQL so unrelated newer rows cannot
+      // consume the bounded candidate window. The shared matcher remains the
+      // authority for separator, case, and trailing-slash equivalence.
       const orderColumn = columns.has('updated_at_ms')
         ? 'updated_at_ms'
         : columns.has('updated_at')
@@ -814,12 +861,12 @@ async function readCodexThreadRows(
         (where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '') +
         ` ORDER BY ${orderColumn} DESC` +
         (options?.limit !== undefined
-          ? ' LIMIT ? OFFSET ?'
+          ? ' LIMIT ?'
           : options?.exactId !== undefined
             ? ' LIMIT 1'
             : '');
       if (options?.limit !== undefined) {
-        params.push(options.limit, options.offset ?? 0);
+        params.push(options.limit);
       }
       return db.prepare(sql).all(...params) as CodexThreadRow[];
     } finally {
@@ -852,6 +899,7 @@ async function walkRolloutFiles(
   root: string,
   archived: boolean,
   expectedId?: string,
+  options: RolloutWalkOptions = {},
 ): Promise<RolloutCandidate[]> {
   const files: RolloutCandidate[] = [];
   const visit = async (directory: string): Promise<void> => {
@@ -861,7 +909,11 @@ async function walkRolloutFiles(
     } catch {
       return;
     }
-    for (const entry of entries) {
+    // Apply the hard cap before opening rollout contents. The filesystem
+    // fallback cannot globally order by mtime without an unbounded metadata
+    // scan, so directory/name order defines this bounded candidate window.
+    for (const entry of entries.sort((left, right) => right.name.localeCompare(left.name))) {
+      if (options.maxCandidates !== undefined && files.length >= options.maxCandidates) return;
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {
         await visit(path);
@@ -872,7 +924,15 @@ async function walkRolloutFiles(
         (expectedId === undefined || rolloutFilenameMatchesId(entry.name, expectedId))
       ) {
         try {
-          files.push({ path, mtimeMs: (await stat(path)).mtimeMs, archived });
+          const mtimeMs = (await stat(path)).mtimeMs;
+          if (
+            options.maxAgeMs !== undefined &&
+            options.nowMs !== undefined &&
+            options.nowMs - mtimeMs > options.maxAgeMs
+          ) {
+            continue;
+          }
+          files.push({ path, mtimeMs, archived });
         } catch {
           // The external store may change while it is being scanned.
         }
@@ -960,6 +1020,28 @@ function compareCatalogEntries(a: CodexCatalogEntry, b: CodexCatalogEntry): numb
 
 function compareRolloutCandidates(a: RolloutCandidate, b: RolloutCandidate): number {
   return b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path);
+}
+
+function codexCwdSqlVariants(cwd: string): string[] {
+  const variants = new Set<string>();
+  for (const candidate of [cwd, cwd.replaceAll('\\', '/')]) {
+    for (const separatorForm of [
+      candidate,
+      candidate.replaceAll('\\', '/'),
+      candidate.replaceAll('/', '\\'),
+    ]) {
+      const withoutTrailingSeparator = separatorForm.replace(/[\\/]+$/u, '') || separatorForm;
+      variants.add(withoutTrailingSeparator);
+      variants.add(`${withoutTrailingSeparator}/`);
+      variants.add(`${withoutTrailingSeparator}\\`);
+      if (/^[A-Za-z]:[\\/]/u.test(withoutTrailingSeparator)) {
+        variants.add(withoutTrailingSeparator.toLowerCase());
+        variants.add(`${withoutTrailingSeparator.toLowerCase()}/`);
+        variants.add(`${withoutTrailingSeparator.toLowerCase()}\\`);
+      }
+    }
+  }
+  return [...variants];
 }
 
 function stateGeneration(path: string): number {

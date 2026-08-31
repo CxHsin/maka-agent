@@ -18,7 +18,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -377,6 +377,52 @@ describe('ClaudeCodeSessionAdapter', () => {
 
       await rm(join(home, 'projects', CWD.replace(/\//gu, '-'), `${id}.jsonl`));
       assert.deepEqual(await adapter.listSessions(), []);
+    });
+  });
+
+  test('prunes deleted transcript cache entries through catalog listing', async () => {
+    await withClaudeHome(async (home) => {
+      const id = 'aaaaaaaa-0000-4000-8000-000000000034';
+      const path = join(home, 'projects', CWD.replace(/\//gu, '-'), `${id}.jsonl`);
+      await seed(home, id, [
+        userRecord('catalog cache'),
+        assistantRecord({ text: 'ok', stopReason: 'end_turn' }),
+      ]);
+      const adapter = new ClaudeCodeSessionAdapter({ claudeHome: home });
+
+      assert.equal((await adapter.listCatalogEntries()).length, 1);
+      const originalTimes = await stat(path);
+      await rm(path);
+      assert.deepEqual(await adapter.listCatalogEntries(), []);
+
+      // Recreate the same path with the same size and timestamps. A catalog
+      // listing must have pruned the deleted cache entry; otherwise the old
+      // summary would be served as if the new transcript were unchanged.
+      await seed(home, id, [
+        userRecord('catalog title'),
+        assistantRecord({ text: 'ok', stopReason: 'end_turn' }),
+      ]);
+      await utimes(path, originalTimes.atime, originalTimes.mtime);
+      assert.equal((await adapter.listCatalogEntries())[0]?.title, 'catalog title');
+    });
+  });
+
+  test('pages bounded catalog results at the source', async () => {
+    await withClaudeHome(async (home) => {
+      for (let index = 0; index < 20; index += 1) {
+        const id = `aaaaaaaa-0000-4000-8000-${String(100 + index).padStart(12, '0')}`;
+        await seed(home, id, [
+          userRecord(`session ${index}`),
+          assistantRecord({ text: 'ok', stopReason: 'end_turn' }),
+        ]);
+      }
+      const adapter = new ClaudeCodeSessionAdapter({ claudeHome: home });
+      const first = await adapter.listSessions({ limit: 3 });
+      const second = await adapter.listSessions({ cursor: 3, limit: 3 });
+
+      assert.equal(first.length, 3);
+      assert.equal(second.length, 3);
+      assert.deepEqual(new Set([...first, ...second].map((session) => session.id)).size, 6);
     });
   });
 

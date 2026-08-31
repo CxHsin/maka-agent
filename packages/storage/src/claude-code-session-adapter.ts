@@ -35,6 +35,7 @@ import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
 import {
   FOREIGN_SESSION_DIGEST_MAX_READ_BYTES,
+  FOREIGN_SESSION_SCAN_MAX_SESSIONS,
   claudeAssistantText,
   claudeToolFilePaths,
   claudeUserAuthoredText,
@@ -61,7 +62,6 @@ import {
   type TranscriptRecord,
 } from './claude-code-transcript-lineage.js';
 import {
-  matchesSourceCatalogQuery,
   readUtf8Tail,
   type ExternalSourceCatalogEntry,
   type ExternalSourceCatalogQuery,
@@ -101,7 +101,16 @@ interface ClaudeCodeCatalogEntry extends ExternalSourceCatalogEntry {
 interface ClaudeCodeSummary extends Omit<ExternalSessionSummary, 'updatedAt'> {
   readonly updatedAt: number;
   readonly gitBranch?: string;
+  readonly transcriptPath: string;
 }
+
+interface TranscriptFileQuery {
+  readonly maxCandidates?: number;
+  readonly maxAgeMs?: number;
+  readonly nowMs?: number;
+}
+
+const CLAUDE_CATALOG_CANDIDATE_LIMIT = FOREIGN_SESSION_SCAN_MAX_SESSIONS;
 
 export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
   readonly id = CLAUDE_CODE_SESSION_ADAPTER_ID;
@@ -134,26 +143,15 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
     return existsSync(this.#projectsRoot());
   }
 
-  async listSessions(query?: ExternalSessionQuery): Promise<readonly ExternalSessionSummary[]> {
-    const summaries: ExternalSessionSummary[] = [];
-    const live = new Set<string>();
-    for (const file of await this.#transcriptFiles()) {
-      live.add(file.path);
-      const summary = await this.#summaryOf(file.path, file.sessionId);
-      if (!summary) continue;
-      // The shared matcher, not a local cwd comparison: filtering happens here
-      // rather than after paging, and every source has to answer a query the
-      // same way or the catalog lies about which one dropped the term.
-      if (!externalSessionMatchesQuery(summary, query)) continue;
-      summaries.push(summary);
-    }
-    // A transcript the source no longer lists must not keep its entry alive,
-    // or a long-lived Host grows one per deleted session.
-    for (const path of this.#summaries.keys()) {
-      if (!live.has(path)) this.#summaries.delete(path);
-    }
-    summaries.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-    return summaries;
+  async listSessions(query: ExternalSessionQuery = {}): Promise<readonly ExternalSessionSummary[]> {
+    const summaries = await this.#listSummaries(query);
+    return summaries.map((summary) => ({
+      id: summary.id,
+      name: summary.name,
+      cwd: summary.cwd,
+      ...(summary.createdAt !== undefined ? { createdAt: summary.createdAt } : {}),
+      updatedAt: summary.updatedAt,
+    }));
   }
 
   /**
@@ -193,6 +191,7 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
             // the handoff staleness policy from treating a readable session as
             // the Unix epoch.
             updatedAt: parsed.updatedAt ?? mtimeMs,
+            transcriptPath: path,
           }
         : undefined;
     this.#summaries.set(path, { mtimeMs, size, ...(summary ? { summary } : {}) });
@@ -221,12 +220,9 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
   async listCatalogEntries(
     query: ExternalSourceCatalogQuery = {},
   ): Promise<readonly ClaudeCodeCatalogEntry[]> {
-    if (query.limit !== undefined && query.limit <= 0) return [];
-    const entries: ClaudeCodeCatalogEntry[] = [];
-    for (const file of await this.#transcriptFiles()) {
-      const summary = await this.#summaryOf(file.path, file.sessionId);
-      if (!summary) continue;
-      const entry: ClaudeCodeCatalogEntry = {
+    const summaries = await this.#listSummaries(query);
+    return summaries.map(
+      (summary): ClaudeCodeCatalogEntry => ({
         source: 'claude-code',
         id: summary.id,
         title: summary.name,
@@ -234,16 +230,49 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
         ...(summary.gitBranch !== undefined ? { gitBranch: summary.gitBranch } : {}),
         ...(summary.createdAt !== undefined ? { createdAtMs: summary.createdAt } : {}),
         updatedAtMs: summary.updatedAt,
-        transcriptPath: file.path,
-      };
-      if (matchesSourceCatalogQuery(entry, query)) entries.push(entry);
-    }
-    entries.sort(
-      (left, right) =>
-        right.updatedAtMs - left.updatedAtMs ||
-        left.transcriptPath.localeCompare(right.transcriptPath),
+        transcriptPath: summary.transcriptPath,
+      }),
     );
-    return query.limit === undefined ? entries : entries.slice(0, query.limit);
+  }
+
+  async #listSummaries(query: ExternalSessionQuery): Promise<ClaudeCodeSummary[]> {
+    if (query.limit !== undefined && query.limit <= 0) {
+      await this.#pruneSummaryCache();
+      return [];
+    }
+    const cursor = query.cursor ?? 0;
+    const summaries: ClaudeCodeSummary[] = [];
+    const files = await this.#transcriptFiles({
+      maxCandidates: CLAUDE_CATALOG_CANDIDATE_LIMIT,
+      maxAgeMs: query.maxAgeMs,
+      nowMs: query.nowMs,
+    });
+    try {
+      for (const file of files) {
+        const summary = await this.#summaryOf(file.path, file.sessionId);
+        if (!summary || !externalSessionMatchesQuery(summary, query)) continue;
+        summaries.push(summary);
+      }
+    } finally {
+      await this.#pruneSummaryCache();
+    }
+    summaries.sort(
+      (left, right) =>
+        right.updatedAt - left.updatedAt || left.transcriptPath.localeCompare(right.transcriptPath),
+    );
+    return query.limit === undefined
+      ? summaries.slice(cursor)
+      : summaries.slice(cursor, cursor + query.limit);
+  }
+
+  async #pruneSummaryCache(): Promise<void> {
+    for (const path of this.#summaries.keys()) {
+      try {
+        await stat(path);
+      } catch {
+        this.#summaries.delete(path);
+      }
+    }
   }
 
   async readDigest(summary: ForeignSessionSummary): Promise<ForeignSessionDigest> {
@@ -323,7 +352,9 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
     return candidate;
   }
 
-  async #transcriptFiles(): Promise<ReadonlyArray<{ path: string; sessionId: string }>> {
+  async #transcriptFiles(
+    options: TranscriptFileQuery = {},
+  ): Promise<ReadonlyArray<{ path: string; sessionId: string; mtimeMs: number }>> {
     const root = this.#projectsRoot();
     let projects: string[];
     try {
@@ -339,7 +370,11 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
     // list and read must pick the same one or a user selects one summary and
     // imports the other.
     const bySessionId = new Map<string, { path: string; sessionId: string; mtimeMs: number }>();
-    for (const project of projects) {
+    let inspectedCandidates = 0;
+    // Keep the filesystem scan bounded before opening transcript contents. A
+    // portable directory listing does not expose a globally mtime-ordered
+    // stream, so updatedAt orders only the deterministic bounded window.
+    scan: for (const project of projects.sort()) {
       let entries: string[];
       try {
         entries = (await readdir(join(root, project), { withFileTypes: true }))
@@ -348,7 +383,11 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
       } catch {
         continue;
       }
-      for (const name of entries) {
+      for (const name of entries.sort()) {
+        if (options.maxCandidates !== undefined && inspectedCandidates >= options.maxCandidates) {
+          break scan;
+        }
+        inspectedCandidates += 1;
         const sessionId = name.slice(0, -'.jsonl'.length);
         if (!SESSION_ID_PATTERN.test(sessionId)) continue;
         const path = join(root, project, name);
@@ -359,6 +398,13 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
         try {
           mtimeMs = (await stat(path)).mtimeMs;
         } catch {
+          continue;
+        }
+        if (
+          options.maxAgeMs !== undefined &&
+          options.nowMs !== undefined &&
+          options.nowMs - mtimeMs > options.maxAgeMs
+        ) {
           continue;
         }
         const existing = bySessionId.get(sessionId);
@@ -374,7 +420,10 @@ export class ClaudeCodeSessionAdapter implements ExternalSessionAdapter {
         }
       }
     }
-    return [...bySessionId.values()].map(({ path, sessionId }) => ({ path, sessionId }));
+    const files = [...bySessionId.values()]
+      .sort((left, right) => right.mtimeMs - left.mtimeMs || left.path.localeCompare(right.path))
+      .map(({ path, sessionId, mtimeMs }) => ({ path, sessionId, mtimeMs }));
+    return files;
   }
 
   async #parse(path: string, sessionId: string): Promise<ParsedTranscript | undefined> {

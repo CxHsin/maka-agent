@@ -540,6 +540,65 @@ describe('CodexSessionAdapter', () => {
     });
   });
 
+  test('pages the filesystem fallback before opening later candidates', async () => {
+    await withCodexHome(async (codexHome) => {
+      const ids = Array.from(
+        { length: 4 },
+        (_, index) => `codex-fallback-page-${String(index).padStart(3, '0')}`,
+      );
+      const baseTime = Date.now() - 10_000;
+      for (const [index, id] of ids.entries()) {
+        const path = await seedMinimalRollout(
+          codexHome,
+          id,
+          false,
+          '/workspace/root',
+          `Page ${index}`,
+        );
+        const timestamp = new Date(baseTime + index * 1_000);
+        await utimes(path, timestamp, timestamp);
+      }
+
+      const adapter = new CodexSessionAdapter({ codexHome });
+      assert.deepEqual(
+        (await adapter.listSessions({ limit: 2 })).map((session) => session.id),
+        ids.slice().reverse().slice(0, 2),
+      );
+      assert.deepEqual(
+        (await adapter.listSessions({ cursor: 2, limit: 2 })).map((session) => session.id),
+        ids.slice().reverse().slice(2),
+      );
+    });
+  });
+
+  test('bounds stale filesystem candidates before the freshness filter can expand the scan', async () => {
+    await withCodexHome(async (codexHome) => {
+      const staleIds = Array.from(
+        { length: 50 },
+        (_, index) => `codex-fallback-stale-${String(index).padStart(3, '0')}`,
+      );
+      const nowMs = Date.now();
+      for (const id of staleIds) {
+        const path = await seedMinimalRollout(codexHome, id, false, '/workspace/stale', 'Stale');
+        const staleTime = new Date(nowMs - 2_000);
+        await utimes(path, staleTime, staleTime);
+      }
+      await seedMinimalRollout(
+        codexHome,
+        'codex-fallback-fresh-target',
+        false,
+        '/workspace/fresh',
+        'Fresh target',
+      );
+
+      const adapter = new CodexSessionAdapter({ codexHome });
+      assert.deepEqual(
+        (await adapter.listSessions({ maxAgeMs: 1_000, nowMs })).map((session) => session.id),
+        [],
+      );
+    });
+  });
+
   test('bounds invalid database rows before resolving rollout paths', async () => {
     await withCodexHome(async (codexHome) => {
       const targetId = 'codex-paged-target';

@@ -324,23 +324,21 @@ export class CodexSessionAdapter implements ExternalSessionAdapter {
           })
         : [];
     const candidates = [...activeCandidates, ...archivedCandidates].sort(compareRolloutCandidates);
-    const matchedCandidates: CodexCatalogEntry[] = [];
+    const entries: CodexCatalogEntry[] = [];
+    const seenIds = new Set<string>();
+    let matched = 0;
+    const cursor = query.cursor ?? 0;
+    const pageEnd = query.limit === undefined ? undefined : cursor + query.limit;
     for (const candidate of candidates) {
+      if (pageEnd !== undefined && matched >= pageEnd) break;
       const head = await readUtf8Prefix(candidate.path, CODEX_ROLLOUT_HEAD_BYTES).catch(
         () => undefined,
       );
       if (head === undefined) continue;
       const entry = catalogEntryFromRolloutHead(head, candidate);
-      if (entry && matchesSourceCatalogQuery(entry, query)) matchedCandidates.push(entry);
-    }
-    matchedCandidates.sort(compareCatalogEntries);
-    const entries: CodexCatalogEntry[] = [];
-    const seenIds = new Set<string>();
-    let matched = 0;
-    const cursor = query.cursor ?? 0;
-    for (const entry of matchedCandidates) {
+      if (!entry || !matchesSourceCatalogQuery(entry, query) || seenIds.has(entry.id)) continue;
       const transcriptPath = await this.resolveRolloutPath(entry.transcriptPath, entry.id);
-      if (!transcriptPath || seenIds.has(entry.id)) continue;
+      if (!transcriptPath) continue;
       seenIds.add(entry.id);
       if (matched < cursor) {
         matched += 1;
@@ -832,10 +830,7 @@ async function readCodexThreadRows(
             END IN (${placeholders})
           )`,
         );
-        params.push(
-          ...CODEX_SUPPORTED_THREAD_SOURCES,
-          ...CODEX_SUPPORTED_THREAD_SOURCES,
-        );
+        params.push(...CODEX_SUPPORTED_THREAD_SOURCES, ...CODEX_SUPPORTED_THREAD_SOURCES);
       }
       if (query.cwd !== undefined && columns.has('cwd')) {
         const variants = codexCwdSqlVariants(query.cwd);
@@ -905,6 +900,7 @@ async function walkRolloutFiles(
   options: RolloutWalkOptions = {},
 ): Promise<RolloutCandidate[]> {
   const files: RolloutCandidate[] = [];
+  let inspectedCandidates = 0;
   const visit = async (directory: string): Promise<void> => {
     let entries: Dirent<string>[];
     try {
@@ -916,7 +912,9 @@ async function walkRolloutFiles(
     // fallback cannot globally order by mtime without an unbounded metadata
     // scan, so directory/name order defines this bounded candidate window.
     for (const entry of entries.sort((left, right) => right.name.localeCompare(left.name))) {
-      if (options.maxCandidates !== undefined && files.length >= options.maxCandidates) return;
+      if (options.maxCandidates !== undefined && inspectedCandidates >= options.maxCandidates) {
+        return;
+      }
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {
         await visit(path);
@@ -926,6 +924,7 @@ async function walkRolloutFiles(
         entry.name.endsWith('.jsonl') &&
         (expectedId === undefined || rolloutFilenameMatchesId(entry.name, expectedId))
       ) {
+        inspectedCandidates += 1;
         try {
           const mtimeMs = (await stat(path)).mtimeMs;
           if (

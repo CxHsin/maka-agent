@@ -332,6 +332,15 @@ test('omits optional MCP tools that would exceed the complete manifest byte limi
 
 test('accounts for services when omitting optional MCP tools for the manifest budget', () => {
   const diagnostics: Error[] = [];
+  const offersOnlyProvider = createDesktopNativeCapabilityProvider({
+    browserTools: [],
+    releaseBrowserSession() {},
+    computerUseTools: computerTools(),
+    releaseComputerUseSession() {},
+    additionalGroups: () => [
+      optionalMcpGroupWithTools('desktop_mcp', 'mcp_tool', 25 * 1024, 2),
+    ],
+  });
   const provider = createDesktopNativeCapabilityProvider(
     {
       browserTools: [],
@@ -356,6 +365,19 @@ test('accounts for services when omitting optional MCP tools for the manifest bu
     },
   );
 
+  assert.equal(offersOnlyProvider.offers()[0]?.tools.length, 2);
+  assert.doesNotThrow(() =>
+    decodeClientCapabilityReplaceInput({
+      registrationId: 'registration-1',
+      offers: offersOnlyProvider.offers(),
+    }),
+  );
+  assert.throws(() =>
+    decodeClientCapabilityReplaceInput({
+      registrationId: 'registration-1',
+      offers: offersOnlyProvider.offers(),
+      services: provider.services?.(),
+    }), /manifest is too large/u);
   assert.deepEqual(provider.offers()[0]?.tools.map(({ name }) => name), ['mcp_tool_1']);
   assert.equal(diagnostics.length, 1);
   assert.match(diagnostics[0]?.message ?? '', /desktop_mcp\/mcp_tool_2/u);

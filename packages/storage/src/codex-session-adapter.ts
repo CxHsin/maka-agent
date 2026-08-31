@@ -63,11 +63,6 @@ const CODEX_SUPPORTED_SOURCE_SQL_VALUES = [
   'vscode',
   'atlas',
   'chatgpt',
-  '{"custom":"cli"}',
-  '{"custom":"exec"}',
-  '{"custom":"vscode"}',
-  '{"custom":"atlas"}',
-  '{"custom":"chatgpt"}',
 ];
 
 export interface CodexSessionAdapterOptions {
@@ -834,10 +829,20 @@ async function readCodexThreadRows(
         where.push('(archived IS NULL OR archived = 0)');
       }
       if (columns.has('source')) {
+        const placeholders = CODEX_SUPPORTED_SOURCE_SQL_VALUES.map(() => '?').join(', ');
         where.push(
-          `(source IS NULL OR source IN (${CODEX_SUPPORTED_SOURCE_SQL_VALUES.map(() => '?').join(', ')}))`,
+          `(
+            source IS NULL
+            OR source IN (${placeholders})
+            OR CASE WHEN json_valid(source)
+              THEN json_extract(source, '$.custom')
+            END IN (${placeholders})
+          )`,
         );
-        params.push(...CODEX_SUPPORTED_SOURCE_SQL_VALUES);
+        params.push(
+          ...CODEX_SUPPORTED_SOURCE_SQL_VALUES,
+          ...CODEX_SUPPORTED_SOURCE_SQL_VALUES,
+        );
       }
       if (query.cwd !== undefined && columns.has('cwd')) {
         const variants = codexCwdSqlVariants(query.cwd);

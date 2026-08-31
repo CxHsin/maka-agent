@@ -275,6 +275,32 @@ describe('ClaudeCodeSessionAdapter', () => {
     });
   });
 
+  test('excludes sidechain records from a mixed transcript import', async () => {
+    await withClaudeHome(async (home) => {
+      const sessionId = 'aaaaaaaa-0000-4000-8000-000000000008';
+      await seed(home, sessionId, [
+        userRecord('main request'),
+        { ...userRecord('sidechain request'), isSidechain: true },
+        {
+          ...assistantRecord({ text: 'sidechain reply', stopReason: 'end_turn' }),
+          isSidechain: true,
+        },
+        assistantRecord({ text: 'main reply', stopReason: 'end_turn' }),
+      ]);
+
+      const messages = await read(home, sessionId);
+      assert.deepEqual(
+        messages
+          .filter(
+            (message): message is Extract<StoredMessage, { type: 'user' | 'assistant' }> =>
+              message.type === 'user' || message.type === 'assistant',
+          )
+          .map((message) => message.text),
+        ['main request', 'main reply'],
+      );
+    });
+  });
+
   test('drops transcripts without a non-empty cwd from catalog and import', async () => {
     await withClaudeHome(async (home) => {
       const directory = join(home, 'projects', '-workspace-project');

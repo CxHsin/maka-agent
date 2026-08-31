@@ -587,7 +587,9 @@ export function convertTranscript(
   sessionId: string,
   rawRecords: readonly TranscriptRecord[],
 ): readonly StoredMessage[] {
-  const records = resolveTranscriptLineage(rawRecords).records;
+  const records = resolveTranscriptLineage(rawRecords).records.filter(
+    (record) => record.isSidechain !== true,
+  );
   // Every fragment of one assistant response, keyed by `message.id`. A
   // response is emitted once, from all of its fragments, at the position of
   // the first — so a later fragment's text is part of the reply rather than

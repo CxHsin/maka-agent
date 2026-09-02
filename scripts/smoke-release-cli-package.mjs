@@ -48,6 +48,7 @@ import {
   renderRuntimeHostFailureDiagnostic,
   retireCollectedRuntimeHostStartupDiagnostic,
 } from './release-cli-runtime-host-diagnostics.mjs';
+import { encodeReleaseSmokeFrame } from './release-cli-websocket-smoke.mjs';
 import { npmSpawnOptions } from './npm-spawn.mjs';
 
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -749,10 +750,6 @@ function releaseSmokeHello(compatibilityEpoch, suffix) {
     compatibilityEpoch,
     compositionId: 'maka.interactive',
   };
-}
-
-function encodeReleaseSmokeFrame(frame) {
-  return Buffer.from(JSON.stringify(frame), 'utf8');
 }
 
 function openReleaseSmokeWebSocket(WebSocket, endpoint, credential) {

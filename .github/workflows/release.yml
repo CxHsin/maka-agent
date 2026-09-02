@@ -101,6 +101,8 @@ jobs:
             runner: windows-2025
     runs-on: ${{ matrix.runner }}
     environment: release
+    env:
+      MAKA_RELEASE_SOURCE_COMMIT: ${{ needs.release-identity.outputs.source_commit }}
     timeout-minutes: 75
     defaults:
       run:
@@ -268,6 +270,8 @@ jobs:
     needs: release-identity
     runs-on: macos-15
     environment: release
+    env:
+      MAKA_RELEASE_SOURCE_COMMIT: ${{ needs.release-identity.outputs.source_commit }}
     timeout-minutes: 45
     defaults:
       run:

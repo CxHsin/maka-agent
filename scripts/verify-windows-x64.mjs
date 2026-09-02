@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readProductManifestIdentity } from './product-release-identity.mjs';
+import { resolveMakaReleaseIdentity } from './release-cli-compatibility.mjs';
 import { assertPackagedUpdateConfiguration } from './desktop-update-contract.mjs';
 import { resolveDesktopBuildVersion, resolveRuntimeHostSetupPackage } from './desktop-nightly.mjs';
 import {
@@ -138,6 +139,17 @@ export async function verifyPackagedWindowsApp(
   const executable = join(appDirectory, executableName);
   const appAsar = join(resources, 'app.asar');
   const sandboxExecutable = join(resources, 'windows-sandbox', 'maka-windows-sandbox.exe');
+  const expectedBuildVersion =
+    expectedVersion ?? resolveDesktopBuildVersion(product.version, environment);
+  const makaReleaseIdentity = requiresCurrentContract
+    ? resolveMakaReleaseIdentity({
+        version: expectedBuildVersion,
+        sourceCommit:
+          environment.MAKA_RELEASE_SOURCE_COMMIT?.trim() ||
+          (await run('git', ['rev-parse', 'HEAD'])).stdout.trim(),
+        sourcePath: join(repoRoot, 'packages/runtime-host/src/protocol/index.ts'),
+      })
+    : undefined;
 
   step('checking packaged resources');
   await requirePath(executable);
@@ -244,10 +256,7 @@ export async function verifyPackagedWindowsApp(
     run,
     `(Get-Item -LiteralPath ${powerShellLiteral(executable)}).VersionInfo.ProductVersion`,
   );
-  assertWindowsProductVersion(
-    stdout,
-    expectedVersion ?? resolveDesktopBuildVersion(product.version, environment),
-  );
+  assertWindowsProductVersion(stdout, expectedBuildVersion);
 
   step('smoking node-pty through conpty');
   const ptyProbe = makePtyProbe(
@@ -256,6 +265,7 @@ export async function verifyPackagedWindowsApp(
     requiresCurrentContract
       ? resolveRuntimeHostSetupPackage(product.version, environment)
       : undefined,
+    makaReleaseIdentity,
   );
   await run(executable, ['-e', ptyProbe, join(appAsar, 'package.json')], {
     env: {

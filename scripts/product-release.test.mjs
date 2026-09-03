@@ -371,6 +371,17 @@ test('Desktop packaging derives the Runtime Host setup package from product mani
   ]);
 });
 
+test('Desktop builder binds a supplied source commit to its release identity', async () => {
+  const sourceCommit = 'a'.repeat(40);
+  const config = resolveDesktopBuilderConfig({ MAKA_RELEASE_SOURCE_COMMIT: sourceCommit });
+
+  assert.equal(config.extraMetadata.makaReleaseIdentity.sourceCommit, sourceCommit);
+  assert.equal(
+    config.extraMetadata.makaReleaseIdentity.version,
+    JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8')).version,
+  );
+});
+
 test('Desktop stages release manifests before electron-builder builds the archive', async (t) => {
   const stage = await mkdtemp(join(tmpdir(), 'maka-desktop-release-manifests-'));
   t.after(() => rm(stage, { recursive: true, force: true }));
@@ -490,6 +501,11 @@ test('platform package verifiers keep Git checks out of every artifact', async (
 
   const macosSource = await readFile(join(repoRoot, 'scripts', 'verify-macos-dmg.mjs'), 'utf8');
   assert.doesNotMatch(macosSource, /requirePath\(join\(resources, ['"]git['"]/u);
+  assert.match(macosSource, /await verifyApp\(copiedApp, \{[\s\S]*?environment,\s*\}\);/u);
+  assert.match(
+    windowsSource,
+    /await verifyApp\(unpackedDirectory, \{[\s\S]*?environment,\s*\}\);/u,
+  );
 
   // The channel is the release descriptor's, resolved once beside the artifact
   // names. Reading the nightly environment variable a second time here would

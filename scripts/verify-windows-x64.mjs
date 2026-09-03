@@ -334,6 +334,7 @@ export async function verifyWindowsX64Release(
     await verifyApp(unpackedDirectory, {
       workingDirectory: temporaryDirectory,
       channel: target.nightly ? 'nightly' : 'release',
+      environment,
     });
 
     step('checksumming the release artifacts');

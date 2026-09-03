@@ -71,12 +71,6 @@ const { runtimeHostSetupPackage, version: productVersion } = resolveProductManif
   desktopManifest: readManifest('./package.json'),
   cliManifest: readManifest('../../packages/cli/package.json'),
 });
-const makaReleaseIdentity = resolveMakaReleaseIdentity({
-  version: productVersion,
-  sourceCommit: resolvePackagingSourceCommit(),
-  sourcePath: join(repoRoot, 'packages/runtime-host/src/protocol/index.ts'),
-});
-
 const baseDesktopBuilderConfig = {
   appId: 'com.maka.desktop',
   productName: 'Maka',
@@ -85,7 +79,6 @@ const baseDesktopBuilderConfig = {
   beforePack: stageReleaseManifests,
   extraMetadata: {
     runtimeHostSetupPackage,
-    makaReleaseIdentity,
     makaUpdateChannel: 'release',
   },
   directories: {
@@ -333,15 +326,30 @@ const baseDesktopBuilderConfig = {
 
 export function resolveDesktopBuilderConfig(environment = process.env) {
   const nightlyVersion = environment.MAKA_DESKTOP_NIGHTLY_VERSION?.trim();
-  if (!nightlyVersion) return baseDesktopBuilderConfig;
-  const version = resolveDesktopBuildVersion(rootManifest.version, environment);
+  const version = nightlyVersion
+    ? resolveDesktopBuildVersion(rootManifest.version, environment)
+    : productVersion;
+  const makaReleaseIdentity = resolveMakaReleaseIdentity({
+    version,
+    sourceCommit: resolvePackagingSourceCommit(environment),
+    sourcePath: join(repoRoot, 'packages/runtime-host/src/protocol/index.ts'),
+  });
+  if (!nightlyVersion) {
+    return {
+      ...baseDesktopBuilderConfig,
+      extraMetadata: {
+        ...baseDesktopBuilderConfig.extraMetadata,
+        makaReleaseIdentity,
+      },
+    };
+  }
   return {
     ...baseDesktopBuilderConfig,
     extraMetadata: {
       ...baseDesktopBuilderConfig.extraMetadata,
       version,
       runtimeHostSetupPackage: resolveRuntimeHostSetupPackage(rootManifest.version, environment),
-      makaReleaseIdentity: { ...makaReleaseIdentity, version },
+      makaReleaseIdentity,
       makaUpdateChannel: 'nightly',
     },
     publish: [{ provider: 'github', owner: 'apache', repo: 'maka', channel: 'dev' }],

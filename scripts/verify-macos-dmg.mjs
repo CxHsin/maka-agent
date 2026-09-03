@@ -248,6 +248,7 @@ export async function verifyMacosDmg(
       workingDirectory: temporaryDirectory,
       expectedArch: arch,
       channel: target.nightly ? 'nightly' : 'release',
+      environment,
     });
     // Which payloads a formal release publishes a `.sha256` beside is the
     // descriptor's to decide, the way `verify:linux` already reads it.

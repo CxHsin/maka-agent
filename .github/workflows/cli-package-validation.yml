@@ -44,6 +44,8 @@ on:
       - 'scripts/release-cli-compatibility.mjs'
       - 'scripts/release-cli-compatibility.test.mjs'
       - 'scripts/release-cli-package.mjs'
+      - 'scripts/release-cli-websocket-smoke.mjs'
+      - 'scripts/release-cli-websocket-smoke.test.mjs'
       - 'scripts/qualify-released-cli-state-root.mjs'
       - 'scripts/qualify-released-cli-state-root.test.mjs'
       - 'scripts/released-cli-state-root-fixture.mjs'

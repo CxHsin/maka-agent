@@ -146,8 +146,9 @@ describe('Runtime Host bootstrap protocol', () => {
 
   test('publishes a new compatibility epoch for the Goal armed-state projection', () => {
     // GoalProjection has an exact key set, so the armedAt and boundTurnId
-    // additions must reject mixed Client-Host peers during the handshake.
-    assert.ok(RUNTIME_HOST_COMPATIBILITY_EPOCH > 42);
+    // additions must reject mixed Client-Host peers during the handshake. The
+    // current main epoch is 110, so this generation is deliberately 111.
+    assert.ok(RUNTIME_HOST_COMPATIBILITY_EPOCH > 110);
   });
 
   test('rejects the legacy connection update result in the current compatibility epoch', () => {

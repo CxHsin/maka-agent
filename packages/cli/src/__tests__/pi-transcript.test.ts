@@ -418,6 +418,8 @@ describe('Maka Pi TUI transcript', () => {
             lastReason: null,
             achievedAt: null,
             pausedAt: null,
+            armedAt: null,
+            boundTurnId: null,
             status: 'active' as const,
           },
         },
@@ -458,6 +460,8 @@ describe('Maka Pi TUI transcript', () => {
         lastReason: null,
         achievedAt: null,
         pausedAt: null,
+        armedAt: null,
+        boundTurnId: null,
         status: 'active' as const,
       },
     };

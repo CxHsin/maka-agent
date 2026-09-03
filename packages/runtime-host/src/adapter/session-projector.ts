@@ -473,6 +473,9 @@ export class RuntimeHostSessionProjector {
         turnId: root.turnId,
         ts: this.#now(),
         stopReason: 'end_turn',
+        ...(root.contextCompactionOutcome
+          ? { contextCompactionOutcome: root.contextCompactionOutcome }
+          : {}),
       });
     } else if (root.status === 'failed') {
       events.push({
@@ -483,9 +486,6 @@ export class RuntimeHostSessionProjector {
         recoverable: false,
         reason: root.failureClass,
         message: root.failureMessage ?? `Turn failed: ${root.failureClass}`,
-        ...(root.contextBudgetExhaustedDetail
-          ? { details: { contextBudgetExhaustedDetail: root.contextBudgetExhaustedDetail } }
-          : {}),
       });
     } else {
       events.push({

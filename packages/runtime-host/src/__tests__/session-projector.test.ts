@@ -117,6 +117,43 @@ test('applies authoritative replacement once and does not complete it again at T
   );
 });
 
+test('forwards a terminal context-compaction outcome with the synthesized complete event', () => {
+  const projector = new RuntimeHostSessionProjector(
+    snapshot(),
+    createRuntimeHostSessionProjectionSeed([], snapshot()),
+    () => 10,
+  );
+
+  const events = projector.accept({
+    kind: 'subscription.session_projection',
+    hostEpoch: 'host-1',
+    subscriptionId: 'subscription-1',
+    sequence: 1,
+    snapshot: snapshot({
+      projectionRevision: 2,
+      rootTurn: {
+        sessionId: 'session-1',
+        turnId: 'turn-1',
+        runId: 'run-1',
+        status: 'completed',
+        terminalEventId: 'compact-terminal-1',
+        contextCompactionOutcome: { kind: 'unchanged', reason: 'already_current' },
+      },
+    }),
+  }).events;
+
+  assert.deepEqual(events, [
+    {
+      type: 'complete',
+      id: 'compact-terminal-1',
+      turnId: 'turn-1',
+      ts: 10,
+      stopReason: 'end_turn',
+      contextCompactionOutcome: { kind: 'unchanged', reason: 'already_current' },
+    },
+  ]);
+});
+
 test('keeps a revocable in-flight lease pending', () => {
   const previous = snapshot({
     queue: {
@@ -333,8 +370,7 @@ test('projects structured context-budget failure detail to the Desktop event', (
         runId: 'run-1',
         status: 'failed',
         terminalEventId: 'terminal-1',
-        failureClass: 'context_budget_exhausted',
-        contextBudgetExhaustedDetail: 'malformed_summary_missing_section',
+        failureClass: 'context_overflow',
       },
     }),
   }).events;
@@ -346,9 +382,8 @@ test('projects structured context-budget failure detail to the Desktop event', (
       turnId: 'turn-1',
       ts: 10,
       recoverable: false,
-      reason: 'context_budget_exhausted',
-      message: 'Turn failed: context_budget_exhausted',
-      details: { contextBudgetExhaustedDetail: 'malformed_summary_missing_section' },
+      reason: 'context_overflow',
+      message: 'Turn failed: context_overflow',
     },
   ]);
 });

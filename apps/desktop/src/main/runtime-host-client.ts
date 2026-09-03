@@ -117,6 +117,7 @@ import {
   type CollaborationTurnRequestAcknowledgeResult,
   type CollaborationTurnRequestDecideResult,
   type CollaborationTurnRequestQueryResult,
+  type CollaborationTurnRequestWithdrawResult,
   type SessionCollaborationGrantKind,
   type SessionTurnAccessRequest,
   type SessionTurnRequestIntent,
@@ -285,6 +286,10 @@ export class DesktopRuntimeHostClient {
   }
 
   get hostId(): string {
+    return this.rootId;
+  }
+
+  get rootId(): string {
     return this.connection.rootId;
   }
 
@@ -347,6 +352,12 @@ export class DesktopRuntimeHostClient {
     requestId: string,
   ): Promise<CollaborationTurnRequestAcknowledgeResult> {
     return this.request('collaboration.turn-request.acknowledge', { requestId });
+  }
+
+  withdrawCollaborationTurnRequest(
+    requestId: string,
+  ): Promise<CollaborationTurnRequestWithdrawResult> {
+    return this.request('collaboration.turn-request.withdraw', { requestId });
   }
 
   decideCollaborationTurnRequest(
@@ -544,6 +555,12 @@ export class DesktopRuntimeHostClient {
     attemptId: string,
   ): Promise<OperationOutput<"oauth.login.cancel">> {
     return this.request("oauth.login.cancel", { attemptId });
+  }
+
+  queryOAuthEnrollment(
+    provider: OperationInput<"oauth.enrollment.query">["provider"],
+  ): Promise<OperationOutput<"oauth.enrollment.query">> {
+    return this.request("oauth.enrollment.query", { provider });
   }
 
   async loadSkillCatalog(

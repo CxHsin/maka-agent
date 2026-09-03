@@ -17,7 +17,12 @@
  * under the License.
  */
 
-import type { DesktopGoalState } from './desktop-goal-state.js';
+import type { GoalState } from '@maka/runtime/goal-state';
+
+/** Desktop-only runtime detail; it is transient and never persisted with a Goal. */
+export type DesktopGoalState = GoalState & {
+  readonly boundTurnId?: string;
+};
 
 /**
  * What the renderer sends to arm a Goal.

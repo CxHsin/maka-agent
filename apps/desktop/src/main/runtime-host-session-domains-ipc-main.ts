@@ -37,7 +37,7 @@ import {
   GOAL_ARM_REQUEST_KEYS,
   type GoalArmOutcome,
 } from '../shared/goal-arm.js';
-import type { DesktopGoalState } from '../shared/desktop-goal-state.js';
+import type { DesktopGoalState } from '../shared/goal-arm.js';
 import { projectHostedDeepResearch } from './deep-research-desktop-projection.js';
 import {
   handleReconciledControl,

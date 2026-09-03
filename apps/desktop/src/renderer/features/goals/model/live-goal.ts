@@ -18,7 +18,7 @@
  */
 
 import type { GoalStatus } from '@maka/core/goal';
-import type { DesktopGoalState } from '../../../../shared/desktop-goal-state.js';
+import type { DesktopGoalState } from '../../../../shared/goal-arm.js';
 
 type LiveGoalStatus = Extract<GoalStatus, 'active' | 'waiting'>;
 

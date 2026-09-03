@@ -17,8 +17,7 @@
  * under the License.
  */
 
-import type { DesktopGoalState } from '../../../shared/desktop-goal-state.js';
-import type { GoalArmOutcome } from '../../../shared/goal-arm.js';
+import type { DesktopGoalState, GoalArmOutcome } from '../../../shared/goal-arm.js';
 
 export type { GoalArmOutcome } from '../../../shared/goal-arm.js';
 

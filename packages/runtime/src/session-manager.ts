@@ -61,9 +61,7 @@ import type {
 } from '@maka/core/session';
 import type {
   CreateSessionInput,
-  BranchFromTurnInput,
   RegenerateTurnInput,
-  ReviseBeforeTurnInput,
   UserMessageInput,
   SessionListFilter,
 } from '@maka/core/runtime-inputs';
@@ -91,7 +89,6 @@ import {
 } from '@maka/core/plan';
 import { DEFAULT_SESSION_NAME } from '@maka/core/session-name';
 import { DEEP_RESEARCH_SESSION_LABEL, isDeepResearchSession } from '@maka/core/deep-research';
-import { SIDE_CONVERSATION_SESSION_LABEL } from '@maka/core/side-conversation';
 import {
   SUBAGENT_SESSION_RUNTIME_SCHEMA_VERSION,
   SUBAGENT_SESSION_SPAWN_SCHEMA_VERSION,
@@ -103,8 +100,14 @@ import { decodeAgentGraphIntentClaim } from '@maka/core/agent-graph-control';
 import { executionBoundaryContains } from '@maka/core/sandbox-boundary';
 import { failureClassFromCompleteStopReason } from '@maka/core/events';
 import { isActiveShellRunStatus } from '@maka/core/shell-run';
-import { isSessionInlineRun } from '@maka/core/agent-run';
 import { isTerminalRuntimeEvent } from '@maka/core/runtime-event';
+import {
+  buildInvocationOpenedEvent,
+  isSessionInlineInvocation,
+  runtimeInvocationOutcome,
+  type RootExecutionDescriptor,
+  type RuntimeInvocationRecord,
+} from '@maka/core/runtime-invocation';
 import type {
   AgentGraphIntentClaim,
   AgentGraphIntentClaimStore,
@@ -115,19 +118,23 @@ import type {
   AgentGraphProvisionedEdge,
 } from '@maka/core/agent-graph-topology';
 import type { AgentGraphScheduleUpdateSource } from '@maka/core/agent-graph-schedule';
-import type {
-  AgentRunEvent,
-  AgentRunHeader,
-  AgentRunStore,
-  RootExecutionDescriptor,
-} from '@maka/core/agent-run';
+import type { AgentRunEvent, AgentRunStore } from '@maka/core/agent-run';
 import type { ArtifactRecord } from '@maka/core/artifacts';
+import { invocationMatchesClaimTarget } from '@maka/core/runtime-boundary';
 import type { ContinuationClaimV1 } from '@maka/core/runtime-boundary';
-import type {
-  RuntimeEventStore,
-  RuntimeContinuationAuthorityStore,
+import {
+  readRunInvocation,
+  type RuntimeEventStore,
+  type RuntimeContinuationAuthorityStore,
 } from '@maka/core/runtime-event-store';
-import type { RuntimeEvent, ToolBoundaryProtocol } from '@maka/core/runtime-event';
+import type {
+  RuntimeEvent,
+  RuntimeEventInvocationOpenedContent,
+  RuntimeInvocationConfiguration,
+  RuntimeInvocationLineage,
+  RuntimeInvocationRootAuthority,
+  ToolBoundaryProtocol,
+} from '@maka/core/runtime-event';
 import type { RunCompositionSnapshot } from '@maka/core/run-composition';
 import type {
   SubagentWorkspaceBinding,
@@ -136,7 +143,10 @@ import type {
 import type { SubagentPreset } from '@maka/core/subagent-settings';
 import type { ResolvedSubagentPreset } from './configured-subagent-catalog.js';
 import { AGENT_GRAPH_OPERATOR_PROVISION_SCHEMA_VERSION } from '@maka/core/agent-graph-topology';
-import type { RuntimeEventTerminalFact } from './runtime-event-read-model.js';
+import {
+  runtimeInvocationFailureClass,
+  type RuntimeEventTerminalFact,
+} from './runtime-event-read-model.js';
 import {
   RuntimeReadModel,
   RuntimeReadModelError,
@@ -144,18 +154,11 @@ import {
   type RuntimeReadModelSessionView,
 } from './runtime-read-model.js';
 import { inspectAgentRunReadModel, type AgentRunInspectModel } from './agent-run-inspect.js';
-import {
-  cloneConversationRuntimeLedger as cloneConversationLedger,
-  createConversationCopySlice,
-  prepareConversationRuntimeLedgerCopy,
-  type ConversationRuntimeLedgerCopyPlan,
-} from './conversation-copy.js';
-import { firstRuntimeRepairRunId, RuntimeLedgerRepair } from './runtime-ledger-repair.js';
+import { RuntimeLedgerRepair } from './runtime-ledger-repair.js';
 import {
   buildRecoveredTerminalRuntimeEvent,
   classifyTerminalRuntimeLedger,
   commitTerminalRunWithRuntimeFact,
-  effectiveRunHeaderFromTerminalFact,
   terminalRunStatusFromRuntimeEvent,
 } from './terminal-run-commit.js';
 
@@ -164,14 +167,12 @@ import type { MakaTool } from './tool-runtime.js';
 import type { TurnShellPlan } from './shell-detect.js';
 import type { RunTraceRecorder } from './run-trace.js';
 import type { ModelCallAttempt } from '@maka/core/model-call-attempt';
-import type {
-  ProviderRequestAttemptRecord,
-  ProviderRequestCaptureLedgerRecord,
-} from './provider-request-telemetry.js';
 import { readLatestContextDiagnostics, type ContextDiagnostics } from './context-diagnostics.js';
 import type { ModelCallCommit } from '@maka/core/agent-run';
 import type { ShellRunProcessManager } from './shell-run-manager.js';
 import type { HistoryCompactCheckpoint } from './history-compact-checkpoint.js';
+import type { ModelProjectionTransition } from '@maka/core/model-projection-transition';
+import type { LoadedModelProjectionTransitions } from './model-projection-transition-ledger.js';
 import type { AgentRunLineage, RuntimeContinuationFailpoint } from './agent-run.js';
 import type { RuntimeCommitResult, RuntimeCommitSink } from './runtime-commit-sink.js';
 import {
@@ -209,6 +210,7 @@ import {
   buildStatusPatch,
   buildTurnStateMessage,
   turnHasRetainedOutput as messagesHaveRetainedOutput,
+  type RunLifecycleStatus,
 } from './session-projection-helpers.js';
 import {
   assertAgentDefinitionRunnable,
@@ -259,10 +261,22 @@ function runtimeCommitSinkFromEventStore(
     : undefined;
 }
 
-export interface StopSessionInput {
-  source?: 'stop_button' | 'graph_supervisor';
-  mode?: BackendStopMode;
-}
+export type StopSessionInput =
+  | {
+      source?: 'stop_button' | 'graph_supervisor';
+      workHubActionId?: never;
+      mode?: BackendStopMode;
+    }
+  | {
+      source: 'workhub_direct_stop';
+      workHubActionId: string;
+      mode?: BackendStopMode;
+    };
+
+export {
+  normalizeStopSessionSource,
+  workHubDirectStopAbortSource,
+} from './session-projection-helpers.js';
 
 export type CompactSessionInput =
   | {
@@ -277,7 +291,10 @@ export type CompactSessionInput =
       };
     };
 
-export type PlanSafeBoundaryContinuationInput = Omit<RuntimeContinuationPlannerInput, 'sessionId'>;
+export type PlanSafeBoundaryContinuationInput = Omit<
+  RuntimeContinuationPlannerInput,
+  'sessionId' | 'admissionRoute'
+>;
 
 export interface PlanAuthoritativeSafeBoundaryContinuationInput {
   sourceRunId: string;
@@ -394,7 +411,6 @@ type ResolvedClaimedAgentGraphIntentInput = Omit<
 };
 
 const CHILD_AGENT_SUMMARY_MAX_CHARS = 4_000;
-const MAX_RUNTIME_LEDGER_REPAIR_ATTEMPTS = 8;
 
 export interface AgentListItem {
   runId: string;
@@ -402,8 +418,8 @@ export interface AgentListItem {
   parentRunId: string;
   agentId?: string;
   agentName?: string;
-  status: AgentRunHeader['status'];
-  permissionMode: AgentRunHeader['permissionMode'];
+  status: RunLifecycleStatus;
+  permissionMode: PermissionMode;
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
@@ -417,7 +433,7 @@ export interface SubagentExecutionListItem {
   agentName?: string;
   profile?: string;
   turnId?: string;
-  status: AgentRunHeader['status'];
+  status: RunLifecycleStatus;
   permissionMode: PermissionMode;
   createdAt: number;
   updatedAt: number;
@@ -449,7 +465,7 @@ export type AgentOutputView = 'result' | 'events' | 'runtime_events' | 'all';
 
 export interface AgentOutputCommittedResult {
   schemaVersion: 1;
-  status: AgentRunHeader['status'];
+  status: RunLifecycleStatus;
   graph?: {
     graphId: string;
     workId: string;
@@ -469,7 +485,7 @@ export interface AgentOutputCommittedResult {
 
 export interface AgentOutputResult {
   execution: SubagentExecutionRef;
-  header: AgentRunHeader;
+  invocation: RuntimeInvocationRecord;
   result?: AgentOutputCommittedResult;
   events: AgentRunEvent[];
   runtimeEvents: RuntimeEvent[];
@@ -630,7 +646,6 @@ export interface StrictRecoverySessionStore extends SessionStore {
 }
 
 export interface StrictRecoveryAgentRunStore extends AgentRunStore {
-  listSessionRunsForRecovery(sessionId: string): Promise<AgentRunHeader[]>;
   readEventsForRecovery(sessionId: string, runId: string): Promise<AgentRunEvent[]>;
 }
 
@@ -678,14 +693,9 @@ export interface BackendFactoryContext {
   /** Turn-scoped shell plan captured with a bound child tool ceiling. */
   turnShellPlan?: TurnShellPlan;
   recordRunTrace?: RunTraceRecorder;
-  /** Durable AgentRun metadata row written after the private capture artifact. */
-  recordProviderRequestCapture?: (capture: ProviderRequestCaptureLedgerRecord) => Promise<void>;
-  /** Best-effort AgentRun row for one physical provider call. */
-  recordProviderRequestAttempt?: (attempt: ProviderRequestAttemptRecord) => void;
   /**
-   * Durable AgentRun row carrying the canonical accounting record for one
-   * physical provider call. Distinct from the diagnostic row above: this one is
-   * the metering source of truth (#1679).
+   * Durable AgentRun row carrying the canonical record for one physical
+   * provider call, including metering and its prepared-request observation.
    */
   recordModelCallAttempt?: (commit: ModelCallCommit<ModelCallAttempt>) => Promise<void>;
   /** Immutable Run policy snapshot; provider dispatch waits for this durable commit. */
@@ -693,6 +703,17 @@ export interface BackendFactoryContext {
   loadHistoryCompactCheckpoint?: () => Promise<HistoryCompactCheckpoint | undefined>;
   recordHistoryCompactCheckpoint?: (
     checkpoint: HistoryCompactCheckpoint,
+    turnId: string,
+  ) => Promise<void>;
+  /**
+   * Session-scoped read of every committed model-projection transition (#4283).
+   * The reducer folds these onto the RuntimeEvent ledger, so a lossy rewrite
+   * survives the Turn that made it.
+   */
+  loadModelProjectionTransitions?: () => Promise<LoadedModelProjectionTransitions>;
+  /** Durable append for one transition; persistence precedes any model-visible loss. */
+  recordModelProjectionTransition?: (
+    transition: ModelProjectionTransition,
     turnId: string,
   ) => Promise<void>;
   /**
@@ -708,21 +729,43 @@ export interface BackendFactoryContext {
 
 export type BackendFactory = (ctx: BackendFactoryContext) => AgentBackend | Promise<AgentBackend>;
 
-export class BackendRegistry {
-  private readonly factories = new Map<PersistedBackendKind, BackendFactory>();
+export type BackendPreparationContext = Pick<
+  BackendFactoryContext,
+  'sessionId' | 'workspaceRoot' | 'header' | 'abortSignal'
+>;
 
-  register(kind: PersistedBackendKind, factory: BackendFactory): void {
-    this.factories.set(kind, factory);
+export interface PreparedBackendActivation {
+  readonly providerStateIdentity?: `sha256:${string}`;
+  build(ctx: BackendFactoryContext): AgentBackend | Promise<AgentBackend>;
+}
+
+export interface PreparedBackendFactory {
+  prepare(ctx: BackendPreparationContext): Promise<PreparedBackendActivation>;
+}
+
+type BackendRegistration = BackendFactory | PreparedBackendFactory;
+
+export class BackendRegistry {
+  private readonly registrations = new Map<PersistedBackendKind, BackendRegistration>();
+
+  register(kind: PersistedBackendKind, registration: BackendRegistration): void {
+    this.registrations.set(kind, registration);
   }
 
-  async build(kind: PersistedBackendKind, ctx: BackendFactoryContext): Promise<AgentBackend> {
-    const f = this.factories.get(kind);
-    if (!f) throw new Error(`No backend factory registered for kind="${kind}"`);
-    return await f(ctx);
+  async prepare(
+    kind: PersistedBackendKind,
+    ctx: BackendPreparationContext,
+  ): Promise<PreparedBackendActivation> {
+    const registration = this.registrations.get(kind);
+    if (!registration) throw new Error(`No backend factory registered for kind="${kind}"`);
+    if (typeof registration === 'function') {
+      return { build: registration };
+    }
+    return await registration.prepare(ctx);
   }
 
   has(kind: PersistedBackendKind): boolean {
-    return this.factories.has(kind);
+    return this.registrations.has(kind);
   }
 }
 
@@ -859,23 +902,14 @@ export class SessionManager {
       deps.runtimeCommitSink ?? runtimeCommitSinkFromEventStore(deps.runtimeEventStore);
     if (deps.runStore && deps.runtimeEventStore) {
       this.runtimeLedgerRepair = new RuntimeLedgerRepair({
-        runStore: deps.runStore,
         runtimeEventStore: deps.runtimeEventStore,
         readMessages: (sessionId) => deps.store.readMessages(sessionId),
         appendMessage: (sessionId, message) => deps.store.appendMessage(sessionId, message),
-        appendTurnState: (sessionId, turnId, status, lineage, options) =>
-          this.appendTurnState(sessionId, turnId, status, lineage, options),
         newId: deps.newId,
         now: deps.now,
       });
     }
-    this.runtimeKernel =
-      deps.runtimeKernel ??
-      new RuntimeKernel({
-        ...deps,
-        repairRunRuntimeLedger: (sessionId, runId) =>
-          this.repairMissingTerminalFactOnce(sessionId, runId),
-      });
+    this.runtimeKernel = deps.runtimeKernel ?? new RuntimeKernel({ ...deps });
   }
 
   // --------------------------------------------------------------------------
@@ -989,7 +1023,7 @@ export class SessionManager {
   private async finalizeAndListChildTurnArtifacts(
     sessionId: string,
     turnId: string,
-    status: AgentRunHeader['status'],
+    status: RunLifecycleStatus,
   ): Promise<ArtifactRecord[]> {
     const list = this.deps.listArtifactsForTurn;
     if (!list) return [];
@@ -1010,6 +1044,30 @@ export class SessionManager {
     return finalized;
   }
 
+  /**
+   * The Session's invocations, enumerated from the events that define them.
+   *
+   * There is no run table to consult: an invocation exists because its opening
+   * fact does, and it has ended because its terminal event does.
+   */
+  private async listInvocations(sessionId: string): Promise<RuntimeInvocationRecord[]> {
+    const store = this.deps.runtimeEventStore;
+    if (!store) return [];
+    return store.listSessionInvocations(sessionId);
+  }
+
+  /** One invocation by run id. Absent means no opening fact ever named it. */
+  private async readInvocation(sessionId: string, runId: string): Promise<RuntimeInvocationRecord> {
+    const store = this.deps.runtimeEventStore;
+    const invocation = store ? await readRunInvocation(store, sessionId, runId) : undefined;
+    if (!invocation) {
+      const error = new Error(`AgentRun ${runId} not found`) as Error & { code?: string };
+      error.code = 'ENOENT';
+      throw error;
+    }
+    return invocation;
+  }
+
   /** Publish the recoverable write-back owed by the latest terminal worktree child Run. */
   async finalizeChildWorkspacePatches(sessionId: string): Promise<void> {
     if (!this.hasWorktreePatchWriteBack() || !this.deps.runStore) return;
@@ -1017,13 +1075,13 @@ export class SessionManager {
     const binding = header.subagentWorkspace;
     if (!binding) return;
 
-    const latest = (await this.deps.runStore.listSessionRuns(sessionId))
-      .filter(isSessionInlineRun)
-      .sort(
-        (left, right) => right.createdAt - left.createdAt || right.runId.localeCompare(left.runId),
-      )[0];
+    const latest = latestInvocation(
+      (await this.listInvocations(sessionId)).filter((run) =>
+        isSessionInlineInvocation(run.opening),
+      ),
+    );
     if (!latest) return;
-    if (!isTerminalRunStatus(latest.status)) {
+    if (!latest.terminalEvent) {
       throw new Error(
         `Child Session ${sessionId} cannot finalize its workspace while Run ${latest.runId} is nonterminal`,
       );
@@ -1214,7 +1272,13 @@ export class SessionManager {
   async getContextDiagnostics(sessionId: string): Promise<ContextDiagnostics> {
     const runStore = this.deps.runStore;
     return runStore
-      ? readLatestContextDiagnostics(runStore, sessionId)
+      ? readLatestContextDiagnostics(
+          runStore,
+          sessionId,
+          (await this.listInvocations(sessionId))
+            .filter((run) => isSessionInlineInvocation(run.opening))
+            .map((run) => run.runId),
+        )
       : { status: 'unavailable', reason: 'trace_unavailable' };
   }
 
@@ -1995,10 +2059,43 @@ export class SessionManager {
     sessionId: string,
     input: PlanSafeBoundaryContinuationInput,
   ): Promise<SafeBoundaryContinuationPlan> {
+    let admissionRoute: RuntimeContinuationPlannerInput['admissionRoute'];
+    try {
+      if (!this.deps.runStore) throw new Error('AgentRunStore is not configured');
+      const [header, invocations] = await Promise.all([
+        this.deps.store.readHeader(sessionId),
+        this.listInvocations(sessionId),
+      ]);
+      const targetProviderStateIdentity = (
+        await this.deps.backends.prepare(header.backend, {
+          sessionId,
+          workspaceRoot: header.workspaceRoot,
+          header,
+        })
+      ).providerStateIdentity;
+      admissionRoute = {
+        invocations,
+        targetProviderStateIdentity,
+        targetModelId: header.model,
+      };
+    } catch {
+      const plan: SafeBoundaryContinuationPlan = {
+        disposition: 'park',
+        rejectionReasons: ['continuation_authority_unavailable'],
+        diagnostics: [
+          {
+            code: 'continuation_authority_unavailable',
+            message: 'provider replay admission authority is unavailable',
+          },
+        ],
+      };
+      this.recordContinuationPlan(sessionId, input.sourceRunId, plan);
+      return plan;
+    }
     const planner = new RuntimeContinuationPlanner({
-      readSourceRun: async (targetSessionId, runId) => {
+      readSourceInvocation: async (targetSessionId, runId) => {
         if (!this.deps.runStore) throw new Error('AgentRunStore is not configured');
-        return this.deps.runStore.readRun(targetSessionId, runId);
+        return this.readInvocation(targetSessionId, runId);
       },
       readImmutableRuntimePrefix: async (prefixInput) => {
         const authority = runtimeContinuationAuthority(this.deps.runtimeEventStore);
@@ -2018,15 +2115,18 @@ export class SessionManager {
         sourceRuntimeEventHighWater,
       ) => {
         if (!this.deps.runStore) throw new Error('AgentRunStore is not configured');
-        return (await this.deps.runStore.listSessionRuns(targetSessionId)).find(
-          (run) =>
-            run.continuationSource?.sourceRunId === sourceRunId &&
-            run.continuationSource.sourceRuntimeEventHighWater === sourceRuntimeEventHighWater,
-        );
+        return (await this.listInvocations(targetSessionId)).find((run) => {
+          const source = run.opening.source;
+          return (
+            source.kind === 'continuation' &&
+            source.sourceRunId === sourceRunId &&
+            source.sourceRuntimeEventHighWater === sourceRuntimeEventHighWater
+          );
+        });
       },
       newId: this.deps.newId,
     });
-    const plan = await planner.plan({ sessionId, ...input });
+    const plan = await planner.plan({ sessionId, admissionRoute, ...input });
     this.recordContinuationPlan(sessionId, input.sourceRunId, plan);
     return plan;
   }
@@ -2054,9 +2154,9 @@ export class SessionManager {
       this.recordContinuationPlan(sessionId, input.sourceRunId, plan);
       return plan;
     }
-    const sourceRun = await this.deps.runStore
-      .readRun(sessionId, input.sourceRunId)
-      .catch(() => undefined);
+    const sourceRun = await this.readInvocation(sessionId, input.sourceRunId).catch(
+      () => undefined,
+    );
     if (!sourceRun) {
       const plan: SafeBoundaryContinuationPlan = {
         disposition: 'park',
@@ -2068,7 +2168,7 @@ export class SessionManager {
       this.recordContinuationPlan(sessionId, input.sourceRunId, plan);
       return plan;
     }
-    if (!sourceRun.workspaceIdentity) {
+    if (!sourceRun.opening.configuration.workspaceIdentity) {
       const plan: SafeBoundaryContinuationPlan = {
         disposition: 'park',
         rejectionReasons: ['workspace_identity_missing'],
@@ -2103,7 +2203,7 @@ export class SessionManager {
     return this.planSafeBoundaryContinuation(sessionId, {
       sourceRunId: input.sourceRunId,
       currentCwd: header.cwd,
-      sourceWorkspaceIdentity: sourceRun.workspaceIdentity,
+      sourceWorkspaceIdentity: sourceRun.opening.configuration.workspaceIdentity,
       currentWorkspaceIdentity: observation.workspaceIdentity,
       backgroundOperationsSettled: observation.backgroundOperationsSettled,
       availableToolNames: observation.availableToolNames,
@@ -2138,13 +2238,15 @@ export class SessionManager {
       this.recordContinuationPlan(sessionId, '', plan);
       return plan;
     }
-    const candidate = (await this.deps.runStore.listSessionRuns(sessionId))
-      .filter(
-        (run) => (run.status === 'failed' || run.status === 'cancelled') && isSessionInlineRun(run),
-      )
-      .sort(
-        (left, right) => right.createdAt - left.createdAt || right.runId.localeCompare(left.runId),
-      )[0];
+    const candidate = latestInvocation(
+      (await this.listInvocations(sessionId)).filter((run) => {
+        const outcome = runtimeInvocationOutcome(run);
+        return (
+          (outcome === 'failed' || outcome === 'cancelled') &&
+          isSessionInlineInvocation(run.opening)
+        );
+      }),
+    );
     if (!candidate) {
       const plan: SafeBoundaryContinuationPlan = {
         disposition: 'park',
@@ -2324,7 +2426,7 @@ export class SessionManager {
     }
     const [parentHeader, sourceRun, parentBoundary] = await Promise.all([
       this.deps.store.readHeader(input.source.sessionId),
-      this.deps.runStore.readRun(input.source.sessionId, input.source.runId),
+      this.readInvocation(input.source.sessionId, input.source.runId),
       this.deps.store.readExecutionBoundary(input.source.sessionId),
     ]);
     if (
@@ -2651,7 +2753,7 @@ export class SessionManager {
       return readyNotification;
     };
 
-    let run = await this.deps.runStore.readRun(child.id, claim.targetRunId).catch((error) => {
+    let run = await this.readInvocation(child.id, claim.targetRunId).catch((error) => {
       if (isNotFoundError(error)) return undefined;
       throw error;
     });
@@ -2675,7 +2777,7 @@ export class SessionManager {
             );
           },
         });
-        run = await this.deps.runStore.readRun(child.id, claim.targetRunId);
+        run = await this.readInvocation(child.id, claim.targetRunId);
         this.assertClaimedAgentGraphRun(child, snapshot, claim, run);
         await this.assertClaimedAgentGraphPrompt(
           child.id,
@@ -2692,15 +2794,15 @@ export class SessionManager {
       await this.assertClaimedAgentGraphPrompt(child.id, claim.targetTurnId, input.prompt);
       await notifyReady();
       while (
-        !isTerminalRunStatus(run.status) &&
+        !run.terminalEvent &&
         this.runtimeKernel.hasActiveRun?.(child.id, run.runId, run.turnId)
       ) {
         await delay(25, undefined, input.abortSignal ? { signal: input.abortSignal } : undefined);
-        run = await this.deps.runStore.readRun(child.id, claim.targetRunId);
+        run = await this.readInvocation(child.id, claim.targetRunId);
       }
-      if (!isTerminalRunStatus(run.status)) {
+      if (!run.terminalEvent) {
         await this.recoverAgentRunsFromLedger(child.id);
-        run = await this.deps.runStore.readRun(child.id, claim.targetRunId);
+        run = await this.readInvocation(child.id, claim.targetRunId);
       }
       this.assertClaimedAgentGraphRun(child, snapshot, claim, run);
       await this.assertClaimedAgentGraphPrompt(child.id, claim.targetTurnId, input.prompt);
@@ -2710,7 +2812,7 @@ export class SessionManager {
     await this.finalizeChildWorkspacePatches(child.id);
 
     const [runs, messages] = await Promise.all([
-      this.deps.runStore.listSessionRuns(child.id),
+      this.listInvocations(child.id),
       this.deps.store.readMessages(child.id),
     ]);
     const turnOwner = runs.find((candidate) => candidate.turnId === claim.targetTurnId);
@@ -2795,13 +2897,14 @@ export class SessionManager {
     }
 
     const completedAt = this.deps.now();
-    const completedRun = await this.deps.runStore.readRun(child.id, claim.targetRunId);
+    const completedRun = await this.readInvocation(child.id, claim.targetRunId);
     this.assertClaimedAgentGraphRun(child, snapshot, claim, completedRun);
-    const failureClass = completedRun.failureClass ?? summary.failureClass;
+    const completedFacts = invocationListingFacts(completedRun);
+    const failureClass = completedFacts.failureClass ?? summary.failureClass;
     const artifacts = await this.finalizeAndListChildTurnArtifacts(
       child.id,
       claim.targetTurnId,
-      completedRun.status,
+      completedFacts.status,
     );
     return {
       claimId: claim.claimId,
@@ -2814,7 +2917,7 @@ export class SessionManager {
       profile: snapshot.profile,
       turnId: claim.targetTurnId,
       runId: claim.targetRunId,
-      status: agentRunStatusForSpawnResult(completedRun.status),
+      status: agentRunStatusForSpawnResult(completedFacts.status),
       permissionMode: child.permissionMode,
       summary: summary.text(),
       artifactIds: artifacts.map((artifact) => artifact.id),
@@ -2879,15 +2982,16 @@ export class SessionManager {
     child: SessionHeader,
     snapshot: NonNullable<SessionHeader['subagentRuntime']>,
     claim: AgentGraphIntentClaim,
-    run: AgentRunHeader,
+    run: RuntimeInvocationRecord,
   ): void {
+    const lineage = run.opening.lineage;
     if (
       run.sessionId !== child.id ||
       run.runId !== claim.targetRunId ||
       run.turnId !== claim.targetTurnId ||
-      !isSessionInlineRun(run) ||
-      run.agentId !== snapshot.agentId ||
-      (run.agentName !== undefined && run.agentName !== snapshot.agentName)
+      !isSessionInlineInvocation(run.opening) ||
+      lineage?.agentId !== snapshot.agentId ||
+      (lineage?.agentName !== undefined && lineage.agentName !== snapshot.agentName)
     ) {
       throw new Error('Existing AgentRun does not match the claimed graph activation identity');
     }
@@ -2934,7 +3038,7 @@ export class SessionManager {
     }
     const [parentHeader, parentRun, parentBoundary] = await Promise.all([
       this.deps.store.readHeader(parentSessionId),
-      this.deps.runStore.readRun(parentSessionId, input.spawnedBy.parentRunId),
+      this.readInvocation(parentSessionId, input.spawnedBy.parentRunId),
       this.deps.store.readExecutionBoundary(parentSessionId),
     ]);
     this.assertActiveParentRun(parentSessionId, parentRun, input.spawnedBy.parentTurnId);
@@ -3064,7 +3168,7 @@ export class SessionManager {
       // crash boundary. Revalidate admission after the lookup: the parent or
       // caller may have settled while durable state was being inspected.
       try {
-        const latestParentRun = await this.deps.runStore.readRun(
+        const latestParentRun = await this.readInvocation(
           parentSessionId,
           input.spawnedBy.parentRunId,
         );
@@ -3138,9 +3242,10 @@ export class SessionManager {
 
       const completedAt = this.deps.now();
       const run = await this.findRunByTurnId(child.id, turnId);
-      const failureClass = run?.failureClass ?? summary.failureClass;
-      const artifacts = run
-        ? await this.finalizeAndListChildTurnArtifacts(child.id, turnId, run.status)
+      const facts = run ? invocationListingFacts(run) : undefined;
+      const failureClass = facts?.failureClass ?? summary.failureClass;
+      const artifacts = facts
+        ? await this.finalizeAndListChildTurnArtifacts(child.id, turnId, facts.status)
         : [];
       return {
         childSessionId: child.id,
@@ -3149,7 +3254,7 @@ export class SessionManager {
         profile: snapshot.profile,
         turnId,
         runId,
-        status: run ? agentRunStatusForSpawnResult(run.status) : summary.status(aborted),
+        status: facts ? agentRunStatusForSpawnResult(facts.status) : summary.status(aborted),
         permissionMode: child.permissionMode,
         summary: summary.text(),
         artifactIds: artifacts.map((artifact) => artifact.id),
@@ -3175,7 +3280,7 @@ export class SessionManager {
     if (!snapshot || !spawn) {
       throw new Error('Stored child session is missing its durable runtime or spawn identity');
     }
-    let run = await this.deps.runStore.readRun(child.id, spawn.initialRunId).catch((error) => {
+    let run = await this.readInvocation(child.id, spawn.initialRunId).catch((error) => {
       if (isNotFoundError(error)) return undefined;
       throw error;
     });
@@ -3183,32 +3288,33 @@ export class SessionManager {
     await notifyReady();
 
     while (
-      !isTerminalRunStatus(run.status) &&
+      !run.terminalEvent &&
       this.runtimeKernel.hasActiveRun?.(child.id, run.runId, run.turnId)
     ) {
       await delay(25, undefined, input.abortSignal ? { signal: input.abortSignal } : undefined);
-      run = await this.deps.runStore.readRun(child.id, spawn.initialRunId);
+      run = await this.readInvocation(child.id, spawn.initialRunId);
     }
-    if (!isTerminalRunStatus(run.status)) {
+    if (!run.terminalEvent) {
       await this.recoverAgentRunsFromLedger(child.id);
-      run = await this.deps.runStore.readRun(child.id, spawn.initialRunId);
+      run = await this.readInvocation(child.id, spawn.initialRunId);
     }
     return await this.projectExistingChildSpawn(child, run);
   }
 
   private async projectExistingChildSpawn(
     child: SessionHeader,
-    run: AgentRunHeader,
+    run: RuntimeInvocationRecord,
   ): Promise<SpawnChildSessionResult> {
     if (!this.deps.runtimeEventStore) {
       throw new Error('Child session projection requires RuntimeEventStore');
     }
     const snapshot = child.subagentRuntime;
     if (!snapshot) throw new Error('Stored child session is missing its durable runtime snapshot');
+    const facts = invocationListingFacts(run);
     const [messages, runtimeEvents, artifacts] = await Promise.all([
       this.deps.store.readMessages(child.id),
       this.deps.runtimeEventStore.readRuntimeEvents(child.id, run.runId),
-      this.finalizeAndListChildTurnArtifacts(child.id, run.turnId, run.status),
+      this.finalizeAndListChildTurnArtifacts(child.id, run.turnId, facts.status),
     ]);
     const storedSummary =
       messages
@@ -3230,7 +3336,6 @@ export class SessionManager {
       .filter((event) => event.partial)
       .map((event) => event.content.text)
       .join('');
-    const completedAt = run.completedAt ?? run.updatedAt;
     return {
       childSessionId: child.id,
       agentId: snapshot.agentId,
@@ -3238,15 +3343,15 @@ export class SessionManager {
       profile: snapshot.profile,
       turnId: run.turnId,
       runId: run.runId,
-      status: agentRunStatusForSpawnResult(run.status),
+      status: agentRunStatusForSpawnResult(facts.status),
       permissionMode: child.permissionMode,
       summary: trimSummary(durableRuntimeSummary ?? (storedSummary || partialRuntimeSummary)),
       artifactIds: artifacts.map((artifact) => artifact.id),
-      startedAt: run.createdAt,
-      completedAt,
-      durationMs: Math.max(0, completedAt - run.createdAt),
+      startedAt: facts.createdAt,
+      completedAt: facts.updatedAt,
+      durationMs: facts.durationMs ?? 0,
       eventCount: runtimeEvents.length,
-      ...(run.failureClass ? { failureClass: run.failureClass } : {}),
+      ...(facts.failureClass ? { failureClass: facts.failureClass } : {}),
     };
   }
 
@@ -3308,36 +3413,20 @@ export class SessionManager {
     });
     const presets = this.deps.subagentCatalog ? await this.deps.subagentCatalog.list() : [];
     if (!this.deps.runStore) return { definitions, presets, executions: [], runs: [] };
-    const runs = await this.deps.runStore.listSessionRuns(sessionId);
-    const childRuns = await Promise.all(
-      runs
-        .filter(
-          (run): run is AgentRunHeader & { parentRunId: string } =>
-            !!run.parentRunId && !isSessionInlineRun(run),
-        )
-        .map(
-          async (run): Promise<AgentRunHeader & { parentRunId: string }> => ({
-            ...(await this.effectiveRunHeaderFromRuntimeLedger(run)),
-            parentRunId: run.parentRunId,
-          }),
-        ),
+    const childRuns = (await this.listInvocations(sessionId)).filter(
+      (run) => !!run.opening.lineage?.parentRunId && !isSessionInlineInvocation(run.opening),
     );
-    const legacyRuns = childRuns.map((run) => ({
-      runId: run.runId,
-      turnId: run.turnId,
-      parentRunId: run.parentRunId,
-      ...(run.agentId ? { agentId: run.agentId } : {}),
-      ...(run.agentName ? { agentName: run.agentName } : {}),
-      status: run.status,
-      permissionMode: run.permissionMode,
-      createdAt: run.createdAt,
-      updatedAt: run.updatedAt,
-      ...(run.completedAt !== undefined ? { completedAt: run.completedAt } : {}),
-      ...(run.completedAt !== undefined
-        ? { durationMs: Math.max(0, run.completedAt - run.createdAt) }
-        : {}),
-      ...(run.failureClass ? { failureClass: run.failureClass } : {}),
-    }));
+    const legacyRuns = childRuns.map((run) => {
+      const facts = invocationListingFacts(run);
+      return {
+        runId: run.runId,
+        turnId: run.turnId,
+        parentRunId: run.opening.lineage!.parentRunId!,
+        ...(run.opening.lineage?.agentId ? { agentId: run.opening.lineage.agentId } : {}),
+        ...(run.opening.lineage?.agentName ? { agentName: run.opening.lineage.agentName } : {}),
+        ...facts,
+      };
+    });
     const childSessionHeaders = await Promise.all(
       (await this.listChildSessions(sessionId)).map((child) =>
         this.deps.store.readHeader(child.id),
@@ -3345,16 +3434,8 @@ export class SessionManager {
     );
     const childSessionExecutions = await Promise.all(
       childSessionHeaders.map(async (child): Promise<SubagentExecutionListItem> => {
-        const childRuns = await this.deps.runStore!.listSessionRuns(child.id);
-        const latest = childRuns
-          .slice()
-          .sort(
-            (left, right) =>
-              right.createdAt - left.createdAt ||
-              right.updatedAt - left.updatedAt ||
-              right.runId.localeCompare(left.runId),
-          )[0];
-        const run = latest ? await this.effectiveRunHeaderFromRuntimeLedger(latest) : undefined;
+        const run = latestInvocation(await this.listInvocations(child.id));
+        const facts = run ? invocationListingFacts(run) : undefined;
         const currentRunId = run?.runId ?? child.subagentSpawn?.initialRunId;
         return {
           execution: {
@@ -3368,15 +3449,13 @@ export class SessionManager {
             : {}),
           ...(child.subagentRuntime?.profile ? { profile: child.subagentRuntime.profile } : {}),
           ...(run?.turnId ? { turnId: run.turnId } : {}),
-          status: run?.status ?? (child.status === 'aborted' ? 'cancelled' : 'created'),
-          permissionMode: run?.permissionMode ?? child.permissionMode,
-          createdAt: run?.createdAt ?? child.createdAt,
-          updatedAt: run?.updatedAt ?? child.lastMessageAt ?? child.createdAt,
-          ...(run?.completedAt !== undefined ? { completedAt: run.completedAt } : {}),
-          ...(run?.completedAt !== undefined
-            ? { durationMs: Math.max(0, run.completedAt - run.createdAt) }
-            : {}),
-          ...(run?.failureClass ? { failureClass: run.failureClass } : {}),
+          status: facts?.status ?? (child.status === 'aborted' ? 'cancelled' : 'running'),
+          permissionMode: facts?.permissionMode ?? child.permissionMode,
+          createdAt: facts?.createdAt ?? child.createdAt,
+          updatedAt: facts?.updatedAt ?? child.lastMessageAt ?? child.createdAt,
+          ...(facts?.completedAt !== undefined ? { completedAt: facts.completedAt } : {}),
+          ...(facts?.durationMs !== undefined ? { durationMs: facts.durationMs } : {}),
+          ...(facts?.failureClass ? { failureClass: facts.failureClass } : {}),
         };
       }),
     );
@@ -3385,7 +3464,7 @@ export class SessionManager {
       presets,
       executions: [
         ...childSessionExecutions,
-        ...childRuns.map(
+        ...legacyRuns.map(
           (run): SubagentExecutionListItem => ({
             execution: {
               kind: 'legacy_child_run',
@@ -3400,9 +3479,7 @@ export class SessionManager {
             createdAt: run.createdAt,
             updatedAt: run.updatedAt,
             ...(run.completedAt !== undefined ? { completedAt: run.completedAt } : {}),
-            ...(run.completedAt !== undefined
-              ? { durationMs: Math.max(0, run.completedAt - run.createdAt) }
-              : {}),
+            ...(run.durationMs !== undefined ? { durationMs: run.durationMs } : {}),
             ...(run.failureClass ? { failureClass: run.failureClass } : {}),
           }),
         ),
@@ -3424,27 +3501,23 @@ export class SessionManager {
       throw new Error('agent_output requires AgentRunStore and RuntimeEventStore');
     }
     const located = await this.findChildRunForOutput(sessionId, input);
-    const { header } = located;
+    const { invocation } = located;
     const inspected = await inspectAgentRunReadModel(
       this.deps.runStore,
       this.deps.runtimeEventStore,
-      {
-        sessionId: header.sessionId,
-        runId: header.runId,
-        header,
-      },
+      { sessionId: invocation.sessionId, runId: invocation.runId, invocation },
     );
     const artifacts = await this.finalizeAndListChildTurnArtifacts(
-      header.sessionId,
-      header.turnId,
-      inspected.header.status,
+      invocation.sessionId,
+      invocation.turnId,
+      runtimeInvocationOutcome(inspected.invocation) ?? 'running',
     );
     const maxEvents = normalizeAgentOutputMaxEvents(input.maxEvents);
     const maxBytes = normalizeAgentOutputMaxBytes(input.maxBytes);
     const view = input.view ?? 'runtime_events';
     if (view === 'result') {
       const boundedResult = buildAgentOutputCommittedResult({
-        header: inspected.header,
+        invocation: inspected.invocation,
         runtimeEvents: inspected.runtimeEvents,
         artifacts,
         maxArtifacts: maxEvents,
@@ -3453,7 +3526,7 @@ export class SessionManager {
       });
       return {
         execution: located.execution,
-        header: inspected.header,
+        invocation: inspected.invocation,
         result: boundedResult.result,
         events: [],
         runtimeEvents: [],
@@ -3485,7 +3558,7 @@ export class SessionManager {
     );
     return {
       execution: located.execution,
-      header: inspected.header,
+      invocation: inspected.invocation,
       events: bounded.events,
       runtimeEvents: bounded.runtimeEvents,
       sourceHealth: inspected.sourceHealth,
@@ -3593,30 +3666,44 @@ export class SessionManager {
       throw new Error('Hosted admission recovery requires execution stores');
     }
     const session = await this.deps.store.readHeader(input.sessionId);
-    const headerExtras: Partial<AgentRunHeader> = {};
+    let root: RuntimeInvocationRootAuthority = { kind: 'user' };
+    let orchestration: Pick<
+      RuntimeInvocationConfiguration,
+      'orchestrationMode' | 'orchestrationSource' | 'agentSwarmAuthorization'
+    > = {
+      orchestrationMode: session.orchestrationMode ?? 'default',
+      orchestrationSource: 'session',
+      agentSwarmAuthorization: 'none',
+    };
+    const lineage: RuntimeInvocationLineage = {};
     let recoveryReason: string;
     let diagnostic: Record<string, unknown>;
     let workspaceIdentity: string | undefined;
     if (input.execution.kind === 'goal') {
-      headerExtras.goalId = input.execution.goalId;
+      root = { kind: 'goal', goalId: input.execution.goalId };
       recoveryReason = 'goal_internal_admission_without_run';
       diagnostic = {
         executionKind: input.execution.kind,
         goalId: input.execution.goalId,
       };
     } else if (input.execution.kind === 'legacy_automation') {
-      headerExtras.legacyAutomationId = input.execution.automationId;
+      root = { kind: 'legacy_automation', legacyAutomationId: input.execution.automationId };
       recoveryReason = 'legacy_automation_authority_removed';
       diagnostic = {
         executionKind: input.execution.kind,
         automationId: input.execution.automationId,
       };
     } else if (input.execution.kind === 'agent_graph_supervisor_wake') {
-      headerExtras.agentGraphWakeId = input.execution.wakeId;
-      headerExtras.agentGraphWakeAttemptId = input.execution.attemptId;
-      headerExtras.orchestrationMode = 'graph';
-      headerExtras.orchestrationSource = 'turn_override';
-      headerExtras.agentSwarmAuthorization = 'none';
+      root = {
+        kind: 'agent_graph_supervisor_wake',
+        wakeId: input.execution.wakeId,
+        attemptId: input.execution.attemptId,
+      };
+      orchestration = {
+        orchestrationMode: 'graph',
+        orchestrationSource: 'turn_override',
+        agentSwarmAuthorization: 'none',
+      };
       recoveryReason = 'agent_graph_supervisor_internal_admission_without_run';
       diagnostic = {
         executionKind: input.execution.kind,
@@ -3668,27 +3755,24 @@ export class SessionManager {
         input.execution.kind === 'linked_child_resume' ||
         input.execution.kind === 'linked_child_provider_retry'
       ) {
-        const sourceRun = await this.deps.runStore.readRun(
-          input.sessionId,
-          input.execution.sourceRunId,
-        );
+        const sourceRun = await this.readInvocation(input.sessionId, input.execution.sourceRunId);
         if (
-          sourceRun.agentId !== input.execution.agentId ||
-          sourceRun.agentName !== input.execution.agentName
+          sourceRun.opening.lineage?.agentId !== input.execution.agentId ||
+          sourceRun.opening.lineage.agentName !== input.execution.agentName
         ) {
           throw new Error(
             `Admitted Turn ${input.turnId} source changed its trusted agent identity`,
           );
         }
-        workspaceIdentity = sourceRun.workspaceIdentity;
+        workspaceIdentity = sourceRun.opening.configuration.workspaceIdentity;
         if (input.execution.kind === 'linked_child_resume') {
-          headerExtras.resumedFromRunId = input.execution.sourceRunId;
+          lineage.resumedFromRunId = input.execution.sourceRunId;
         } else {
-          headerExtras.retriedFromRunId = input.execution.sourceRunId;
+          lineage.retriedFromRunId = input.execution.sourceRunId;
         }
       }
-      headerExtras.agentId = input.execution.agentId;
-      headerExtras.agentName = input.execution.agentName;
+      lineage.agentId = input.execution.agentId;
+      lineage.agentName = input.execution.agentName;
       recoveryReason = 'child_internal_admission_without_run';
       diagnostic = {
         executionKind: input.execution.kind,
@@ -3701,27 +3785,55 @@ export class SessionManager {
       throw new Error('External message recovery closure is not supported');
     }
 
-    const run: AgentRunHeader = {
-      runId: input.runId,
-      invocationId: input.runId,
+    const run = {
       sessionId: input.sessionId,
+      invocationId: input.runId,
+      runId: input.runId,
       turnId: input.turnId,
-      status: 'created',
-      backendKind: session.backend,
-      ...(session.llmConnectionId === undefined
-        ? {}
-        : { llmConnectionId: session.llmConnectionId }),
-      llmConnectionSlug: session.llmConnectionSlug,
-      modelId: session.model,
-      cwd: session.cwd,
-      ...(workspaceIdentity !== undefined ? { workspaceIdentity } : {}),
-      permissionMode: session.permissionMode,
-      collaborationMode: session.collaborationMode ?? 'agent',
-      createdAt: input.admittedAt,
-      updatedAt: input.admittedAt,
-      ...headerExtras,
     };
-    await this.deps.runStore.createRun(run, { durable: true });
+    const opening: RuntimeEventInvocationOpenedContent = {
+      kind: 'invocation_opened',
+      protocol: 'invocation_opened_v1',
+      route:
+        session.llmConnectionId === undefined
+          ? {
+              provenance: 'unknown',
+              backendKind: session.backend,
+              llmConnectionSlug: session.llmConnectionSlug,
+              modelId: session.model,
+            }
+          : {
+              provenance: 'runtime',
+              backendKind: session.backend,
+              llmConnectionId: session.llmConnectionId,
+              llmConnectionSlug: session.llmConnectionSlug,
+              modelId: session.model,
+            },
+      configuration: {
+        cwd: session.cwd,
+        permissionMode: session.permissionMode,
+        collaborationMode: session.collaborationMode ?? 'agent',
+        toolMode: DEFAULT_TOOL_MODE,
+        ...orchestration,
+        ...(workspaceIdentity !== undefined ? { workspaceIdentity } : {}),
+      },
+      root,
+      source: { kind: 'fresh' },
+      ...(Object.keys(lineage).length > 0 ? { lineage } : {}),
+    };
+    // The admission never reached an AgentRun, so nothing else will ever open
+    // this invocation. Recovery opens and closes it in one pass so the Turn
+    // ends up on the spine like any other, with its own reason for ending.
+    await this.deps.runtimeEventStore.appendRuntimeEvent(
+      input.sessionId,
+      input.runId,
+      buildInvocationOpenedEvent({
+        id: this.deps.newId(),
+        run,
+        openedAt: input.admittedAt,
+        opening,
+      }),
+    );
 
     const ts = this.deps.now();
     const terminalEvent = buildRecoveredTerminalRuntimeEvent({
@@ -3735,7 +3847,6 @@ export class SessionManager {
       message: 'app_restarted',
     });
     await commitTerminalRunWithRuntimeFact({
-      runStore: this.deps.runStore,
       runtimeEventStore: this.deps.runtimeEventStore,
       newId: this.deps.newId,
       sessionId: input.sessionId,
@@ -3745,12 +3856,6 @@ export class SessionManager {
       ts,
       terminalEvent,
       failureClass: 'app_restarted',
-      runEventData: {
-        recovered: true,
-        recoveryReason,
-        ...diagnostic,
-      },
-      existingEvents: [],
     });
   }
 
@@ -3875,13 +3980,6 @@ export class SessionManager {
     };
   }
 
-  async branchFromTurn(sessionId: string, input: BranchFromTurnInput): Promise<SessionSummary> {
-    const sourceView = await this.getSessionView(sessionId);
-    const slice = createConversationCopySlice(sourceView.messages, input.sourceTurnId, 'through');
-    if (!slice) throw new Error(`Cannot branch from unknown turn ${input.sourceTurnId}`);
-    return this.createBranchSession(sessionId, sourceView, [...slice.messages], input);
-  }
-
   /** Canonical, repaired source view for a Host-owned cross-Session copy. */
   async readConversationCopySnapshot(sessionId: string): Promise<RuntimeReadModelSessionView> {
     const readMessagesSnapshot = this.deps.store.readMessagesSnapshot;
@@ -3890,7 +3988,7 @@ export class SessionManager {
     }
     const readMessages = readMessagesSnapshot.bind(this.deps.store);
     const view = await this.getSessionView(sessionId, { readMessages });
-    if (view.runs.length > 0 || view.messages.length > 0) return view;
+    if (view.invocations.length > 0 || view.messages.length > 0) return view;
     const messages = await readMessages(sessionId);
     if (messages.length === 0) return view;
     return {
@@ -3898,148 +3996,6 @@ export class SessionManager {
       messages,
       turns: deriveTurnRecords(messages),
     };
-  }
-
-  async branchBeforeTurn(sessionId: string, input: BranchFromTurnInput): Promise<SessionSummary> {
-    const sourceView = await this.getSessionView(sessionId);
-    const slice = createConversationCopySlice(sourceView.messages, input.sourceTurnId, 'before');
-    if (!slice) throw new Error(`Cannot branch before unknown turn ${input.sourceTurnId}`);
-    return this.createBranchSession(sessionId, sourceView, [...slice.messages], input);
-  }
-
-  /**
-   * Create a non-destructive edit-and-resend version. Unlike branchBeforeTurn,
-   * this is not a new sidebar conversation: revision lineage lets hosts fold
-   * every version into one conversation slot while keeping old transcripts.
-   */
-  async reviseBeforeTurn(sessionId: string, input: ReviseBeforeTurnInput): Promise<SessionSummary> {
-    const sourceView = await this.getSessionView(sessionId);
-    const slice = createConversationCopySlice(sourceView.messages, input.sourceTurnId, 'before');
-    if (!slice) throw new Error(`Cannot revise before unknown turn ${input.sourceTurnId}`);
-    return this.createRevisionSession(sessionId, sourceView, [...slice.messages], input);
-  }
-
-  private async createRevisionSession(
-    sessionId: string,
-    sourceView: RuntimeReadModelSessionView,
-    copied: StoredMessage[],
-    input: ReviseBeforeTurnInput,
-  ): Promise<SessionSummary> {
-    const plan = await this.prepareConversationRuntimeLedgerClone(sessionId, sourceView, copied);
-    const [header, boundary] = await Promise.all([
-      this.deps.store.readHeader(sessionId),
-      this.deps.store.readExecutionBoundary(sessionId),
-    ]);
-    const revisionRootSessionId = header.revisionRootSessionId ?? sessionId;
-    const family = (await this.deps.store.list()).filter(
-      (candidate) =>
-        candidate.id === revisionRootSessionId ||
-        candidate.revisionRootSessionId === revisionRootSessionId,
-    );
-    const revisionIndex =
-      Math.max(1, ...family.map((candidate) => candidate.revisionIndex ?? 1)) + 1;
-    const next = await this.deps.store.create(
-      {
-        cwd: header.cwd,
-        ...(header.projectId !== undefined ? { projectId: header.projectId } : {}),
-        ...(header.llmConnectionId === undefined
-          ? {}
-          : { llmConnectionId: header.llmConnectionId }),
-        llmConnectionSlug: header.llmConnectionSlug,
-        model: header.model,
-        thinkingLevel: header.thinkingLevel,
-        permissionMode: header.permissionMode,
-        collaborationMode: header.collaborationMode,
-        orchestrationMode: header.orchestrationMode ?? 'default',
-        name: header.name,
-        labels: header.labels,
-        // A revision of a real branch remains in that branch's conversation
-        // slot; revision lineage itself must not create a branch banner.
-        parentSessionId: header.parentSessionId,
-        branchOfTurnId: header.branchOfTurnId,
-        revisionRootSessionId,
-        revisionParentSessionId: sessionId,
-        revisionOfTurnId: input.sourceTurnId,
-        revisionIndex,
-        revisionState: 'preparing',
-        status: 'active',
-      },
-      boundary,
-    );
-    try {
-      const rewritten = await this.cloneConversationRuntimeLedger(next.id, copied, plan);
-      if (rewritten.length > 0) await this.deps.store.appendMessages(next.id, [...rewritten]);
-      await this.deps.store.appendMessage(next.id, {
-        type: 'system_note',
-        id: this.deps.newId(),
-        ts: this.deps.now(),
-        kind: 'session_start',
-        data: {
-          revisionRootSessionId,
-          revisionParentSessionId: sessionId,
-          revisionOfTurnId: input.sourceTurnId,
-          revisionIndex,
-          revisionState: 'preparing',
-        },
-      });
-      await this.deps.store.updateHeader(next.id, {
-        isFlagged: header.isFlagged,
-        titleIsManual: header.titleIsManual,
-      });
-      return headerToSummary(await this.deps.store.readHeader(next.id));
-    } catch (error) {
-      return this.rollbackLegacyConversationCopy(next.id, error);
-    }
-  }
-
-  private async createBranchSession(
-    sessionId: string,
-    sourceView: RuntimeReadModelSessionView,
-    copied: StoredMessage[],
-    input: BranchFromTurnInput,
-  ): Promise<SessionSummary> {
-    const plan = await this.prepareConversationRuntimeLedgerClone(sessionId, sourceView, copied);
-    const [header, boundary] = await Promise.all([
-      this.deps.store.readHeader(sessionId),
-      this.deps.store.readExecutionBoundary(sessionId),
-    ]);
-    const next = await this.deps.store.create(
-      {
-        cwd: header.cwd,
-        ...(header.projectId !== undefined ? { projectId: header.projectId } : {}),
-        ...(header.llmConnectionId === undefined
-          ? {}
-          : { llmConnectionId: header.llmConnectionId }),
-        llmConnectionSlug: header.llmConnectionSlug,
-        model: header.model,
-        thinkingLevel: header.thinkingLevel,
-        permissionMode: header.permissionMode,
-        collaborationMode: header.collaborationMode,
-        orchestrationMode: header.orchestrationMode ?? 'default',
-        name: input.name ?? `${header.name} · 分支`,
-        labels: input.sideConversation
-          ? [...new Set([...header.labels, SIDE_CONVERSATION_SESSION_LABEL])]
-          : header.labels,
-        parentSessionId: sessionId,
-        branchOfTurnId: input.sourceTurnId,
-        status: 'active',
-      },
-      boundary,
-    );
-    try {
-      const rewritten = await this.cloneConversationRuntimeLedger(next.id, copied, plan);
-      if (rewritten.length > 0) await this.deps.store.appendMessages(next.id, [...rewritten]);
-      await this.deps.store.appendMessage(next.id, {
-        type: 'system_note',
-        id: this.deps.newId(),
-        ts: this.deps.now(),
-        kind: 'session_start',
-        data: { parentSessionId: sessionId, branchOfTurnId: input.sourceTurnId },
-      });
-      return headerToSummary(await this.deps.store.readHeader(next.id));
-    } catch (error) {
-      return this.rollbackLegacyConversationCopy(next.id, error);
-    }
   }
 
   async respondToSandboxBoundary(
@@ -4070,16 +4026,15 @@ export class SessionManager {
   private async findRunByTurnId(
     sessionId: string,
     turnId: string,
-  ): Promise<AgentRunHeader | undefined> {
+  ): Promise<RuntimeInvocationRecord | undefined> {
     if (!this.deps.runStore) return undefined;
-    const runs = await this.deps.runStore.listSessionRuns(sessionId).catch(() => []);
-    const run = runs.find((candidate) => candidate.turnId === turnId);
-    return run ? this.effectiveRunHeaderFromRuntimeLedger(run) : undefined;
+    const runs = await this.listInvocations(sessionId).catch(() => []);
+    return runs.find((candidate) => candidate.turnId === turnId);
   }
 
   private assertActiveParentRun(
     parentSessionId: string,
-    parentRun: AgentRunHeader,
+    parentRun: RuntimeInvocationRecord,
     parentTurnId: string,
   ): void {
     if (
@@ -4142,7 +4097,7 @@ export class SessionManager {
     sessionId: string,
     input: AgentOutputInput,
   ): Promise<{
-    header: AgentRunHeader;
+    invocation: RuntimeInvocationRecord;
     execution: SubagentExecutionRef;
     graph?: NonNullable<SubagentSessionParent['graph']>;
   }> {
@@ -4162,27 +4117,19 @@ export class SessionManager {
       ) {
         throw new Error('agent_output could not find the requested child session');
       }
-      const runs = await this.deps.runStore?.listSessionRuns(child.id);
+      const runs = await this.listInvocations(child.id);
       const selected = execution.currentRunId
-        ? runs?.find((run) => run.runId === execution.currentRunId)
-        : runs
-            ?.slice()
-            .sort(
-              (left, right) =>
-                right.createdAt - left.createdAt ||
-                right.updatedAt - left.updatedAt ||
-                right.runId.localeCompare(left.runId),
-            )[0];
-      if (!selected || !isSessionInlineRun(selected)) {
+        ? runs.find((run) => run.runId === execution.currentRunId)
+        : latestInvocation(runs);
+      if (!selected || !isSessionInlineInvocation(selected.opening)) {
         throw new Error('agent_output could not find the requested child session run');
       }
-      const header = await this.effectiveRunHeaderFromRuntimeLedger(selected);
       return {
-        header,
+        invocation: selected,
         execution: {
           kind: 'child_session',
           sessionId: child.id,
-          currentRunId: header.runId,
+          currentRunId: selected.runId,
         },
         ...(child.subagentParent.graph ? { graph: child.subagentParent.graph } : {}),
       };
@@ -4193,8 +4140,7 @@ export class SessionManager {
     if (legacyExecution && legacyExecution.sessionId !== sessionId) {
       throw new Error('agent_output could not find the requested legacy child run');
     }
-    const runs = await this.deps.runStore?.listSessionRuns(sessionId);
-    const header = runs?.find((run) =>
+    const invocation = (await this.listInvocations(sessionId)).find((run) =>
       legacyExecution
         ? run.runId === legacyExecution.runId
         : input.runId
@@ -4203,28 +4149,18 @@ export class SessionManager {
             ? run.turnId === input.turnId
             : false,
     );
-    if (!header) throw new Error('agent_output could not find the requested child agent run');
-    if (!header.parentRunId || isSessionInlineRun(header)) {
+    if (!invocation) throw new Error('agent_output could not find the requested child agent run');
+    if (!invocation.opening.lineage?.parentRunId || isSessionInlineInvocation(invocation.opening)) {
       throw new Error('agent_output only reads child agent runs');
     }
     return {
-      header: await this.effectiveRunHeaderFromRuntimeLedger(header),
+      invocation,
       execution: {
         kind: 'legacy_child_run',
         sessionId,
-        runId: header.runId,
+        runId: invocation.runId,
       },
     };
-  }
-
-  private async effectiveRunHeaderFromRuntimeLedger(run: AgentRunHeader): Promise<AgentRunHeader> {
-    if (!this.deps.runtimeEventStore) return run;
-    const runtimeEvents = await this.deps.runtimeEventStore
-      .readRuntimeEvents(run.sessionId, run.runId)
-      .catch(() => undefined);
-    if (!runtimeEvents) return run;
-    const ledger = classifyTerminalRuntimeLedger(run, runtimeEvents);
-    return ledger.kind === 'fact' ? effectiveRunHeaderFromTerminalFact(run, ledger.fact) : run;
   }
 
   private async updateStatus(
@@ -4407,22 +4343,6 @@ export class SessionManager {
     sessionId: string,
     projectionCache: RuntimeReadModelProjectionCache = this.deps.store,
   ): Promise<RuntimeReadModelSessionView> {
-    const repaired = new Set<string>();
-    for (let attempt = 0; attempt < MAX_RUNTIME_LEDGER_REPAIR_ATTEMPTS; attempt += 1) {
-      try {
-        const view = await this.readModel(projectionCache).getSessionView(sessionId);
-        const runId = firstRuntimeRepairRunId(view.diagnostics, repaired);
-        if (!runId) return view;
-        if (!(await this.repairMissingTerminalFactOnce(sessionId, runId))) return view;
-        repaired.add(runId);
-      } catch (error) {
-        if (!(error instanceof RuntimeReadModelError)) throw error;
-        const runId = firstRuntimeRepairRunId(error.diagnostics, repaired);
-        if (!runId) throw error;
-        if (!(await this.repairMissingTerminalFactOnce(sessionId, runId))) throw error;
-        repaired.add(runId);
-      }
-    }
     return this.readModel(projectionCache).getSessionView(sessionId);
   }
 
@@ -4433,19 +4353,12 @@ export class SessionManager {
       throw new Error('RuntimeReadModel requires AgentRunStore and RuntimeEventStore');
     }
     return new RuntimeReadModel({
-      runStore: this.deps.runStore,
       runtimeEventStore: this.deps.runtimeEventStore,
       projectionCache,
       ...(this.deps.canonicalPermissionOutcomes
         ? { canonicalPermissionOutcomes: this.deps.canonicalPermissionOutcomes }
         : {}),
     });
-  }
-
-  private async repairMissingTerminalFactOnce(sessionId: string, runId: string): Promise<boolean> {
-    return (
-      (await this.runtimeLedgerRepair?.repairMissingTerminalFactOnce(sessionId, runId)) ?? false
-    );
   }
 
   async prepareImportedSessionHistory(sessionId: string): Promise<void> {
@@ -4471,54 +4384,6 @@ export class SessionManager {
     this.preparedTranscriptLedgers.add(sessionId);
   }
 
-  private async prepareConversationRuntimeLedgerClone(
-    sourceSessionId: string,
-    sourceView: RuntimeReadModelSessionView,
-    copiedMessages: readonly StoredMessage[],
-  ): Promise<ConversationRuntimeLedgerCopyPlan | undefined> {
-    if (!this.deps.runStore || !this.deps.runtimeEventStore) return undefined;
-    return prepareConversationRuntimeLedgerCopy({
-      sourceSessionId,
-      sourceEvents: sourceView.events,
-      copiedMessages,
-      runStore: this.deps.runStore,
-      runtimeEventStore: this.deps.runtimeEventStore,
-    });
-  }
-
-  private async cloneConversationRuntimeLedger(
-    childSessionId: string,
-    copiedMessages: readonly StoredMessage[],
-    plan: ConversationRuntimeLedgerCopyPlan | undefined,
-  ): Promise<readonly StoredMessage[]> {
-    if (!plan || !this.deps.runStore || !this.deps.runtimeEventStore) return copiedMessages;
-    const copied = await cloneConversationLedger({
-      plan,
-      copiedMessages,
-      referenceMap: {
-        mode: 'preserve_external',
-        sourceSessionId: plan.sourceSessionId,
-        targetSessionId: childSessionId,
-      },
-      runStore: this.deps.runStore,
-      runtimeEventStore: this.deps.runtimeEventStore,
-      newId: this.deps.newId,
-    });
-    return copied.copiedMessages;
-  }
-
-  private async rollbackLegacyConversationCopy(sessionId: string, error: unknown): Promise<never> {
-    try {
-      await this.deps.store.remove(sessionId);
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        `Conversation copy ${sessionId} failed and could not be removed`,
-      );
-    }
-    throw error;
-  }
-
   /**
    * Closes only the two provably pre-provider crash windows owned by B2:
    * claim-only and target-Run-created-without-start. A repaired claim never
@@ -4541,33 +4406,19 @@ export class SessionManager {
     let recovered = false;
     for (const initialState of states) {
       const { claim } = initialState;
-      let run: AgentRunHeader;
-      try {
-        run = await this.deps.runStore.readRun(sessionId, claim.target.runId);
-      } catch (error) {
-        if (!isMissingRunError(error)) throw error;
-        try {
-          await this.deps.runStore.createRun(claim.targetRunHeader, { durable: true });
-          run = await this.deps.runStore.readRun(sessionId, claim.target.runId);
-        } catch (createError) {
-          try {
-            run = await this.deps.runStore.readRun(sessionId, claim.target.runId);
-          } catch {
-            throw createError;
-          }
-        }
-        recovered = true;
-      }
+      // The target's opening fact rides its continuation-start event, so an
+      // invocation that does not exist yet is exactly the case the repair
+      // start below commits. There is no separate run record to create.
+      const invocation = await this.readInvocation(sessionId, claim.target.runId).catch((error) => {
+        if (isMissingRunError(error)) return undefined;
+        throw error;
+      });
       let state =
         (await authority.readContinuationClaimStateByBoundary(claim.boundaryDigest)) ??
         initialState;
-      if (
-        state.startEventId
-          ? !claimTargetRunHeaderIsCompatible(run, claim.targetRunHeader)
-          : !isDeepStrictEqual(run, claim.targetRunHeader)
-      ) {
+      if (invocation && !invocationMatchesClaimTarget(invocation, claim)) {
         throw new Error(
-          `Continuation claim target Run header conflicts with claim ${claim.claimId}`,
+          `Continuation claim target invocation conflicts with claim ${claim.claimId}`,
         );
       }
 
@@ -4606,7 +4457,7 @@ export class SessionManager {
       const failureClass = 'continuation_abandoned_before_provider_dispatch';
       const expectedTerminal = buildRecoveredTerminalRuntimeEvent({
         id: continuationRepairEventId('terminal', claim.claimId),
-        run,
+        run: claim.target,
         status: 'failed',
         ts: Math.max(start.ts + 1, claim.claimedAt + 1),
         recoveryReason: failureClass,
@@ -4618,18 +4469,8 @@ export class SessionManager {
       if (terminal && !isDeepStrictEqual(terminal, expectedTerminal)) {
         throw new Error(`Continuation claim ${claim.claimId} has a conflicting repair terminal`);
       }
-      const existingRunEvents = await this.deps.runStore.readEvents(
-        claim.target.sessionId,
-        claim.target.runId,
-      );
-      const projectionComplete =
-        terminal !== undefined &&
-        run.status === 'failed' &&
-        run.failureClass === failureClass &&
-        existingRunEvents.some((event) => event.type === 'run_failed');
-      if (projectionComplete) continue;
+      if (terminal) continue;
       await commitTerminalRunWithRuntimeFact({
-        runStore: this.deps.runStore,
         runtimeEventStore: authority,
         newId: () => continuationRepairEventId('run-terminal', claim.claimId),
         sessionId: claim.target.sessionId,
@@ -4639,12 +4480,6 @@ export class SessionManager {
         ts: expectedTerminal.ts,
         terminalEvent: expectedTerminal,
         failureClass,
-        runEventData: {
-          recovered: true,
-          recoveryReason: failureClass,
-          continuationClaimId: claim.claimId,
-        },
-        existingEvents: existingRunEvents,
       });
       recovered = true;
     }
@@ -4657,10 +4492,7 @@ export class SessionManager {
   ): Promise<{ hasLedger: boolean; recovered: boolean }> {
     if (!this.deps.runStore || !this.deps.runtimeEventStore)
       return { hasLedger: false, recovered: false };
-    const runs =
-      policy.kind === 'strict'
-        ? await policy.stores.agentRunStore.listSessionRunsForRecovery(sessionId)
-        : await this.deps.runStore.listSessionRuns(sessionId);
+    const runs = await this.listInvocations(sessionId);
     if (runs.length === 0) return { hasLedger: false, recovered: false };
     const continuationAuthority = runtimeContinuationAuthority(this.deps.runtimeEventStore);
     const claimOwnedUnsettledRunIds = new Set<string>();
@@ -4702,7 +4534,7 @@ export class SessionManager {
       let inspected = await inspectAgentRunReadModel(
         this.deps.runStore,
         this.deps.runtimeEventStore,
-        { sessionId, runId: run.runId, header: run },
+        { sessionId, runId: run.runId, invocation: run },
       );
       if (inspected.sourceHealth.runtimeLedger === 'read_failed') {
         if (policy.kind === 'strict') {
@@ -4733,7 +4565,7 @@ export class SessionManager {
         const interruptedOutcomes = buildInterruptedCodeModeOutcomeCommits(
           inspected.runtimeEvents,
           this.deps.now(),
-          run.toolMode ?? DEFAULT_TOOL_MODE,
+          run.opening.configuration.toolMode,
         );
         let outcomeCommitFailed = false;
         for (const outcome of interruptedOutcomes) {
@@ -4755,23 +4587,16 @@ export class SessionManager {
           inspected = await inspectAgentRunReadModel(
             this.deps.runStore,
             this.deps.runtimeEventStore,
-            { sessionId, runId: run.runId, header: run },
+            { sessionId, runId: run.runId, invocation: run },
           );
         }
       }
       const terminalLedger = classifyTerminalRuntimeLedger(run, inspected.runtimeEvents);
-      if (terminalLedger.kind === 'ambiguous') {
+      if (terminalLedger.kind === 'corrupt') {
         if (policy.kind === 'strict') {
-          throw new Error(`RuntimeEvent ledger has ambiguous terminal facts for run ${run.runId}`);
-        }
-        continue;
-      }
-      if (isTerminalRunStatus(run.status) && !inspected.terminalRuntimeFact) {
-        const repaired = await this.repairMissingTerminalFactOnce(sessionId, run.runId);
-        if (repaired) {
-          recovered = true;
-        } else if (policy.kind === 'strict') {
-          throw new Error(`Unable to repair the terminal RuntimeEvent fact for run ${run.runId}`);
+          throw new Error(
+            `RuntimeEvent ledger has more than one terminal event for run ${run.runId}`,
+          );
         }
         continue;
       }
@@ -4792,9 +4617,11 @@ export class SessionManager {
   private classifyRuntimeEventRecovery(
     inspected: AgentRunInspectModel,
   ): AgentRunRecoveryDecision | undefined {
-    if (isTerminalRunStatus(inspected.header.status) || !inspected.terminalRuntimeFact)
-      return undefined;
-    return runtimeTerminalFactToRecoveryDecision(inspected.header, inspected.terminalRuntimeFact);
+    if (!inspected.terminalRuntimeFact) return undefined;
+    return runtimeTerminalFactToRecoveryDecision(
+      inspected.invocation,
+      inspected.terminalRuntimeFact,
+    );
   }
 
   private async applyAgentRunRecovery(
@@ -4805,12 +4632,7 @@ export class SessionManager {
   ): Promise<boolean> {
     if (!this.deps.runStore || !this.deps.runtimeEventStore) return false;
     const ts = this.deps.now();
-    const terminalLedger = classifyTerminalRuntimeLedger(inspected.header, inspected.runtimeEvents);
-    const existingTerminal =
-      inspected.terminalRuntimeFact?.terminalEvent ??
-      (terminalLedger.kind === 'incomplete_single_terminal'
-        ? terminalLedger.terminalEvent
-        : undefined);
+    const existingTerminal = inspected.terminalRuntimeFact?.terminalEvent;
     const status = existingTerminal
       ? (terminalRunStatusFromRuntimeEvent(existingTerminal) ?? decision.status)
       : decision.status;
@@ -4821,7 +4643,7 @@ export class SessionManager {
       existingTerminal ??
       buildRecoveredTerminalRuntimeEvent({
         id: this.deps.newId(),
-        run: inspected.header,
+        run: inspected.invocation,
         status,
         ts,
         recoveryReason: diagnosticRecoveryReason(decision.diagnostic),
@@ -4834,7 +4656,6 @@ export class SessionManager {
       });
     try {
       await commitTerminalRunWithRuntimeFact({
-        runStore: this.deps.runStore,
         runtimeEventStore: this.deps.runtimeEventStore,
         newId: this.deps.newId,
         sessionId,
@@ -4845,20 +4666,18 @@ export class SessionManager {
         terminalEvent,
         ...(failureClass ? { failureClass } : {}),
         ...(abortSource ? { abortSource } : {}),
-        runEventData: { recovered: true, ...decision.diagnostic },
-        existingEvents: inspected.events,
       });
     } catch (error) {
       if (policy.kind === 'strict') throw error;
       return false;
     }
 
-    await recoverOr(
+    const appendedTurnState = await recoverOr(
       policy,
       () =>
         this.appendTerminalTurnStateIfNeeded(
           sessionId,
-          inspected.header,
+          inspected.invocation,
           decision,
           terminalTurnStatus(status),
           {
@@ -4868,28 +4687,32 @@ export class SessionManager {
           },
           policy,
         ),
-      undefined,
+      false,
     );
-    return true;
+    // A run that already carried a complete terminal fact and a terminal Turn
+    // state had nothing to recover. Saying otherwise makes recovery rewrite the
+    // Session status of every healthy run it walks past.
+    return inspected.terminalRuntimeFact === undefined || appendedTurnState;
   }
 
   private async appendTerminalTurnStateIfNeeded(
     sessionId: string,
-    run: AgentRunHeader,
+    run: RuntimeInvocationRecord,
     decision: AgentRunRecoveryDecision,
     status: TurnRecord['status'],
     options: { ts: number; errorClass?: string; abortSource?: string },
     policy: RecoveryPolicy = { kind: 'best_effort' },
-  ): Promise<void> {
-    if (!isSessionInlineRun(run)) return;
+  ): Promise<boolean> {
+    if (!isSessionInlineInvocation(run.opening)) return false;
     const messages = await recoverOr(
       policy,
       () => this.deps.store.readMessages(sessionId),
       [] as StoredMessage[],
     );
     const latest = latestTurnState(messages, decision.turnId);
-    if (latest && isTerminalTurnStatus(latest.status) && latest.status === status) return;
+    if (latest && isTerminalTurnStatus(latest.status) && latest.status === status) return false;
     await this.appendTurnState(sessionId, decision.turnId, status, decision.lineage, options);
+    return true;
   }
 }
 
@@ -4979,6 +4802,8 @@ function buildContinuationRepairStartEvent(claim: ContinuationClaimV1): RuntimeE
     partial: false,
     role: 'system',
     author: 'system',
+    modelVisibility: 'hidden',
+    content: claim.targetOpening,
     actions: {
       continuationStart: {
         protocol: 'continuation_start_v2',
@@ -5023,38 +4848,26 @@ function assertClaimOwnsHostedLinkedChildAdmission(
   ) {
     throw new Error('Linked child admission conflicts with its continuation claim target');
   }
-  const header = claim.targetRunHeader;
+  const { lineage, source: openSource } = claim.targetOpening;
   const source = claim.boundary.segments.at(-1)!;
-  const continuationSource = header.continuationSource;
-  const continuationSourceV2 =
-    continuationSource !== undefined &&
-    'protocol' in continuationSource &&
-    continuationSource.protocol === 'continuation_source_v2'
-      ? continuationSource
-      : undefined;
   if (
-    header.sessionId !== claim.target.sessionId ||
-    header.invocationId !== claim.target.invocationId ||
-    header.runId !== claim.target.runId ||
-    header.turnId !== claim.target.turnId ||
-    header.status !== 'created' ||
-    header.agentId !== input.execution.agentId ||
-    header.agentName !== input.execution.agentName ||
+    lineage?.agentId !== input.execution.agentId ||
+    lineage.agentName !== input.execution.agentName ||
     source.identity.sessionId !== input.sessionId ||
     source.identity.runId !== input.execution.sourceRunId ||
-    !continuationSourceV2 ||
-    continuationSourceV2.claimId !== claim.claimId ||
-    continuationSourceV2.boundaryDigest !== claim.boundaryDigest ||
-    continuationSourceV2.sourceRunId !== input.execution.sourceRunId
+    openSource.kind !== 'continuation' ||
+    openSource.claimId !== claim.claimId ||
+    openSource.boundaryDigest !== claim.boundaryDigest ||
+    openSource.sourceRunId !== input.execution.sourceRunId
   ) {
     throw new Error('Linked child admission continuation claim identity is inconsistent');
   }
   if (
     input.execution.kind === 'linked_child_resume'
-      ? header.resumedFromRunId !== input.execution.sourceRunId ||
-        header.retriedFromRunId !== undefined
-      : header.retriedFromRunId !== input.execution.sourceRunId ||
-        header.resumedFromRunId !== undefined
+      ? lineage.resumedFromRunId !== input.execution.sourceRunId ||
+        lineage.retriedFromRunId !== undefined
+      : lineage.retriedFromRunId !== input.execution.sourceRunId ||
+        lineage.resumedFromRunId !== undefined
   ) {
     throw new Error('Linked child admission continuation lineage is inconsistent');
   }
@@ -5066,26 +4879,6 @@ async function readImmutableRuntimeEventsOrEmpty(
   runId: string,
 ): Promise<RuntimeEvent[]> {
   return authority.readImmutableRuntimeEvents(sessionId, runId);
-}
-
-function claimTargetRunHeaderIsCompatible(
-  actual: AgentRunHeader,
-  expected: AgentRunHeader,
-): boolean {
-  const immutable = (header: AgentRunHeader) => {
-    const {
-      status: _status,
-      updatedAt: _updatedAt,
-      completedAt: _completedAt,
-      failureClass: _failureClass,
-      failureMessage: _failureMessage,
-      abortSource: _abortSource,
-      traceWriteError: _traceWriteError,
-      ...rest
-    } = header;
-    return rest;
-  };
-  return isDeepStrictEqual(immutable(actual), immutable(expected));
 }
 
 function isMissingRunError(error: unknown): boolean {
@@ -5138,6 +4931,48 @@ export function headerToSummary(h: SessionHeader): SessionSummary {
     summary.lastMessageAt = h.lastMessageAt;
   }
   return summary;
+}
+
+/**
+ * What a listing shows about one invocation, read entirely off its own facts.
+ *
+ * Every field here used to be a mutable column on the Run header that a writer
+ * had to keep in step with the events. Deriving them means a listing cannot
+ * disagree with the ledger it is listing.
+ */
+function invocationListingFacts(invocation: RuntimeInvocationRecord): {
+  status: RunLifecycleStatus;
+  permissionMode: PermissionMode;
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  failureClass?: string;
+} {
+  const completedAt = invocation.terminalEvent?.ts;
+  const failureClass = runtimeInvocationFailureClass(invocation);
+  return {
+    status: runtimeInvocationOutcome(invocation) ?? 'running',
+    permissionMode: invocation.opening.configuration.permissionMode,
+    createdAt: invocation.openedAt,
+    updatedAt: completedAt ?? invocation.openedAt,
+    ...(completedAt !== undefined ? { completedAt } : {}),
+    ...(completedAt !== undefined
+      ? { durationMs: Math.max(0, completedAt - invocation.openedAt) }
+      : {}),
+    ...(failureClass ? { failureClass } : {}),
+  };
+}
+
+/** The most recently opened invocation, breaking ties on run id. */
+function latestInvocation(
+  invocations: readonly RuntimeInvocationRecord[],
+): RuntimeInvocationRecord | undefined {
+  return invocations
+    .slice()
+    .sort(
+      (left, right) => right.openedAt - left.openedAt || right.runId.localeCompare(left.runId),
+    )[0];
 }
 
 function isNotFoundError(error: unknown): error is NodeJS.ErrnoException {
@@ -5270,12 +5105,12 @@ function narrowsExecutionAuthority(
 }
 
 function agentRunStatusForSpawnResult(
-  status: AgentRunHeader['status'],
+  status: RunLifecycleStatus,
 ): SpawnChildSessionResult['status'] {
   if (status === 'waiting_for_user') return 'waiting_for_user';
   if (status === 'cancelled') return 'cancelled';
   if (status === 'failed') return 'failed';
-  if (status === 'running' || status === 'created') return 'running';
+  if (status === 'running') return 'running';
   return 'completed';
 }
 
@@ -5437,7 +5272,7 @@ function turnStateLineage(
   };
 }
 
-function isTerminalRunStatus(status: AgentRunHeader['status']): boolean {
+function isTerminalRunStatus(status: RunLifecycleStatus): boolean {
   return status === 'completed' || status === 'failed' || status === 'cancelled';
 }
 
@@ -5469,7 +5304,7 @@ function latestTurnState(
 }
 
 function runtimeTerminalFactToRecoveryDecision(
-  header: AgentRunHeader,
+  invocation: RuntimeInvocationRecord,
   fact: RuntimeEventTerminalFact,
 ): AgentRunRecoveryDecision {
   return {
@@ -5483,20 +5318,22 @@ function runtimeTerminalFactToRecoveryDecision(
       runtimeEventId: fact.terminalEvent.id,
       runtimeEventStatus: fact.terminalEvent.status,
     },
-    lineage: headerLineage(header),
+    lineage: openingLineage(invocation),
   };
 }
 
-function headerLineage(header: AgentRunHeader): AgentRunRecoveryDecision['lineage'] {
+function openingLineage(invocation: RuntimeInvocationRecord): AgentRunRecoveryDecision['lineage'] {
+  const lineage = invocation.opening.lineage;
+  if (!lineage) return {};
   return {
-    ...(header.parentRunId ? { parentRunId: header.parentRunId } : {}),
-    ...(header.parentTurnId ? { parentTurnId: header.parentTurnId } : {}),
-    ...(header.retriedFromTurnId ? { retriedFromTurnId: header.retriedFromTurnId } : {}),
-    ...(header.regeneratedFromTurnId
-      ? { regeneratedFromTurnId: header.regeneratedFromTurnId }
+    ...(lineage.parentRunId ? { parentRunId: lineage.parentRunId } : {}),
+    ...(lineage.parentTurnId ? { parentTurnId: lineage.parentTurnId } : {}),
+    ...(lineage.retriedFromTurnId ? { retriedFromTurnId: lineage.retriedFromTurnId } : {}),
+    ...(lineage.regeneratedFromTurnId
+      ? { regeneratedFromTurnId: lineage.regeneratedFromTurnId }
       : {}),
-    ...(header.branchOfTurnId ? { branchOfTurnId: header.branchOfTurnId } : {}),
-    ...(header.parentSessionId ? { parentSessionId: header.parentSessionId } : {}),
+    ...(lineage.branchOfTurnId ? { branchOfTurnId: lineage.branchOfTurnId } : {}),
+    ...(lineage.parentSessionId ? { parentSessionId: lineage.parentSessionId } : {}),
   };
 }
 
@@ -5516,7 +5353,7 @@ function normalizeAgentOutputMaxBytes(value: number | undefined): number {
 }
 
 function buildAgentOutputCommittedResult(input: {
-  header: AgentRunHeader;
+  invocation: RuntimeInvocationRecord;
   runtimeEvents: readonly RuntimeEvent[];
   artifacts: readonly ArtifactRecord[];
   maxArtifacts: number;
@@ -5543,9 +5380,9 @@ function buildAgentOutputCommittedResult(input: {
             {
               operator: {
                 operatorId: input.graph.operatorId,
-                sessionId: input.header.sessionId,
+                sessionId: input.invocation.sessionId,
               },
-              run: input.header,
+              run: input.invocation,
               events: input.runtimeEvents,
             },
           ],
@@ -5566,7 +5403,7 @@ function buildAgentOutputCommittedResult(input: {
   );
   const base = (): AgentOutputCommittedResult => ({
     schemaVersion: 1,
-    status: input.header.status,
+    status: runtimeInvocationOutcome(input.invocation) ?? 'running',
     ...(input.graph ? { graph: { ...input.graph } } : {}),
     ...(outputRecord || terminalRecord
       ? { resultRecordId: (outputRecord ?? terminalRecord)!.recordId }
@@ -5577,7 +5414,9 @@ function buildAgentOutputCommittedResult(input: {
     textTruncated: false,
     artifactIds,
     omittedArtifactIds: Math.max(0, input.artifacts.length - artifactIds.length),
-    ...(input.header.failureClass ? { failureClass: input.header.failureClass } : {}),
+    ...(runtimeInvocationFailureClass(input.invocation)
+      ? { failureClass: runtimeInvocationFailureClass(input.invocation) }
+      : {}),
   });
 
   while (artifactIds.length > 0 && serializedBytes(base()) > input.maxBytes) {

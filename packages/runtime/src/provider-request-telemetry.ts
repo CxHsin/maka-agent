@@ -23,13 +23,10 @@ import {
   type ModelCallAttempt,
   type ModelCallKind,
   type ModelCallUsageBasis,
+  type PromptComposition,
 } from '@maka/core/model-call-attempt';
 import type { PricingConfig } from '@maka/core/usage-stats/types';
-import {
-  capturePreparedProviderRequest,
-  type PreparedProviderRequestCapture,
-  type PreparedRequestSegment,
-} from './request-shape.js';
+import { preparedPromptComposition } from './request-shape.js';
 import { rawFinishReasonString } from './model-protocol.js';
 import {
   providerFailureDiagnostic,
@@ -68,46 +65,15 @@ export interface ProviderRequestUsageLike {
 
 export type ProviderRequestAttemptStatus = 'completed' | 'failed' | 'interrupted' | 'aborted';
 
-export interface ProviderRequestCaptureRecord extends PreparedProviderRequestCapture {
-  traceId: string;
-  captureId: string;
-  turnId: string;
-  step: number;
-  providerId: string;
-  modelId: string;
-}
-
-export interface ProviderRequestCaptureRef {
-  captureId: string;
-  artifactId: string;
-}
-
-export type ProviderRequestCaptureLedgerRecord = Omit<
-  ProviderRequestCaptureRecord,
-  'serializedRequest'
-> & {
-  artifactId: string;
-};
-
-export interface ProviderRequestAttemptRecord extends ProviderRequestUsage {
+interface SettledProviderAttempt extends ProviderRequestUsage {
   traceId: string;
   attemptId: string;
   turnId: string;
   step: number;
   attempt: number;
-  /**
-   * Present only when a capture sink is wired. The request shape below is
-   * computed locally and always present; these two are the join keys to the
-   * persisted artifact, so they are absent when there is nothing to join to.
-   */
-  captureId?: string;
-  captureArtifactId?: string;
   providerId: string;
   modelId: string;
   contextWindow?: number;
-  requestHash: string;
-  requestBytes: number;
-  segments: PreparedRequestSegment[];
   startedAt: number;
   completedAt: number;
   status: ProviderRequestAttemptStatus;
@@ -135,15 +101,6 @@ export interface ProviderRequestTrackerInput {
   now: () => number;
   newId: () => string;
   /**
-   * Request-body capture sink. Optional because capture is a diagnostic, and
-   * metering must not depend on one: a deployment with capture switched off
-   * still settles canonical records, it just has no artifact to join them to.
-   */
-  persistCapture?: (
-    capture: ProviderRequestCaptureRecord,
-  ) => Promise<Pick<ProviderRequestCaptureRef, 'artifactId'>>;
-  recordAttempt: (attempt: ProviderRequestAttemptRecord) => void | Promise<void>;
-  /**
    * Durable run metadata that must exist before any physical provider call.
    * Kept outside accounting because a dispatch gate is an execution contract,
    * not a metering concern.
@@ -154,7 +111,7 @@ export interface ProviderRequestTrackerInput {
    * Canonical metering. Present as a unit or not at all: a `ModelCallAttempt`
    * without session, run, and kind is unattributable, so identity and sink are
    * wired together rather than as independently optional fields. Absent leaves
-   * the tracker purely diagnostic, which is what the capture-only tests use.
+   * the tracker purely diagnostic.
    */
   accounting?: ModelCallAccountingInput;
 }
@@ -193,13 +150,6 @@ export interface ModelCallAccountingInput {
    * stream's `pull` handler and error an otherwise-complete model response.
    */
   assertReady?: () => void;
-}
-
-export interface ProviderRequestCaptureRecorderInput {
-  persistArtifact: (
-    capture: ProviderRequestCaptureRecord,
-  ) => Promise<Pick<ProviderRequestCaptureRef, 'artifactId'>>;
-  recordLedger: (capture: ProviderRequestCaptureLedgerRecord) => Promise<void>;
 }
 
 export interface TrackProviderStreamInput {
@@ -302,19 +252,6 @@ export function withProviderStreamTracking(input: {
   });
 }
 
-export function createProviderRequestCaptureRecorder(
-  input: ProviderRequestCaptureRecorderInput,
-): (
-  capture: ProviderRequestCaptureRecord,
-) => Promise<Pick<ProviderRequestCaptureRef, 'artifactId'>> {
-  return async (capture) => {
-    const artifact = await input.persistArtifact(capture);
-    const { serializedRequest: _serializedRequest, ...metadata } = capture;
-    await input.recordLedger({ ...metadata, artifactId: artifact.artifactId });
-    return artifact;
-  };
-}
-
 export interface ProviderStreamResult {
   stream: ReadableStream<unknown>;
   request?: unknown;
@@ -327,12 +264,6 @@ export interface ProviderGenerateResult {
   request?: unknown;
   response?: unknown;
   [key: string]: unknown;
-}
-
-interface StoredCapture {
-  capture: ProviderRequestCaptureRecord;
-  /** Absent when no capture sink is wired: there is no artifact to point at. */
-  ref?: ProviderRequestCaptureRef;
 }
 
 const CANONICAL_USAGE_FIELDS = [
@@ -372,7 +303,6 @@ function modelCallUsageFields(
 export class ProviderRequestTracker {
   private step = 0;
   private readonly attemptsByStep = new Map<number, number>();
-  private readonly captures = new Map<string, Promise<StoredCapture>>();
   /**
    * One logical call per step. Retries of the same step are further attempts of
    * that call, not new calls, so they share this id.
@@ -395,10 +325,10 @@ export class ProviderRequestTracker {
     throwIfAbortedBeforeDispatch(input.abortSignal);
     this.input.accounting?.assertReady?.();
     const step = this.step;
-    const capture = await this.capture(step, input);
+    const composition = preparedPromptComposition(secretFreeParams(input.params));
     throwIfAbortedBeforeDispatch(input.abortSignal);
     let sawOutput = false;
-    const attempt = this.beginAttempt(step, capture, input);
+    const attempt = this.beginAttempt(step, composition, input);
 
     let result: ProviderStreamResult;
     try {
@@ -464,9 +394,9 @@ export class ProviderRequestTracker {
     throwIfAbortedBeforeDispatch(input.abortSignal);
     this.input.accounting?.assertReady?.();
     const step = this.step;
-    const capture = await this.capture(step, input);
+    const composition = preparedPromptComposition(secretFreeParams(input.params));
     throwIfAbortedBeforeDispatch(input.abortSignal);
-    const attempt = this.beginAttempt(step, capture, input);
+    const attempt = this.beginAttempt(step, composition, input);
     try {
       const result = await input.doGenerate();
       await attempt.finalize(input.abortSignal?.aborted ? 'aborted' : 'completed', {
@@ -482,7 +412,7 @@ export class ProviderRequestTracker {
 
   private beginAttempt(
     step: number,
-    capture: StoredCapture,
+    composition: PromptComposition | undefined,
     input: Pick<
       TrackProviderStreamInput | TrackProviderGenerateInput,
       'providerId' | 'modelId' | 'abortSignal' | 'historyCompactBoundary' | 'historyCompactRoute'
@@ -531,24 +461,15 @@ export class ProviderRequestTracker {
       const contextWindow = positiveInteger(this.input.contextWindow);
       const failure =
         finish?.error !== undefined ? providerFailureDiagnostic(finish.error) : undefined;
-      const record: ProviderRequestAttemptRecord = {
+      const record: SettledProviderAttempt = {
         traceId: this.input.traceId,
         attemptId,
         turnId: this.input.turnId,
         step,
         attempt,
-        ...(capture.ref
-          ? {
-              captureId: capture.ref.captureId,
-              captureArtifactId: capture.ref.artifactId,
-            }
-          : {}),
         providerId: input.providerId,
         modelId: input.modelId,
         ...(contextWindow !== undefined ? { contextWindow } : {}),
-        requestHash: capture.capture.requestHash,
-        requestBytes: capture.capture.requestBytes,
-        segments: capture.capture.segments,
         startedAt,
         completedAt,
         status,
@@ -559,15 +480,11 @@ export class ProviderRequestTracker {
         ...(usage ?? {}),
       };
       accountingSettlement = accountingSettlement.then(async () => {
-        try {
-          await this.input.recordAttempt(record);
-        } catch {
-          // Attempt telemetry is diagnostic. The provider outcome remains authoritative.
-        }
         await this.emitModelCallAttempt(record, {
           logicalCallId,
           usage,
           contextWindow,
+          promptComposition: composition,
           // Frozen when THIS request was prepared, so a checkpoint published
           // mid-flight by another turn cannot be sealed into a prompt built
           // before it existed.
@@ -606,11 +523,12 @@ export class ProviderRequestTracker {
    * reported, not raised.
    */
   private async emitModelCallAttempt(
-    record: ProviderRequestAttemptRecord,
+    record: SettledProviderAttempt,
     context: {
       logicalCallId: string;
       usage: ProviderRequestUsage | undefined;
       contextWindow: number | undefined;
+      promptComposition: PromptComposition | undefined;
       historyCompactBoundary: ContextDiagnosticsCompaction | undefined;
       historyCompactRoute: HistoryCompactRoute | undefined;
     },
@@ -647,9 +565,7 @@ export class ProviderRequestTracker {
       providerId: accounting.providerId ?? record.providerId,
       modelId: record.modelId,
       ...(context.contextWindow !== undefined ? { contextWindow: context.contextWindow } : {}),
-      ...(record.captureArtifactId !== undefined
-        ? { captureArtifactId: record.captureArtifactId }
-        : {}),
+      ...(context.promptComposition ? { promptComposition: context.promptComposition } : {}),
       startedAt: record.startedAt,
       completedAt: record.completedAt,
       latencyMs: record.latencyMs,
@@ -678,7 +594,11 @@ export class ProviderRequestTracker {
     // call commits its metering alone and leaves the last answer standing.
     const latestContext =
       attempt.callKind === 'main' && attempt.status === 'completed'
-        ? latestContextProjectionInput(attempt, record.segments, context.historyCompactBoundary)
+        ? latestContextProjectionInput(
+            attempt,
+            attempt.promptComposition,
+            context.historyCompactBoundary,
+          )
         : undefined;
 
     try {
@@ -688,76 +608,12 @@ export class ProviderRequestTracker {
       // itself. Settlement must not fail the turn the call already completed.
     }
   }
-
-  private async capture(
-    step: number,
-    input: TrackProviderStreamInput | TrackProviderGenerateInput,
-  ): Promise<StoredCapture> {
-    const prepared = preparedCapture(input.providerId, input.modelId, input.params);
-    const key = `${step}:${prepared.requestHash}`;
-    const existing = this.captures.get(key);
-    if (existing) return await existing;
-
-    const persistCapture = this.input.persistCapture;
-    const pending = (async (): Promise<StoredCapture> => {
-      const captureId = this.input.newId();
-      const capture: ProviderRequestCaptureRecord = {
-        ...prepared,
-        traceId: this.input.traceId,
-        captureId,
-        turnId: this.input.turnId,
-        step,
-        providerId: input.providerId,
-        modelId: input.modelId,
-      };
-      // The request shape on `capture` is computed here and needs no sink. Only
-      // the artifact join keys depend on one, so without it the attempt still
-      // carries hash, bytes, and segments — it just points at nothing.
-      if (!persistCapture) return { capture };
-      const persisted = await persistCapture(capture);
-      return { capture, ref: { captureId, artifactId: persisted.artifactId } };
-    })();
-    this.captures.set(key, pending);
-    try {
-      return await pending;
-    } catch (error) {
-      this.captures.delete(key);
-      throw error;
-    }
-  }
 }
 
 function throwIfAbortedBeforeDispatch(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw new DOMException('The provider request was cancelled before dispatch', 'AbortError');
   }
-}
-
-function preparedCapture(
-  providerId: string,
-  modelId: string,
-  params: Record<string, unknown>,
-): PreparedProviderRequestCapture {
-  const safeParams = secretFreeParams(params);
-  const prompt = Array.isArray(safeParams.prompt) ? safeParams.prompt : [];
-  const instructions: unknown[] = [];
-  const messages: unknown[] = [];
-  for (const item of prompt) {
-    const record = asRecord(item);
-    if (record?.role === 'system') instructions.push(record.content);
-    else messages.push(item);
-  }
-  const tools = Array.isArray(safeParams.tools) ? safeParams.tools : [];
-  const providerOptions = asRecord(safeParams.providerOptions);
-  return capturePreparedProviderRequest({
-    providerId,
-    modelId,
-    instructions,
-    messages,
-    tools,
-    ...(providerOptions ? { providerOptions } : {}),
-    requestPayload: safeParams,
-  });
 }
 
 function secretFreeParams(params: Record<string, unknown>): Record<string, unknown> {

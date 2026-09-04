@@ -19,7 +19,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import type { AgentRunEvent, AgentRunHeader, AgentRunStore } from '@maka/core/agent-run';
+import type { AgentRunEvent, AgentRunStore } from '@maka/core/agent-run';
 import type { RuntimeEvent } from '@maka/core/runtime-event';
 import {
   buildHistoryCompactCheckpoint,
@@ -55,13 +55,52 @@ const STRUCTURED_SUMMARY = [
 ].join('\n');
 
 describe('history compact checkpoint', () => {
+  test('rejects provider-native state from a recreated same-slug connection', () => {
+    const providerState = {
+      kind: 'openai_codex_remote_v2' as const,
+      connectionId: 'connection-a',
+      modelId: 'gpt-5.3-codex',
+      itemId: 'cmp_123',
+      encryptedContent: 'encrypted-state',
+    };
+    const checkpoint = buildHistoryCompactCheckpoint({
+      sessionId: 'session-1',
+      coveredRuntimeEvents: [textEvent(0), textEvent(1)],
+      providerState,
+    });
+    const recreatedConnection = {
+      providerType: 'openai-codex',
+      slug: 'codex-subscription',
+      connectionId: 'connection-b',
+    };
+
+    assert.equal(
+      canReplayHistoryCompactCheckpointForModel(
+        checkpoint,
+        recreatedConnection,
+        recreatedConnection.connectionId,
+        'gpt-5.3-codex',
+      ),
+      false,
+    );
+    assert.equal(
+      canContinueHistoryCompactCheckpointForModel(
+        checkpoint,
+        recreatedConnection,
+        recreatedConnection.connectionId,
+        'gpt-5.3-codex',
+      ),
+      false,
+    );
+  });
+
   test('persists provider-native state as a V3 checkpoint bound to one Codex model', () => {
     const checkpoint = buildHistoryCompactCheckpoint({
       sessionId: 'session-1',
       coveredRuntimeEvents: [textEvent(0), textEvent(1)],
       providerState: {
         kind: 'openai_codex_remote_v2',
-        connectionSlug: 'codex-subscription',
+        connectionId: 'connection-a',
         modelId: 'gpt-5.3-codex',
         itemId: 'cmp_123',
         encryptedContent: 'encrypted-state',
@@ -75,7 +114,8 @@ describe('history compact checkpoint', () => {
     assert.equal(
       canReplayHistoryCompactCheckpointForModel(
         checkpoint,
-        { providerType: 'openai-codex', slug: 'codex-subscription' },
+        { providerType: 'openai-codex' },
+        'connection-a',
         'gpt-5.3-codex',
       ),
       true,
@@ -83,7 +123,8 @@ describe('history compact checkpoint', () => {
     assert.equal(
       canReplayHistoryCompactCheckpointForModel(
         checkpoint,
-        { providerType: 'openai-codex', slug: 'other-codex-account' },
+        { providerType: 'openai-codex' },
+        'connection-b',
         'gpt-5.3-codex',
       ),
       false,
@@ -91,7 +132,8 @@ describe('history compact checkpoint', () => {
     assert.equal(
       canContinueHistoryCompactCheckpointForModel(
         checkpoint,
-        { providerType: 'openai-codex', slug: 'codex-subscription' },
+        { providerType: 'openai-codex' },
+        'connection-a',
         'gpt-5.3-codex',
       ),
       true,
@@ -99,7 +141,8 @@ describe('history compact checkpoint', () => {
     assert.equal(
       canContinueHistoryCompactCheckpointForModel(
         checkpoint,
-        { providerType: 'openai', slug: 'openai-api' },
+        { providerType: 'openai' },
+        'connection-a',
         'gpt-5.3-codex',
       ),
       false,
@@ -107,7 +150,8 @@ describe('history compact checkpoint', () => {
     assert.equal(
       canReplayHistoryCompactCheckpointForModel(
         checkpoint,
-        { providerType: 'openai', slug: 'openai-api' },
+        { providerType: 'openai' },
+        'connection-a',
         'gpt-5.3-codex',
       ),
       false,
@@ -133,7 +177,7 @@ describe('history compact checkpoint', () => {
       coveredRuntimeEvents: [textEvent(0)],
       providerState: {
         kind: 'openai_codex_remote_v2',
-        connectionSlug: 'codex-subscription',
+        connectionId: 'connection-a',
         modelId: 'gpt-5.3-codex',
         itemId: 'cmp_123',
         encryptedContent: 'encrypted-state',
@@ -151,6 +195,14 @@ describe('history compact checkpoint', () => {
       validateHistoryCompactCheckpointShape({ ...checkpoint, summary: 'opaque state leaked here' }),
       false,
     );
+    const { connectionId: _connectionId, ...legacyProviderState } = checkpoint.providerState;
+    assert.equal(
+      validateHistoryCompactCheckpointShape({
+        ...checkpoint,
+        providerState: { ...legacyProviderState, connectionSlug: 'codex-subscription' },
+      }),
+      false,
+    );
     const v2 = buildHistoryCompactCheckpoint({
       sessionId: 'session-1',
       coveredRuntimeEvents: [textEvent(0)],
@@ -161,7 +213,8 @@ describe('history compact checkpoint', () => {
     assert.equal(
       canContinueHistoryCompactCheckpointForModel(
         v2,
-        { providerType: 'openai', slug: 'openai-api' },
+        { providerType: 'openai' },
+        'connection-a',
         'gpt-5.3-codex',
       ),
       true,
@@ -169,7 +222,8 @@ describe('history compact checkpoint', () => {
     assert.equal(
       canContinueHistoryCompactCheckpointForModel(
         v2,
-        { providerType: 'openai-codex', slug: 'codex-subscription' },
+        { providerType: 'openai-codex' },
+        'connection-a',
         'gpt-5.3-codex',
       ),
       false,
@@ -335,8 +389,8 @@ describe('history compact checkpoint', () => {
       previousCheckpointId: first.checkpointId,
       now: 20,
     });
+    const runIds = ['run-1', 'run-2', 'run-3'];
     const store = new StubAgentRunStore(
-      [run('run-1', 10), run('run-2', 20), run('run-3', 30)],
       new Map([
         ['run-1', [checkpointEvent('ledger-1', 'run-1', first, 10)]],
         ['run-2', [checkpointEvent('ledger-2', 'run-2', latest, 20)]],
@@ -352,11 +406,15 @@ describe('history compact checkpoint', () => {
       ]),
     );
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(
+      store,
+      'session-1',
+      runIds,
+    );
 
     assert.equal(loaded?.checkpointId, latest.checkpointId);
     assert.deepEqual(
-      (await loadHistoryCompactCheckpointsFromRunLedger(store, 'session-1')).map(
+      (await loadHistoryCompactCheckpointsFromRunLedger(store, 'session-1', runIds)).map(
         (checkpoint) => checkpoint.checkpointId,
       ),
       [first.checkpointId, latest.checkpointId],
@@ -433,19 +491,23 @@ describe('history compact checkpoint', () => {
       coveredRuntimeEvents: [textEvent(0), textEvent(1)],
       providerState: {
         kind: 'openai_codex_remote_v2',
-        connectionSlug: 'codex-subscription',
+        connectionId: 'connection-a',
         modelId: 'gpt-5.3-codex',
         itemId: 'cmp_durable',
         encryptedContent: 'durable-encrypted-state',
       },
       now: 20,
     });
+    const runIds = ['run-1'];
     const store = new StubAgentRunStore(
-      [run('run-1', 20)],
       new Map([['run-1', [checkpointEvent('ledger-v3', 'run-1', checkpoint, 20)]]]),
     );
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(
+      store,
+      'session-1',
+      runIds,
+    );
 
     assert.deepEqual(loaded, checkpoint);
     assert.equal(
@@ -473,15 +535,19 @@ describe('history compact checkpoint', () => {
       previousCheckpointId: valid.checkpointId,
       now: 20,
     });
+    const runIds = ['run-valid', 'run-poisoned'];
     const store = new StubAgentRunStore(
-      [run('run-valid', 10), run('run-poisoned', 20)],
       new Map([
         ['run-valid', [checkpointEvent('ledger-valid', 'run-valid', valid, 10)]],
         ['run-poisoned', [checkpointEvent('ledger-poisoned', 'run-poisoned', poisoned, 20)]],
       ]),
     );
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(
+      store,
+      'session-1',
+      runIds,
+    );
 
     assert.equal(loaded?.checkpointId, valid.checkpointId);
   });
@@ -502,15 +568,19 @@ describe('history compact checkpoint', () => {
       previousCheckpointId: valid.checkpointId,
       now: 20,
     });
+    const runIds = ['run-valid', 'run-poisoned'];
     const store = new StubAgentRunStore(
-      [run('run-valid', 10), run('run-poisoned', 20)],
       new Map([
         ['run-valid', [checkpointEvent('ledger-valid', 'run-valid', valid, 10)]],
         ['run-poisoned', [checkpointEvent('ledger-poisoned', 'run-poisoned', poisoned, 20)]],
       ]),
     );
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(
+      store,
+      'session-1',
+      runIds,
+    );
 
     assert.equal(loaded?.checkpointId, valid.checkpointId);
   });
@@ -542,25 +612,6 @@ describe('history compact checkpoint', () => {
           summary: 'free-form prose without the mandated sections.',
         }),
       /summary failed validation: malformed_summary_missing_section/,
-    );
-  });
-
-  test('the builder re-runs the size floor over the covered span it is handed', () => {
-    // Every construction seam has the covered events in hand — including
-    // copy — so a structurally valid but undersized summary cannot be
-    // rebuilt over a large span and keep the marker.
-    const bigEvent: RuntimeEvent = {
-      ...textEvent(0),
-      content: { kind: 'text', text: `big ${'x'.repeat(60_000)}` },
-    };
-    assert.throws(
-      () =>
-        buildHistoryCompactCheckpoint({
-          sessionId: 'session-1',
-          coveredRuntimeEvents: [bigEvent],
-          summary: STRUCTURED_SUMMARY,
-        }),
-      /summary failed validation: malformed_summary_too_small_for_fold/,
     );
   });
 
@@ -606,15 +657,19 @@ describe('history compact checkpoint', () => {
       }),
       summaryFormat: 'sections_v1' as const,
     };
+    const runIds = ['run-valid', 'run-marked'];
     const store = new StubAgentRunStore(
-      [run('run-valid', 10), run('run-marked', 20)],
       new Map([
         ['run-valid', [checkpointEvent('ledger-valid', 'run-valid', valid, 10)]],
         ['run-marked', [checkpointEvent('ledger-marked', 'run-marked', markedMalformed, 20)]],
       ]),
     );
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(
+      store,
+      'session-1',
+      runIds,
+    );
 
     assert.equal(loaded?.checkpointId, valid.checkpointId);
   });
@@ -637,19 +692,22 @@ describe('history compact checkpoint', () => {
     const replacedEventIds: Array<string | undefined> = [];
     const store = {
       readEventProjection: async () => poisonedProjection,
+      readEventLedgerRevision: async () => 'ledger-revision',
       repairEventProjection: async (
         _sessionId: string,
         _type: AgentRunEvent['type'],
         _event: AgentRunEvent | null,
-        options?: { replaceEventId?: string },
+        options: { ifLedgerRevision: string; replaceEventId?: string },
       ) => {
+        assert.equal(options.ifLedgerRevision, 'ledger-revision');
         replacedEventIds.push(options?.replaceEventId);
       },
-      listSessionRuns: async () => [run('run-canonical', 10)],
       readEvents: async () => [canonicalEvent],
     };
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1', [
+      'run-canonical',
+    ]);
 
     assert.equal(loaded?.checkpointId, valid.checkpointId);
     assert.deepEqual(replacedEventIds, [poisonedProjection.id]);
@@ -668,15 +726,19 @@ describe('history compact checkpoint', () => {
       summary: 'stale coverage',
       summaryFormat: 'legacy_freeform',
     });
+    const runIds = ['run-furthest', 'run-stale'];
     const store = new StubAgentRunStore(
-      [run('run-furthest', 10), run('run-stale', 20)],
       new Map([
         ['run-furthest', [checkpointEvent('ledger-furthest', 'run-furthest', furthest, 30)]],
         ['run-stale', [checkpointEvent('ledger-stale', 'run-stale', stale, 40)]],
       ]),
     );
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(
+      store,
+      'session-1',
+      runIds,
+    );
 
     assert.equal(loaded?.checkpointId, furthest.checkpointId);
   });
@@ -706,8 +768,8 @@ describe('history compact checkpoint', () => {
       previousCheckpointId: second.checkpointId,
       now: 30,
     });
+    const runIds = ['parent-created-first', 'child-created-later'];
     const store = new StubAgentRunStore(
-      [run('parent-created-first', 10), run('child-created-later', 20)],
       new Map([
         [
           'parent-created-first',
@@ -722,7 +784,11 @@ describe('history compact checkpoint', () => {
         ],
       ]),
     );
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(
+      store,
+      'session-1',
+      runIds,
+    );
 
     assert.equal(loaded?.checkpointId, tip.checkpointId);
   });
@@ -737,15 +803,14 @@ describe('history compact checkpoint', () => {
     const projectedEvent = checkpointEvent('projection-event', 'run-projection', checkpoint, 20);
     const store = {
       readEventProjection: async () => projectedEvent,
-      listSessionRuns: async () => {
-        throw new Error('run enumeration must stay cold');
-      },
       readEvents: async () => {
         throw new Error('run ledger reads must stay cold');
       },
     };
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1', [
+      'run-canonical',
+    ]);
 
     assert.equal(loaded?.checkpointId, checkpoint.checkpointId);
   });
@@ -753,15 +818,14 @@ describe('history compact checkpoint', () => {
   test('uses an empty bounded projection without enumerating run ledgers', async () => {
     const store = {
       readEventProjection: async () => null,
-      listSessionRuns: async () => {
-        throw new Error('run enumeration must stay cold');
-      },
       readEvents: async () => {
         throw new Error('run ledger reads must stay cold');
       },
     };
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1', [
+      'run-canonical',
+    ]);
 
     assert.equal(loaded, undefined);
   });
@@ -777,21 +841,50 @@ describe('history compact checkpoint', () => {
     const repaired: Array<AgentRunEvent | null> = [];
     const store = {
       readEventProjection: async () => undefined,
+      readEventLedgerRevision: async () => 'ledger-revision',
       repairEventProjection: async (
         _sessionId: string,
         _type: AgentRunEvent['type'],
         repairedEvent: AgentRunEvent | null,
+        options: { ifLedgerRevision: string },
       ) => {
+        assert.equal(options.ifLedgerRevision, 'ledger-revision');
         repaired.push(repairedEvent);
       },
-      listSessionRuns: async () => [run('run-recovered', 10)],
       readEvents: async () => [event],
     };
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1', [
+      'run-canonical',
+    ]);
 
     assert.equal(loaded?.checkpointId, checkpoint.checkpointId);
     assert.deepEqual(repaired, [event]);
+  });
+
+  test('recovers without repairing when the store lacks a ledger revision capability', async () => {
+    const checkpoint = buildHistoryCompactCheckpoint({
+      sessionId: 'session-1',
+      coveredRuntimeEvents: [textEvent(0)],
+      summary: 'recovered checkpoint',
+      summaryFormat: 'legacy_freeform',
+    });
+    const event = checkpointEvent('recovered-event', 'run-recovered', checkpoint, 20);
+    let repaired = false;
+    const store = {
+      readEventProjection: async () => undefined,
+      repairEventProjection: async () => {
+        repaired = true;
+      },
+      readEvents: async () => [event],
+    };
+
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1', [
+      'run-canonical',
+    ]);
+
+    assert.equal(loaded?.checkpointId, checkpoint.checkpointId);
+    assert.equal(repaired, false);
   });
 
   test('identifies a parseable but invalid projection when repairing from the canonical ledger', async () => {
@@ -810,19 +903,22 @@ describe('history compact checkpoint', () => {
     const replacedEventIds: Array<string | undefined> = [];
     const store = {
       readEventProjection: async () => invalidProjection,
+      readEventLedgerRevision: async () => 'ledger-revision',
       repairEventProjection: async (
         _sessionId: string,
         _type: AgentRunEvent['type'],
         _event: AgentRunEvent | null,
-        options?: { replaceEventId?: string },
+        options: { ifLedgerRevision: string; replaceEventId?: string },
       ) => {
+        assert.equal(options.ifLedgerRevision, 'ledger-revision');
         replacedEventIds.push(options?.replaceEventId);
       },
-      listSessionRuns: async () => [run('run-canonical', 10)],
       readEvents: async () => [canonicalEvent],
     };
 
-    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1');
+    const loaded = await loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1', [
+      'run-canonical',
+    ]);
 
     assert.equal(loaded?.checkpointId, checkpoint.checkpointId);
     assert.deepEqual(replacedEventIds, [invalidProjection.id]);
@@ -833,14 +929,13 @@ describe('history compact checkpoint', () => {
       readEventProjection: async () => {
         throw new Error('damaged projection');
       },
-      listSessionRuns: async () => {
+      readEvents: async () => {
         throw new Error('ledger recovery failed');
       },
-      readEvents: async () => [],
     };
 
     await assert.rejects(
-      loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1'),
+      loadLatestHistoryCompactCheckpointFromRunLedger(store, 'session-1', ['run-canonical']),
       /ledger recovery failed/,
     );
   });
@@ -860,15 +955,10 @@ describe('history compact checkpoint', () => {
       summaryFormat: 'legacy_freeform',
     });
 
-    const replay = applyRuntimeEventHistoryCompact(
-      events,
-      {
-        enabled: true,
-        checkpoint,
-      },
-      1,
-      1_000,
-    );
+    const replay = applyRuntimeEventHistoryCompact(events, {
+      enabled: true,
+      checkpoint,
+    });
 
     assert.equal(replay.events[0]?.id, `history-compact:${checkpoint.checkpointId}`);
     assert.match(
@@ -882,7 +972,7 @@ describe('history compact checkpoint', () => {
     assert.equal(replay.checkpoint?.checkpointId, checkpoint.checkpointId);
   });
 
-  test('replays a durable pre_turn checkpoint below the current high water', () => {
+  test('replays a durable pre_turn checkpoint without a local size gate', () => {
     const events = Array.from({ length: 6 }, (_, index) => ({
       ...textEvent(index),
       content: {
@@ -897,16 +987,11 @@ describe('history compact checkpoint', () => {
       summaryFormat: 'legacy_freeform',
     });
 
-    // The raw history is deliberately far below high water. Once a durable
+    // The raw history is deliberately small. Once a durable
     // checkpoint exists, replaying it is nevertheless mandatory: otherwise a
     // recovery/manual compaction only affects its own turn and the next turn
     // resurrects the covered raw prefix.
-    const replay = applyRuntimeEventHistoryCompact(
-      events,
-      { enabled: true, checkpoint },
-      4,
-      1_000_000,
-    );
+    const replay = applyRuntimeEventHistoryCompact(events, { enabled: true, checkpoint });
 
     assert.equal(replay.checkpoint?.checkpointId, checkpoint.checkpointId);
     assert.deepEqual(
@@ -914,72 +999,6 @@ describe('history compact checkpoint', () => {
       [`history-compact:${checkpoint.checkpointId}`, 'event-4', 'event-5'],
     );
     assert.equal(replay.diagnosticPatch.compactionDecisions?.[0]?.decision, 'replaced');
-  });
-
-  test('accepts a complete checkpoint above legacy block limits when the full replay fits', () => {
-    const events = Array.from({ length: 8 }, (_, index) => ({
-      ...textEvent(index),
-      content: {
-        kind: 'text' as const,
-        text: `source-payload-${index} `.repeat(index < 4 ? 80 : 1),
-      },
-    }));
-    const checkpoint = buildHistoryCompactCheckpoint({
-      sessionId: 'session-1',
-      coveredRuntimeEvents: events.slice(0, 4),
-      summary: 'checkpoint summary '.repeat(20),
-      summaryFormat: 'legacy_freeform',
-      charsPerToken: 1,
-    });
-    assert.ok(checkpoint.estimatedTokens > 100);
-
-    const replay = applyRuntimeEventHistoryCompact(
-      events,
-      {
-        enabled: true,
-        checkpoint,
-      },
-      1,
-      10_000,
-    );
-
-    assert.equal(replay.checkpoint?.checkpointId, checkpoint.checkpointId);
-    assert.equal(
-      replay.events.some((event) => event.id === `history-compact:${checkpoint.checkpointId}`),
-      true,
-    );
-  });
-
-  test('applies max-history overrides to checkpoint replay validation', () => {
-    const events = Array.from({ length: 8 }, (_, index) => ({
-      ...textEvent(index),
-      content: { kind: 'text' as const, text: `payload-${index} `.repeat(20) },
-    }));
-    const checkpoint = buildHistoryCompactCheckpoint({
-      sessionId: 'session-1',
-      coveredRuntimeEvents: events.slice(0, 6),
-      summary: 'short checkpoint',
-      summaryFormat: 'legacy_freeform',
-      charsPerToken: 1,
-    });
-    const checkpointTokens = estimateRuntimeEventsTokens(
-      [historyCompactCheckpointToRuntimeEvent(checkpoint)],
-      1,
-    );
-    const overrideMax = checkpointTokens + 1;
-
-    const replay = applyRuntimeEventHistoryCompact(
-      events,
-      {
-        enabled: true,
-        checkpoint,
-      },
-      1,
-      10_000,
-      { maxHistoryEstimatedTokens: overrideMax },
-    );
-
-    assert.equal(replay.checkpoint, undefined);
   });
 });
 
@@ -995,22 +1014,6 @@ function textEvent(index: number): RuntimeEvent {
     role: index % 2 === 0 ? 'user' : 'model',
     author: index % 2 === 0 ? 'user' : 'agent',
     content: { kind: 'text', text: `payload-${index}` },
-  };
-}
-
-function run(runId: string, createdAt: number): AgentRunHeader {
-  return {
-    runId,
-    sessionId: 'session-1',
-    turnId: `turn-${runId}`,
-    status: 'completed',
-    backendKind: 'ai-sdk',
-    llmConnectionSlug: 'test',
-    modelId: 'test',
-    cwd: '/tmp',
-    permissionMode: 'ask',
-    createdAt,
-    updatedAt: createdAt,
   };
 }
 
@@ -1032,28 +1035,12 @@ function checkpointEvent(
 }
 
 class StubAgentRunStore implements AgentRunStore {
-  constructor(
-    private readonly runs: AgentRunHeader[],
-    private readonly events: Map<string, AgentRunEvent[]>,
-  ) {}
-
-  async listSessionRuns(): Promise<AgentRunHeader[]> {
-    return this.runs;
-  }
+  constructor(private readonly events: Map<string, AgentRunEvent[]>) {}
 
   async readEvents(_sessionId: string, runId: string): Promise<AgentRunEvent[]> {
     return this.events.get(runId) ?? [];
   }
 
-  async createRun(): Promise<AgentRunHeader> {
-    throw new Error('not implemented');
-  }
-  async updateRun(): Promise<AgentRunHeader> {
-    throw new Error('not implemented');
-  }
-  async readRun(): Promise<AgentRunHeader> {
-    throw new Error('not implemented');
-  }
   async appendEvent(): Promise<void> {
     throw new Error('not implemented');
   }

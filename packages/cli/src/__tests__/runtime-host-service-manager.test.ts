@@ -188,6 +188,9 @@ describe('managed Runtime Host service', () => {
         '/ip4/0.0.0.0/udp/44001/quic-v1',
         '--clear-coordination-relays',
         '--no-automatic-relay-discovery',
+        '--webrtc-stun',
+        'stun:stun.example:3478',
+        '--webrtc-stun-status',
         '--allow-interrupt-active-tasks',
         '--expected-service-id',
         'b'.repeat(64),
@@ -208,6 +211,8 @@ describe('managed Runtime Host service', () => {
         listenAddresses: ['/ip4/0.0.0.0/udp/44001/quic-v1'],
         coordinationRelays: [],
         automaticRelayDiscovery: false,
+        webRtcStunPolicy: { kind: 'custom', urls: ['stun:stun.example:3478'] },
+        webRtcStunStatus: true,
         allowInterruptActiveTasks: true,
         managedRootId: 'a'.repeat(64),
         operatorDeploymentId: '00000000-0000-4000-8000-000000000001',
@@ -2544,7 +2549,12 @@ describe('managed Runtime Host service', () => {
       version,
       root: deploymentRoot,
       cliPath,
-      operatorPath: join(deploymentRoot, 'operator'),
+      operator: {
+        kind: 'node' as const,
+        platform: 'posix' as const,
+        nodePath: '/usr/bin/node',
+        modulePath: join(deploymentRoot, 'operator.mjs'),
+      },
       activate: async () => {
         assert.equal(insideLifecycle, true);
         order.push('activate');
@@ -2606,13 +2616,17 @@ describe('managed Runtime Host service', () => {
           ),
         ),
       runOperator: async (
-        _operatorPath: string,
+        operator: import('@maka/runtime-host/operator').RuntimeHostOperatorCommand,
         args: readonly string[],
         invocation?: {
           readonly inheritedFds?: readonly number[];
           readonly capabilityRequest?: RuntimeHostOperatorCapability;
         },
       ) => {
+        assert.deepEqual(operator, {
+          kind: 'legacy_posix_executable',
+          executablePath: join(deploymentRoot, 'operator'),
+        });
         const action = args[0];
         assert.ok(action === 'status' || action === 'retire');
         if (action === 'status') {

@@ -18,7 +18,9 @@
  */
 
 import type { RuntimeHostPeerMeshManagementAction } from '@maka/runtime-host/operator';
+import type { RuntimeHostWebRtcStunPolicy } from '@maka/runtime-host/operator';
 import type {
+  HostResourcesResult,
   PeerMeshInvitationResult,
   PeerMeshQueryResult,
 } from '@maka/runtime-host/protocol';
@@ -33,7 +35,7 @@ export interface PeerMeshOperationInput {
   readonly peerId?: string;
   readonly invitation?: string;
   readonly displayName?: string | null;
-  readonly operationId?: string;
+  readonly operationId: string;
 }
 
 export interface PeerMeshDirectPeerSnapshot {
@@ -42,17 +44,27 @@ export interface PeerMeshDirectPeerSnapshot {
   readonly routeHints: readonly string[];
   readonly coordinationRelays: readonly string[];
   readonly automaticRelayDiscovery: boolean;
+  readonly webRtcStunPolicy?: RuntimeHostWebRtcStunPolicy;
   readonly profilePresent: boolean;
   readonly profileEnabled: boolean;
   readonly clientAvailable: boolean;
   readonly managementAvailable: boolean;
 }
 
+export class PeerMeshOperationOutcomeUnknownError extends Error {
+  constructor(readonly action: RuntimeHostPeerMeshManagementAction) {
+    super('Peer Mesh operation outcome is unknown');
+    this.name = 'PeerMeshOperationOutcomeUnknownError';
+  }
+}
+
 export interface PeerMeshServices {
+  getConnectivityPolicy(): Promise<RuntimeHostWebRtcStunPolicy>;
+  setConnectivityPolicy(policy: RuntimeHostWebRtcStunPolicy): Promise<RuntimeHostWebRtcStunPolicy>;
   execute(
     target: PeerMeshTarget,
     action: RuntimeHostPeerMeshManagementAction,
-    input?: PeerMeshOperationInput,
+    input: PeerMeshOperationInput,
   ): Promise<PeerMeshQueryResult | PeerMeshInvitationResult>;
   cancel(operationId: string): Promise<void>;
   getDirectPeer(profileId: string): Promise<PeerMeshDirectPeerSnapshot>;
@@ -61,6 +73,7 @@ export interface PeerMeshServices {
     enabled: boolean,
     coordinationRelays: readonly string[],
     automaticRelayDiscovery: boolean,
+    webRtcStunPolicy?: RuntimeHostWebRtcStunPolicy,
   ): Promise<PeerMeshDirectPeerSnapshot>;
   copyText(value: string): Promise<void>;
   createOperationId(): string;
@@ -72,7 +85,34 @@ export interface RuntimeHostProfilePairingServices {
   discard(profileId: string): Promise<void>;
 }
 
+export type RuntimeHostConnectionCodeImportResult =
+  | { readonly kind: 'connected'; readonly profileId: string }
+  | {
+      readonly kind: 'error';
+      readonly reason:
+        | 'invalid_code'
+        | 'code_unavailable'
+        | 'host_unreachable'
+        | 'host_mismatch'
+        | 'unknown';
+    };
+
+export interface RuntimeHostConnectionCodeServices {
+  create(profileId: string): Promise<string>;
+  importCode(code: string): Promise<RuntimeHostConnectionCodeImportResult>;
+  readClipboardText(): Promise<string>;
+  writeClipboardText(value: string): Promise<void>;
+}
+
+export interface RuntimeHostResourceServices {
+  query(profileId: string): Promise<HostResourcesResult | undefined>;
+  schedule(callback: () => void, delayMs: number): () => void;
+}
+
 export interface RuntimeHostManagementServices {
   readonly peerMesh: PeerMeshServices;
   readonly profilePairing: RuntimeHostProfilePairingServices;
+  readonly connectionCodes: RuntimeHostConnectionCodeServices;
+  readonly resources: RuntimeHostResourceServices;
+  readonly supportsWsl: boolean;
 }

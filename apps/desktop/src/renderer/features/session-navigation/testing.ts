@@ -20,6 +20,7 @@
 import type { SessionNavigationServices } from './ports.js';
 
 export type {
+  SessionNavigationPorts,
   SessionNavigationServices,
   SessionNavigationSession,
   SessionNavigationSessionService,
@@ -33,18 +34,23 @@ export { createSessionOpenCommand } from './controller/session-open-command.js';
 export {
   useSessionNavigationController,
   type SessionNavigationController,
-  type SessionNavigationPorts,
   type UseSessionNavigationControllerInput,
 } from './controller/use-session-navigation-controller.js';
+export { useSessionSelection } from './controller/use-session-selection.js';
+export type { SessionNavigationRowActions } from './controller/session-row-actions.js';
 export { useSessionNavigationReads } from './controller/use-session-navigation-reads.js';
 export { sessionMatchesRail } from './model/session-nav-filter.js';
 export { deriveBranchBanner } from './model/branch-banner.js';
 export { deriveSessionRail } from './model/session-rail.js';
 export { deriveSessionRevisionNavigation } from './model/session-revisions.js';
 export {
+  EMPTY_SESSION_SELECTION,
+  pickSessionRow,
+  pruneSessionSelection,
+  type SessionSelection,
+} from './model/session-selection.js';
+export {
   readSessionListViewMode,
-  SESSION_LIST_EXPANDED_MAX_WIDTH,
-  SESSION_LIST_EXPANDED_MIN_WIDTH,
   writeSessionListViewMode,
 } from './model/session-list-layout.js';
 export { createSessionRailLayoutStore } from './model/session-rail-layout-store.js';
@@ -59,7 +65,8 @@ export function createFakeSessionNavigationServices(
       archive: async () => undefined,
       unarchive: async () => undefined,
       rename: async () => undefined,
-      remove: async () => 'removed',
+      remove: async () => ({ disposition: 'removed', archivedSubtaskCount: 0 }),
+      previewRemoval: async () => 0,
     },
     ...overrides,
   };

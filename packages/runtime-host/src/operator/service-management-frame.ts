@@ -20,6 +20,10 @@
 import { z } from 'zod';
 import { PROJECT_DIRECTORY_MAX_ROOTS } from '../protocol/project-catalog.js';
 import {
+  runtimeHostReconciliationProviderSchema,
+  runtimeHostSupervisorProviderSchema,
+} from './managed-deployment.js';
+import {
   compareProductReleaseVersions,
   isProductReleaseVersion,
   isSha512PackageIntegrity,
@@ -36,6 +40,7 @@ export const RUNTIME_HOST_OPERATOR_PROJECT_DIRECTORY_CONFIGURATION_REQUEST_ENV =
 export const RUNTIME_HOST_OPERATOR_PROCESS_LIFETIME_LOCK_CAPABILITY = 'process-lifetime-lock-v1';
 export const RUNTIME_HOST_OPERATOR_PEER_MANAGEMENT_CAPABILITY = 'peer-management-v1';
 export const RUNTIME_HOST_OPERATOR_PEER_RELAY_DISCOVERY_CAPABILITY = 'peer-relay-discovery-v1';
+export const RUNTIME_HOST_OPERATOR_PEER_WEBRTC_STUN_CAPABILITY = 'peer-webrtc-stun-v1';
 export const RUNTIME_HOST_OPERATOR_UPDATE_SCHEDULER_CAPABILITY = 'update-scheduler-v1';
 export const RUNTIME_HOST_OPERATOR_CAPABILITY_REQUEST_ENV =
   'MAKA_RUNTIME_HOST_OPERATOR_CAPABILITY_REQUEST';
@@ -93,6 +98,7 @@ const OPERATOR_CAPABILITIES = [
   RUNTIME_HOST_OPERATOR_ACCESS_MANAGEMENT_CAPABILITY,
   RUNTIME_HOST_OPERATOR_PEER_MANAGEMENT_CAPABILITY,
   RUNTIME_HOST_OPERATOR_PEER_RELAY_DISCOVERY_CAPABILITY,
+  RUNTIME_HOST_OPERATOR_PEER_WEBRTC_STUN_CAPABILITY,
   RUNTIME_HOST_OPERATOR_PROCESS_LIFETIME_LOCK_CAPABILITY,
   RUNTIME_HOST_OPERATOR_UPDATE_SCHEDULER_CAPABILITY,
 ] as const;
@@ -239,18 +245,14 @@ const SERVICE_SUMMARY_SCHEMA = z
       .object({
         mode: z.enum(['on_demand', 'supervised']),
         availability: z.enum(['activation', 'session', 'environment', 'machine']),
-        provider: z
-          .enum(['systemd_user', 'launch_agent', 'openrc_user', 'openrc_system'])
-          .optional(),
+        provider: runtimeHostSupervisorProviderSchema.optional(),
       })
       .strict()
       .optional(),
     reconciliation: z
       .object({
         trigger: z.enum(['manual', 'activation', 'scheduled']),
-        provider: z
-          .enum(['systemd_timer', 'launch_agent_timer', 'openrc_supervised_loop'])
-          .optional(),
+        provider: runtimeHostReconciliationProviderSchema.optional(),
       })
       .strict()
       .optional(),

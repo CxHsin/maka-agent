@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, it } from 'node:test';
+import { DEFAULT_TOOL_MODE } from '@maka/core/tool-mode';
 import type { RuntimeEvent } from '@maka/core/runtime-event';
 import { RunSealedError } from '@maka/core/runtime-event-store';
 import { canonicalToolArgsHash } from '@maka/core/tool-args-identity';
@@ -420,8 +421,16 @@ describe('SqliteRuntimeStore', () => {
 
   it('commits function_response, outcome journal fact, and projection atomically in T2', async () => {
     await withStore(async (store) => {
-      await commitPrepared(store);
-      const outcome = functionResponseEvent();
+      await commitPrepared(store, { resultProjectionVersion: 1 });
+      const outcome = functionResponseEvent({
+        content: {
+          kind: 'function_response',
+          id: 'provider-call-1',
+          name: 'Read',
+          result: 'private execution contents',
+          modelProjection: { version: 1, kind: 'text', text: 'bounded model contents' },
+        },
+      });
 
       const result = await store.commitToolOutcome({
         operationId: 'operation-1',
@@ -434,7 +443,19 @@ describe('SqliteRuntimeStore', () => {
       assert.equal(result.runtimeEventSeq, 3);
       assert.deepEqual(await store.readRuntimeEvents('session-1', 'run-1'), [
         functionCallEvent(),
-        toolDispatchEvent(),
+        toolDispatchEvent({
+          actions: {
+            toolDispatch: {
+              protocol: 't1_after_preflight_v1',
+              operationId: 'operation-1',
+              providerToolCallId: 'provider-call-1',
+              toolName: 'Read',
+              canonicalArgsHash: READ_ARGS_HASH,
+              recoveryMode: 'replay_safe',
+              resultProjectionVersion: 1,
+            },
+          },
+        }),
         outcome,
       ]);
       assert.equal((await store.readImmutableRuntimeEvents('session-1', 'run-1')).length, 3);
@@ -458,6 +479,32 @@ describe('SqliteRuntimeStore', () => {
         ['prepared', 'outcome_committed'],
       );
       assert.deepEqual(await store.listUnsettledToolOperations(), []);
+    });
+  });
+
+  it('keeps projected T2 prepared when its atomic model projection is missing', async () => {
+    await withStore(async (store) => {
+      await commitPrepared(store, { resultProjectionVersion: 1 });
+
+      await assert.rejects(
+        store.commitToolOutcome({
+          operationId: 'operation-1',
+          journalEventId: 'operation-1_outcome',
+          runtimeEvent: functionResponseEvent(),
+          committedAt: 20,
+        }),
+        /requires its durable model projection/,
+      );
+
+      assert.deepEqual(
+        (await store.readRuntimeEvents('session-1', 'run-1')).map((event) => event.id),
+        ['call-event-1', 'dispatch-event-1'],
+      );
+      assert.equal((await store.readToolOperation('operation-1'))?.currentState, 'prepared');
+      assert.deepEqual(
+        (await store.readToolJournal('operation-1')).map((event) => event.state),
+        ['prepared'],
+      );
     });
   });
 
@@ -777,7 +824,7 @@ describe('SqliteRuntimeStore', () => {
     });
   });
 
-  it('decodes a persisted continuation target without widening new claims', async () => {
+  it('refuses a continuation target opening it cannot read, stored or submitted', async () => {
     await withStore(async (store, dbPath) => {
       const claim = continuationClaim();
       await persistImmutablePrefix(store, continuationSourcePrefix());
@@ -786,13 +833,16 @@ describe('SqliteRuntimeStore', () => {
           store.claimContinuation({
             claim: {
               ...claim,
-              targetRunHeader: {
-                ...claim.targetRunHeader,
-                permissionMode: 'execute',
-              } as unknown as ContinuationClaimV1['targetRunHeader'],
+              targetOpening: {
+                ...claim.targetOpening,
+                configuration: {
+                  ...claim.targetOpening.configuration,
+                  permissionMode: 'execute',
+                },
+              } as unknown as ContinuationClaimV1['targetOpening'],
             },
           }),
-        /Invalid AgentRun header schema/,
+        /Invalid RuntimeEvent invocation_opened schema/,
       );
       assert.equal((await store.claimContinuation({ claim })).kind, 'acquired');
 
@@ -800,9 +850,9 @@ describe('SqliteRuntimeStore', () => {
       try {
         database.exec(`
           UPDATE runtime_continuation_claims
-          SET target_run_header_json = json_set(
-            target_run_header_json,
-            '$.permissionMode',
+          SET target_opening_json = json_set(
+            target_opening_json,
+            '$.configuration.permissionMode',
             'execute'
           )
           WHERE claim_id = 'claim-1';
@@ -811,8 +861,15 @@ describe('SqliteRuntimeStore', () => {
         database.close();
       }
 
-      const persisted = await store.readContinuationClaimByBoundary(claim.boundaryDigest);
-      assert.equal(persisted?.targetRunHeader.permissionMode, 'ask');
+      // A persisted Run header used to be widened on read. The opening fact has
+      // no legacy layer and none is wanted: a claim whose frozen opening cannot
+      // be read cannot authenticate the start event it exists to authenticate,
+      // and admitting one against a guessed opening would be the failure this
+      // record is meant to prevent.
+      await assert.rejects(
+        store.readContinuationClaimByBoundary(claim.boundaryDigest),
+        /Invalid RuntimeEvent invocation_opened schema/,
+      );
     });
   });
 
@@ -1027,6 +1084,47 @@ describe('SqliteRuntimeStore', () => {
 
       assert.equal(conflict.kind, 'conflict');
       assert.deepEqual(conflict.claim, claim);
+    });
+  });
+
+  it('lets a started continuation target be purged instead of refusing the delete', async () => {
+    await withStore(async (store, dbPath) => {
+      const claim = continuationClaim();
+      await persistImmutablePrefix(store, continuationSourcePrefix());
+      assert.equal((await store.claimContinuation({ claim })).kind, 'acquired');
+
+      const db = new DatabaseSync(dbPath);
+      try {
+        db.exec('PRAGMA foreign_keys = ON');
+        // Stand the claim up the way starting a continuation does: its start
+        // event is event one of the target Session's run.
+        const start = db
+          .prepare('SELECT event_id, session_id FROM runtime_events ORDER BY event_seq ASC LIMIT 1')
+          .get() as { event_id: string; session_id: string };
+        db.prepare(
+          "UPDATE runtime_continuation_claims SET start_event_id = ?, start_kind = 'runtime_admission' WHERE claim_id = ?",
+        ).run(start.event_id, claim.claimId);
+
+        // Purging a conversation deletes its events. The claim used to have no
+        // ON DELETE clause, so the constraint refused this and rolled the whole
+        // purge back — for the user's delete, a copy rollback, an import
+        // discard and Session retirement alike.
+        db.prepare('DELETE FROM runtime_events WHERE session_id = ?').run(start.session_id);
+
+        assert.equal(
+          (
+            db
+              .prepare(
+                'SELECT COUNT(*) AS count FROM runtime_continuation_claims WHERE claim_id = ?',
+              )
+              .get(claim.claimId) as { count: number }
+          ).count,
+          0,
+          'a continuation whose target was deleted no longer names anything, so it goes too',
+        );
+      } finally {
+        db.close();
+      }
     });
   });
 
@@ -1867,32 +1965,37 @@ function continuationClaimForBoundary(
     providerProjectionVersion: 1,
     providerReplayDigest: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     target,
-    targetRunHeader: {
-      ...target,
-      status: 'created',
-      backendKind: 'fake',
-      llmConnectionSlug: 'connection-1',
-      modelId: 'model-1',
-      cwd: '/workspace/repo',
-      permissionMode: 'ask',
-      collaborationMode: 'agent',
-      orchestrationMode: 'default',
-      orchestrationSource: 'session',
-      agentSwarmAuthorization: 'none',
-      createdAt: claimedAt,
-      updatedAt: claimedAt,
-      parentRunId: source.identity.runId,
-      parentTurnId: source.identity.turnId,
-      continuationSource: {
-        protocol: 'continuation_source_v2',
-        claimId,
-        boundaryDigest: boundary.manifestDigest,
+    targetOpening: {
+      kind: 'invocation_opened',
+      protocol: 'invocation_opened_v1',
+      route: {
+        provenance: 'unknown',
+        backendKind: 'fake',
+        llmConnectionSlug: 'connection-1',
+        modelId: 'model-1',
+      },
+      configuration: {
+        cwd: '/workspace/repo',
+        permissionMode: 'ask',
+        collaborationMode: 'agent',
+        orchestrationMode: 'default',
+        orchestrationSource: 'session',
+        toolMode: DEFAULT_TOOL_MODE,
+        agentSwarmAuthorization: 'none',
+      },
+      root: { kind: 'user' },
+      source: {
+        kind: 'continuation',
         sourceInvocationId: source.identity.invocationId,
         sourceRunId: source.identity.runId,
         sourceTurnId: source.identity.turnId,
         sourceRuntimeEventHighWater: source.position.lastEventSeq,
-        sourcePrefixDigest: source.prefixDigest,
-        replayManifestDigest: boundary.manifestDigest,
+        claimId,
+        boundaryDigest: boundary.manifestDigest,
+      },
+      lineage: {
+        parentRunId: source.identity.runId,
+        parentTurnId: source.identity.turnId,
       },
     },
     claimedAt,
@@ -1975,6 +2078,8 @@ function continuationStartEvent(
     partial: false,
     role: 'system',
     author: 'system',
+    modelVisibility: 'hidden',
+    content: claim.targetOpening,
     actions: {
       ...(overrides.toolBoundaryProtocol
         ? { runtimeProtocol: { toolBoundary: overrides.toolBoundaryProtocol } }
@@ -2069,12 +2174,26 @@ function toolDispatchEvent(overrides: Partial<RuntimeEvent> = {}): RuntimeEvent 
   };
 }
 
-function commitPrepared(store: Store) {
+function commitPrepared(store: Store, options: { resultProjectionVersion?: 1 } = {}) {
   return store.commitToolPrepared({
     operationId: 'operation-1',
     journalEventId: 'operation-1_prepared',
     runtimeEvent: functionCallEvent(),
-    dispatchRuntimeEvent: toolDispatchEvent(),
+    dispatchRuntimeEvent: toolDispatchEvent({
+      actions: {
+        toolDispatch: {
+          protocol: 't1_after_preflight_v1',
+          operationId: 'operation-1',
+          providerToolCallId: 'provider-call-1',
+          toolName: 'Read',
+          canonicalArgsHash: READ_ARGS_HASH,
+          recoveryMode: 'replay_safe',
+          ...(options.resultProjectionVersion !== undefined
+            ? { resultProjectionVersion: options.resultProjectionVersion }
+            : {}),
+        },
+      },
+    }),
     providerToolCallId: 'provider-call-1',
     toolName: 'Read',
     canonicalArgsHash: READ_ARGS_HASH,

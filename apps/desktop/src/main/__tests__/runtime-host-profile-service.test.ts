@@ -25,6 +25,7 @@ import { afterEach, test } from "node:test";
 import {
   createClientRuntimeHostCredentialStore,
   createClientRuntimeHostProfileCatalog,
+  createRuntimeHostProfileCredentialStore,
   encodeRuntimeHostOwnerConnectionCode,
   LOCAL_RUNTIME_HOST_PROFILE,
   RuntimeHostPermanentReconnectError,
@@ -35,13 +36,17 @@ import {
   INTERACTIVE_RUNTIME_HOST_COMPOSITION_ID,
   RUNTIME_HOST_COMPATIBILITY_EPOCH,
   RUNTIME_HOST_PROTOCOL_VERSION,
-  encodeCollaborationInvitationCode,
 } from "@maka/runtime-host/protocol";
 import {
   RuntimeHostPairingFinalizationInterruptedError,
   type RuntimeHostDesktopTargetState,
 } from "../runtime-host-desktop-manager.js";
-import { createDesktopRuntimeHostManagedServiceStore } from "../runtime-host-managed-services.js";
+import {
+  createDesktopRuntimeHostManagedServiceStore,
+  findDesktopRuntimeHostManagedServiceBinding,
+  isDesktopRuntimeHostManagedSshServiceBinding,
+  type DesktopRuntimeHostManagedServiceStore,
+} from "../runtime-host-managed-services.js";
 import {
   createDesktopRuntimeHostPairingIntent,
   writeDesktopRuntimeHostPairingIntents,
@@ -50,9 +55,14 @@ import {
   createDesktopRuntimeHostProfileService,
   resolveDesktopRuntimeHostStartup,
 } from "../runtime-host-profile-service.js";
-import { encodeDesktopCollaborationInvitation } from '../runtime-host-collaboration-invitation.js';
 
 const ROOT_ID = "a".repeat(64);
+const OPERATOR = {
+  kind: "node" as const,
+  platform: "posix" as const,
+  nodePath: "/usr/bin/node",
+  modulePath: "/home/operator/.local/share/Maka/runtime-host-services/operator.mjs",
+};
 const PROFILE = {
   id: "office",
   name: "Office",
@@ -78,7 +88,7 @@ const MANAGED_SERVICE = {
   },
   control: {
     kind: "ssh_operator" as const,
-    operatorPath: "/home/operator/.local/share/maka/operator",
+    operator: OPERATOR,
   },
 };
 const READY_PROFILE = {
@@ -114,6 +124,48 @@ test("migrates the former selected Host into enabled and default preferences", a
       .schemaVersion,
     2,
   );
+});
+
+test('removes obsolete experimental Guest profiles and pairing intents at startup', async () => {
+  const root = await clientRoot();
+  const credentials = createClientRuntimeHostCredentialStore(root);
+  const catalog = createClientRuntimeHostProfileCatalog(root, credentials);
+  const guest = { ...PROFILE, id: 'shared-obsolete', access: 'session_guest' as const };
+  await createRuntimeHostProfileCredentialStore(credentials).set(guest, {
+    credential: 'guest-token',
+    profileIncarnationId: 'guest-incarnation',
+  });
+  await writeFile(
+    join(root, 'runtime-host-profiles.json'),
+    `${JSON.stringify({ schemaVersion: 3, profiles: [guest] })}\n`,
+  );
+  await writeFile(
+    join(root, 'runtime-host-profile-selection.json'),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: guest.id,
+      enabledRemoteProfileIds: [guest.id],
+    })}\n`,
+  );
+  await writeDesktopRuntimeHostPairingIntents(credentials, [
+    createDesktopRuntimeHostPairingIntent({
+      target: { profile: guest, credential: 'guest-token' },
+      wasEnabled: true,
+    }),
+  ]);
+
+  const startup = await resolveDesktopRuntimeHostStartup(root, {
+    catalog,
+    credentialStore: credentials,
+  });
+
+  assert.deepEqual((await catalog.read()).profiles, []);
+  assert.deepEqual(startup.pairingIntents, []);
+  assert.deepEqual(startup.preferences, {
+    schemaVersion: 2,
+    defaultProfileId: 'local',
+    enabledRemoteProfileIds: [],
+  });
 });
 
 test("starts Local and preserves remote preferences when the profile catalog is unreadable", async () => {
@@ -234,6 +286,104 @@ test("keeps Local enabled while a new remote Host connects", async () => {
   );
 });
 
+test("reuses the existing WSL profile when the same managed Host is added again", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  const managedServices = createDesktopRuntimeHostManagedServiceStore(root);
+  const existing = {
+    id: "ubuntu",
+    name: "Ubuntu",
+    kind: "environment" as const,
+    provider: { kind: "wsl" as const, distribution: "Ubuntu-24.04" },
+    rootId: ROOT_ID,
+    operator: {
+      kind: "legacy_posix_executable" as const,
+      executablePath: "/home/operator/.local/share/Maka/runtime-host-services/operator",
+    },
+  };
+  await catalog.create(existing);
+  const enabled: string[] = [];
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup: await resolveDesktopRuntimeHostStartup(root, { catalog }),
+    catalog,
+    managedServices,
+    states: () => [connectingLocal()],
+    enable: async (target) => {
+      enabled.push(target.profile.id);
+    },
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
+  });
+  const managedService = {
+    deployment: {
+      id: ROOT_ID,
+      rootPath: "/home/operator/.config/Maka/workspaces/default",
+      deploymentId: "11111111-1111-4111-8111-111111111111",
+    },
+  };
+
+  const result = await service.addManagedEnvironmentAndEnable({
+    profile: { ...existing, id: "replacement", name: "Replacement", operator: OPERATOR },
+    managedService,
+  });
+
+  const upgraded = { ...existing, operator: OPERATOR };
+  assert.equal(result.profileId, existing.id);
+  assert.deepEqual((await catalog.read()).profiles, [upgraded]);
+  assert.deepEqual(enabled, [existing.id]);
+  assert.deepEqual(
+    findDesktopRuntimeHostManagedServiceBinding(
+      await managedServices.read(),
+      upgraded,
+    ),
+    { profile: upgraded, ...managedService, state: "active" },
+  );
+});
+
+test("rolls back a new WSL profile when its managed binding cannot be saved", async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup: await resolveDesktopRuntimeHostStartup(root, { catalog }),
+    catalog,
+    managedServices: {
+      async save() {
+        throw new Error("binding rejected");
+      },
+    } as unknown as DesktopRuntimeHostManagedServiceStore,
+    states: () => [connectingLocal()],
+    enable: async () => assert.fail("an unbound profile must not be enabled"),
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
+  });
+
+  await assert.rejects(
+    service.addManagedEnvironmentAndEnable({
+      profile: {
+        id: "ubuntu",
+        name: "Ubuntu",
+        kind: "environment",
+        provider: { kind: "wsl", distribution: "Ubuntu-24.04" },
+        rootId: ROOT_ID,
+        operator: OPERATOR,
+      },
+      managedService: {
+        deployment: {
+          id: ROOT_ID,
+          rootPath: "/home/operator/.config/Maka/workspaces/default",
+          deploymentId: "11111111-1111-4111-8111-111111111111",
+        },
+      },
+    }),
+    /binding rejected/u,
+  );
+  assert.deepEqual((await catalog.read()).profiles, []);
+});
+
 test("reconnects an enabled remote Host with interactive SSH", async () => {
   const root = await clientRoot();
   const catalog = createClientRuntimeHostProfileCatalog(root);
@@ -297,6 +447,46 @@ test("does not enable the same State Root twice", async () => {
     (await service.getSnapshot()).entries.some((entry) => entry.profile.id === PROFILE.id),
     false,
   );
+});
+
+test('starts an enabled Owner profile beside a retained Guest mount for the same Root', async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  await catalog.create(PROFILE, 'owner-token');
+  await writeFile(
+    join(root, 'runtime-host-profile-selection.json'),
+    `${JSON.stringify({
+      schemaVersion: 2,
+      defaultProfileId: PROFILE.id,
+      enabledRemoteProfileIds: [PROFILE.id],
+    })}\n`,
+  );
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  const enabled: string[] = [];
+  const guest = {
+    profile: {
+      ...PROFILE,
+      id: 'shared-session',
+      access: 'session_guest' as const,
+    },
+    credential: 'guest-token',
+  };
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal(), connecting(guest)],
+    enable: async (target) => {
+      enabled.push(target.profile.id);
+    },
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
+  });
+
+  await service.startEnabledProfiles();
+
+  assert.deepEqual(enabled, [PROFILE.id]);
 });
 
 test("preserves an enabled remote profile when that Host is unavailable", async () => {
@@ -503,190 +693,6 @@ test("keeps a separate profile when the same Host is paired through another conn
   assert.equal((await catalog.resolve("replacement")).credential, "new-token");
 });
 
-test('imports shared access without requiring or persisting an Owner credential', async () => {
-  const root = await clientRoot();
-  const catalog = createClientRuntimeHostProfileCatalog(root);
-  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
-  const connected: ResolvedRuntimeHostProfile[] = [];
-  const finalized: string[] = [];
-  const service = createDesktopRuntimeHostProfileService({
-    clientDataRoot: root,
-    startup,
-    catalog,
-    states: () => [connectingLocal()],
-    enable: async (target) => {
-      connected.push(target);
-    },
-    disable: async () => undefined,
-    setDefault: () => undefined,
-    finalizePairing: async (profileId) => {
-      finalized.push(profileId);
-    },
-  });
-
-  const result = await service.importCollaborationInvitation(
-    encodeDesktopCollaborationInvitation({
-      invitationCode: encodeCollaborationInvitationCode({
-        schemaVersion: 1,
-        rootId: ROOT_ID,
-        credential: 'guest-token',
-      }),
-      target: {
-        name: PROFILE.name,
-        transport: PROFILE.transport,
-      },
-    }),
-    false,
-  );
-
-  assert.equal(result.kind, 'connected');
-  if (result.kind !== 'connected') return;
-  assert.equal((await catalog.read()).profiles.length, 1);
-  const sharedProfileId = connected[0]?.profile.id;
-  assert.ok(sharedProfileId);
-  const shared = await catalog.resolve(sharedProfileId);
-  assert.equal(shared.profile.kind, 'remote');
-  assert.equal(shared.profile.kind === 'remote' ? shared.profile.access : undefined, 'session_guest');
-  assert.equal(shared.credential, 'guest-token');
-  assert.deepEqual(finalized, [sharedProfileId]);
-});
-
-test('keeps separate Guest principals for sessions shared by the same Host', async () => {
-  const root = await clientRoot();
-  const catalog = createClientRuntimeHostProfileCatalog(root);
-  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
-  const connected: ResolvedRuntimeHostProfile[] = [];
-  const service = createDesktopRuntimeHostProfileService({
-    clientDataRoot: root,
-    startup,
-    catalog,
-    states: () => [connectingLocal(), ...connected.map(ready)],
-    enable: async (target) => {
-      connected.push(target);
-    },
-    disable: async () => undefined,
-    setDefault: () => undefined,
-    finalizePairing: async () => undefined,
-  });
-  const invitation = (credential: string) => encodeDesktopCollaborationInvitation({
-    invitationCode: encodeCollaborationInvitationCode({
-      schemaVersion: 1,
-      rootId: ROOT_ID,
-      credential,
-    }),
-    target: { name: PROFILE.name, transport: PROFILE.transport },
-  });
-
-  assert.equal((await service.importCollaborationInvitation(invitation('guest-one'), false)).kind, 'connected');
-  assert.equal((await service.importCollaborationInvitation(invitation('guest-two'), false)).kind, 'connected');
-
-  const profiles = await catalog.read();
-  assert.equal(profiles.profiles.length, 2);
-  assert.notEqual(profiles.profiles[0]?.id, profiles.profiles[1]?.id);
-  assert.deepEqual(
-    await Promise.all(profiles.profiles.map(async ({ id }) => (await catalog.resolve(id)).credential)),
-    ['guest-one', 'guest-two'],
-  );
-});
-
-test('lets the user discard an interrupted shared-session pairing', async () => {
-  const root = await clientRoot();
-  const catalog = createClientRuntimeHostProfileCatalog(root);
-  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
-  const service = createDesktopRuntimeHostProfileService({
-    clientDataRoot: root,
-    startup,
-    catalog,
-    states: () => [connectingLocal()],
-    enable: async () => undefined,
-    disable: async () => undefined,
-    setDefault: () => undefined,
-    finalizePairing: async () => {
-      throw new RuntimeHostPairingFinalizationInterruptedError();
-    },
-  });
-
-  const result = await service.importCollaborationInvitation(
-    encodeDesktopCollaborationInvitation({
-      invitationCode: encodeCollaborationInvitationCode({
-        schemaVersion: 1,
-        rootId: ROOT_ID,
-        credential: 'guest-token',
-      }),
-      target: {
-        name: PROFILE.name,
-        transport: PROFILE.transport,
-      },
-    }),
-    false,
-  );
-
-  assert.equal(result.kind, 'pairing_pending');
-  if (result.kind !== 'pairing_pending') return;
-  const pending = (await service.getSnapshot()).entries.find(
-    (entry) => entry.pairingPending,
-  );
-  assert.ok(pending);
-  assert.equal(result.profileId, pending.profile.id);
-  assert.equal(pending.enabled, true);
-
-  const discarded = await service.discardPairing(pending.profile.id);
-  assert.equal(discarded.pairingRecoveryPending, undefined);
-  assert.deepEqual((await catalog.read()).profiles, []);
-  assert.deepEqual(
-    (await resolveDesktopRuntimeHostStartup(root, { catalog })).pairingIntents,
-    [],
-  );
-});
-
-test('requires explicit confirmation before importing plaintext shared access', async () => {
-  const root = await clientRoot();
-  const catalog = createClientRuntimeHostProfileCatalog(root);
-  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
-  const connected: ResolvedRuntimeHostProfile[] = [];
-  const service = createDesktopRuntimeHostProfileService({
-    clientDataRoot: root,
-    startup,
-    catalog,
-    states: () => [connectingLocal()],
-    enable: async (target) => {
-      connected.push(target);
-    },
-    disable: async () => undefined,
-    setDefault: () => undefined,
-    finalizePairing: async () => undefined,
-  });
-
-  const code = encodeDesktopCollaborationInvitation({
-    invitationCode: encodeCollaborationInvitationCode({
-      schemaVersion: 1,
-      rootId: ROOT_ID,
-      credential: 'guest-token',
-    }),
-    target: {
-      name: 'Lab',
-      transport: {
-        kind: 'plaintext',
-        url: 'ws://runtime.example.com',
-        acknowledgement: 'plaintext-bearer-v1',
-      },
-    },
-  });
-  assert.deepEqual(await service.importCollaborationInvitation(code, false), {
-    kind: 'error',
-    reason: 'insecure_confirmation_required',
-  });
-  assert.equal(connected.length, 0);
-
-  const result = await service.importCollaborationInvitation(code, true);
-  assert.equal(result.kind, 'connected');
-  assert.equal(connected[0]?.profile.kind, 'remote');
-  assert.equal(
-    connected[0]?.profile.kind === 'remote' ? connected[0].profile.transport.kind : undefined,
-    'plaintext',
-  );
-});
-
 test('classifies connection-code failures without exposing transport errors to the renderer', async () => {
   const root = await clientRoot();
   const startup = await resolveDesktopRuntimeHostStartup(root);
@@ -715,15 +721,74 @@ test('classifies connection-code failures without exposing transport errors to t
         rootId: ROOT_ID,
         transport: {
           kind: 'libp2p-direct',
-          peerId: '12D3KooWpeer',
-          routeHints: ['/ip4/192.0.2.8/udp/44001/quic-v1'],
-          coordinationRelays: [],
+          reachability: peerReachability('12D3KooWpeer'),
         },
         credential: 'pending-credential',
       }),
     ),
     { kind: 'error', reason: 'code_unavailable' },
   );
+});
+
+test('persists authenticated Owner routes imported through a connection code', async () => {
+  const root = await clientRoot();
+  const catalog = createClientRuntimeHostProfileCatalog(root);
+  const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  const staleTransport = {
+    kind: 'libp2p-direct' as const,
+    reachability: peerReachability(
+      '12D3KooWpeer',
+      1,
+      ['/ip4/192.0.2.8/udp/44001/quic-v1'],
+      ['/memory/stale-relay'],
+    ),
+  };
+  const freshEndpoint = peerReachability(
+    '12D3KooWpeer',
+    2,
+    ['/ip4/198.51.100.9/udp/44002/quic-v1'],
+    ['/memory/fresh-relay'],
+  );
+  let observedIncarnation: string | undefined;
+  const service = createDesktopRuntimeHostProfileService({
+    clientDataRoot: root,
+    startup,
+    catalog,
+    states: () => [connectingLocal()],
+    enable: async (target, _sshInteraction, onPeerEndpoint) => {
+      observedIncarnation = target.profileIncarnationId;
+      assert.deepEqual(
+        target.profile.kind === 'remote' ? target.profile.transport : undefined,
+        staleTransport,
+      );
+      assert.ok(onPeerEndpoint);
+      onPeerEndpoint(freshEndpoint);
+    },
+    disable: async () => undefined,
+    setDefault: () => undefined,
+    finalizePairing: async () => undefined,
+  });
+
+  const result = await service.importConnectionCode(
+    encodeRuntimeHostOwnerConnectionCode({
+      name: 'Other computer',
+      rootId: ROOT_ID,
+      transport: staleTransport,
+      credential: 'pending-owner-token',
+    }),
+  );
+
+  assert.equal(result.kind, 'connected');
+  if (result.kind !== 'connected') return;
+  const persisted = await catalog.resolve(result.profileId);
+  assert.equal(persisted.credential, 'pending-owner-token');
+  assert.equal(persisted.profileIncarnationId, observedIncarnation);
+  assert.deepEqual(
+    persisted.profile.kind === 'remote' ? persisted.profile.transport : undefined,
+    { kind: 'libp2p-direct', reachability: freshEndpoint },
+  );
+  const restarted = await resolveDesktopRuntimeHostStartup(root, { catalog });
+  assert.deepEqual(restarted.remotes, [persisted]);
 });
 
 test("finishes a persisted pairing after Desktop restarts before finalization", async () => {
@@ -763,12 +828,28 @@ test("keeps a managed Direct route on the SSH profile credential authority", asy
   await managedServices.save(MANAGED_PROFILE, MANAGED_SERVICE);
   const startup = await resolveDesktopRuntimeHostStartup(root, { catalog });
   const activated: ResolvedRuntimeHostProfile[] = [];
+  const livePeer = peerReachability(
+    '12D3KooWpeer',
+    2,
+    ['/ip4/192.0.2.9/udp/44002/quic-v1'],
+    ['/dns4/relay.example/udp/443/quic-v1/p2p/12D3KooWrelay'],
+  );
+  let exposeReadyState = false;
   const service = createDesktopRuntimeHostProfileService({
     clientDataRoot: root,
     startup,
     catalog,
     managedServices,
-    states: () => [connectingLocal()],
+    states: () =>
+      exposeReadyState
+        ? [
+            connectingLocal(),
+            readyWithPeerEndpoint(
+              { profile: MANAGED_PROFILE, credential: "owner-token" },
+              livePeer,
+            ),
+          ]
+        : [connectingLocal()],
     enable: async (target) => {
       activated.push(target);
     },
@@ -782,11 +863,8 @@ test("keeps a managed Direct route on the SSH profile credential authority", asy
     /Enable Direct peer access/u,
   );
 
-  await service.upsertManagedDirectPeerProfile(MANAGED_PROFILE.id, {
-    peerId: "12D3KooWpeer",
-    routeHints: ["/ip4/192.0.2.8/udp/44001/quic-v1"],
-    coordinationRelays: [],
-  });
+  exposeReadyState = true;
+  await service.upsertManagedDirectPeerProfile(MANAGED_PROFILE.id, '12D3KooWpeer');
 
   const directId = (await catalog.read()).profiles.find(
     (profile) => profile.kind === 'remote' && profile.transport.kind === 'libp2p-direct',
@@ -798,14 +876,16 @@ test("keeps a managed Direct route on the SSH profile credential authority", asy
   if (direct.profile.kind !== "remote") assert.fail("expected a remote Direct profile");
   assert.deepEqual(direct.profile.transport, {
     kind: "libp2p-direct",
-    peerId: "12D3KooWpeer",
-    routeHints: ["/ip4/192.0.2.8/udp/44001/quic-v1"],
-    coordinationRelays: [],
+    reachability: livePeer,
   });
   assert.deepEqual(
     await service.resolveCollaborationConnectionTarget(MANAGED_PROFILE),
-    { name: MANAGED_PROFILE.name, transport: direct.profile.transport },
+    {
+      name: MANAGED_PROFILE.name,
+      transport: { kind: 'libp2p-direct', reachability: livePeer },
+    },
   );
+  exposeReadyState = false;
   assert.equal((await catalog.resolve(MANAGED_PROFILE.id)).credential, "owner-token");
 
   const beforeRejectedRemoval = {
@@ -817,6 +897,7 @@ test("keeps a managed Direct route on the SSH profile credential authority", asy
   };
   const managedBinding = await service.resolveManagedService(MANAGED_PROFILE.id);
   assert.ok(managedBinding);
+  assert.ok(isDesktopRuntimeHostManagedSshServiceBinding(managedBinding));
   await assert.rejects(
     service.remove(MANAGED_PROFILE.id),
     /remove the Direct peer profile/u,
@@ -892,6 +973,7 @@ test("recovers interrupted managed credential rotation after restart", async () 
   assert.equal((await catalog.resolve(MANAGED_PROFILE.id)).credential, "new-token");
   const managed = await service.resolveManagedService(MANAGED_PROFILE.id);
   assert.ok(managed);
+  assert.ok(isDesktopRuntimeHostManagedSshServiceBinding(managed));
   await assert.rejects(
     service.markManagedServiceUninstalling(managed),
     /unfinished pairing/u,
@@ -1349,6 +1431,7 @@ test("restores an existing profile when replacement finalization fails", async (
     const root = await clientRoot();
     const catalog = createClientRuntimeHostProfileCatalog(root);
     await catalog.create(PROFILE, "old-token");
+    const original = await catalog.resolve(PROFILE.id);
     await writeFile(
       join(root, "runtime-host-profile-selection.json"),
       `${JSON.stringify({
@@ -1386,13 +1469,7 @@ test("restores an existing profile when replacement finalization fails", async (
       /finalization failed/u,
     );
 
-    assert.deepEqual(await catalog.resolve(PROFILE.id), {
-      profile: {
-        ...PROFILE,
-        transport: { kind: "tls", url: "wss://runtime.example.com/" },
-      },
-      credential: "old-token",
-    });
+    assert.deepEqual(await catalog.resolve(PROFILE.id), original);
     assert.equal(enabled.at(-1)?.credential, "old-token");
 });
 
@@ -1440,6 +1517,52 @@ test("keeps existing Hosts available while corrupt pairing recovery awaits resol
   );
   assert.equal((await service.resolvePairingRecovery()).pairingRecoveryBlocked, undefined);
   assert.equal((await service.setEnabled(PROFILE.id, false)).entries[1]?.enabled, false);
+});
+
+test("migrates an interrupted SSH pairing from the released operator path", async () => {
+  const root = await clientRoot();
+  const credentialStore = createClientRuntimeHostCredentialStore(root);
+  await credentialStore.setSecret(
+    "runtime-host-pairing-recovery",
+    "runtime_host_access",
+    JSON.stringify({
+      schemaVersion: 1,
+      intents: [
+        {
+          target: {
+            profile: {
+              ...MANAGED_PROFILE,
+              transport: {
+                kind: "ssh",
+                destination: "operator@example.com",
+                activation: {
+                  kind: "ssh_operator",
+                  operatorPath: "/home/operator/.local/share/maka/operator",
+                },
+              },
+            },
+            credential: "new-token",
+          },
+          wasEnabled: true,
+        },
+      ],
+    }),
+  );
+
+  const startup = await resolveDesktopRuntimeHostStartup(root, { credentialStore });
+
+  assert.equal(startup.pairingReadFailure, undefined);
+  assert.deepEqual(startup.pairingIntents[0]?.target.profile.transport, {
+    kind: "ssh",
+    destination: "operator@example.com",
+    activation: {
+      kind: "ssh_operator",
+      operator: {
+        kind: "legacy_posix_executable",
+        executablePath: "/home/operator/.local/share/maka/operator",
+      },
+    },
+  });
 });
 
 test("retries pairing recovery before discarding it", async () => {
@@ -1649,6 +1772,44 @@ function ready(target: ResolvedRuntimeHostProfile): RuntimeHostDesktopTargetStat
     candidate: {
       client: { hostId: target.profile.kind === "remote" ? target.profile.rootId : ROOT_ID },
     } as never,
+  };
+}
+
+function readyWithPeerEndpoint(
+  target: ResolvedRuntimeHostProfile,
+  peerEndpoint: ReturnType<typeof peerReachability>,
+): RuntimeHostDesktopTargetState {
+  return {
+    epoch: `epoch-${target.profile.id}`,
+    target,
+    readiness: "ready",
+    candidate: {
+      client: {
+        hostId: target.profile.kind === "remote" ? target.profile.rootId : ROOT_ID,
+        status: async () => ({ peerEndpoint }),
+      },
+    } as never,
+  };
+}
+
+function peerReachability(
+  peerId: string,
+  revision = 1,
+  directRoutes: readonly string[] = ['/ip4/192.0.2.8/udp/44001/quic-v1'],
+  coordinationRoutes: readonly string[] = [],
+) {
+  return {
+    lease: {
+      version: 1 as const,
+      peerId,
+      revision,
+      issuedAt: 1,
+      expiresAt: 2,
+      directRoutes,
+      coordinationRoutes,
+    },
+    publicKey: Buffer.from('public').toString('base64url'),
+    signature: Buffer.from(`signature-${revision}`).toString('base64url'),
   };
 }
 

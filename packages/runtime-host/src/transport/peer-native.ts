@@ -49,11 +49,22 @@ export class RuntimeHostPeerError extends Error {
 
 export interface RuntimeHostPeerNativeStream {
   readonly peerId: string;
+  readonly path?: RuntimeHostPeerConnectionPath;
   read(): Promise<Buffer | null>;
   write(bytes: Buffer): Promise<void>;
   close(): Promise<void>;
   abort(): void;
 }
+
+export type RuntimeHostPeerConnectionPath =
+  | {
+      readonly kind: 'direct';
+      readonly transport: 'quic' | 'tcp' | 'webrtc' | 'other';
+    }
+  | {
+      readonly kind: 'transit';
+      readonly relayPeerId: string;
+    };
 
 export interface RuntimeHostPeerIdentityProof {
   readonly publicKey: Buffer;
@@ -62,9 +73,14 @@ export interface RuntimeHostPeerIdentityProof {
 
 export interface RuntimeHostPeerNativeEndpoint {
   readonly peerId: string;
-  readonly listenAddresses: readonly string[];
-  readonly activeCoordinationRelays: readonly string[];
+  readonly reachabilitySnapshot: RuntimeHostPeerNativeReachabilitySnapshot;
+  readonly connectivitySnapshot: RuntimeHostPeerNativeConnectivitySnapshot;
   readonly transitSnapshot: RuntimeHostPeerTransitSnapshot;
+  watchReachability(afterGeneration: number, timeoutMs: number): Promise<number>;
+  watchConnectivity(
+    afterGeneration: number,
+    timeoutMs: number,
+  ): Promise<RuntimeHostPeerNativeConnectivitySnapshot>;
   connect(options: {
     readonly requestId: number;
     readonly peerId: string;
@@ -81,14 +97,32 @@ export interface RuntimeHostPeerNativeEndpoint {
     readonly transitRelayPeerIds?: readonly string[];
     readonly directDeadlineMs: number;
   }): Promise<RuntimeHostPeerNativeStream>;
+  updateConnect(options: {
+    readonly requestId: number;
+    readonly routeHints: readonly string[];
+    readonly coordinationRelays?: readonly string[];
+    readonly transitRelayPeerIds?: readonly string[];
+  }): Promise<boolean>;
   configureTransit(options: {
     readonly allowedPeerIds: readonly string[];
+    readonly approvedRelayPeerIds: readonly string[];
     readonly relayCandidates: readonly RuntimeHostPeerTransitRelayCandidate[];
   }): Promise<void>;
   cancelConnect(requestId: number): Promise<boolean>;
   accept(): Promise<RuntimeHostPeerNativeStream | null>;
   acceptMeshControl(): Promise<RuntimeHostPeerNativeStream | null>;
   close(): Promise<void>;
+}
+
+export interface RuntimeHostPeerNativeReachabilitySnapshot {
+  readonly generation: number;
+  readonly listenAddresses: readonly string[];
+  readonly activeCoordinationRelays: readonly string[];
+}
+
+export interface RuntimeHostPeerNativeConnectivitySnapshot {
+  readonly generation: number;
+  readonly connectedPeerIds: readonly string[];
 }
 
 export interface RuntimeHostPeerTransitSnapshot {
@@ -109,6 +143,7 @@ export interface RuntimeHostPeerTransitRelayCandidate {
 }
 
 interface RuntimeHostPeerNativeModule {
+  readProcessStartIdentity?(pid: number): unknown;
   ensurePeerIdentity(keyPath: string): Promise<string>;
   signPeerIdentity(
     keyPath: string,
@@ -123,11 +158,23 @@ interface RuntimeHostPeerNativeModule {
   ): boolean;
   startPeerEndpoint(options: {
     readonly keyPath: string;
+    readonly relayAnchorPath?: string;
     readonly expectedPeerId?: string;
     readonly listenAddresses?: readonly string[];
     readonly coordinationRelays?: readonly string[];
     readonly automaticRelayDiscovery?: boolean;
+    readonly webRtcStunUrls?: readonly string[];
   }): unknown;
+}
+
+export function readRuntimeHostNativeProcessStartIdentity(
+  nativePath: string,
+  pid: number,
+): string | undefined {
+  const reader = loadNativeModule(nativePath).readProcessStartIdentity;
+  if (!reader) return undefined;
+  const identity = reader(pid);
+  return typeof identity === 'string' && isProcessStartIdentity(identity) ? identity : undefined;
 }
 
 export async function signRuntimeHostPeerIdentity(input: {
@@ -194,20 +241,24 @@ export async function ensureRuntimeHostPeerIdentity(input: {
 export function startRuntimeHostPeerEndpoint(input: {
   readonly nativePath: string;
   readonly keyPath: string;
+  readonly relayAnchorPath?: string;
   readonly expectedPeerId?: string;
   readonly listenAddresses?: readonly string[];
   readonly coordinationRelays?: readonly string[];
   readonly automaticRelayDiscovery?: boolean;
+  readonly webRtcStunUrls?: readonly string[];
 }): RuntimeHostPeerNativeEndpoint {
   try {
     const endpoint = loadNativeModule(input.nativePath).startPeerEndpoint({
       keyPath: input.keyPath,
+      ...(input.relayAnchorPath ? { relayAnchorPath: input.relayAnchorPath } : {}),
       ...(input.expectedPeerId ? { expectedPeerId: input.expectedPeerId } : {}),
       ...(input.listenAddresses ? { listenAddresses: input.listenAddresses } : {}),
       ...(input.coordinationRelays ? { coordinationRelays: input.coordinationRelays } : {}),
       ...(input.automaticRelayDiscovery === undefined
         ? {}
         : { automaticRelayDiscovery: input.automaticRelayDiscovery }),
+      ...(input.webRtcStunUrls === undefined ? {} : { webRtcStunUrls: input.webRtcStunUrls }),
     });
     if (!isPeerNativeEndpoint(endpoint)) {
       throw new RuntimeHostPeerError(
@@ -470,20 +521,24 @@ function isPeerNativeEndpoint(value: unknown): value is RuntimeHostPeerNativeEnd
     value !== null &&
     'peerId' in value &&
     isPeerId(value.peerId) &&
-    'listenAddresses' in value &&
-    Array.isArray(value.listenAddresses) &&
-    value.listenAddresses.every((address) => typeof address === 'string') &&
-    'activeCoordinationRelays' in value &&
-    Array.isArray(value.activeCoordinationRelays) &&
-    value.activeCoordinationRelays.every((address) => typeof address === 'string') &&
+    'reachabilitySnapshot' in value &&
+    isPeerReachabilitySnapshot(value.reachabilitySnapshot) &&
+    'connectivitySnapshot' in value &&
+    isPeerConnectivitySnapshot(value.connectivitySnapshot) &&
     'transitSnapshot' in value &&
     isPeerTransitSnapshot(value.transitSnapshot) &&
     'connect' in value &&
     typeof value.connect === 'function' &&
     'connectMeshControl' in value &&
     typeof value.connectMeshControl === 'function' &&
+    'updateConnect' in value &&
+    typeof value.updateConnect === 'function' &&
     'configureTransit' in value &&
     typeof value.configureTransit === 'function' &&
+    'watchReachability' in value &&
+    typeof value.watchReachability === 'function' &&
+    'watchConnectivity' in value &&
+    typeof value.watchConnectivity === 'function' &&
     'cancelConnect' in value &&
     typeof value.cancelConnect === 'function' &&
     'accept' in value &&
@@ -492,6 +547,37 @@ function isPeerNativeEndpoint(value: unknown): value is RuntimeHostPeerNativeEnd
     typeof value.acceptMeshControl === 'function' &&
     'close' in value &&
     typeof value.close === 'function'
+  );
+}
+
+function isPeerConnectivitySnapshot(
+  value: unknown,
+): value is RuntimeHostPeerNativeConnectivitySnapshot {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'generation' in value &&
+    isCount(value.generation) &&
+    'connectedPeerIds' in value &&
+    Array.isArray(value.connectedPeerIds) &&
+    value.connectedPeerIds.every((peerId) => typeof peerId === 'string')
+  );
+}
+
+function isPeerReachabilitySnapshot(
+  value: unknown,
+): value is RuntimeHostPeerNativeReachabilitySnapshot {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'generation' in value &&
+    isCount(value.generation) &&
+    'listenAddresses' in value &&
+    Array.isArray(value.listenAddresses) &&
+    value.listenAddresses.every((address) => typeof address === 'string') &&
+    'activeCoordinationRelays' in value &&
+    Array.isArray(value.activeCoordinationRelays) &&
+    value.activeCoordinationRelays.every((address) => typeof address === 'string')
   );
 }
 
@@ -591,6 +677,12 @@ function isPeerId(value: unknown): value is string {
     value.length > 0 &&
     Buffer.byteLength(value, 'utf8') <= 256 &&
     !/[\u0000-\u001f\u007f]/u.test(value)
+  );
+}
+
+function isProcessStartIdentity(value: string): boolean {
+  return (
+    Buffer.byteLength(value, 'utf8') <= 256 && /^(?:darwin|linux|windows):[0-9a-f:-]+$/u.test(value)
   );
 }
 

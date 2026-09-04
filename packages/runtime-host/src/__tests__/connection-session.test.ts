@@ -17,6 +17,7 @@
  * under the License.
  */
 
+import { deferred, type Deferred, withTimeout } from '@maka/core/test-only/async-primitives';
 import { defineInteractiveRuntimeHostComposition } from '../server/host-composition.js';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -1492,7 +1493,7 @@ function createHandlers(queryTurn: TurnQueryHandler): RuntimeHostComposition['ha
       message: 'not available in this test composition',
     },
   } as const;
-  const taskLedgerUnavailable: Awaited<ReturnType<OperationHandlerMap['task.ledger.query']>> = {
+  const sessionTodoUnavailable: Awaited<ReturnType<OperationHandlerMap['session.todo.query']>> = {
     ok: false,
     error: {
       code: 'operation_unavailable',
@@ -1528,7 +1529,7 @@ function createHandlers(queryTurn: TurnQueryHandler): RuntimeHostComposition['ha
     'interaction.answer': async () => interactionUnavailable,
     'subscription.open': async () => subscriptionUnavailable,
     'subscription.close': async () => subscriptionUnavailable,
-    'task.ledger.query': async () => taskLedgerUnavailable,
+    'session.todo.query': async () => sessionTodoUnavailable,
   };
 }
 
@@ -1551,13 +1552,17 @@ function statusResponse(requestId: string): ResponseFrame {
 
 const UNUSED_HOST_DIAGNOSTICS_HANDLER: Pick<
   OperationHandlerMap,
-  'host.diagnostics.query' | 'host.upgrade.prepare'
+  'host.diagnostics.query' | 'host.resources.query' | 'host.upgrade.prepare'
 > = {
   'host.diagnostics.query': async () => ({
     ok: false,
     error: { code: 'internal_failure', message: 'not used' },
   }),
   'host.upgrade.prepare': async () => ({
+    ok: false,
+    error: { code: 'internal_failure', message: 'not used' },
+  }),
+  'host.resources.query': async () => ({
     ok: false,
     error: { code: 'internal_failure', message: 'not used' },
   }),
@@ -1696,34 +1701,6 @@ async function waitForStatus(
   assert.equal(predicate(status), true, 'Host operation counters did not settle');
   return status;
 }
-
-interface Deferred {
-  promise: Promise<void>;
-  resolve(): void;
-}
-
-function deferred(): Deferred {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }

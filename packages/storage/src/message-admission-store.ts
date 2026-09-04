@@ -24,6 +24,10 @@ import {
   type MessageContent,
 } from '@maka/core/events';
 import {
+  decodeSkillInvocationResult,
+  type SkillInvocationResult,
+} from '@maka/core/skill-invocation';
+import {
   normalizeSubmittedTurnIntent,
   submittedTurnIntentsEqual,
   type SubmittedTurnIntent,
@@ -50,6 +54,8 @@ export interface PendingMessageAdmission {
    * same submit reads as a different one.
    */
   readonly submittedIntent?: SubmittedTurnIntent;
+  /** The Skill resolution answer returned for this admitted Message. */
+  readonly skillInvocation: SkillInvocationResult;
   readonly admittedAt: number;
 }
 
@@ -79,6 +85,11 @@ export interface MarkMessagesHandedOffInput {
   readonly provenSteeringMessages?: readonly ProvenSteeringMessageHandoff[];
 }
 
+export type MessageAdmissionCancellationClaimOutcome =
+  | 'cancelled_by_claim'
+  | 'same_claim'
+  | 'already_cancelled';
+
 export interface MessageAdmissionStore {
   commitMessageAdmission(admission: PendingMessageAdmission): Promise<PendingMessageAdmission>;
   readMessageAdmission(
@@ -91,6 +102,11 @@ export interface MessageAdmissionStore {
    * own columns never leave this layer.
    */
   hasCancelledMessageAdmission(sessionId: string, messageId: string): Promise<boolean>;
+  claimMessageAdmissionCancellation(
+    sessionId: string,
+    messageId: string,
+    claimId: string,
+  ): Promise<MessageAdmissionCancellationClaimOutcome>;
   listMessageAdmissions(sessionId: string): Promise<readonly PendingMessageAdmission[]>;
   markMessagesHandedOff(input: MarkMessagesHandedOffInput): Promise<void>;
   updateMessageAdmission(admission: PendingMessageAdmission): Promise<void>;
@@ -127,6 +143,7 @@ export function normalizePendingMessageAdmission(
     ...(admission.submittedIntent
       ? { submittedIntent: normalizeSubmittedTurnIntent(admission.submittedIntent) }
       : {}),
+    skillInvocation: decodeSkillInvocationResult(admission.skillInvocation),
   });
   if (!/^sha256:[a-f0-9]{64}$/u.test(normalized.submittedContentDigest)) {
     throw new Error('Invalid pending Message submitted content digest');
@@ -181,6 +198,7 @@ export function samePendingMessageAdmission(
     a.disposition === b.disposition &&
     a.admittedAt === b.admittedAt &&
     submittedTurnIntentsEqual(a.submittedIntent, b.submittedIntent) &&
+    isDeepStrictEqual(a.skillInvocation, b.skillInvocation) &&
     isDeepStrictEqual(a.content, b.content)
   );
 }

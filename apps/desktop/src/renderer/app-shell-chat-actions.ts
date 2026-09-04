@@ -19,7 +19,7 @@
 
 import type { ChatDefaultPermissionMode } from '@maka/core/settings';
 import type { CollaborationMode } from '@maka/core/collaboration';
-import type { DesktopNewTaskTarget } from '../preload/bridge-contract.js';
+import type * as DesktopBridge from '../preload/bridge-contract.js';
 import type { InlineReference, QuoteRef } from '@maka/core/events';
 import type { OrchestrationMode } from '@maka/core/orchestration';
 import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
@@ -28,7 +28,6 @@ import type { StoredMessage } from '@maka/core/session';
 import type { ThinkingLevel } from '@maka/core/model-thinking';
 import type { TurnOrchestration } from '@maka/core/runtime-inputs';
 import type { UiLocale } from '@maka/core/ui-locale';
-import type { DesktopSessionSummary } from '../preload/bridge-contract.js';
 import type { UserQuestionResponse } from '@maka/core/user-question';
 import { DEFAULT_SESSION_NAME } from '@maka/core/session-name';
 import {
@@ -92,6 +91,11 @@ type PendingNewChatModel = {
 } | null;
 
 type PendingNewChatThinkingLevel = ThinkingLevel | null;
+type DesktopNewTaskTarget = DesktopBridge.DesktopNewTaskTarget;
+type DesktopSessionSummary = DesktopBridge.DesktopSessionSummary;
+type InteractionFormResponse = Parameters<
+  DesktopBridge.MakaBridge['sessions']['respondToUserForm']
+>[1];
 
 type ToastApi = {
   error(
@@ -103,17 +107,30 @@ type ToastApi = {
   info(title: string, description?: string): void;
 };
 
+type DirectoryReferences = NonNullable<TransientUserMessageProjection['directoryReferences']>;
+type MessageContextOptions = {
+  directoryReferences?: DirectoryReferences;
+  quotes?: readonly QuoteRef[];
+  workspaceFileReferences?: readonly WorkspaceFileReferencePosition[];
+};
+type SendOptions = MessageContextOptions & {
+  turnOrchestration?: TurnOrchestration;
+  displayText?: string;
+  onSessionResolved?: (sessionId: string) => void;
+};
+
+function copiedArray<K extends string, T>(
+  key: K,
+  values: readonly T[] | undefined,
+): Partial<Record<K, T[]>> {
+  return values?.length ? { [key]: [...values] } as Record<K, T[]> : {};
+}
+
 export interface AppShellChatActions {
   send(
     text: string,
     pending?: readonly PendingAttachment[],
-    options?: {
-      turnOrchestration?: TurnOrchestration;
-      quotes?: readonly QuoteRef[];
-      workspaceFileReferences?: readonly WorkspaceFileReferencePosition[];
-      displayText?: string;
-      onSessionResolved?: (sessionId: string) => void;
-    },
+    options?: SendOptions,
   ): Promise<boolean>;
   /**
    * Resolves with whether the Message was sent. An unproven outcome counts as
@@ -125,13 +142,11 @@ export interface AppShellChatActions {
     text: string,
     placement: 'current_turn' | 'next_turn',
     pending?: readonly PendingAttachment[],
-    options?: {
-      quotes?: readonly QuoteRef[];
-      workspaceFileReferences?: readonly WorkspaceFileReferencePosition[];
-    },
+    options?: MessageContextOptions,
   ): Promise<boolean>;
   respondToSandboxBoundary(response: SandboxBoundaryResponse): Promise<void>;
   respondToUserQuestion(response: UserQuestionResponse): Promise<void>;
+  respondToUserForm(response: InteractionFormResponse): Promise<void>;
   refreshMessages(sessionId: string, options?: RefreshMessagesOptions): Promise<boolean>;
   retryMessages(sessionId: string): Promise<void>;
 }
@@ -169,6 +184,7 @@ export function createAppShellChatActions(deps: {
   onInteractionChanged?: (sessionId: string) => void;
   /** A boundary decision settled: the session's execution boundary may have moved. */
   onExecutionBoundaryChanged?: (sessionId: string) => void;
+  respondToUserForm: DesktopBridge.MakaBridge['sessions']['respondToUserForm'];
   showModelSetupToast: (
     description: string,
     reason?: string,
@@ -214,6 +230,7 @@ export function createAppShellChatActions(deps: {
     setInteractionBySession,
     onInteractionChanged,
     onExecutionBoundaryChanged,
+    respondToUserForm: submitUserForm,
     showModelSetupToast,
     toastApi,
     newChatModel,
@@ -235,17 +252,20 @@ export function createAppShellChatActions(deps: {
       placement?: TransientUserMessageProjection['transientPlacement'];
       hostTurnId?: string;
       updateOnly?: boolean;
+      directoryReferences?: DirectoryReferences;
       quotes?: readonly QuoteRef[];
       inlineReferences?: readonly InlineReference[];
     } = {},
   ): void {
+    const directoryReferences = options.directoryReferences;
     const quotes = options.quotes ?? [];
     const next: TransientUserMessageProjection = {
       id: messageId,
       ts: Date.now(),
       text,
-      ...(attachments.length > 0 ? { attachments: [...attachments] } : {}),
-      ...(quotes.length > 0 ? { quotes: [...quotes] } : {}),
+      ...copiedArray('attachments', attachments),
+      ...copiedArray('directoryReferences', directoryReferences),
+      ...copiedArray('quotes', quotes),
       inlineReferences: [...(options.inlineReferences ?? [])],
       transientPlacement: options.placement ?? 'current_turn',
       ...(options.hostTurnId ? { hostTurnId: options.hostTurnId } : {}),
@@ -336,6 +356,7 @@ export function createAppShellChatActions(deps: {
     isSurfaceVisible?: () => boolean;
   }): Promise<SubmittedMessage> {
     const { sessionId, messageId, placement } = input;
+    const directoryReferences = input.command.directoryReferences;
     const quotes = input.quotes ?? [];
     const result = await window.maka.sessions.submitMessage(sessionId, placement, {
       ...input.command,
@@ -383,7 +404,8 @@ export function createAppShellChatActions(deps: {
         updateOnly: true,
         placement,
         ...(result.turnId ? { hostTurnId: result.turnId } : {}),
-        ...(quotes.length > 0 ? { quotes } : {}),
+        ...copiedArray('directoryReferences', directoryReferences),
+        ...copiedArray('quotes', quotes),
         inlineReferences: result.inlineReferences ?? [],
       },
     );
@@ -397,14 +419,9 @@ export function createAppShellChatActions(deps: {
   async function send(
     text: string,
     pending?: readonly PendingAttachment[],
-    options: {
-      turnOrchestration?: TurnOrchestration;
-      quotes?: readonly QuoteRef[];
-      workspaceFileReferences?: readonly WorkspaceFileReferencePosition[];
-      displayText?: string;
-      onSessionResolved?: (sessionId: string) => void;
-    } = {},
+    options: SendOptions = {},
   ): Promise<boolean> {
+    const directoryReferences = options.directoryReferences;
     const quotes = options.quotes;
     const exactTurn = options.turnOrchestration !== undefined;
     const initialSessionId = activeIdRef.current;
@@ -444,6 +461,41 @@ export function createAppShellChatActions(deps: {
     };
     try {
       const messageId = crypto.randomUUID();
+      async function submitIntoSession(sessionId: string, messageId: string) {
+        if (exactTurn) armTurnActive(sessionId, messageId);
+        const attachmentItems =
+          pending && pending.length > 0
+            ? toComposerIngestItems(pending)
+            : undefined;
+        const retainedAttachments =
+          pending && pending.length > 0
+            ? retainedAttachmentRefs(pending)
+            : undefined;
+        const sendCommand = {
+          text,
+          ...(options.displayText ? { displayText: options.displayText } : {}),
+          ...copiedArray('attachmentItems', attachmentItems),
+          ...(retainedAttachments && retainedAttachments.length > 0
+            ? { retainedAttachments }
+            : {}),
+          ...copiedArray('directoryReferences', directoryReferences),
+          ...copiedArray('quotes', quotes),
+          ...copiedArray('workspaceFileReferences', options.workspaceFileReferences),
+        };
+        return submitAndProject({
+          sessionId,
+          messageId,
+          placement: 'current_turn',
+          command: {
+            ...sendCommand,
+            ...(options.turnOrchestration ? { turnOrchestration: options.turnOrchestration } : {}),
+          },
+          ...(options.displayText ? { displayText: options.displayText } : {}),
+          ...copiedArray('quotes', quotes),
+          exactTurn,
+          isSurfaceVisible: () => activeIdRef.current === sessionId,
+        });
+      }
       if (!initialSessionId) {
         if (!initialNewTaskTarget) return false;
         if (pending && pending.length > 0) preflightAttachmentItems(pending, uiLocale);
@@ -474,7 +526,8 @@ export function createAppShellChatActions(deps: {
           options.displayText ?? text,
           [],
           {
-            ...(quotes && quotes.length > 0 ? { quotes } : {}),
+            ...copiedArray('directoryReferences', directoryReferences),
+            ...copiedArray('quotes', quotes),
             inlineReferences: [],
           },
         );
@@ -491,48 +544,15 @@ export function createAppShellChatActions(deps: {
           await discardUnsentSession();
           return false;
         }
-        if (exactTurn) armTurnActive(session.id, messageId);
-        const attachmentItems =
-          pending && pending.length > 0
-            ? toComposerIngestItems(pending)
-            : undefined;
-        const retainedAttachments =
-          pending && pending.length > 0
-            ? retainedAttachmentRefs(pending)
-            : undefined;
-        const sendCommand = {
-          text,
-          ...(options.displayText ? { displayText: options.displayText } : {}),
-          ...(attachmentItems && attachmentItems.length > 0 ? { attachmentItems } : {}),
-          ...(retainedAttachments && retainedAttachments.length > 0
-            ? { retainedAttachments }
-            : {}),
-          ...(quotes && quotes.length > 0 ? { quotes: [...quotes] } : {}),
-          ...(options.workspaceFileReferences && options.workspaceFileReferences.length > 0
-            ? { workspaceFileReferences: [...options.workspaceFileReferences] }
-            : {}),
-        };
-        const submitted = await submitAndProject({
-          sessionId: session.id,
-          messageId,
-          placement: 'current_turn',
-          command: {
-            ...sendCommand,
-            ...(options.turnOrchestration
-              ? { turnOrchestration: options.turnOrchestration }
-              : {}),
-          },
-          ...(options.displayText ? { displayText: options.displayText } : {}),
-          ...(quotes && quotes.length > 0 ? { quotes } : {}),
-          exactTurn,
-          isSurfaceVisible: () => activeIdRef.current === session.id,
-        });
+        const submitted = await submitIntoSession(session.id, messageId);
         if (submitted.kind === 'refused') {
           await discardUnsentSession();
           return false;
         }
         unsentSessionId = undefined;
-        options.onSessionResolved?.(session.id);
+        // The callback fires only when this send's first message projected;
+        // an unreconciled first message stays unreported.
+        if (submitted.kind === 'projected') options.onSessionResolved?.(session.id);
         await refreshSessions();
         return true;
       }
@@ -562,47 +582,14 @@ export function createAppShellChatActions(deps: {
         options.displayText ?? text,
         [],
         {
-          ...(quotes && quotes.length > 0 ? { quotes } : {}),
+          ...copiedArray('directoryReferences', directoryReferences),
+          ...copiedArray('quotes', quotes),
           inlineReferences: [],
         },
       );
-      if (exactTurn) armTurnActive(sessionId, messageId);
-      const attachmentItems =
-        pending && pending.length > 0
-          ? toComposerIngestItems(pending)
-          : undefined;
-      const retainedAttachments =
-        pending && pending.length > 0
-          ? retainedAttachmentRefs(pending)
-          : undefined;
-      const sendCommand = {
-        text,
-        ...(options.displayText ? { displayText: options.displayText } : {}),
-        ...(attachmentItems && attachmentItems.length > 0 ? { attachmentItems } : {}),
-        ...(retainedAttachments && retainedAttachments.length > 0
-          ? { retainedAttachments }
-          : {}),
-        ...(quotes && quotes.length > 0 ? { quotes: [...quotes] } : {}),
-        ...(options.workspaceFileReferences && options.workspaceFileReferences.length > 0
-          ? { workspaceFileReferences: [...options.workspaceFileReferences] }
-          : {}),
-      };
-      const submitted = await submitAndProject({
-        sessionId,
-        messageId,
-        placement: 'current_turn',
-        command: {
-          ...sendCommand,
-          ...(options.turnOrchestration ? { turnOrchestration: options.turnOrchestration } : {}),
-        },
-        ...(options.displayText ? { displayText: options.displayText } : {}),
-        ...(quotes && quotes.length > 0 ? { quotes } : {}),
-        exactTurn,
-        isSurfaceVisible: () => activeIdRef.current === sessionId,
-      });
+      const submitted = await submitIntoSession(sessionId, messageId);
       if (submitted.kind === 'refused') return false;
-      if (submitted.kind === 'unreconciled') return true;
-      options.onSessionResolved?.(sessionId);
+      // An existing-Session send never reports a resolved Session.
       return true;
     } catch (error) {
       // Capture ownership before cleanup clears the optimistic Session. A
@@ -671,16 +658,15 @@ export function createAppShellChatActions(deps: {
     text: string,
     placement: 'current_turn' | 'next_turn',
     pending?: readonly PendingAttachment[],
-    options: {
-      quotes?: readonly QuoteRef[];
-      workspaceFileReferences?: readonly WorkspaceFileReferencePosition[];
-    } = {},
+    options: MessageContextOptions = {},
   ): Promise<boolean> {
     const messageId = crypto.randomUUID();
+    const directoryReferences = options.directoryReferences;
     const quotes = options.quotes ?? [];
     showTransientUserMessage(sessionId, messageId, text, retainedAttachmentRefs(pending ?? []), {
       placement,
-      ...(quotes.length > 0 ? { quotes } : {}),
+      ...copiedArray('directoryReferences', directoryReferences),
+      ...copiedArray('quotes', quotes),
       inlineReferences: [],
     });
     try {
@@ -692,14 +678,13 @@ export function createAppShellChatActions(deps: {
         placement,
         command: {
           text,
-          ...(attachmentItems.length > 0 ? { attachmentItems } : {}),
-          ...(retainedAttachments.length > 0 ? { retainedAttachments } : {}),
-          ...(quotes.length > 0 ? { quotes: [...quotes] } : {}),
-          ...(options.workspaceFileReferences?.length
-            ? { workspaceFileReferences: [...options.workspaceFileReferences] }
-            : {}),
+          ...copiedArray('attachmentItems', attachmentItems),
+          ...copiedArray('retainedAttachments', retainedAttachments),
+          ...copiedArray('directoryReferences', directoryReferences),
+          ...copiedArray('quotes', quotes),
+          ...copiedArray('workspaceFileReferences', options.workspaceFileReferences),
         },
-        ...(quotes.length > 0 ? { quotes } : {}),
+        ...copiedArray('quotes', quotes),
         isSurfaceVisible: () => activeIdRef.current === sessionId,
       });
       // A refused Message opened nothing and left no row. Reporting it as sent
@@ -711,45 +696,20 @@ export function createAppShellChatActions(deps: {
     }
   }
 
-  async function respondToSandboxBoundary(response: SandboxBoundaryResponse) {
+  async function respondToInteraction<Response extends { requestId: string }>(
+    response: Response,
+    submit: (sessionId: string, response: Response) => Promise<void>,
+    onApplied?: (sessionId: string) => void,
+  ) {
     const sessionId = activeIdRef.current;
     if (!sessionId) return;
     try {
-      await window.maka.sessions.respondToSandboxBoundary(sessionId, response);
+      await submit(sessionId, response);
       onInteractionChanged?.(sessionId);
-      // #1611: the answer has been applied to the authoritative boundary, so
-      // the permission label must stop describing the pre-decision one. The
-      // ack event covers decisions settled on other surfaces; this covers the
-      // one the user just made here, without waiting for the round trip.
-      onExecutionBoundaryChanged?.(sessionId);
+      onApplied?.(sessionId);
       setInteractionBySession((current) =>
         dequeueInteractionByRequestId(current, sessionId, response.requestId),
       );
-    } catch (error) {
-      // Same fire-and-forget call site as stop(), wrap so a failed
-      // permission response (main process busy / session dropped)
-      // surfaces instead of dying as UnhandledPromiseRejection.
-      if (activeIdRef.current !== sessionId) return;
-      if (isSessionWorkspaceUnavailableError(error)) {
-        showSessionWorkspaceUnavailableToast(toastApi, uiLocale, { sessionId });
-      } else {
-        toastApi.error(
-          copy.responseFailedTitle,
-          localizedShellErrorMessage(error, copy.responseFailedFallback, uiLocale),
-          undefined,
-          { sessionId },
-        );
-      }
-    }
-  }
-
-  async function respondToUserQuestion(response: UserQuestionResponse) {
-    const sessionId = activeIdRef.current;
-    if (!sessionId) return;
-    try {
-      await window.maka.sessions.respondToUserQuestion(sessionId, response);
-      onInteractionChanged?.(sessionId);
-      setInteractionBySession((current) => dequeueInteractionByRequestId(current, sessionId, response.requestId));
     } catch (error) {
       if (activeIdRef.current !== sessionId) return;
       if (isSessionWorkspaceUnavailableError(error)) {
@@ -828,8 +788,15 @@ export function createAppShellChatActions(deps: {
   return {
     send,
     enqueueMessage,
-    respondToSandboxBoundary,
-    respondToUserQuestion,
+    respondToSandboxBoundary: (response) =>
+      respondToInteraction(
+        response,
+        window.maka.sessions.respondToSandboxBoundary,
+        onExecutionBoundaryChanged,
+      ),
+    respondToUserQuestion: (response) =>
+      respondToInteraction(response, window.maka.sessions.respondToUserQuestion),
+    respondToUserForm: (response) => respondToInteraction(response, submitUserForm),
     refreshMessages,
     retryMessages,
   };

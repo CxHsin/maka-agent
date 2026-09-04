@@ -31,7 +31,6 @@ import { TOOL_SEARCH_PROVIDER_NAME } from '../tool-availability.js';
 import { resolveModelRuntime } from '../model-runtime.js';
 import { resolveRuntimeProviderAdapter } from '../provider-runtime-policy.js';
 import { lowerModelTools } from '../model-adapter.js';
-import { openAiCodexCompactionMessages } from '../openai-codex-history-compactor.js';
 import { openAiResponsesBaseUrl, openResponsesUrl } from '../provider-urls.js';
 
 function conn(providerType: LlmConnection['providerType'], slug = 'test'): LlmConnection {
@@ -165,8 +164,11 @@ describe('responses wire contract', () => {
 
   test('routes OpenCode Go Muse Spark through the Responses endpoint', async () => {
     const urls: string[] = [];
-    const fetch = (async (url: string | URL | Request) => {
-      urls.push(String(url));
+    const sessionHeaders: Array<string | null> = [];
+    const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(url, init);
+      urls.push(request.url);
+      sessionHeaders.push(request.headers.get('x-opencode-session'));
       return Response.json({
         id: 'r',
         object: 'response',
@@ -180,13 +182,76 @@ describe('responses wire contract', () => {
       apiKey: '[redacted]',
       modelId: 'muse-spark-1.2-contributor',
       fetch,
-    });
+      sessionId: 'session-opencode-go',
+    } as Parameters<typeof getAIModel>[0]);
 
     await model.doGenerate({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
     });
 
     assert.deepEqual(urls, ['https://opencode.ai/zen/go/v1/responses']);
+    assert.deepEqual(sessionHeaders, ['session-opencode-go']);
+  });
+
+  test('sends the OpenCode Go session identity through Chat and Messages adapters', async () => {
+    const requests: Array<{ url: string; sessionHeader: string | null }> = [];
+    const fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(url, init);
+      requests.push({
+        url: request.url,
+        sessionHeader: request.headers.get('x-opencode-session'),
+      });
+      if (request.url.endsWith('/messages')) {
+        return Response.json({
+          id: 'msg-opencode-go',
+          type: 'message',
+          role: 'assistant',
+          model: 'minimax-m3',
+          content: [{ type: 'text', text: 'ok' }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        });
+      }
+      return Response.json({
+        id: 'chatcmpl-opencode-go',
+        object: 'chat.completion',
+        created: 1,
+        model: 'kimi-k2.7-code',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'ok' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof globalThis.fetch;
+
+    for (const modelId of ['kimi-k2.7-code', 'minimax-m3']) {
+      const model = getAIModel({
+        connection: conn('opencode-go'),
+        apiKey: '[redacted]',
+        modelId,
+        fetch,
+        sessionId: 'session-opencode-go',
+      });
+      await model.doGenerate({
+        prompt: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+      });
+    }
+
+    assert.deepEqual(requests, [
+      {
+        url: 'https://opencode.ai/zen/go/v1/chat/completions',
+        sessionHeader: 'session-opencode-go',
+      },
+      {
+        url: 'https://opencode.ai/zen/go/v1/messages',
+        sessionHeader: 'session-opencode-go',
+      },
+    ]);
   });
 
   test('normalizes the upstream Open Responses endpoint exactly once', () => {
@@ -590,112 +655,6 @@ describe('responses wire request body', () => {
     );
   });
 
-  test('keeps provider-executed tool history free of dangling outputs', async () => {
-    let body: Record<string, unknown> | undefined;
-    const fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      body = JSON.parse(String(init?.body));
-      return Response.json({
-        id: 'r',
-        object: 'response',
-        status: 'completed',
-        output: [],
-        usage: { input_tokens: 1, output_tokens: 1 },
-      });
-    }) as unknown as typeof globalThis.fetch;
-    const event = (
-      id: string,
-      role: RuntimeEvent['role'],
-      author: RuntimeEvent['author'],
-      content: RuntimeEvent['content'],
-      refs?: RuntimeEvent['refs'],
-    ): RuntimeEvent => ({
-      id,
-      invocationId: 'inv-1',
-      runId: 'run-1',
-      sessionId: 'session-1',
-      turnId: 'turn-1',
-      ts: 1,
-      partial: false,
-      role,
-      author,
-      content,
-      ...(refs ? { refs } : {}),
-    });
-    const messages = openAiCodexCompactionMessages([
-      event('user', 'user', 'user', { kind: 'text', text: 'search' }),
-      event(
-        'call',
-        'model',
-        'agent',
-        {
-          kind: 'function_call',
-          id: 'search-1',
-          name: 'WebSearch',
-          args: { query: 'latest Maka' },
-          providerExecuted: true,
-        },
-        { stepId: 'provider-step' },
-      ),
-      event('result', 'tool', 'tool', {
-        kind: 'function_response',
-        id: 'search-1',
-        name: 'WebSearch',
-        result: { type: 'web_search_result', query: 'latest Maka' },
-        providerOutput: { type: 'web_search_result', id: 'ws_123' },
-        providerExecuted: true,
-        isError: false,
-      }),
-      event(
-        'text',
-        'model',
-        'agent',
-        { kind: 'text', text: 'Maka shipped.' },
-        { providerEventId: 'provider-step' },
-      ),
-    ]);
-    assert.deepEqual(
-      messages.map((message) => ({
-        role: message.role,
-        parts:
-          typeof message.content === 'string' ? ['text'] : message.content.map((part) => part.type),
-      })),
-      [
-        { role: 'user', parts: ['text'] },
-        { role: 'assistant', parts: ['tool-call'] },
-        { role: 'tool', parts: ['tool-result'] },
-        { role: 'assistant', parts: ['text'] },
-      ],
-    );
-
-    const model = getAIModel({
-      connection: conn('openai-codex', 'codex-subscription'),
-      apiKey: 'codex-token',
-      modelId: 'gpt-5.3-codex',
-      fetch,
-    });
-    await model.doGenerate({
-      prompt: messages as never,
-      providerOptions: { openai: { store: false, compactionTrigger: true } },
-    });
-
-    const input = body?.input as Array<Record<string, unknown>>;
-    const callIds = new Set(
-      input.filter((item) => item.type === 'function_call').map((item) => String(item.call_id)),
-    );
-    const danglingOutputIds = input
-      .filter((item) => item.type === 'function_call_output')
-      .map((item) => String(item.call_id))
-      .filter((callId) => !callIds.has(callId));
-    assert.deepEqual([...callIds], ['search-1']);
-    assert.deepEqual(
-      input
-        .filter((item) => item.type === 'function_call_output')
-        .map((item) => String(item.call_id)),
-      ['search-1'],
-    );
-    assert.deepEqual(danglingOutputIds, [], JSON.stringify(input));
-  });
-
   test('returns native apply_patch results with the provider output item', async () => {
     let body: Record<string, unknown> | undefined;
     const fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
@@ -742,7 +701,7 @@ describe('responses wire request body', () => {
           ],
         },
       ],
-      tools: [tools.apply_patch as never],
+      tools: [{ ...(tools.apply_patch as object), name: 'apply_patch' } as never],
       providerOptions: { openai: { store: false } },
     });
 

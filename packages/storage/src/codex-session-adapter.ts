@@ -459,6 +459,9 @@ function convertCodexRollout(
           turnId,
           ts,
           text: presentation.text,
+          ...(presentation.providerOptions !== undefined
+            ? { providerOptions: presentation.providerOptions }
+            : {}),
           modelId: activeModel,
           contentOrder: ['text'],
         });
@@ -613,6 +616,7 @@ interface CodexPresentationMessage {
   kind: 'user' | 'assistant' | 'reasoning';
   text: string;
   id?: string;
+  providerOptions?: Record<string, unknown>;
 }
 
 function codexPresentationRecords(
@@ -651,7 +655,14 @@ function codexPresentationRecords(
     }
     if (eventType === 'agent_message') {
       const text = stringField(payload, 'message');
-      if (text) eventMessages.set(record.line, { kind: 'assistant', text });
+      if (text) {
+        const providerOptions = codexAssistantProviderOptions(payload);
+        eventMessages.set(record.line, {
+          kind: 'assistant',
+          text,
+          ...(providerOptions !== undefined ? { providerOptions } : {}),
+        });
+      }
       continue;
     }
     if (eventType === 'agent_reasoning') {
@@ -682,10 +693,12 @@ function codexPresentationRecords(
     } else if (itemType === 'agentmessage') {
       const text = codexCompletedItemText(item);
       if (text.length > 0) {
+        const providerOptions = codexAssistantProviderOptions(item);
         eventMessages.set(record.line, {
           kind: 'assistant',
           text,
           ...(stringField(item, 'id') ? { id: stringField(item, 'id') } : {}),
+          ...(providerOptions !== undefined ? { providerOptions } : {}),
         });
       }
     } else if (itemType === 'reasoning') {
@@ -962,6 +975,18 @@ function isRecord(value: unknown): value is JsonRecord {
 function stringField(record: JsonRecord | undefined, field: string): string | undefined {
   const value = record?.[field];
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function codexAssistantProviderOptions(
+  record: JsonRecord | undefined,
+): Record<string, unknown> | undefined {
+  const phase = record?.phase;
+  if (phase !== 'commentary' && phase !== 'final_answer') return undefined;
+  return {
+    openai: {
+      phase,
+    },
+  };
 }
 
 function isSafeCodexSessionId(value: unknown): value is string {

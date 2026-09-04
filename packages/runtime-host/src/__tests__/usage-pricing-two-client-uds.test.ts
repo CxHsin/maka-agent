@@ -17,6 +17,7 @@
  * under the License.
  */
 
+import { deferred } from '@maka/core/test-only/async-primitives';
 import { defineInteractiveRuntimeHostComposition } from '../server/host-composition.js';
 import assert from 'node:assert/strict';
 import { lstat, mkdtemp, rename, rm } from 'node:fs/promises';
@@ -363,6 +364,45 @@ test('usage logs carry the Host-resolved session title and tolerate unreadable s
       tool.result.rows.find((row) => row.id === 'tool-a')?.sessionTitle,
       '重构使用统计页请求日志的任务列',
     );
+  });
+});
+
+test('a connection-scoped summary omits the tool split instead of sending an unscoped one', async () => {
+  await withUsageAuthority('summary-slug-omission', async ({ stores }) => {
+    await Promise.all([
+      stores.telemetry.recordLlmCall({
+        ...usageRecord('llm-slug', 30, 'openai', 'gpt-a'),
+        connectionSlug: 'openai',
+      }),
+      stores.telemetry.recordToolInvocation(toolRecord('tool-slug', 31)),
+    ]);
+    const coordinator = new HostUsagePricingCoordinator(
+      stores,
+      () => {},
+      new RuntimePolicyActivationGate(),
+      () => {},
+      async () => undefined,
+    );
+
+    // Tool rows predate connection attribution, so a connectionSlug-filtered
+    // query cannot scope them; the summary omits the split rather than let the
+    // tool ring quietly contradict the model totals beside it.
+    const scoped = await coordinator.handlers['usage.query'](
+      { kind: 'summary', query: { range: 'all', connectionSlug: 'openai' } },
+      CONNECTION_CONTEXT,
+    );
+    assert.ok(scoped.ok);
+    if (scoped.result.kind !== 'summary') throw new Error('expected summary');
+    assert.equal(scoped.result.summary.toolUsage, undefined);
+    assert.equal(scoped.result.summary.totalRequests, 1);
+
+    const unscoped = await coordinator.handlers['usage.query'](
+      { kind: 'summary', query: { range: 'all' } },
+      CONNECTION_CONTEXT,
+    );
+    assert.ok(unscoped.ok);
+    if (unscoped.result.kind !== 'summary') throw new Error('expected summary');
+    assert.deepEqual(unscoped.result.summary.toolUsage, { requests: 1, durationMs: 12 });
   });
 });
 
@@ -920,18 +960,6 @@ function requirePricingPage(
   if (result.kind !== 'page') throw new Error('Pricing revision changed during page read');
   return result;
 }
-
-function deferred(): {
-  readonly promise: Promise<void>;
-  resolve(): void;
-} {
-  let resolve!: () => void;
-  const promise = new Promise<void>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
-}
-
 function usageRecord(
   id: string,
   ts: number,

@@ -30,6 +30,8 @@
 - 事实权威：immutable RuntimeEvents
 - 主要平台：Linux、macOS；Windows 有限支持
 - 拆分审计：`runtime-resume-extraction-ledger.zh-CN.md`
+- 跟踪：[生产级 Write/Edit 恢复 #4319](https://github.com/apache/maka/issues/4319)
+- 跟踪：[safe-boundary continuation 加固 #4324](https://github.com/apache/maka/issues/4324)
 
 ## 1. 四个正交平面
 
@@ -76,7 +78,7 @@ RuntimeEvent 是语义事实的唯一权威，但不能替代执行所有权的�
 11. strict args identity 明确处理 `__proto__` 并拒绝 sparse/accessor/custom array；
 12. 唯一 canonical RuntimeEvent codec 负责 decode、normalization、strict JSON、稳定 bytes 与
     lossless round-trip；SQLite/JSONL、未来 prefix digest 均复用它；
-13. JSONL immutable exact retry 物理去重，写前验证 Run header identity；
+13. JSONL immutable exact retry 物理去重，写前验证 invocation identity；
 14. SQLite 强制一个 invocation 只对应一个 `(sessionId, runId, turnId)`；
 15. journal ID 只由 store 派生；正式 schema 4 的无 dispatch legacy rows保守隔离。
 
@@ -167,7 +169,7 @@ composite replay 存在时，它是 tool-state 与 provider suffix 的唯一 gat
 
 最终同时冻结：
 
-- `providerProjectionVersion = 1`；
+- `providerProjectionVersion`（PR B 时冻结为 1；#4286 起为 2）；
 - composite `providerReplayDigest`；
 - segment boundary manifest。
 
@@ -182,7 +184,7 @@ schema 6 增加 `runtime_continuation_claims` 与 capability
 - immediate source execution identity、physical high-water、prefix digest；
 - provider projection version 与 provider replay digest；
 - fresh target session/invocation/run/turn；
-- target Run 的完整、严格解码 `AgentRunHeader`（含 V2 continuation source）；
+- target invocation 的完整、严格解码开场事实（含 continuation source）；
 - claim id、claimed-at、protocol version；
 - 可空、唯一的 continuation-start event id；
 - 与 start 同生存期的 store-owned `start_kind`：`runtime_admission | claim_repair`。
@@ -286,8 +288,8 @@ retry 入口。历史 `linked_child_resume` / `linked_child_provider_retry` desc
 `retriedFromRunId` 只保留重启关闭、查询和展示兼容，不会重新触发 provider。
 
 live continuation-start 同时绑定 claim id、boundary digest、immediate source identity/high-water/prefix
-digest、replay manifest、provider projection version 和 provider replay digest。V2 AgentRun header 的
-`continuationSource` 必须与首条 continuation-start 完全一致。若当前执行使用
+digest、replay manifest、provider projection version 和 provider replay digest。target invocation 开场事实里的
+continuation source 必须与首条 continuation-start 完全一致。若当前执行使用
 `t1_after_preflight_v1`，该 marker 也写在同一 event-seq 1；repair start 不得携带它。
 
 只有 `RuntimeKernel` 能 dispatch durable continuation。AgentRun 仅在 live start 返回
@@ -407,6 +409,8 @@ provider materializer/projection version
 permission/sandbox execution-policy digest（会影响可执行语义时）
 ```
 
+跟踪：[sandbox boundary negotiation #3731](https://github.com/apache/maka/issues/3731)。该 issue 只覆盖 permission/sandbox execution-policy 跨安全续接，不覆盖完整 execution profile 的其余字段。
+
 boundary 证明“继续哪一段事实”，execution profile 证明“按照哪套执行语义继续”。两者必须分开
 摘要并同时匹配；不能在执行时用当前 Session 配置重新生成 target header，从而把 plan 后的模型、
 prompt 或同名工具 schema 漂移悄悄合法化。
@@ -453,7 +457,7 @@ authority、同一 ledger transaction domain。lease 要携带 epoch/fencing tok
 | observation | 动作 |
 |---|---|
 | `matches_expected_state` | cleanup/finalize，合成 outcome，提交 PR A bundle |
-| `matches_prior_state` | park，reason=`redo_disabled_pending_cas` |
+| `matches_prior_state` | park，reason=`reconcile_matches_prior_state` |
 | `diverged` | park，不覆盖外部写入 |
 | `unreadable` | park，不猜测 |
 
@@ -474,8 +478,8 @@ authority、同一 ledger transaction domain。lease 要携带 epoch/fencing tok
 sandbox、one-call grant 和 abort boundary 的执行所有权。
 
 PR C 沿用 PR A 的 durable vocabulary：`matches_expected_state` 可 finalize；
-`matches_prior_state`、`diverged`、`unreadable` 均提交 terminal parked decision。UI 可以把
-`matches_prior_state` 映射为 `redo_disabled_pending_cas`，但不新增第二套 durable fact 名称。
+`matches_prior_state`、`diverged`、`unreadable` 均提交 terminal parked decision。UI 直接展示
+durable reason code（如 `reconcile_matches_prior_state`），不维护第二套展示层状态名。
 
 ### PR D — Host owner lifecycle
 
@@ -538,6 +542,8 @@ receipt、worktree materialization 与 Runtime Host admission path 已删除。s
 projection reader/rebuild 与升级合同继续保留；它们是历史事实 authority，不是可执行 Git path。
 
 ## 4. Gitoxide managed workspace 后续边界
+
+跟踪：[Gitoxide workspace continuity #4325](https://github.com/apache/maka/issues/4325)
 
 后续强模式必须从 Gitoxide data plane 建立新的 production composition，并分别证明：
 

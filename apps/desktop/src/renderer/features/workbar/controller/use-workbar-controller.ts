@@ -26,13 +26,15 @@ import {
   useState,
   type ComponentProps,
 } from 'react';
+import type { ClientCapabilityResponse } from '@maka/core/client-capability-grant';
 import type { QuoteRef } from '@maka/core/events';
+import type { InteractionFormResponse } from '@maka/core/interaction';
 import type { SessionSummary } from '@maka/core/session';
 import { Composer, useUiLocale } from '@maka/ui';
 import type { ChatModelChoice } from '@maka/ui';
 import { safeLocalStorageGet, safeLocalStorageSet } from '../../../browser-storage.js';
 import { getDesktopConversationCopy } from '../../../locales/conversation-copy.js';
-import { localizedShellErrorMessage } from '../../../locales/shell-copy.js';
+import { getShellCopy, localizedShellErrorMessage } from '../../../locales/shell-copy.js';
 import { sideChatTitleFromPrompt } from '../../../side-chat-command.js';
 import { useWorkbarServices } from '../services-context.js';
 import type { WorkbarHostModel } from '../ui/workbar-host.js';
@@ -62,6 +64,7 @@ import {
 import { recoverOrphanedCompanionCopies } from '../tools/side-chat/quote-companion-core.js';
 import { useSideConversationWorkspace } from '../tools/side-chat/use-side-conversation-workspace.js';
 import { useWorkbarLayoutState } from './use-workbar-layout-state.js';
+import { LiveContextUsageProbe } from '../tools/inspector/live-context-usage-probe.js';
 
 interface OpenToolOptions {
   initialPrompt?: string;
@@ -74,6 +77,8 @@ export interface WorkbarControllerCommands {
     options?: OpenToolOptions,
   ): void;
   openSideChatWithQuote(quote: QuoteRef): void;
+  respondToClientCapability(response: ClientCapabilityResponse): Promise<void>;
+  respondToUserForm(sessionId: string, response: InteractionFormResponse): Promise<void>;
   toggleRight(): void;
 }
 
@@ -98,6 +103,14 @@ export interface WorkbarController {
   host: WorkbarHostModel;
   commands: WorkbarControllerCommands;
   selectors: WorkbarControllerSelectors;
+  /**
+   * The composer context gauge's live overlay (#4717), handed to the shell on
+   * the controller so the shell gains no import edge to the inspector's
+   * subscription: the app shell is a debt-ratcheted legacy file, and every
+   * named import it adds is new debt the ratchet forbids. The probe's readers
+   * stay inside this feature; the shell only forwards the reference.
+   */
+  readonly LiveContextUsageProbe: typeof LiveContextUsageProbe;
 }
 
 function assertNever(value: never): never {
@@ -181,6 +194,26 @@ export function useWorkbarController(
       activeSessionIdRef.current = undefined;
     };
   }, [activeSessionId]);
+  const respondToClientCapability = useCallback<
+    WorkbarControllerCommands['respondToClientCapability']
+  >(
+    async (response) => {
+      const sessionId = activeSessionIdRef.current;
+      if (!sessionId) return;
+      try {
+        await sideChat.respondToClientCapability(sessionId, response);
+      } catch (error) {
+        if (activeSessionIdRef.current !== sessionId) return;
+        const copy = getShellCopy(locale).chatActions;
+        input.reportError(
+          copy.responseFailedTitle,
+          localizedShellErrorMessage(error, copy.responseFailedFallback, locale),
+          sessionId,
+        );
+      }
+    },
+    [input.reportError, locale, sideChat],
+  );
   const panelsStateRef = useRef(layout.workbarPanelsState);
   useLayoutEffect(() => {
     panelsStateRef.current = layout.workbarPanelsState;
@@ -273,7 +306,7 @@ export function useWorkbarController(
         initialPrompt,
         newId: () => crypto.randomUUID(),
       });
-      sideConversations.upsertPanel(panel, true);
+      sideConversations.upsertPanel(panel);
       layout.openDynamicWorkbarTab(
         {
           id: `side-chat:${panel.id}`,
@@ -391,7 +424,7 @@ export function useWorkbarController(
         quote,
         newId: () => crypto.randomUUID(),
       });
-      sideConversations.upsertPanel(panel, !activePanel);
+      sideConversations.upsertPanel(panel);
       const placement = activeSideChat?.placement ?? 'right';
       layout.openDynamicWorkbarTab(
         {
@@ -441,17 +474,10 @@ export function useWorkbarController(
       placement: SessionWorkbarPlacement,
       tabs: readonly SessionWorkbarTab[],
     ) => {
-      const closableTabs = tabs.filter(
-        (tab) =>
-          tab.kind !== 'side-chat' ||
-          !sideConversations.preparingPanelIds.has(
-            tab.id.slice('side-chat:'.length),
-          ),
-      );
-      if (closableTabs.length === 0) return;
+      if (tabs.length === 0) return;
       const needsConfirmation =
         !skipSideChatCloseConfirmation &&
-        closableTabs.some(
+        tabs.some(
           (tab) =>
             tab.kind === 'side-chat' &&
             sideConversations.contentPanelIds.has(
@@ -460,16 +486,15 @@ export function useWorkbarController(
         );
       if (needsConfirmation) {
         setPendingSideChatClose(
-          closableTabs.map((tab) => ({ placement, tab })),
+          tabs.map((tab) => ({ placement, tab })),
         );
         return;
       }
-      closeTabsImmediately(placement, closableTabs);
+      closeTabsImmediately(placement, tabs);
     },
     [
       closeTabsImmediately,
       sideConversations.contentPanelIds,
-      sideConversations.preparingPanelIds,
       skipSideChatCloseConfirmation,
     ],
   );
@@ -641,8 +666,20 @@ export function useWorkbarController(
   );
 
   const commands = useMemo<WorkbarControllerCommands>(
-    () => ({ openTool, openSideChatWithQuote, toggleRight }),
-    [openSideChatWithQuote, openTool, toggleRight],
+    () => ({
+      openTool,
+      openSideChatWithQuote,
+      respondToClientCapability,
+      respondToUserForm: sideChat.respondToUserForm,
+      toggleRight,
+    }),
+    [
+      openSideChatWithQuote,
+      openTool,
+      respondToClientCapability,
+      sideChat.respondToUserForm,
+      toggleRight,
+    ],
   );
 
   const activeSideChatTabIds = useMemo(
@@ -666,6 +703,7 @@ export function useWorkbarController(
 
   return {
     commands,
+    LiveContextUsageProbe,
     selectors: {
       rightCollapsed: layout.workbarCollapsed,
       hiddenSessionIds: hiddenCompanionForkIds,
@@ -711,9 +749,7 @@ export function useWorkbarController(
         ),
       onForkVisibilityChange,
       onContentStateChange: sideConversations.setContent,
-      preparingSideChatPanelIds: sideConversations.preparingPanelIds,
       activeSideChatPanelIds: sideConversations.activePanelIds,
-      onPreparingStateChange: sideConversations.setPreparing,
       onInitialPromptStarted: (panelId) =>
         sideConversations.updatePanel(panelId, (panel) =>
           consumeCompanionInitialPrompt(panel, panelId) ?? panel,

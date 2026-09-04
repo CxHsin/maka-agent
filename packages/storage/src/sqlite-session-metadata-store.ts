@@ -92,7 +92,11 @@ import {
   type SessionHeaderPatch,
   type StoredMessage,
   type SubagentSessionParent,
+  type WorkHubActionClaim,
+  type WorkHubActionClaimOutcome,
+  type WorkHubActionOperation,
   type WorkHubDelegationAssignedMessage,
+  type WorkHubDelegationSupersededMessage,
   WORKHUB_COORDINATION_SESSION_ID,
   WORKHUB_COORDINATION_SESSION_ROLE,
   decodeCanonicalMessage,
@@ -105,6 +109,7 @@ import {
   normalizeProvenSteeringMessageHandoff,
   samePendingMessageAdmission,
   type MarkMessagesHandedOffInput,
+  type MessageAdmissionCancellationClaimOutcome,
   type PendingMessageAdmission,
   type ProvenRootMessageHandoff,
   type ProvenSteeringMessageHandoff,
@@ -226,6 +231,7 @@ export interface SqliteWorkHubMessageAssignmentRequest {
   readonly assignment: WorkHubDelegationAssignedMessage;
   readonly admission: PendingMessageAdmission;
   readonly projection: SessionCatalogMessageProjection;
+  readonly supersession?: WorkHubDelegationSupersededMessage;
   readonly create?: {
     readonly header: SessionHeader;
     readonly requestFingerprint: string;
@@ -279,6 +285,7 @@ interface MessageAdmissionRow {
   readonly queue_order?: unknown;
   readonly admitted_at?: unknown;
   readonly submitted_intent_json?: unknown;
+  readonly skill_invocation_json?: unknown;
 }
 
 function decodeMessageAdmissionRow(
@@ -290,6 +297,7 @@ function decodeMessageAdmissionRow(
     typeof row.run_id !== 'string' ||
     typeof row.message_id !== 'string' ||
     typeof row.content_json !== 'string' ||
+    typeof row.skill_invocation_json !== 'string' ||
     typeof row.submitted_content_digest !== 'string' ||
     (row.submitted_placement !== 'current_turn' && row.submitted_placement !== 'next_turn') ||
     (row.placement !== 'current_turn' && row.placement !== 'next_turn') ||
@@ -315,6 +323,9 @@ function decodeMessageAdmissionRow(
     ...(typeof row.submitted_intent_json === 'string'
       ? { submittedIntent: normalizeSubmittedTurnIntent(JSON.parse(row.submitted_intent_json)) }
       : {}),
+    skillInvocation: JSON.parse(
+      row.skill_invocation_json,
+    ) as PendingMessageAdmission['skillInvocation'],
     admittedAt: row.admitted_at,
   });
 }
@@ -1627,7 +1638,7 @@ export class SqliteSessionMetadataStore {
         `
         SELECT turn_id, run_id, message_id, content_json, submitted_content_digest,
           submitted_placement, placement, disposition, queue_order, admitted_at,
-          submitted_intent_json
+          submitted_intent_json, skill_invocation_json
         FROM message_admissions
         WHERE session_id = ? AND message_id = ?
       `,
@@ -1663,8 +1674,8 @@ export class SqliteSessionMetadataStore {
           INSERT INTO message_admissions(
             session_id, turn_id, run_id, message_id, content_json, submitted_content_digest,
             submitted_placement, placement, disposition, queue_order, admitted_at,
-            submitted_intent_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            submitted_intent_json, skill_invocation_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -1680,6 +1691,7 @@ export class SqliteSessionMetadataStore {
         orderRow.next_order,
         stored.admittedAt,
         stored.submittedIntent ? JSON.stringify(stored.submittedIntent) : null,
+        JSON.stringify(stored.skillInvocation),
       );
   }
 
@@ -1688,6 +1700,12 @@ export class SqliteSessionMetadataStore {
   ): Promise<SqliteWorkHubMessageAssignmentResult> {
     const assignmentJson = JSON.stringify(request.assignment);
     const assignment = decodeCanonicalMessage(JSON.parse(assignmentJson) as unknown);
+    const supersessionJson = request.supersession
+      ? JSON.stringify(request.supersession)
+      : undefined;
+    const supersession = supersessionJson
+      ? decodeCanonicalMessage(JSON.parse(supersessionJson) as unknown)
+      : undefined;
     const admission = normalizePendingMessageAdmission(request.admission);
     const suffix = createHash('sha256')
       .update(request.assignment.actionId)
@@ -1712,6 +1730,28 @@ export class SqliteSessionMetadataStore {
       admission.disposition !== 'steering'
     ) {
       throw new SessionMetadataConflictError('Invalid WorkHub assignment identity');
+    }
+    if (
+      (assignment.replacesActionId === undefined) !==
+        (assignment.replacesDelegationId === undefined) ||
+      (assignment.replacesDelegationId === undefined) !== (supersession === undefined) ||
+      (supersession !== undefined &&
+        (supersession.type !== 'workhub_coordination' ||
+          supersession.kind !== 'delegation_superseded' ||
+          supersession.actionId !== assignment.actionId ||
+          supersession.actionFingerprint !== assignment.actionFingerprint ||
+          supersession.coordinationTurnId !== assignment.coordinationTurnId ||
+          supersession.turnId !== assignment.coordinationTurnId ||
+          supersession.supersededActionId !== assignment.replacesActionId ||
+          supersession.supersededDelegationId !== assignment.replacesDelegationId ||
+          supersession.replacementDelegationId !== assignment.delegationId ||
+          supersession.id !==
+            `whx_${createHash('sha256')
+              .update(supersession.supersededDelegationId)
+              .digest('hex')
+              .slice(0, 48)}`))
+    ) {
+      throw new SessionMetadataConflictError('Invalid WorkHub supersession identity');
     }
     const create = request.create
       ? {
@@ -1763,6 +1803,59 @@ export class SqliteSessionMetadataStore {
         };
       }
 
+      if (supersession && assignment.replacesActionId && assignment.replacesDelegationId) {
+        const replacedSuffix = createHash('sha256')
+          .update(assignment.replacesActionId)
+          .digest('hex')
+          .slice(0, 48);
+        const replaced = this.readMessageByIdSync(
+          WORKHUB_COORDINATION_SESSION_ID,
+          `wha_${replacedSuffix}`,
+        );
+        if (
+          replaced?.type !== 'workhub_coordination' ||
+          replaced.kind !== 'delegation_assigned' ||
+          replaced.delegationId !== assignment.replacesDelegationId
+        ) {
+          throw new SessionMetadataConflictError('WorkHub supersession source is unavailable');
+        }
+        const abortSuffix = createHash('sha256')
+          .update(assignment.replacesDelegationId)
+          .digest('hex')
+          .slice(0, 48);
+        const stopRequest = this.readMessageByIdSync(
+          WORKHUB_COORDINATION_SESSION_ID,
+          `whq_${abortSuffix}`,
+        );
+        if (stopRequest) {
+          const stopResolution = this.readMessageByIdSync(
+            WORKHUB_COORDINATION_SESSION_ID,
+            `whz_${abortSuffix}`,
+          );
+          if (
+            stopResolution?.type !== 'workhub_coordination' ||
+            stopResolution.kind !== 'delegation_stop_resolved' ||
+            stopResolution.outcome !== 'not_owned'
+          ) {
+            throw new SessionMetadataConflictError('WorkHub delegation already has a stop claim');
+          }
+        }
+        const existingAbort = this.readMessageByIdSync(
+          WORKHUB_COORDINATION_SESSION_ID,
+          `whb_${abortSuffix}`,
+        );
+        if (existingAbort) {
+          throw new SessionMetadataConflictError('WorkHub delegation replacement is aborted');
+        }
+        const existingSupersession = this.readMessageByIdSync(
+          WORKHUB_COORDINATION_SESSION_ID,
+          supersession.id,
+        );
+        if (existingSupersession) {
+          throw new SessionMetadataConflictError('WorkHub delegation is already superseded');
+        }
+      }
+
       let targetCreated = false;
       if (create) {
         const probe = this.probeStableSessionCreateSync(
@@ -1796,8 +1889,21 @@ export class SqliteSessionMetadataStore {
       if (target.header.status === 'waiting_for_user') {
         throw new SessionMetadataConflictError('WorkHub target Session is waiting for user input');
       }
+      let committedAssignment = assignment;
+      let committedAssignmentJson = assignmentJson;
       if (target.header.name !== assignment.targetSessionName) {
-        throw new SessionMetadataConflictError('WorkHub target display identity changed');
+        if (
+          assignment.disposition !== 'delegate_existing' ||
+          assignment.replacesDelegationId === undefined
+        ) {
+          throw new SessionMetadataConflictError('WorkHub target display identity changed');
+        }
+        // A durable replacement owns the target Session id before retiring the
+        // source. Canonicalize its display-only name at the same transaction
+        // boundary that validates the target so a concurrent rename cannot
+        // strand the already-retired delegation.
+        committedAssignment = { ...assignment, targetSessionName: target.header.name };
+        committedAssignmentJson = JSON.stringify(committedAssignment);
       }
       if (this.readMessageAdmissionSync(admission.sessionId, admission.messageId)) {
         throw new SessionMetadataConflictError(
@@ -1821,10 +1927,15 @@ export class SqliteSessionMetadataStore {
       this.insertSessionMessagesSync(
         WORKHUB_COORDINATION_SESSION_ID,
         sequenceRow.last_sequence + 1,
-        [{ message: assignment, json: assignmentJson }],
+        [
+          { message: committedAssignment, json: committedAssignmentJson },
+          ...(supersession && supersessionJson
+            ? [{ message: supersession, json: supersessionJson }]
+            : []),
+        ],
       );
       this.updateCatalogProjectionSync(WORKHUB_COORDINATION_SESSION_ID, request.projection, false);
-      return { kind: 'assigned' as const, targetCreated, assignment };
+      return { kind: 'assigned' as const, targetCreated, assignment: committedAssignment };
     });
   }
 
@@ -1841,7 +1952,7 @@ export class SqliteSessionMetadataStore {
           `
           SELECT turn_id, run_id, message_id, content_json, submitted_content_digest,
             submitted_placement, placement, disposition, queue_order, admitted_at,
-            submitted_intent_json
+            submitted_intent_json, skill_invocation_json
           FROM message_admissions
           WHERE session_id = ? AND message_id = ?
         `,
@@ -1865,6 +1976,137 @@ export class SqliteSessionMetadataStore {
     });
   }
 
+  /**
+   * Binds one WorkHub action identity to one exact operation, for good.
+   *
+   * Every other durable WorkHub record is keyed by what it is about, so none of
+   * them can see an action id that moved to a second delegation or a second
+   * disposition. This row is the global owner that rejects both, and it is
+   * written before the action's effect so a rejected or recovering attempt can
+   * never leak its identity into a different operation.
+   */
+  async claimWorkHubAction(claim: WorkHubActionClaim): Promise<WorkHubActionClaimOutcome> {
+    this.assertOpen();
+    assertSafeSessionId(claim.actionId);
+    assertSafeSessionId(claim.subject);
+    if (!/^sha256:[a-f0-9]{64}$/u.test(claim.actionFingerprint)) {
+      throw new SessionMetadataConflictError('Invalid WorkHub action fingerprint');
+    }
+    return this.transaction(() => {
+      const existing = this.readWorkHubActionClaimSync(claim.actionId);
+      if (existing) {
+        return existing.operation === claim.operation &&
+          existing.actionFingerprint === claim.actionFingerprint &&
+          existing.subject === claim.subject
+          ? 'same_claim'
+          : 'conflict';
+      }
+      this.db
+        .prepare(
+          `
+          INSERT INTO workhub_action_claims(
+            action_id, operation, action_fingerprint, subject, claimed_at
+          ) VALUES (?, ?, ?, ?, ?)
+        `,
+        )
+        .run(claim.actionId, claim.operation, claim.actionFingerprint, claim.subject, this.now());
+      return 'claimed';
+    });
+  }
+
+  async readWorkHubActionClaim(actionId: string): Promise<WorkHubActionClaim | undefined> {
+    this.assertOpen();
+    assertSafeSessionId(actionId);
+    return this.readTransaction(() => this.readWorkHubActionClaimSync(actionId));
+  }
+
+  private readWorkHubActionClaimSync(actionId: string): WorkHubActionClaim | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT operation, action_fingerprint, subject FROM workhub_action_claims WHERE action_id = ?',
+      )
+      .get(actionId) as
+      | { operation?: unknown; action_fingerprint?: unknown; subject?: unknown }
+      | undefined;
+    if (!row) return undefined;
+    if (
+      !isWorkHubActionOperation(row.operation) ||
+      typeof row.action_fingerprint !== 'string' ||
+      !/^sha256:[a-f0-9]{64}$/u.test(row.action_fingerprint) ||
+      typeof row.subject !== 'string'
+    ) {
+      throw new SessionMetadataConflictError('Invalid WorkHub action claim row');
+    }
+    return {
+      actionId,
+      operation: row.operation,
+      actionFingerprint: row.action_fingerprint as `sha256:${string}`,
+      subject: row.subject,
+    };
+  }
+
+  async claimMessageAdmissionCancellation(
+    sessionId: string,
+    messageId: string,
+    claimId: string,
+  ): Promise<MessageAdmissionCancellationClaimOutcome> {
+    this.assertOpen();
+    assertSafeSessionId(sessionId);
+    assertSafeSessionId(messageId);
+    assertSafeSessionId(claimId);
+    return this.transaction(() => {
+      const cancelled = this.db
+        .prepare(
+          'SELECT cancellation_claim_id FROM cancelled_message_admissions WHERE session_id = ? AND message_id = ?',
+        )
+        .get(sessionId, messageId) as { cancellation_claim_id?: unknown } | undefined;
+      if (cancelled) {
+        return cancelled.cancellation_claim_id === claimId ? 'same_claim' : 'already_cancelled';
+      }
+      const admission = this.db
+        .prepare(
+          `
+          SELECT submitted_content_digest, submitted_placement
+          FROM message_admissions
+          WHERE session_id = ? AND message_id = ?
+        `,
+        )
+        .get(sessionId, messageId) as
+        | { submitted_content_digest?: unknown; submitted_placement?: unknown }
+        | undefined;
+      if (
+        typeof admission?.submitted_content_digest !== 'string' ||
+        (admission.submitted_placement !== 'current_turn' &&
+          admission.submitted_placement !== 'next_turn')
+      ) {
+        throw new SessionMetadataConflictError('Message admission cancellation identity conflict');
+      }
+      this.db
+        .prepare(
+          `
+          INSERT INTO cancelled_message_admissions(
+            session_id, message_id, submitted_content_digest, submitted_placement,
+            cancellation_claim_id
+          ) VALUES (?, ?, ?, ?, ?)
+        `,
+        )
+        .run(
+          sessionId,
+          messageId,
+          admission.submitted_content_digest,
+          admission.submitted_placement,
+          claimId,
+        );
+      const deleted = this.db
+        .prepare('DELETE FROM message_admissions WHERE session_id = ? AND message_id = ?')
+        .run(sessionId, messageId);
+      if (deleted.changes !== 1) {
+        throw new SessionMetadataConflictError('Message admission cancellation identity conflict');
+      }
+      return 'cancelled_by_claim';
+    });
+  }
+
   async listMessageAdmissions(sessionId: string): Promise<readonly PendingMessageAdmission[]> {
     this.assertOpen();
     assertSafeSessionId(sessionId);
@@ -1874,7 +2116,7 @@ export class SqliteSessionMetadataStore {
           `
           SELECT turn_id, run_id, message_id, content_json, submitted_content_digest,
             submitted_placement, placement, disposition, queue_order, admitted_at,
-            submitted_intent_json
+            submitted_intent_json, skill_invocation_json
           FROM message_admissions
           WHERE session_id = ?
           ORDER BY queue_order, sequence
@@ -1955,7 +2197,7 @@ export class SqliteSessionMetadataStore {
             `
             SELECT turn_id, run_id, message_id, content_json, submitted_content_digest,
               submitted_placement, placement, disposition, queue_order, admitted_at,
-            submitted_intent_json
+            submitted_intent_json, skill_invocation_json
             FROM message_admissions
             WHERE session_id = ? AND message_id = ?
           `,
@@ -2207,7 +2449,7 @@ export class SqliteSessionMetadataStore {
           `
           SELECT turn_id, run_id, message_id, content_json, submitted_content_digest,
             submitted_placement, placement, disposition, queue_order, admitted_at,
-            submitted_intent_json
+            submitted_intent_json, skill_invocation_json
           FROM message_admissions
           WHERE session_id = ? AND message_id = ?
         `,
@@ -2227,7 +2469,8 @@ export class SqliteSessionMetadataStore {
         .prepare(
           `
           UPDATE message_admissions
-          SET content_json = ?, submitted_content_digest = ?, placement = ?, disposition = ?
+          SET content_json = ?, submitted_content_digest = ?, placement = ?, disposition = ?,
+            skill_invocation_json = ?
           WHERE session_id = ? AND message_id = ?
         `,
         )
@@ -2236,6 +2479,7 @@ export class SqliteSessionMetadataStore {
           stored.submittedContentDigest,
           stored.placement,
           stored.disposition,
+          JSON.stringify(stored.skillInvocation),
           stored.sessionId,
           stored.messageId,
         );
@@ -6808,6 +7052,17 @@ function readStoredMessageRecordJson(
   return recordJson;
 }
 
+function isWorkHubActionOperation(value: unknown): value is WorkHubActionOperation {
+  return (
+    value === 'answer_here' ||
+    value === 'clarify' ||
+    value === 'delegate_existing' ||
+    value === 'create_new' ||
+    value === 'replace' ||
+    value === 'stop'
+  );
+}
+
 function sameWorkHubAssignmentRequest(
   existing: WorkHubDelegationAssignedMessage,
   requested: WorkHubDelegationAssignedMessage,
@@ -6821,6 +7076,8 @@ function sameWorkHubAssignmentRequest(
       disposition: existing.disposition,
       userText: existing.userText,
       create: existing.create,
+      replacesActionId: existing.replacesActionId,
+      replacesDelegationId: existing.replacesDelegationId,
     },
     {
       actionId: requested.actionId,
@@ -6830,6 +7087,8 @@ function sameWorkHubAssignmentRequest(
       disposition: requested.disposition,
       userText: requested.userText,
       create: requested.create,
+      replacesActionId: requested.replacesActionId,
+      replacesDelegationId: requested.replacesDelegationId,
     },
   );
 }

@@ -123,13 +123,141 @@ test("keeps synthetic E2E interactions visible through Host hydration and retire
   await observer.close();
 });
 
+test('answers a Client Capability approval through the existing Interaction authority', async () => {
+  const pending = {
+    schemaVersion: 1 as const,
+    interactionId: 'capability-1',
+    sessionId: 'session-1',
+    turnId: 'turn-1',
+    runId: 'run-1',
+    revision: 1 as const,
+    request: {
+      kind: 'client_capability' as const,
+      toolUseId: 'tool-1',
+      target: {
+        providerId: 'provider-1',
+        contractId: 'contract-1',
+        serverId: 'desktop_browser',
+        toolName: 'browser_snapshot',
+        capability: 'browser' as const,
+        scope: { kind: 'browser_origin' as const, origin: 'https://example.com' },
+      },
+    },
+    status: 'pending' as const,
+    outcome: null,
+  };
+  const observer = observerWithSnapshot({
+    interactions: { pending: [pending] },
+  });
+  const answers: unknown[] = [];
+  const ipc = ipcHarness();
+  registerExecutionIpc(
+    {
+      client: executionClient({
+        answerInteraction: async (input) => {
+          answers.push(input);
+          return {
+            ...pending,
+            revision: 2,
+            status: 'answered' as const,
+            outcome: {
+              kind: 'client_capability_decision' as const,
+              decision: 'allow' as const,
+              committedAt: 2,
+            },
+          };
+        },
+      }),
+      observer,
+    },
+    ipc,
+  );
+
+  await ipc.invoke('sessions:listActiveInteractions', 'session-1');
+  await ipc.invoke('sessions:respondToClientCapability', 'session-1', {
+    requestId: 'capability-1',
+    decision: 'allow',
+  });
+  assert.deepEqual(answers, [
+    {
+      sessionId: 'session-1',
+      interactionId: 'capability-1',
+      answer: { kind: 'client_capability', decision: 'allow' },
+    },
+  ]);
+  await observer.close();
+});
+
+test("validates and forwards Desktop form responses to the pending Host interaction", async () => {
+  const pending = {
+    schemaVersion: 1 as const,
+    interactionId: "form-1",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    runId: "run-1",
+    revision: 1 as const,
+    status: "pending" as const,
+    outcome: null,
+    request: {
+      kind: "form" as const,
+      toolUseId: "tool-1",
+      message: "Configure deployment",
+      requester: { name: "deploy" },
+      fields: [{ kind: "integer" as const, name: "replicas", label: "Replicas", required: true }],
+    },
+  };
+  const observer = observerWithSnapshot({ interactions: { pending: [pending] } });
+  const answers: unknown[] = [];
+  const ipc = ipcHarness();
+  registerExecutionIpc({
+    observer,
+    client: executionClient({
+      answerInteraction: async (input) => {
+        answers.push(input);
+        return {
+          ...pending,
+          revision: 2,
+          status: "answered",
+          outcome: {
+            kind: "form_answer",
+            action: "accept",
+            values: { replicas: 3 },
+            committedAt: 2,
+          },
+        };
+      },
+    }),
+  }, ipc);
+
+  await ipc.invoke("sessions:respondToUserForm", "session-1", {
+    requestId: "form-1",
+    action: "accept",
+    values: { replicas: 3 },
+  });
+  assert.deepEqual(answers, [{
+    sessionId: "session-1",
+    interactionId: "form-1",
+    answer: { kind: "form", action: "accept", values: { replicas: 3 } },
+  }]);
+
+  await assert.rejects(
+    () => ipc.invoke("sessions:respondToUserForm", "session-1", {
+      requestId: "form-1",
+      action: "accept",
+      values: { replicas: Number.NaN },
+    }),
+  );
+  assert.equal(answers.length, 1);
+  await observer.close();
+});
+
 test("retries committed Branch and Revision copies with the renderer-owned identity", async () => {
   const committed = new Map<string, SessionCatalogProjection>();
   const lostResponses = new Set(["branch-copy-1", "revision-copy-1"]);
   const calls: Array<{
     kind: "branch" | "revision";
     targetSessionId: string;
-    sourceTurnId: string;
+    sourceTurnId: string | undefined;
   }> = [];
   let fallbackIds = 0;
   const ipc = ipcHarness();
@@ -172,25 +300,23 @@ test("retries committed Branch and Revision copies with the renderer-owned ident
     {
       channel: "sessions:branchFromTurn",
       copyId: "branch-copy-1",
-      sourceTurnId: "branch-source-turn",
+      payload: { sourceTurnId: "branch-source-turn", copyId: "branch-copy-1" },
     },
     {
       channel: "sessions:reviseBeforeTurn",
       copyId: "revision-copy-1",
-      sourceTurnId: "revision-source-turn",
+      payload: { sourceTurnId: "revision-source-turn", copyId: "revision-copy-1" },
     },
   ] as const) {
     await assert.rejects(
-      ipc.invoke(input.channel, "source-session", {
-        sourceTurnId: input.sourceTurnId,
-        copyId: input.copyId,
-      }),
+      ipc.invoke(input.channel, "source-session", input.payload),
       /response was lost/,
     );
-    const retried = (await ipc.invoke(input.channel, "source-session", {
-      sourceTurnId: input.sourceTurnId,
-      copyId: input.copyId,
-    })) as { id: string };
+    const retried = (await ipc.invoke(
+      input.channel,
+      "source-session",
+      input.payload,
+    )) as { id: string };
     assert.equal(retried.id, input.copyId);
   }
 
@@ -369,7 +495,11 @@ test("sends canonical content and uploads owned Attachment bytes through the Hos
     },
     submitMessage: async (input) => {
       starts.push(input);
-      return { disposition: "turn_started", turnId: "turn-1" };
+      return {
+        disposition: "turn_started",
+        turnId: "turn-1",
+        skillInvocation: { loaded: [], failed: [], receipts: [] },
+      };
     },
   });
   const ipc = ipcHarness();
@@ -474,7 +604,11 @@ test("uploads a selected workspace file as a Host-owned Session Artifact", async
         },
         submitMessage: async (input) => {
           starts.push(input);
-          return { disposition: "turn_started", turnId: "turn-1" };
+          return {
+            disposition: "turn_started",
+            turnId: "turn-1",
+            skillInvocation: { loaded: [], failed: [], receipts: [] },
+          };
         },
       }),
       observer: unusedObserver(),
@@ -574,7 +708,11 @@ test("submits an ordinary composer message once under its stable message identit
         getSession: async () => session(),
         submitMessage: async (input) => {
           submits.push(input);
-          return { disposition: "turn_started", turnId: "host-turn" };
+          return {
+            disposition: "turn_started",
+            turnId: "host-turn",
+            skillInvocation: { loaded: [], failed: [], receipts: [] },
+          };
         },
       }),
       observer: unusedObserver(),
@@ -726,6 +864,11 @@ test('submits a slash Skill message and reports the Host Skill outcome', async (
 test("queues a mid-turn send as steering when the Host reports the session busy", async () => {
   const submits: unknown[] = [];
   const changes: unknown[] = [];
+  const skillInvocation = {
+    loaded: [{ id: 'review', name: 'Review' }],
+    failed: [{ request: 'typo', reason: 'not_found' as const }],
+    receipts: [],
+  };
   const ipc = ipcHarness();
   registerExecutionIpc(
     {
@@ -733,7 +876,7 @@ test("queues a mid-turn send as steering when the Host reports the session busy"
         getSession: async () => session(),
         submitMessage: async (input) => {
           submits.push(input);
-          return { disposition: "steering", queueRevision: 1 };
+          return { disposition: "steering", queueRevision: 1, skillInvocation };
         },
       }),
       observer: unusedObserver(),
@@ -768,7 +911,7 @@ test("queues a mid-turn send as steering when the Host reports the session busy"
     turnId: "turn-1",
     attachments: [],
     inlineReferences: [],
-    skillInvocation: { loaded: [], failed: [], receipts: [] },
+    skillInvocation,
   });
   assert.deepEqual(changes, [
     { reason: "status-change", sessionId: "session-1" },
@@ -852,7 +995,11 @@ test("retries a dispatched send with its original message identity", async () =>
               "connection_lost",
             );
           }
-          return { disposition: "steering", queueRevision: 1 };
+          return {
+            disposition: "steering",
+            queueRevision: 1,
+            skillInvocation: { loaded: [], failed: [], receipts: [] },
+          };
         },
       }),
       newId: () => "id-1",
@@ -931,6 +1078,7 @@ test("answers a send with the Turn the Host started for it", async () => {
           return {
             disposition: "turn_started",
             turnId: "turn-9",
+            skillInvocation: { loaded: [], failed: [], receipts: [] },
           };
         },
       }),
@@ -1028,7 +1176,11 @@ test("lets the Host queue a textual Skill token as steering", async () => {
         getSession: async () => session(),
         submitMessage: async (input) => {
           submits.push(input);
-          return { disposition: "steering", queueRevision: 1 };
+          return {
+            disposition: "steering",
+            queueRevision: 1,
+            skillInvocation: { loaded: [], failed: [], receipts: [] },
+          };
         },
       }),
       newId: () => "id-1",
@@ -1099,6 +1251,11 @@ test("reports a Host-blocked Skill send as a Skill failure", async () => {
 test("queues explicit Desktop follow-ups", async () => {
   const submits: unknown[] = [];
   let sequence = 0;
+  const skillInvocation = {
+    loaded: [{ id: 'writer', name: 'Writer' }],
+    failed: [{ request: 'missing', reason: 'not_found' as const }],
+    receipts: [],
+  };
   const ipc = ipcHarness();
   registerExecutionIpc(
     {
@@ -1106,7 +1263,7 @@ test("queues explicit Desktop follow-ups", async () => {
         getSession: async () => session(),
         submitMessage: async (input) => {
           submits.push(input);
-          return { disposition: "followup", queueRevision: 4 };
+          return { disposition: "followup", queueRevision: 4, skillInvocation };
         },
       }),
       observer: unusedObserver(),
@@ -1156,7 +1313,7 @@ test("queues explicit Desktop follow-ups", async () => {
         },
       ],
       inlineReferences: [],
-      skillInvocation: { loaded: [], failed: [], receipts: [] },
+      skillInvocation,
     },
   );
   assert.deepEqual(submits, [
@@ -1325,7 +1482,11 @@ test("binds steer and stop to Host-owned queue and active Turn identities", asyn
           'Message disposition cannot be proven in this Host Epoch',
         );
       }
-      return { disposition: "steering", queueRevision: 2 };
+      return {
+        disposition: "steering",
+        queueRevision: 2,
+        skillInvocation: { loaded: [], failed: [], receipts: [] },
+      };
     },
     interruptTurn: async (input) => {
       stopLifecycle.push("interrupt");

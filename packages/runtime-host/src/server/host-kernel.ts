@@ -62,6 +62,7 @@ import {
   acknowledgeCollaborationTurnRequest,
   createCollaborationTurnRequest,
   decideCollaborationTurnRequest,
+  withdrawCollaborationTurnRequest,
   finalizeAccessCredential,
   prepareCollaborationInvitation,
   queryCollaborationTurnRequests,
@@ -93,6 +94,7 @@ import {
 import { HostResidencyRegistry } from './host-residency-registry.js';
 import type { PeerMeshNode } from '../peer-mesh/node.js';
 import { createPeerMeshOperationHandlers } from './peer-mesh-authority.js';
+import { createHostResourceCollector } from './host-resource-collector.js';
 
 const DEFAULT_IDLE_GRACE_MS = 30_000;
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000;
@@ -160,6 +162,10 @@ interface RuntimeHostKernelCommonOptions {
   listenerSetFactory?: RuntimeHostListenerSetFactory;
   accessAuthority?: RuntimeHostAccessAuthority;
   peerMesh?: PeerMeshNode;
+  /** Ephemeral launch gate used until a supervised Candidate durably commits. */
+  initialClientAdmission?: {
+    isClientAdmitted(clientInstanceId: string): boolean;
+  };
 }
 
 export type RuntimeHostLifecycleMode = 'ephemeral' | 'service';
@@ -202,6 +208,7 @@ export class RuntimeHostKernel {
   >();
   readonly #operationDrainWaiters = new Set<() => void>();
   readonly #residencies = new HostResidencyRegistry();
+  readonly #resourceCollector = createHostResourceCollector();
   readonly #lifecycle: RuntimeHostLifecycle;
   readonly #handshakeTimeoutMs: number;
   readonly #shutdownGraceMs: number;
@@ -477,6 +484,18 @@ export class RuntimeHostKernel {
         compositionRevision: this.compositionDescriptor.revision,
       };
     }
+    const initialClientAdmission = this.#options.initialClientAdmission;
+    if (
+      initialClientAdmission &&
+      !initialClientAdmission.isClientAdmitted(hello.clientInstanceId)
+    ) {
+      return {
+        kind: 'draining',
+        hostEpoch: this.hostEpoch,
+        compositionId: this.compositionDescriptor.id,
+        compositionRevision: this.compositionDescriptor.revision,
+      };
+    }
     if (authority.clientInstanceId && authority.clientInstanceId !== hello.clientInstanceId) {
       throw new Error('Runtime Host access credential belongs to another Client');
     }
@@ -683,6 +702,10 @@ export class RuntimeHostKernel {
               .map((entry) => collapseHomePath(entry, homedir(), process.platform)),
           },
         }),
+        'host.resources.query': async () => ({
+          ok: true,
+          result: await this.#resourceCollector.snapshot(this.hostEpoch),
+        }),
         'host.upgrade.prepare': async (input) => {
           if (input.expectedHostEpoch !== this.hostEpoch) {
             return {
@@ -783,6 +806,14 @@ export class RuntimeHostKernel {
               input,
             ),
           ),
+        'collaboration.turn-request.withdraw': async (input, context) =>
+          this.#settleAccessCredentialMutation(
+            withdrawCollaborationTurnRequest(
+              this.#options.accessAuthority,
+              context.principal,
+              input,
+            ),
+          ),
         'collaboration.turn-request.decide': async (input, context) =>
           this.#settleAccessCredentialMutation(
             decideCollaborationTurnRequest(this.#options.accessAuthority, context.principal, input),
@@ -809,6 +840,7 @@ export class RuntimeHostKernel {
   }
 
   #statusSnapshot(): HostStatusResult {
+    const peer = this.peerListeners[0];
     return {
       hostEpoch: this.hostEpoch,
       compositionId: this.compositionDescriptor.id,
@@ -817,6 +849,11 @@ export class RuntimeHostKernel {
       connections: this.#acceptedTransports.size,
       activeOperations: this.#activeOperations,
       activeResidencies: this.#residencies.activeCount,
+      ...(peer
+        ? {
+            peerEndpoint: peer.reachability,
+          }
+        : {}),
     };
   }
 
@@ -830,6 +867,10 @@ export class RuntimeHostKernel {
   }
 
   #hasUpgradeBlockingActivity(): boolean {
+    // The request's own accepted transport is expected. Any other live
+    // connection arrived after discovery or remained attached and therefore
+    // requires explicit interruption authority before retirement.
+    if (this.#acceptedTransports.size > 1) return true;
     if (this.#activeCommandOperations > 1) return true;
     return this.#residencies.snapshot().some(({ label }) => label !== 'process-retention');
   }

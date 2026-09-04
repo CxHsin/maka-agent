@@ -84,6 +84,13 @@ import {
   type TurnStateMessage,
   type UserMessage,
   type WorkHubDelegationAssignedMessage,
+  type WorkHubDelegationReplacementAbortedMessage,
+  type WorkHubDelegationReplacementRequestedMessage,
+  type WorkHubActionClaim,
+  type WorkHubActionClaimOutcome,
+  type WorkHubDelegationStopRequestedMessage,
+  type WorkHubDelegationStopResolvedMessage,
+  type WorkHubDelegationSupersededMessage,
 } from '@maka/core/session';
 import type {
   MarkMessagesHandedOffInput,
@@ -184,6 +191,8 @@ export interface CreateStableSessionRequest {
 export interface WorkHubMessageAssignmentRequest {
   readonly assignment: WorkHubDelegationAssignedMessage;
   readonly admission: PendingMessageAdmission;
+  /** Present exactly when this assignment atomically supersedes an earlier link. */
+  readonly supersession?: WorkHubDelegationSupersededMessage;
   /** Present exactly when the assignment creates its target Session. */
   readonly create?: CreateStableSessionRequest;
 }
@@ -416,6 +425,28 @@ export interface SessionAuthorityStore extends SessionStore, MessageAdmissionSto
     request: WorkHubMessageAssignmentRequest,
   ): Promise<WorkHubMessageAssignmentResult>;
   readWorkHubAssignment(actionId: string): Promise<WorkHubDelegationAssignedMessage | undefined>;
+  readWorkHubReplacement(
+    delegationId: string,
+  ): Promise<WorkHubDelegationReplacementRequestedMessage | undefined>;
+  readWorkHubReplacementAbort(
+    delegationId: string,
+  ): Promise<WorkHubDelegationReplacementAbortedMessage | undefined>;
+  readWorkHubSupersession(
+    delegationId: string,
+  ): Promise<WorkHubDelegationSupersededMessage | undefined>;
+  readWorkHubStopRequest(
+    delegationId: string,
+  ): Promise<WorkHubDelegationStopRequestedMessage | undefined>;
+  readWorkHubStopResolution(
+    delegationId: string,
+  ): Promise<WorkHubDelegationStopResolvedMessage | undefined>;
+  /**
+   * Durably binds one action identity to one exact WorkHub operation before its
+   * effect. Survives removal of the target Session so a committed destructive
+   * claim can still converge afterwards.
+   */
+  claimWorkHubAction(claim: WorkHubActionClaim): Promise<WorkHubActionClaimOutcome>;
+  readWorkHubActionClaim(actionId: string): Promise<WorkHubActionClaim | undefined>;
   discardStableConversationCopy(sessionId: string, requestFingerprint: string): Promise<boolean>;
   listCatalogPage(
     filter: SessionListFilter | undefined,
@@ -634,6 +665,7 @@ class SqliteSessionStore implements SessionAuthorityStore {
       assignment: request.assignment,
       admission: request.admission,
       projection: projectSessionCatalogMessages([request.assignment]),
+      ...(request.supersession ? { supersession: request.supersession } : {}),
       ...(create
         ? {
             create: {
@@ -659,22 +691,96 @@ class SqliteSessionStore implements SessionAuthorityStore {
   async readWorkHubAssignment(
     actionId: string,
   ): Promise<WorkHubDelegationAssignedMessage | undefined> {
+    const message = await this.readWorkHubCoordinationMessage(
+      `wha_${workHubIdentitySuffix(actionId)}`,
+    );
+    return message?.type === 'workhub_coordination' && message.kind === 'delegation_assigned'
+      ? message
+      : undefined;
+  }
+
+  async readWorkHubReplacement(
+    delegationId: string,
+  ): Promise<WorkHubDelegationReplacementRequestedMessage | undefined> {
+    const message = await this.readWorkHubCoordinationMessage(
+      `whp_${workHubIdentitySuffix(delegationId)}`,
+    );
+    return message?.type === 'workhub_coordination' &&
+      message.kind === 'delegation_replacement_requested'
+      ? message
+      : undefined;
+  }
+
+  async readWorkHubReplacementAbort(
+    delegationId: string,
+  ): Promise<WorkHubDelegationReplacementAbortedMessage | undefined> {
+    const message = await this.readWorkHubCoordinationMessage(
+      `whb_${workHubIdentitySuffix(delegationId)}`,
+    );
+    return message?.type === 'workhub_coordination' &&
+      message.kind === 'delegation_replacement_aborted'
+      ? message
+      : undefined;
+  }
+
+  async readWorkHubSupersession(
+    delegationId: string,
+  ): Promise<WorkHubDelegationSupersededMessage | undefined> {
+    const message = await this.readWorkHubCoordinationMessage(
+      `whx_${workHubIdentitySuffix(delegationId)}`,
+    );
+    return message?.type === 'workhub_coordination' && message.kind === 'delegation_superseded'
+      ? message
+      : undefined;
+  }
+
+  async readWorkHubStopRequest(
+    delegationId: string,
+  ): Promise<WorkHubDelegationStopRequestedMessage | undefined> {
+    const message = await this.readWorkHubCoordinationMessage(
+      `whq_${workHubIdentitySuffix(delegationId)}`,
+    );
+    return message?.type === 'workhub_coordination' && message.kind === 'delegation_stop_requested'
+      ? message
+      : undefined;
+  }
+
+  async readWorkHubStopResolution(
+    delegationId: string,
+  ): Promise<WorkHubDelegationStopResolvedMessage | undefined> {
+    const message = await this.readWorkHubCoordinationMessage(
+      `whz_${workHubIdentitySuffix(delegationId)}`,
+    );
+    return message?.type === 'workhub_coordination' && message.kind === 'delegation_stop_resolved'
+      ? message
+      : undefined;
+  }
+
+  async claimWorkHubAction(claim: WorkHubActionClaim): Promise<WorkHubActionClaimOutcome> {
     await this.ensureReady();
-    const suffix = createHash('sha256').update(actionId, 'utf8').digest('hex').slice(0, 48);
+    return this.metadata.claimWorkHubAction(claim);
+  }
+
+  async readWorkHubActionClaim(actionId: string): Promise<WorkHubActionClaim | undefined> {
+    await this.ensureReady();
+    return this.metadata.readWorkHubActionClaim(actionId);
+  }
+
+  private async readWorkHubCoordinationMessage(
+    messageId: string,
+  ): Promise<StoredMessage | undefined> {
+    await this.ensureReady();
     const throughSequence = await this.metadata.readTranscriptHighWater(
       WORKHUB_COORDINATION_SESSION_ID,
     );
     if (throughSequence === null) return undefined;
     const messages = await this.metadata.readTranscriptMessages(WORKHUB_COORDINATION_SESSION_ID, {
-      messageIds: [`wha_${suffix}`],
+      messageIds: [messageId],
       throughSequence,
       maxMessages: 1,
       maxBytes: 768 * 1024,
     });
-    const message = messages[0];
-    return message?.type === 'workhub_coordination' && message.kind === 'delegation_assigned'
-      ? message
-      : undefined;
+    return messages[0];
   }
 
   async discardStableConversationCopy(
@@ -1002,6 +1108,11 @@ class SqliteSessionStore implements SessionAuthorityStore {
     return this.metadata.hasCancelledMessageAdmission(sessionId, messageId);
   }
 
+  async claimMessageAdmissionCancellation(sessionId: string, messageId: string, claimId: string) {
+    await this.ensureReady();
+    return this.metadata.claimMessageAdmissionCancellation(sessionId, messageId, claimId);
+  }
+
   async listMessageAdmissions(sessionId: string): Promise<readonly PendingMessageAdmission[]> {
     await this.ensureReady();
     return this.metadata.listMessageAdmissions(sessionId);
@@ -1197,6 +1308,10 @@ class SqliteSessionStore implements SessionAuthorityStore {
   private async ensureCatalogProjectionReadable(): Promise<void> {
     await this.ensureReady();
   }
+}
+
+function workHubIdentitySuffix(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 48);
 }
 
 /**
@@ -1415,17 +1530,25 @@ function isValidConversationCopyLineage(header: SessionHeader): boolean {
     return false;
   }
   if (copy.kind === 'branch') {
-    return (
-      header.parentSessionId === copy.sourceSessionId &&
-      header.branchOfTurnId === copy.sourceTurnId &&
+    const revisionClear =
       header.revisionRootSessionId === undefined &&
       header.revisionParentSessionId === undefined &&
       header.revisionOfTurnId === undefined &&
       header.revisionIndex === undefined &&
-      header.revisionState === undefined
-    );
+      header.revisionState === undefined;
+    if (!revisionClear || header.parentSessionId !== copy.sourceSessionId) {
+      return false;
+    }
+    // An empty copy (absent `sourceTurnId`) records provenance
+    // (`parentSessionId`) but must not fabricate a `branchOfTurnId`, and is only
+    // valid for a side conversation; a through-turn copy must anchor to it.
+    return copy.sourceTurnId === undefined
+      ? header.branchOfTurnId === undefined && copy.intent === 'side_conversation'
+      : header.branchOfTurnId === copy.sourceTurnId;
   }
+  // Revision copies always carry a turn boundary (enforced at decode).
   return (
+    copy.sourceTurnId !== undefined &&
     header.revisionParentSessionId === copy.sourceSessionId &&
     header.revisionOfTurnId === copy.sourceTurnId
   );

@@ -56,6 +56,8 @@ export interface ChatItem {
   ts?: number;
   /** User-message attachments projected from StoredMessage; absent on assistant/system rows. */
   attachments?: AttachmentRef[];
+  /** Host-bound directory references projected from StoredMessage; user rows only. */
+  directoryReferences?: import('@maka/core/events').DirectoryReference[];
   /** Inline quoted excerpts projected from StoredMessage; user rows only. */
   quotes?: QuoteRef[];
   /** Frozen inline token metadata projected from StoredMessage; user rows only. */
@@ -138,10 +140,49 @@ export interface ToolActivityItem {
   shellRunSource?: "owned" | "unavailable";
 }
 
-function systemNoteLabel(kind: string, locale: UiLocale): string {
+function systemNoteLabel(kind: string, data: unknown, locale: UiLocale): string {
   const copy = getConversationCopy(locale).messages.systemNotes;
   if (kind === "context_compacted") return copy.contextCompacted;
   if (kind === "context_compaction_failed_open") return copy.contextCompactionFailedOpen;
+  if (kind === "context_provider_dropping") {
+    const dropping = data as { inputTokens?: unknown; priorInputTokens?: unknown } | undefined;
+    const used = typeof dropping?.inputTokens === "number" ? dropping.inputTokens : 0;
+    const prior = typeof dropping?.priorInputTokens === "number" ? dropping.priorInputTokens : 0;
+    return copy.contextProviderDropping(used, prior);
+  }
+  if (kind === "context_overflow_after_compaction") return copy.contextOverflowAfterCompaction;
+  if (kind === "context_reported_window_exceeded") {
+    const exceeded = data as
+      | { usedTokens?: unknown; reportedContextWindow?: unknown }
+      | undefined;
+    const used = typeof exceeded?.usedTokens === "number" ? exceeded.usedTokens : 0;
+    const reported =
+      typeof exceeded?.reportedContextWindow === "number" ? exceeded.reportedContextWindow : 0;
+    return copy.contextReportedWindowExceeded(used, reported);
+  }
+  if (kind === "context_window_overrun") {
+    const overrun = data as
+      | { usedTokens?: unknown; declaredContextWindow?: unknown }
+      | undefined;
+    const used = typeof overrun?.usedTokens === "number" ? overrun.usedTokens : 0;
+    const declared =
+      typeof overrun?.declaredContextWindow === "number" ? overrun.declaredContextWindow : 0;
+    return copy.contextWindowOverrun(used, declared);
+  }
+  if (kind === "context_window_suggestion") {
+    const suggestion = data as
+      | { suggestedContextWindow?: unknown; declaredContextWindow?: unknown }
+      | undefined;
+    const tokens =
+      typeof suggestion?.suggestedContextWindow === "number"
+        ? suggestion.suggestedContextWindow
+        : 0;
+    const declared =
+      typeof suggestion?.declaredContextWindow === "number"
+        ? suggestion.declaredContextWindow
+        : undefined;
+    return copy.contextWindowSuggestion(tokens, declared);
+  }
   if (kind === "step_limit") return copy.stepLimit;
   return kind;
 }
@@ -164,6 +205,7 @@ export function materializeChat(
         ...(message.quotes && message.quotes.length > 0
           ? { quotes: message.quotes }
           : {}),
+        ...(message.directoryReferences ? { directoryReferences: message.directoryReferences } : {}),
         ...(message.inlineReferences !== undefined
           ? { inlineReferences: message.inlineReferences }
           : {}),
@@ -184,7 +226,7 @@ export function materializeChat(
       items.push({
         id: message.id,
         role: "system",
-        text: systemNoteLabel(message.kind, locale),
+        text: systemNoteLabel(message.kind, message.data, locale),
         ts: message.ts,
       });
     }
@@ -769,7 +811,7 @@ export function materializeTurns(
       turn.notes.push({
         id: message.id,
         role: "system",
-        text: systemNoteLabel(message.kind, locale),
+        text: systemNoteLabel(message.kind, message.data, locale),
         ts: message.ts,
       });
     } else if (message.type === "token_usage") {
@@ -1091,6 +1133,7 @@ function chatItemFromContent(
     ...(content.quotes && content.quotes.length > 0
       ? { quotes: content.quotes }
       : {}),
+    ...(content.directoryReferences ? { directoryReferences: content.directoryReferences } : {}),
     ...(content.inlineReferences !== undefined
       ? { inlineReferences: content.inlineReferences }
       : {}),

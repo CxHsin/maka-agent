@@ -19,10 +19,10 @@
 
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setImmediate as waitForImmediate } from 'node:timers/promises';
+import { setImmediate as waitForImmediate, setTimeout as delay } from 'node:timers/promises';
 import { test } from 'node:test';
 import type { RuntimeHostPeerNativeStream } from '../transport/peer-native.js';
 import {
@@ -30,15 +30,41 @@ import {
   generatePeerMeshAuthorityKeyPair,
   peerMeshId,
   signPeerMeshRoster,
+  type SignedPeerMeshMemberAdvertisementV1,
 } from '../peer-mesh/model.js';
-import { openPeerMeshNode, type PeerMeshNode, type PeerMeshTransport } from '../peer-mesh/node.js';
 import {
-  hasActivePeerMeshMembership,
+  openPeerMeshNode as openPeerMeshNodeImpl,
+  type PeerMeshNode,
+  type PeerMeshTransport,
+} from '../peer-mesh/node.js';
+import {
+  canonicalPeerReachabilityLease,
+  decodeSignedPeerReachabilityLease,
+  PEER_REACHABILITY_LEASE_TTL_MS,
+  PEER_REACHABILITY_MAX_CLOCK_SKEW_MS,
+  PEER_REACHABILITY_REFRESH_LEAD_MS,
+  peerReachabilityLeaseSigningBytes,
+  samePeerReachabilityRoutes,
+  verifySignedPeerReachabilityLease,
+  type PeerReachabilityPublisher,
+  type SignedPeerReachabilityLeaseV1,
+} from '../peer-reachability/index.js';
+import {
+  hasPeerMeshIdentityObligations,
   migrateLegacyPeerMeshState,
   PeerMeshPersistenceError,
   PeerMeshPostCommitError,
 } from '../peer-mesh/store.js';
 import { createPeerMeshOperationHandlers } from '../server/peer-mesh-authority.js';
+
+function openPeerMeshNode(
+  input: Omit<Parameters<typeof openPeerMeshNodeImpl>[0], 'peer' | 'reachability'> & {
+    readonly peer: MemoryPeerClient;
+  },
+): Promise<PeerMeshNode> {
+  input.peer.useClock(input.now ?? Date.now);
+  return openPeerMeshNodeImpl({ ...input, reachability: input.peer });
+}
 
 test('preserves durable Mesh mutation outcomes and drains after an unknown commit', async () => {
   let drains = 0;
@@ -89,11 +115,11 @@ test('authenticates three peers, consumes invitations once, and keeps authority 
     const [authority, memberB, memberC] = nodes as [PeerMeshNode, PeerMeshNode, PeerMeshNode];
     await authority.setDisplayName('Alice Desktop');
     const mesh = await authority.create();
-    assert.deepEqual(mesh.authority.coordinationRelays, ['/memory/relay/peer-a']);
+    assert.equal(mesh.authorityPeerId, 'peer-a');
     const serving = authority.serve();
 
     const contested = await authority.invite(mesh.roster.roster.meshId);
-    assert.deepEqual(contested.coordinationRelays, mesh.authority.coordinationRelays);
+    assert.deepEqual(contested.reachability.lease.coordinationRoutes, ['/memory/relay/peer-a']);
     const attempts = await Promise.allSettled([memberB.join(contested), memberC.join(contested)]);
     assert.equal(attempts.filter(({ status }) => status === 'fulfilled').length, 1);
     assert.equal(attempts.filter(({ status }) => status === 'rejected').length, 1);
@@ -119,7 +145,11 @@ test('authenticates three peers, consumes invitations once, and keeps authority 
         displayName,
       })),
       [
-        { peerId: 'peer-a', endpointKind: 'client', displayName: 'Alice Desktop' },
+        {
+          peerId: 'peer-a',
+          endpointKind: 'client',
+          displayName: 'Alice Desktop',
+        },
         { peerId: 'peer-b', endpointKind: 'host', displayName: 'Build Host' },
         { peerId: 'peer-c', endpointKind: 'host', displayName: undefined },
       ],
@@ -131,6 +161,7 @@ test('authenticates three peers, consumes invitations once, and keeps authority 
 
     await memberC.leave(mesh.roster.roster.meshId);
     assert.deepEqual(memberC.status(), []);
+    await memberC.reconcile();
     assert.deepEqual(authority.status()[0]?.roster.roster.members, ['peer-a']);
 
     const closing = authority.close();
@@ -145,12 +176,136 @@ test('authenticates three peers, consumes invitations once, and keeps authority 
   }
 });
 
+test('does not synchronize reachability to a peer removed after reconciliation selected it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-revoked-sync-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const member = await openPeerMeshNode({
+    dataRoot: join(root, 'member'),
+    peer: memberPeer,
+  });
+  const serving = [authority.serve(), member.serve()];
+  try {
+    const mesh = await authority.create();
+    await member.join(await authority.invite(mesh.roster.roster.meshId));
+    await authority.reconcile();
+    const synchronizedBeforeRemoval = memberPeer.receivedControlCount('sync');
+
+    const connection = authorityPeer.stallNextConnection();
+    const reconciliation = authority.reconcile();
+    await connection.started;
+    await authority.remove(mesh.roster.roster.meshId, 'peer-b');
+    connection.release();
+    await reconciliation;
+
+    assert.equal(memberPeer.receivedControlCount('sync'), synchronizedBeforeRemoval);
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled(serving);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close()]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('commits an offline leave locally and reconciles it after restart', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-leave-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const memberRoot = join(root, 'member');
+  let member = await openPeerMeshNode({
+    dataRoot: memberRoot,
+    peer: memberPeer,
+  });
+  const serving = [authority.serve(), member.serve()];
+  try {
+    const mesh = await authority.create();
+    await member.join(await authority.invite(mesh.roster.roster.meshId));
+    authorityPeer.setReachable(false);
+
+    await member.leave(mesh.roster.roster.meshId);
+    assert.deepEqual(memberPeer.transitPolicy.approvedRelayPeerIds, []);
+    await authority.remove(mesh.roster.roster.meshId, 'peer-b');
+    assert.deepEqual(member.status(), []);
+    assert.equal(await hasPeerMeshIdentityObligations(memberRoot, 'peer-b'), true);
+
+    await member.close();
+    await serving[1];
+    member = await openPeerMeshNode({ dataRoot: memberRoot, peer: memberPeer });
+    serving[1] = member.serve();
+    assert.deepEqual(member.status(), []);
+
+    authorityPeer.setReachable(true);
+    await member.reconcile();
+    assert.deepEqual(authority.status()[0]?.roster.roster.members, ['peer-a']);
+    assert.equal(await hasPeerMeshIdentityObligations(memberRoot, 'peer-b'), false);
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled(serving);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close()]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('announces authority commits without coupling success to delivery', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-announce-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const member = await openPeerMeshNode({
+    dataRoot: join(root, 'member'),
+    peer: memberPeer,
+  });
+  const serving = [authority.serve(), member.serve()];
+  try {
+    const mesh = await authority.create();
+    await member.join(await authority.invite(mesh.roster.roster.meshId));
+
+    await authority.setMeshDisplayName(mesh.roster.roster.meshId, 'Online');
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (member.status()[0]?.roster.roster.displayName === 'Online') break;
+      await delay(10);
+    }
+    assert.equal(member.status()[0]?.roster.roster.displayName, 'Online');
+
+    memberPeer.stallNextControl();
+    await authority.setMeshDisplayName(mesh.roster.roster.meshId, 'Recovered');
+    assert.equal(authority.status()[0]?.roster.roster.displayName, 'Recovered');
+    await member.reconcile();
+    assert.equal(member.status()[0]?.roster.roster.displayName, 'Recovered');
+
+    await authority.closeMesh(mesh.roster.roster.meshId);
+    await member.reconcile();
+    assert.equal(authority.status()[0]?.roster.roster.closed, true);
+    assert.equal(member.status()[0]?.roster.roster.closed, true);
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled(serving);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close()]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('rejects a modified authority-signed roster', () => {
   const keys = generatePeerMeshAuthorityKeyPair();
   const signed = signPeerMeshRoster(
     {
       version: 1,
       meshId: peerMeshId(keys.publicKey),
+      authorityPeerId: 'peer-a',
       revision: 1,
       members: ['peer-a'],
       closed: false,
@@ -200,29 +355,30 @@ test('reconciles changed routes, propagates removal, and recovers the verified c
     await authority.reconcile();
     await memberC.setDisplayName('Peer C');
     await memberC.reconcile();
-    authorityPeer.stallNextControl();
-    await memberB.reconcile(AbortSignal.timeout(1_000));
+    authorityPeer.setReachable(false);
+    await memberB.reconcile();
     assert.deepEqual(memberB.resolveRoutes('peer-a')?.routeHints, ['/memory/peer-a/p2p/peer-a']);
 
-    memberCPeer.setRouteHints(['/memory/peer-c-moved/p2p/peer-c']);
+    await memberCPeer.setRouteHints(['/memory/peer-c-moved/p2p/peer-c']);
     await memberC.reconcile();
     await memberB.reconcile();
     assert.deepEqual(memberB.resolveRoutes('peer-c')?.routeHints, [
       '/memory/peer-c-moved/p2p/peer-c',
     ]);
+    authorityPeer.setReachable(true);
 
     await memberC.close();
     await serving[2];
     await rm(join(root, 'member-c'), { recursive: true, force: true });
     now += 6 * 60 * 1_000;
-    authorityPeer.setRouteHints(['/memory/peer-a-moved/p2p/peer-a']);
+    await authorityPeer.setRouteHints(['/memory/peer-a-moved/p2p/peer-a']);
     await authority.reconcile();
     await memberB.reconcile();
     assert.deepEqual(memberB.resolveRoutes('peer-a')?.routeHints, [
       '/memory/peer-a-moved/p2p/peer-a',
     ]);
 
-    memberCPeer.setRouteHints(['/memory/peer-c-rejoined/p2p/peer-c']);
+    await memberCPeer.setRouteHints(['/memory/peer-c-rejoined/p2p/peer-c']);
     memberC = await openPeerMeshNode({
       dataRoot: join(root, 'member-c'),
       peer: memberCPeer,
@@ -246,7 +402,7 @@ test('reconciles changed routes, propagates removal, and recovers the verified c
     await memberC.reconcile();
     authorityPeer.setReachable(false);
     await memberB.reconcile();
-    assert.equal(memberB.resolveRoutes('peer-c'), undefined);
+    assert.equal(memberB.resolveRoutes('peer-c').state, 'exhausted');
     assert.deepEqual(memberC.status()[0]?.roster.roster.members, ['peer-a', 'peer-c']);
     assert.deepEqual(memberC.resolveRoutes('peer-a')?.routeHints, [
       '/memory/peer-a-moved/p2p/peer-a',
@@ -270,6 +426,382 @@ test('reconciles changed routes, propagates removal, and recovers the verified c
   }
 });
 
+test('repairs an existing membership with a fresh invitation after every locator is lost', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-route-repair-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const member = await openPeerMeshNode({
+    dataRoot: join(root, 'member'),
+    peer: memberPeer,
+  });
+  const serving = [authority.serve(), member.serve()];
+  try {
+    const meshId = (await authority.create()).roster.roster.meshId;
+    await member.join(await authority.invite(meshId));
+
+    await authorityPeer.setCoordinationRelays([]);
+    await authorityPeer.setRouteHints([]);
+    await authority.reconcile();
+    authorityPeer.setReachable(false);
+    await member.reconcile();
+    assert.equal(
+      member.status()[0]?.memberRoutes.find(({ peerId }) => peerId === 'peer-a')?.state,
+      'reconnecting',
+    );
+    const observedStates: string[] = [];
+    const unsubscribe = member.subscribeRoutes('peer-a', () => {
+      observedStates.push(member.resolveRoutes('peer-a').state);
+    });
+    await member.prepareRoutes('peer-a', AbortSignal.timeout(4_000));
+    unsubscribe();
+    assert.deepEqual(observedStates, ['exhausted']);
+    assert.equal(
+      member.status()[0]?.memberRoutes.find(({ peerId }) => peerId === 'peer-a')?.state,
+      'needs_repair',
+    );
+
+    const recoveredRoute = '/memory/peer-a-recovered/p2p/peer-a';
+    authorityPeer.setReachable(true);
+    await authorityPeer.setRouteHints([recoveredRoute]);
+    const repaired = await member.join(await authority.invite(meshId));
+    assert.equal(member.status().length, 1);
+    assert.deepEqual(repaired.roster.roster.members, ['peer-a', 'peer-b']);
+    assert.deepEqual(member.resolveRoutes('peer-a')?.routeHints, [recoveredRoute]);
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close(), ...serving]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('does not let a member replace the signed Mesh authority locator', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-authority-binding-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberBPeer = network.create('peer-b');
+  const memberCPeer = network.create('peer-c');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const memberB = await openPeerMeshNode({
+    dataRoot: join(root, 'member-b'),
+    peer: memberBPeer,
+  });
+  const memberC = await openPeerMeshNode({
+    dataRoot: join(root, 'member-c'),
+    peer: memberCPeer,
+  });
+  const serving = [authority.serve(), memberB.serve(), memberC.serve()];
+  try {
+    const meshId = (await authority.create()).roster.roster.meshId;
+    await memberB.join(await authority.invite(meshId));
+    await memberC.join(await authority.invite(meshId));
+    const invitation = await authority.invite(meshId);
+
+    await assert.rejects(
+      memberB.join({ ...invitation, reachability: memberCPeer.current() }),
+      /wrong authority identity/u,
+    );
+    assert.equal(memberB.status()[0]?.authorityPeerId, 'peer-a');
+  } finally {
+    await Promise.allSettled([authority.close(), memberB.close(), memberC.close()]);
+    await Promise.allSettled([authorityPeer.close(), memberBPeer.close(), memberCPeer.close()]);
+    await Promise.allSettled(serving);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('keeps Mesh membership while pruning reachability beyond its recovery horizon', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-expired-reachability-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  let now = Date.now();
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+    now: () => now,
+  });
+  const memberRoot = join(root, 'member');
+  let member = await openPeerMeshNode({
+    dataRoot: memberRoot,
+    peer: memberPeer,
+    now: () => now,
+  });
+  const serving = authority.serve();
+  try {
+    const meshId = (await authority.create()).roster.roster.meshId;
+    await member.join(await authority.invite(meshId));
+    await member.close();
+
+    now += PEER_REACHABILITY_LEASE_TTL_MS + 24 * 60 * 60 * 1_000 + 1;
+    member = await openPeerMeshNode({
+      dataRoot: memberRoot,
+      peer: memberPeer,
+      now: () => now,
+    });
+
+    assert.equal(member.status()[0]?.roster.roster.meshId, meshId);
+    const persisted = JSON.parse(await readFile(join(memberRoot, 'peer-mesh.json'), 'utf8')) as {
+      readonly reachability: readonly {
+        readonly lease: { readonly peerId: string };
+      }[];
+    };
+    assert.deepEqual(
+      persisted.reachability.map(({ lease }) => lease.peerId),
+      ['peer-b'],
+    );
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close(), serving]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('recovers persisted Mesh reachability after the wall clock moves backward', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-clock-rollback-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  let now = Date.now();
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+    now: () => now,
+  });
+  const memberRoot = join(root, 'member');
+  let member = await openPeerMeshNode({
+    dataRoot: memberRoot,
+    peer: memberPeer,
+    now: () => now,
+  });
+  const serving = authority.serve();
+  try {
+    const meshId = (await authority.create()).roster.roster.meshId;
+    await member.join(await authority.invite(meshId));
+    const previous = memberPeer.current();
+    await member.close();
+
+    now -= PEER_REACHABILITY_MAX_CLOCK_SKEW_MS + 1;
+    member = await openPeerMeshNode({
+      dataRoot: memberRoot,
+      peer: memberPeer,
+      now: () => now,
+    });
+
+    assert.equal(member.status()[0]?.roster.roster.meshId, meshId);
+    assert.equal(memberPeer.current().lease.revision, previous.lease.revision + 1);
+    assert.equal(memberPeer.current().lease.issuedAt, now);
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close(), serving]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects conflicting reachability facts at the same revision during Mesh sync', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-reachability-equivocation-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const memberRoot = join(root, 'member');
+  const member = await openPeerMeshNode({ dataRoot: memberRoot, peer: memberPeer });
+  const serving = authority.serve();
+  try {
+    const meshId = (await authority.create()).roster.roster.meshId;
+    await member.join(await authority.invite(meshId));
+    const originalRoutes = authority.resolveRoutes('peer-b');
+    const original = memberPeer.current();
+    const conflictingLease = canonicalPeerReachabilityLease({
+      ...original.lease,
+      directRoutes: ['/memory/conflicting/p2p/peer-b'],
+    });
+    const proof = await memberPeer.signIdentity(
+      peerReachabilityLeaseSigningBytes(conflictingLease),
+    );
+    const conflicting = decodeSignedPeerReachabilityLease({
+      lease: conflictingLease,
+      publicKey: proof.publicKey.toString('base64url'),
+      signature: proof.signature.toString('base64url'),
+    });
+    const persisted = JSON.parse(await readFile(join(memberRoot, 'peer-mesh.json'), 'utf8')) as {
+      readonly advertisements: readonly SignedPeerMeshMemberAdvertisementV1[];
+    };
+    const advertisement = persisted.advertisements.find(
+      ({ advertisement: candidate }) =>
+        candidate.meshId === meshId && candidate.peerId === 'peer-b',
+    );
+    assert.ok(advertisement);
+
+    const stream = await memberPeer.connectMeshControl({ peerId: 'peer-a' });
+    await stream.write(
+      Buffer.from(
+        `${JSON.stringify({
+          kind: 'sync',
+          meshId,
+          roster: authority.status()[0]?.roster,
+          reachability: conflicting,
+          advertisement,
+          knownReachability: [],
+          knownAdvertisements: [],
+        })}\n`,
+      ),
+    );
+
+    assert.equal(await stream.read(), null);
+    assert.deepEqual(authority.resolveRoutes('peer-b'), originalRoutes);
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close(), serving]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects equal-revision conflicts exposed by Mesh anti-entropy summaries', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-summary-equivocation-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberBPeer = network.create('peer-b');
+  const memberCPeer = network.create('peer-c');
+  const authorityRoot = join(root, 'authority');
+  const authority = await openPeerMeshNode({ dataRoot: authorityRoot, peer: authorityPeer });
+  const memberB = await openPeerMeshNode({ dataRoot: join(root, 'member-b'), peer: memberBPeer });
+  const memberC = await openPeerMeshNode({ dataRoot: join(root, 'member-c'), peer: memberCPeer });
+  const serving = [authority.serve(), memberB.serve(), memberC.serve()];
+  try {
+    const meshId = (await authority.create()).roster.roster.meshId;
+    await memberB.join(await authority.invite(meshId));
+    await memberC.join(await authority.invite(meshId));
+    await memberC.reconcile();
+    const originalRoutes = memberC.resolveRoutes('peer-b');
+    assert.deepEqual(originalRoutes?.routeHints, ['/memory/peer-b/p2p/peer-b']);
+
+    const original = memberBPeer.current();
+    const conflictingLease = canonicalPeerReachabilityLease({
+      ...original.lease,
+      directRoutes: ['/memory/conflicting/p2p/peer-b'],
+    });
+    const conflictingProof = await memberBPeer.signIdentity(
+      peerReachabilityLeaseSigningBytes(conflictingLease),
+    );
+    const conflicting = memberBPeer.verify(
+      decodeSignedPeerReachabilityLease({
+        lease: conflictingLease,
+        publicKey: conflictingProof.publicKey.toString('base64url'),
+        signature: conflictingProof.signature.toString('base64url'),
+      }),
+      'peer-b',
+    );
+    const conflictingDigest = createHash('sha256')
+      .update(peerReachabilityLeaseSigningBytes(conflicting.lease))
+      .digest('hex');
+    const persisted = JSON.parse(await readFile(join(authorityRoot, 'peer-mesh.json'), 'utf8')) as {
+      readonly advertisements: readonly SignedPeerMeshMemberAdvertisementV1[];
+    };
+    const advertisement = persisted.advertisements.find(
+      ({ advertisement: candidate }) =>
+        candidate.meshId === meshId && candidate.peerId === 'peer-a',
+    );
+    assert.ok(advertisement);
+
+    const stream = await authorityPeer.connectMeshControl({ peerId: 'peer-c' });
+    await stream.write(
+      Buffer.from(
+        `${JSON.stringify({
+          kind: 'sync',
+          meshId,
+          roster: authority.status()[0]?.roster,
+          reachability: authorityPeer.current(),
+          advertisement,
+          knownReachability: [
+            {
+              peerId: 'peer-b',
+              revision: conflictingLease.revision,
+              digest: conflictingDigest,
+            },
+          ],
+          knownAdvertisements: [],
+        })}\n`,
+      ),
+    );
+
+    assert.equal(await stream.read(), null);
+    assert.deepEqual(memberC.resolveRoutes('peer-b'), originalRoutes);
+  } finally {
+    await Promise.allSettled([authority.close(), memberB.close(), memberC.close()]);
+    await Promise.allSettled([
+      authorityPeer.close(),
+      memberBPeer.close(),
+      memberCPeer.close(),
+      ...serving,
+    ]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('publishes a changed local route promptly and refreshes a live cached peer route', {
+  timeout: 10_000,
+}, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-route-liveness-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberBPeer = network.create('peer-b');
+  const memberCPeer = network.create('peer-c');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const memberB = await openPeerMeshNode({
+    dataRoot: join(root, 'member-b'),
+    peer: memberBPeer,
+  });
+  const memberC = await openPeerMeshNode({
+    dataRoot: join(root, 'member-c'),
+    peer: memberCPeer,
+  });
+  // Keep the observer demand-driven so its explicit prepareRoutes() call,
+  // rather than a racing background reconciliation, owns the cache refresh.
+  const serving = [authority.serve(), memberB.serve()];
+  try {
+    const mesh = await authority.create();
+    await memberB.join(await authority.invite(mesh.roster.roster.meshId));
+    await memberC.join(await authority.invite(mesh.roster.roster.meshId));
+    await memberC.reconcile();
+    assert.deepEqual(memberC.resolveRoutes('peer-b')?.routeHints, ['/memory/peer-b/p2p/peer-b']);
+
+    const movedRoute = '/memory/peer-b-restarted/p2p/peer-b';
+    const movedRelay = '/memory/relay/peer-b-restarted';
+    await memberBPeer.setRouteHints([movedRoute]);
+    await memberBPeer.setCoordinationRelays([movedRelay]);
+    await waitForRoutes(authority, 'peer-b', [movedRoute], [movedRelay]);
+
+    assert.deepEqual(memberC.resolveRoutes('peer-b')?.routeHints, ['/memory/peer-b/p2p/peer-b']);
+    assert.deepEqual(memberC.resolveRoutes('peer-b')?.coordinationRelays, ['/memory/relay/peer-b']);
+    await memberC.prepareRoutes('peer-b', AbortSignal.timeout(4_000));
+    assert.deepEqual(memberC.resolveRoutes('peer-b')?.routeHints, [movedRoute]);
+    assert.deepEqual(memberC.resolveRoutes('peer-b')?.coordinationRelays, [movedRelay]);
+  } finally {
+    await Promise.allSettled([authority.close(), memberB.close(), memberC.close()]);
+    await Promise.allSettled([
+      authorityPeer.close(),
+      memberBPeer.close(),
+      memberCPeer.close(),
+      ...serving,
+    ]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('reconciles one selected Mesh into signed transit routes and native policy', async () => {
   const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-transit-'));
   const network = new MemoryPeerNetwork();
@@ -277,10 +809,24 @@ test('reconciles one selected Mesh into signed transit routes and native policy'
   const memberBPeer = network.create('peer-b');
   const memberCPeer = network.create('peer-c');
   const memberDPeer = network.create('peer-d');
-  const authority = await openPeerMeshNode({ dataRoot: join(root, 'a'), peer: authorityPeer });
-  const memberB = await openPeerMeshNode({ dataRoot: join(root, 'b'), peer: memberBPeer });
-  const memberC = await openPeerMeshNode({ dataRoot: join(root, 'c'), peer: memberCPeer });
-  const memberD = await openPeerMeshNode({ dataRoot: join(root, 'd'), peer: memberDPeer });
+  await memberCPeer.setRouteHints([]);
+  await memberCPeer.setCoordinationRelays([]);
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'a'),
+    peer: authorityPeer,
+  });
+  const memberB = await openPeerMeshNode({
+    dataRoot: join(root, 'b'),
+    peer: memberBPeer,
+  });
+  const memberC = await openPeerMeshNode({
+    dataRoot: join(root, 'c'),
+    peer: memberCPeer,
+  });
+  const memberD = await openPeerMeshNode({
+    dataRoot: join(root, 'd'),
+    peer: memberDPeer,
+  });
   const serving = [authority.serve(), memberB.serve(), memberC.serve(), memberD.serve()];
   try {
     const meshId = (await authority.create()).roster.roster.meshId;
@@ -288,8 +834,11 @@ test('reconciles one selected Mesh into signed transit routes and native policy'
     await memberC.join(await authority.invite(meshId));
     await memberD.join(await authority.invite(meshId));
 
-    authorityPeer.failNextTransitConfiguration();
-    await authority.setTransitMesh(meshId);
+    await authority.reconcile();
+    authorityPeer.setTransitConfigurationFailure(true);
+    await assert.rejects(authority.setTransitMesh(meshId), /transit configuration failure/u);
+    assert.equal(authority.transitMeshId(), meshId);
+    authorityPeer.setTransitConfigurationFailure(false);
     await authority.reconcile();
     await memberB.reconcile();
     assert.equal(authority.transitMeshId(), meshId);
@@ -301,11 +850,12 @@ test('reconciles one selected Mesh into signed transit routes and native policy'
         coordinationRelays: ['/memory/relay/peer-a'],
       },
     ]);
+    assert.equal(memberB.resolveRoutes('peer-c').state, 'available');
     assert.deepEqual(memberB.resolveRoutes('peer-c')?.transitRelayPeerIds, ['peer-a']);
 
     await memberD.setTransitMesh(meshId);
     await memberD.reconcile();
-    memberDPeer.setRouteHints(['/memory/peer-c/p2p/peer-c']);
+    await memberDPeer.setRouteHints(['/memory/peer-c/p2p/peer-c']);
     await memberD.reconcile();
     await memberB.reconcile();
     assert.deepEqual(memberBPeer.transitPolicy.relayCandidates, [
@@ -332,11 +882,12 @@ test('reconciles one selected Mesh into signed transit routes and native policy'
     await memberB.reconcile();
     assert.deepEqual(memberBPeer.transitPolicy, {
       allowedPeerIds: [],
+      approvedRelayPeerIds: ['peer-d'],
       relayCandidates: [],
     });
 
     await authority.closeMesh(meshId);
-    assert.deepEqual(authority.status(), []);
+    assert.equal(authority.status()[0]?.roster.roster.closed, true);
     assert.equal(authority.transitMeshId(), null);
     assert.deepEqual(authorityPeer.transitPolicy.allowedPeerIds, []);
   } finally {
@@ -364,15 +915,50 @@ test('closed Mesh records do not permanently consume membership capacity', async
   try {
     for (let index = 0; index < 16; index += 1) {
       const mesh = await node.create();
-      if (index === 0) assert.equal(await hasActivePeerMeshMembership(root, 'peer-a'), true);
       await node.closeMesh(mesh.roster.roster.meshId);
-      if (index === 0) assert.equal(await hasActivePeerMeshMembership(root, 'peer-a'), false);
     }
     assert.equal((await node.create()).roster.roster.closed, false);
-    assert.equal(node.status().length, 1);
+    assert.equal(node.status().filter(({ roster }) => !roster.roster.closed).length, 1);
   } finally {
     await node.close();
     await peer.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('reserves capacity for an offline leave until its authority obligation retires', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-capacity-obligation-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const member = await openPeerMeshNode({
+    dataRoot: join(root, 'member'),
+    peer: memberPeer,
+  });
+  const serving = authority.serve();
+  try {
+    const first = await authority.create();
+    await member.join(await authority.invite(first.roster.roster.meshId));
+    authorityPeer.setReachable(false);
+    await member.leave(first.roster.roster.meshId);
+    for (let index = 0; index < 15; index += 1) await member.create();
+
+    authorityPeer.setReachable(true);
+    const next = await authority.create();
+    const invitation = await authority.invite(next.roster.roster.meshId);
+    await assert.rejects(member.join(invitation), /too many Peer Meshes/u);
+    assert.deepEqual(
+      authority.status().find(({ roster }) => roster.roster.meshId === next.roster.roster.meshId)
+        ?.roster.roster.members,
+      ['peer-a'],
+    );
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close(), serving]);
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -429,14 +1015,21 @@ test('retries a committed invitation redemption for the same authenticated peer'
     peer: authorityPeer,
     now: () => now,
   });
-  const member = await openPeerMeshNode({ dataRoot: join(root, 'member'), peer: memberPeer });
+  const memberRoot = join(root, 'member');
+  let member = await openPeerMeshNode({
+    dataRoot: memberRoot,
+    peer: memberPeer,
+  });
   let serving = authority.serve();
   try {
     const mesh = await authority.create();
-    const invitation = await authority.invite(mesh.roster.roster.meshId, { ttlMs: 1_000 });
+    const invitation = await authority.invite(mesh.roster.roster.meshId, {
+      ttlMs: 1_000,
+    });
     authorityPeer.failNextResponse();
 
     await assert.rejects(member.join(invitation));
+    await member.close();
     await authority.close();
     await serving;
 
@@ -451,10 +1044,10 @@ test('retries a committed invitation redemption for the same authenticated peer'
       now: () => now,
     });
     serving = authority.serve();
-    const joined = await member.join(invitation);
-    assert.deepEqual(joined.roster.roster.members, ['peer-a', 'peer-b']);
-    assert.equal(joined.roster.roster.closed, false);
+    member = await openPeerMeshNode({ dataRoot: memberRoot, peer: memberPeer });
     await member.reconcile();
+    assert.deepEqual(member.status()[0]?.roster.roster.members, ['peer-a', 'peer-b']);
+    assert.equal(member.status()[0]?.roster.roster.closed, false);
     assert.equal(authority.status()[0]?.roster.roster.revision, 2);
 
     await authority.close();
@@ -463,6 +1056,126 @@ test('retries a committed invitation redemption for the same authenticated peer'
   } finally {
     await Promise.allSettled([authority.close(), member.close()]);
     await Promise.allSettled([authorityPeer.close(), memberPeer.close()]);
+    await Promise.allSettled([serving]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('cancels a recovered join while its authority is reconnecting', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-recovered-join-abort-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const memberRoot = join(root, 'member');
+  let now = Date.now();
+  let member = await openPeerMeshNode({
+    dataRoot: memberRoot,
+    peer: memberPeer,
+    now: () => now,
+  });
+  const serving = authority.serve();
+  try {
+    const mesh = await authority.create();
+    const invitation = await authority.invite(mesh.roster.roster.meshId, {
+      ttlMs: 1_000,
+    });
+    authorityPeer.failNextResponse();
+    await assert.rejects(member.join(invitation));
+    await member.close();
+
+    now += 2_000;
+    member = await openPeerMeshNode({
+      dataRoot: memberRoot,
+      peer: memberPeer,
+      now: () => now,
+    });
+    const connection = memberPeer.stallNextConnection();
+    const abort = new AbortController();
+    const retry = member.join(invitation, abort.signal);
+    await connection.started;
+    abort.abort();
+    await assert.rejects(
+      retry,
+      (error: unknown) => error instanceof Error && error.name === 'AbortError',
+    );
+    connection.release();
+
+    assert.deepEqual(member.status(), []);
+    await member.reconcile();
+    await member.reconcile();
+    assert.deepEqual(authority.status()[0]?.roster.roster.members, ['peer-a']);
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close(), serving]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('does not redeem a prepared join after explicit cancellation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-stale-join-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const cancelledPeer = network.create('peer-b');
+  const joiningPeer = network.create('peer-c');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const memberRoot = join(root, 'cancelled');
+  let cancelled: PeerMeshNode | undefined;
+  const joining = await openPeerMeshNode({
+    dataRoot: join(root, 'joining'),
+    peer: joiningPeer,
+  });
+  const serving = authority.serve();
+  try {
+    const mesh = await authority.create();
+    const invitation = await authority.invite(mesh.roster.roster.meshId);
+    await mkdir(memberRoot, { recursive: true });
+    await writeFile(
+      join(memberRoot, 'peer-mesh.json'),
+      `${JSON.stringify(
+        {
+          version: 7,
+          localPeerId: 'peer-b',
+          displayName: null,
+          meshes: [],
+          pendingJoins: [{ invitation, phase: 'prepared' }],
+          reachability: [],
+          advertisements: [],
+          transitMeshId: null,
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    cancelled = await openPeerMeshNode({
+      dataRoot: memberRoot,
+      peer: cancelledPeer,
+    });
+
+    const connection = cancelledPeer.stallNextConnection();
+    const reconciliation = cancelled.reconcile();
+    await connection.started;
+    const abort = new AbortController();
+    abort.abort();
+    await assert.rejects(
+      cancelled.join(invitation, abort.signal),
+      (error: unknown) => error instanceof Error && error.name === 'AbortError',
+    );
+    connection.release();
+    await assert.rejects(reconciliation, /pending intent/u);
+
+    await joining.join(invitation);
+    assert.deepEqual(authority.status()[0]?.roster.roster.members, ['peer-a', 'peer-c']);
+  } finally {
+    await Promise.allSettled([authority.close(), cancelled?.close(), joining.close()]);
+    await Promise.allSettled([authorityPeer.close(), cancelledPeer.close(), joiningPeer.close()]);
     await Promise.allSettled([serving]);
     await rm(root, { recursive: true, force: true });
   }
@@ -477,7 +1190,10 @@ test('cancels a redemption stalled after the control connection opens', async ()
     dataRoot: join(root, 'authority'),
     peer: authorityPeer,
   });
-  const member = await openPeerMeshNode({ dataRoot: join(root, 'member'), peer: memberPeer });
+  const member = await openPeerMeshNode({
+    dataRoot: join(root, 'member'),
+    peer: memberPeer,
+  });
   const serving = authority.serve();
   try {
     const mesh = await authority.create();
@@ -499,6 +1215,158 @@ test('cancels a redemption stalled after the control connection opens', async ()
   }
 });
 
+test('preserves an invitation when join is cancelled before redemption', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-pre-redeem-abort-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const cancelledPeer = network.create('peer-b');
+  const joiningPeer = network.create('peer-c');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const cancelled = await openPeerMeshNode({
+    dataRoot: join(root, 'cancelled'),
+    peer: cancelledPeer,
+  });
+  const joining = await openPeerMeshNode({
+    dataRoot: join(root, 'joining'),
+    peer: joiningPeer,
+  });
+  const serving = authority.serve();
+  try {
+    const mesh = await authority.create();
+    const invitation = await authority.invite(mesh.roster.roster.meshId);
+    const abort = new AbortController();
+    const attempt = cancelled.join(invitation, abort.signal);
+    abort.abort();
+    await assert.rejects(
+      attempt,
+      (error: unknown) => error instanceof Error && error.name === 'AbortError',
+    );
+
+    await joining.join(invitation);
+    assert.deepEqual(authority.status()[0]?.roster.roster.members, ['peer-a', 'peer-c']);
+  } finally {
+    await Promise.allSettled([authority.close(), cancelled.close(), joining.close()]);
+    await Promise.allSettled([authorityPeer.close(), cancelledPeer.close(), joiningPeer.close()]);
+    await Promise.allSettled([serving]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejoins a Mesh after completed leave or stale authority removal', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-rejoin-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const member = await openPeerMeshNode({
+    dataRoot: join(root, 'member'),
+    peer: memberPeer,
+  });
+  const serving = authority.serve();
+  try {
+    const mesh = await authority.create();
+    await member.join(await authority.invite(mesh.roster.roster.meshId));
+    const rejoinInvitation = await authority.invite(mesh.roster.roster.meshId);
+    authorityPeer.setReachable(false);
+    await member.leave(mesh.roster.roster.meshId);
+    await assert.rejects(member.join(rejoinInvitation), /leave is still being reconciled/u);
+    authorityPeer.setReachable(true);
+    await member.reconcile();
+    assert.deepEqual(member.status(), []);
+
+    await member.join(rejoinInvitation);
+    assert.deepEqual(member.status()[0]?.roster.roster.members, ['peer-a', 'peer-b']);
+
+    await authority.remove(mesh.roster.roster.meshId, 'peer-b');
+    await member.join(await authority.invite(mesh.roster.roster.meshId));
+    assert.deepEqual(member.status()[0]?.roster.roster.members, ['peer-a', 'peer-b']);
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close()]);
+    await Promise.allSettled([serving]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('turns a committed join into leave when cancellation arrives during transit setup', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-post-commit-abort-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const member = await openPeerMeshNode({
+    dataRoot: join(root, 'member'),
+    peer: memberPeer,
+  });
+  const serving = authority.serve();
+  try {
+    const mesh = await authority.create();
+    const invitation = await authority.invite(mesh.roster.roster.meshId);
+    const transit = memberPeer.stallNextTransitConfiguration();
+    const abort = new AbortController();
+    const joining = member.join(invitation, abort.signal);
+    await transit.started;
+    abort.abort();
+    transit.release();
+
+    await assert.rejects(
+      joining,
+      (error: unknown) => error instanceof Error && error.name === 'AbortError',
+    );
+    assert.deepEqual(member.status(), []);
+    await member.reconcile();
+    assert.deepEqual(authority.status()[0]?.roster.roster.members, ['peer-a']);
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close(), serving]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('preserves a committed join when its peer endpoint shuts down', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'maka-peer-mesh-join-shutdown-'));
+  const network = new MemoryPeerNetwork();
+  const authorityPeer = network.create('peer-a');
+  const memberPeer = network.create('peer-b');
+  const authority = await openPeerMeshNode({
+    dataRoot: join(root, 'authority'),
+    peer: authorityPeer,
+  });
+  const memberRoot = join(root, 'member');
+  let member = await openPeerMeshNode({
+    dataRoot: memberRoot,
+    peer: memberPeer,
+  });
+  const serving = authority.serve();
+  try {
+    const mesh = await authority.create();
+    const transit = memberPeer.stallNextTransitConfiguration();
+    const joining = member.join(await authority.invite(mesh.roster.roster.meshId));
+    const rejected = assert.rejects(joining);
+    await transit.started;
+    const closing = member.close();
+    transit.release();
+    await rejected;
+    await closing;
+
+    member = await openPeerMeshNode({ dataRoot: memberRoot, peer: memberPeer });
+    assert.deepEqual(member.status()[0]?.roster.roster.members, ['peer-a', 'peer-b']);
+  } finally {
+    await Promise.allSettled([authority.close(), member.close()]);
+    await Promise.allSettled([authorityPeer.close(), memberPeer.close(), serving]);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 class MemoryPeerNetwork {
   readonly #peers = new Map<string, MemoryPeerClient>();
 
@@ -509,7 +1377,7 @@ class MemoryPeerNetwork {
   }
 }
 
-class MemoryPeerClient implements PeerMeshTransport {
+class MemoryPeerClient implements PeerMeshTransport, PeerReachabilityPublisher {
   #meshServer:
     | {
         readonly onStream: (stream: RuntimeHostPeerNativeStream) => void;
@@ -521,47 +1389,178 @@ class MemoryPeerClient implements PeerMeshTransport {
   #stallNextControl = false;
   #responseDelayMs = 0;
   #reachable = true;
+  readonly #connectedPeerIds = new Set<string>();
   #routeHints: readonly string[];
+  #coordinationRelays: readonly string[];
+  #reachability: SignedPeerReachabilityLeaseV1 | undefined;
+  #reachabilityRevision = 0;
+  #now: () => number = Date.now;
+  readonly #reachabilityListeners = new Set<() => void>();
+  #nextConnectionBarrier:
+    | {
+        readonly started: () => void;
+        readonly wait: Promise<void>;
+      }
+    | undefined;
   transitPolicy = {
     allowedPeerIds: [] as readonly string[],
+    approvedRelayPeerIds: [] as readonly string[],
     relayCandidates: [] as readonly {
       readonly peerId: string;
       readonly addresses: readonly string[];
       readonly coordinationRelays: readonly string[];
     }[],
   };
-  #failNextTransitConfiguration = false;
+  #transitConfigurationFailure = false;
+  #nextTransitBarrier:
+    | {
+        readonly started: () => void;
+        readonly wait: Promise<void>;
+      }
+    | undefined;
   #failNextSignature = false;
+  readonly #receivedControlKinds: string[] = [];
 
   constructor(
     private readonly peerId: string,
     private readonly peers: ReadonlyMap<string, MemoryPeerClient>,
   ) {
     this.#routeHints = [`/memory/${peerId}/p2p/${peerId}`];
+    this.#coordinationRelays = [`/memory/relay/${peerId}`];
   }
 
   identity() {
+    return { peerId: this.peerId } as const;
+  }
+
+  reachability() {
     return {
-      peerId: this.peerId,
       listenAddresses: this.#routeHints,
-      coordinationRelays: [`/memory/relay/${this.peerId}`],
+      activeCoordinationRelays: this.#coordinationRelays,
     } as const;
   }
 
-  setRouteHints(routeHints: readonly string[]): void {
+  useClock(now: () => number): void {
+    this.#now = now;
+  }
+
+  current(): SignedPeerReachabilityLeaseV1 {
+    if (!this.#reachability) throw new Error('Test reachability is not initialized');
+    return this.#reachability;
+  }
+
+  async refresh(): Promise<SignedPeerReachabilityLeaseV1> {
+    const reachability = this.reachability();
+    const now = this.#now();
+    if (
+      this.#reachability &&
+      this.#reachability.lease.issuedAt <= now &&
+      this.#reachability.lease.expiresAt > now + PEER_REACHABILITY_REFRESH_LEAD_MS &&
+      samePeerReachabilityRoutes(this.#reachability.lease, reachability)
+    ) {
+      return this.#reachability;
+    }
+    this.#reachabilityRevision += 1;
+    const lease = canonicalPeerReachabilityLease({
+      version: 1,
+      peerId: this.peerId,
+      revision: this.#reachabilityRevision,
+      issuedAt: now,
+      expiresAt: now + PEER_REACHABILITY_LEASE_TTL_MS,
+      directRoutes: reachability.listenAddresses,
+      coordinationRoutes: reachability.activeCoordinationRelays,
+    });
+    const proof = await this.signIdentity(peerReachabilityLeaseSigningBytes(lease));
+    const signed = decodeSignedPeerReachabilityLease({
+      lease,
+      publicKey: proof.publicKey.toString('base64url'),
+      signature: proof.signature.toString('base64url'),
+    });
+    this.verify(signed, this.peerId);
+    this.#reachability = signed;
+    for (const listener of this.#reachabilityListeners) listener();
+    return signed;
+  }
+
+  verify(
+    value: unknown,
+    expectedPeerId: string,
+    options: { readonly allowExpired?: boolean } = {},
+  ): SignedPeerReachabilityLeaseV1 {
+    return verifySignedPeerReachabilityLease({
+      value,
+      expectedPeerId,
+      now: this.#now(),
+      verifyIdentity: this.verifyIdentity.bind(this),
+      ...(options.allowExpired === undefined ? {} : { allowExpired: options.allowExpired }),
+    });
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.#reachabilityListeners.add(listener);
+    return () => this.#reachabilityListeners.delete(listener);
+  }
+
+  async setRouteHints(routeHints: readonly string[]): Promise<void> {
     this.#routeHints = [...routeHints];
+    await this.refresh();
+  }
+
+  async setCoordinationRelays(coordinationRelays: readonly string[]): Promise<void> {
+    this.#coordinationRelays = [...coordinationRelays];
+    await this.refresh();
   }
 
   setReachable(reachable: boolean): void {
     this.#reachable = reachable;
+    if (!reachable) {
+      this.#connectedPeerIds.clear();
+      for (const peer of this.peers.values()) peer.#connectedPeerIds.delete(this.peerId);
+    }
   }
 
   setResponseDelay(delayMs: number): void {
     this.#responseDelayMs = delayMs;
   }
 
-  failNextTransitConfiguration(): void {
-    this.#failNextTransitConfiguration = true;
+  setTransitConfigurationFailure(fail: boolean): void {
+    this.#transitConfigurationFailure = fail;
+  }
+
+  stallNextTransitConfiguration(): {
+    readonly started: Promise<void>;
+    readonly release: () => void;
+  } {
+    let markStarted!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#nextTransitBarrier = { started: markStarted, wait };
+    return { started, release };
+  }
+
+  stallNextConnection(): {
+    readonly started: Promise<void>;
+    readonly release: () => void;
+  } {
+    let markStarted!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#nextConnectionBarrier = { started: markStarted, wait };
+    return { started, release };
+  }
+
+  receivedControlCount(kind: string): number {
+    return this.#receivedControlKinds.filter((candidate) => candidate === kind).length;
   }
 
   failNextSignature(): void {
@@ -590,6 +1589,10 @@ class MemoryPeerClient implements PeerMeshTransport {
     );
   }
 
+  isConnected(peerId: string): boolean {
+    return this.#connectedPeerIds.has(peerId);
+  }
+
   transitSnapshot() {
     return {
       allowedPeerCount: this.transitPolicy.allowedPeerIds.length,
@@ -603,37 +1606,60 @@ class MemoryPeerClient implements PeerMeshTransport {
     };
   }
 
-  configureTransit(input: {
+  async configureTransit(input: {
     readonly allowedPeerIds: readonly string[];
+    readonly approvedRelayPeerIds: readonly string[];
     readonly relayCandidates: readonly {
       readonly peerId: string;
       readonly addresses: readonly string[];
       readonly coordinationRelays: readonly string[];
     }[];
   }): Promise<void> {
-    if (this.#failNextTransitConfiguration) {
-      this.#failNextTransitConfiguration = false;
-      return Promise.reject(new Error('Injected transit configuration failure'));
+    if (this.#transitConfigurationFailure) {
+      throw new Error('Injected transit configuration failure');
+    }
+    const barrier = this.#nextTransitBarrier;
+    if (barrier) {
+      this.#nextTransitBarrier = undefined;
+      barrier.started();
+      await barrier.wait;
     }
     this.transitPolicy = {
       allowedPeerIds: [...input.allowedPeerIds],
+      approvedRelayPeerIds: [...input.approvedRelayPeerIds],
       relayCandidates: input.relayCandidates.map(({ peerId, addresses, coordinationRelays }) => ({
         peerId,
         addresses: [...addresses],
         coordinationRelays: [...coordinationRelays],
       })),
     };
-    return Promise.resolve();
   }
 
-  async connectMeshControl(input: {
-    readonly peerId: string;
-  }): Promise<RuntimeHostPeerNativeStream> {
+  async connectMeshControl(
+    input: { readonly peerId: string },
+    signal?: AbortSignal,
+  ): Promise<RuntimeHostPeerNativeStream> {
+    const barrier = this.#nextConnectionBarrier;
+    if (barrier) {
+      this.#nextConnectionBarrier = undefined;
+      barrier.started();
+      await waitForAbortable(barrier.wait, signal);
+    }
+    signal?.throwIfAborted();
     const remote = this.peers.get(input.peerId);
-    if (!remote || !remote.#reachable) {
+    if (!this.#reachable || !remote || !remote.#reachable) {
       throw new Error('Peer is unavailable');
     }
-    const [localStream, remoteStream] = memoryStreamPair(this.peerId, input.peerId);
+    this.#connectedPeerIds.add(input.peerId);
+    remote.#connectedPeerIds.add(this.peerId);
+    const [localStream, remoteStream] = memoryStreamPair(this.peerId, input.peerId, (bytes) => {
+      const newline = bytes.indexOf(0x0a);
+      if (newline < 0) return;
+      const value = JSON.parse(bytes.subarray(0, newline).toString('utf8')) as {
+        readonly kind?: unknown;
+      };
+      if (typeof value.kind === 'string') remote.#receivedControlKinds.push(value.kind);
+    });
     if (remote.#failNextResponse) {
       remote.#failNextResponse = false;
       remoteStream.failNextWrite();
@@ -671,6 +1697,9 @@ class MemoryPeerClient implements PeerMeshTransport {
   close(): Promise<void> {
     if (this.#closed) return Promise.resolve();
     this.#closed = true;
+    this.#connectedPeerIds.clear();
+    for (const peer of this.peers.values()) peer.#connectedPeerIds.delete(this.peerId);
+    this.#reachabilityListeners.clear();
     this.#meshServer?.stop();
     return Promise.resolve();
   }
@@ -688,13 +1717,56 @@ class MemoryPeerClient implements PeerMeshTransport {
   }
 }
 
+async function waitForAbortable(task: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return task;
+  signal.throwIfAborted();
+  let onAbort!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    await Promise.race([task, aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+async function waitForRoutes(
+  node: PeerMeshNode,
+  peerId: string,
+  expectedRouteHints: readonly string[],
+  expectedCoordinationRelays: readonly string[],
+): Promise<void> {
+  const deadline = Date.now() + 4_000;
+  while (Date.now() < deadline) {
+    const routes = node.resolveRoutes(peerId);
+    if (
+      JSON.stringify(routes?.routeHints) === JSON.stringify(expectedRouteHints) &&
+      JSON.stringify(routes?.coordinationRelays) === JSON.stringify(expectedCoordinationRelays)
+    )
+      return;
+    await delay(25);
+  }
+  assert.deepEqual(node.resolveRoutes(peerId), {
+    state: 'available',
+    routeHints: expectedRouteHints,
+    coordinationRelays: expectedCoordinationRelays,
+    transitRelayPeerIds: [],
+  });
+}
+
 function memorySignature(peerId: string, payload: Buffer): Buffer {
   return createHash('sha256').update(peerId).update(payload).digest();
 }
 
-function memoryStreamPair(localPeerId: string, remotePeerId: string): [MemoryStream, MemoryStream] {
+function memoryStreamPair(
+  localPeerId: string,
+  remotePeerId: string,
+  observeRemote?: (bytes: Buffer) => void,
+): [MemoryStream, MemoryStream] {
   const local = new MemoryStream(remotePeerId);
-  const remote = new MemoryStream(localPeerId);
+  const remote = new MemoryStream(localPeerId, observeRemote);
   local.connect(remote);
   remote.connect(local);
   return [local, remote];
@@ -707,7 +1779,10 @@ class MemoryStream implements RuntimeHostPeerNativeStream {
   #closed = false;
   #failNextWrite = false;
 
-  constructor(readonly peerId: string) {}
+  constructor(
+    readonly peerId: string,
+    private readonly observe?: (bytes: Buffer) => void,
+  ) {}
 
   connect(remote: MemoryStream): void {
     this.#remote = remote;
@@ -746,6 +1821,7 @@ class MemoryStream implements RuntimeHostPeerNativeStream {
   }
 
   push(chunk: Buffer | null): void {
+    if (chunk) this.observe?.(chunk);
     const waiter = this.#waiters.shift();
     if (waiter) waiter(chunk);
     else this.#incoming.push(chunk);

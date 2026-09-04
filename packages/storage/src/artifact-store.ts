@@ -52,6 +52,7 @@ import {
   isDeepResearchArtifactRole,
   type DeepResearchArtifactRole,
 } from '@maka/core/deep-research-run';
+import { sniffAttachmentMimeType } from '@maka/core/attachments';
 import { publishMarkerFile, readBoundedMarkerFile } from './marker-file.js';
 import {
   ARTIFACT_PUBLICATION_STAGING_PATTERN,
@@ -69,7 +70,10 @@ import {
 } from './artifact-writer-lock.js';
 import type { ArtifactWriterLockAuthority } from './root-authority.js';
 import { syncDirectory, syncDirectoryChain, syncFile } from './stable-storage.js';
-import type { ArtifactMetadataRepository } from './artifact-metadata-repository.js';
+import type {
+  ArtifactMetadataChanges,
+  ArtifactMetadataRepository,
+} from './artifact-metadata-repository.js';
 import { createSqliteArtifactMetadataRepository } from './sqlite-artifact-metadata.js';
 
 export { isSafeRelativeArtifactPath } from './artifact-metadata-codec.js';
@@ -81,10 +85,6 @@ const PURGE_INTENT_SCHEMA_VERSION = 1 as const;
 
 const MAX_PURGE_INTENT_BYTES = 64 * 1024 * 1024;
 const ARTIFACT_PURGE_RESOLVE_CONCURRENCY = 8;
-const EMPTY_SESSION_SNAPSHOT: ArtifactSessionSnapshot = {
-  records: [],
-  revision: artifactListRevision([]),
-};
 
 interface ArtifactSessionSnapshot {
   readonly records: readonly ArtifactRecord[];
@@ -161,6 +161,14 @@ export interface ConversationArtifactCopyInput {
   readonly targetSessionId: string;
   readonly turnIds: readonly string[];
   readonly excludeArtifactIds?: readonly string[];
+  /**
+   * Source-Session artifact ids to copy in addition to the turn-scoped
+   * selection, regardless of their `turnId`. Used to carry user-uploaded
+   * attachments (whose `turnId` is the upload id sentinel, not a conversation
+   * turn) that the copied transcript still references. Lenient: an id with no
+   * matching source record is a no-op.
+   */
+  readonly includeArtifactIds?: readonly string[];
   readonly linkedArtifacts?: readonly {
     readonly sessionId: string;
     readonly artifactIds: readonly string[];
@@ -279,7 +287,6 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
   private artifactRoot: string;
   private purgeIntentPath: string;
   private records: ArtifactRecord[] = [];
-  private sessionSnapshots = new Map<string, ArtifactSessionSnapshot>();
   private metadataReady = false;
   private recoveryRequired: boolean;
   private selfManagedRecoveryRequired: boolean;
@@ -391,6 +398,7 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
     }
     const turnIds = new Set(input.turnIds);
     const excludedArtifactIds = new Set(input.excludeArtifactIds ?? []);
+    const includedArtifactIds = new Set(input.includeArtifactIds ?? []);
     for (const turnId of turnIds) assertArtifactTurnKey(turnId);
     const linkedArtifacts = input.linkedArtifacts ?? [];
     const requestedLinkedArtifactIds = new Map<string, Set<string>>();
@@ -426,6 +434,18 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
           );
           if (!record) throw new Error(`Linked Artifact ${artifactId} could not be copied`);
           selected.push({ ...record });
+        }
+      }
+      const selectedIds = new Set(selected.map((record) => record.id));
+      for (const record of this.records) {
+        if (
+          record.sessionId === input.sourceSessionId &&
+          includedArtifactIds.has(record.id) &&
+          !excludedArtifactIds.has(record.id) &&
+          !selectedIds.has(record.id)
+        ) {
+          selected.push({ ...record });
+          selectedIds.add(record.id);
         }
       }
       return selected;
@@ -535,7 +555,7 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
           throw error;
         }
         await syncDirectory(targetDirectory);
-        await this.writeMetadataUnlocked(nextRecords);
+        await this.writeMetadataUnlocked({ upserts: [record] });
       } catch (error) {
         if (targetLinked) {
           try {
@@ -551,7 +571,7 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
         }
         throw error;
       }
-      this.replaceRecords(nextRecords);
+      this.records = nextRecords;
       return { ...record };
     } finally {
       if (!preserveStaging) {
@@ -617,8 +637,8 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
     const nextRecords = this.records.map((record) =>
       record.id === canonical.id ? revived : record,
     );
-    await this.writeMetadataUnlocked(nextRecords);
-    this.replaceRecords(nextRecords);
+    await this.writeMetadataUnlocked({ upserts: [revived] });
+    this.records = nextRecords;
     return { ...revived };
   }
 
@@ -668,7 +688,7 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
     const { offset, limit } = options;
     return this.enqueue(async () => {
       await this.load();
-      const snapshot = this.sessionSnapshots.get(sessionId) ?? EMPTY_SESSION_SNAPSHOT;
+      const snapshot = this.sessionSnapshot(sessionId);
       return {
         revision: snapshot.revision,
         records: snapshot.records.slice(offset, offset + limit).map((record) => ({ ...record })),
@@ -682,7 +702,7 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
     assertArtifactTurnKey(turnId);
     return this.enqueue(async () => {
       await this.load();
-      const snapshot = this.sessionSnapshots.get(sessionId) ?? EMPTY_SESSION_SNAPSHOT;
+      const snapshot = this.sessionSnapshot(sessionId);
       return snapshot.records
         .filter((record) => record.turnId === turnId && record.status !== 'deleted')
         .map((record) => ({ ...record }));
@@ -692,7 +712,7 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
   async getInSession(sessionId: string, artifactId: string): Promise<ArtifactSessionEntry> {
     return this.enqueue(async () => {
       await this.load();
-      const snapshot = this.sessionSnapshots.get(sessionId) ?? EMPTY_SESSION_SNAPSHOT;
+      const snapshot = this.sessionSnapshot(sessionId);
       const record = snapshot.records.find((candidate) => candidate.id === artifactId);
       return {
         revision: snapshot.revision,
@@ -821,14 +841,16 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
   async delete(artifactId: string): Promise<void> {
     await this.enqueueMutation(async () => {
       await this.prepareMutationUnlocked({ kind: 'delete' });
-      const nextRecords: ArtifactRecord[] = this.records.map((record) =>
-        record.id === artifactId && record.status !== 'deleted'
-          ? { ...record, status: 'deleted' }
-          : record,
+      const existing = this.records.find(
+        (record) => record.id === artifactId && record.status !== 'deleted',
       );
-      if (nextRecords.every((record, index) => record === this.records[index])) return;
-      await this.writeMetadataUnlocked(nextRecords);
-      this.replaceRecords(nextRecords);
+      if (!existing) return;
+      const tombstone: ArtifactRecord = { ...existing, status: 'deleted' };
+      const nextRecords: ArtifactRecord[] = this.records.map((record) =>
+        record.id === artifactId ? tombstone : record,
+      );
+      await this.writeMetadataUnlocked({ upserts: [tombstone] });
+      this.records = nextRecords;
     });
   }
 
@@ -838,7 +860,7 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
   ): Promise<ArtifactUserDeleteResult> {
     return this.enqueueMutation(async () => {
       await this.prepareMutationUnlocked({ kind: 'delete' });
-      const snapshot = this.sessionSnapshots.get(sessionId) ?? EMPTY_SESSION_SNAPSHOT;
+      const snapshot = this.sessionSnapshot(sessionId);
       const existing = snapshot.records.find((record) => record.id === artifactId);
       if (!existing) return { kind: 'not_found' };
       if (!canUserDeleteArtifact(existing)) return { kind: 'protected' };
@@ -849,8 +871,8 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
       const nextRecords = this.records.map((record) =>
         record.id === existing.id ? tombstone : record,
       );
-      await this.writeMetadataUnlocked(nextRecords);
-      this.replaceRecords(nextRecords);
+      await this.writeMetadataUnlocked({ upserts: [tombstone] });
+      this.records = nextRecords;
       return { kind: 'deleted', record: { ...tombstone } };
     });
   }
@@ -970,8 +992,8 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
       for (const directory of changedDirectories) await syncDirectory(directory);
     }
     const nextRecords = this.records.filter((record) => !ids.has(record.id));
-    await this.writeMetadataUnlocked(nextRecords);
-    this.replaceRecords(nextRecords);
+    await this.writeMetadataUnlocked({ deleteIds: [...ids] });
+    this.records = nextRecords;
     await this.removePurgeIntentUnlocked();
   }
 
@@ -991,7 +1013,7 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
     maxBytes: number,
   ): Promise<PreparedArtifactRead | ArtifactReadFailure> {
     await this.load();
-    const snapshot = this.sessionSnapshots.get(sessionId) ?? EMPTY_SESSION_SNAPSHOT;
+    const snapshot = this.sessionSnapshot(sessionId);
     const record = snapshot.records.find((candidate) => candidate.id === artifactId);
     if (!record) return { ok: false, reason: 'not_found' };
     return this.prepareRecordRead(record, maxBytes, false);
@@ -1014,13 +1036,13 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
   private async load(): Promise<void> {
     await this.metadataRepository.ready();
     this.metadataReady = true;
-    this.replaceRecords(this.metadataRepository.readAll());
+    this.records = this.metadataRepository.readAll();
   }
 
-  private async writeMetadataUnlocked(records: readonly ArtifactRecord[]): Promise<void> {
+  private async writeMetadataUnlocked(changes: ArtifactMetadataChanges): Promise<void> {
     await this.metadataRepository.ready();
     this.metadataReady = true;
-    this.metadataRepository.replaceAll(records);
+    this.metadataRepository.applyChanges(changes);
   }
 
   private async prepareMutationUnlocked(
@@ -1067,7 +1089,7 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
   private async reloadForMutationUnlocked(): Promise<void> {
     await this.metadataRepository.ready();
     this.metadataReady = true;
-    this.replaceRecords(this.metadataRepository.readAll());
+    this.records = this.metadataRepository.readAll();
   }
 
   private async hasCanonicalRecoveryResidueUnlocked(): Promise<boolean> {
@@ -1175,8 +1197,8 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
       status: 'live',
     };
     const nextRecords = [...this.records, record];
-    await this.writeMetadataUnlocked(nextRecords);
-    this.replaceRecords(nextRecords);
+    await this.writeMetadataUnlocked({ upserts: [record] });
+    this.records = nextRecords;
     this.recoverableOrphans.delete(filesystemPathKey(candidate.relativePath));
     return { ...record };
   }
@@ -1333,28 +1355,25 @@ class SqliteArtifactStore implements ArtifactAuthorityStore {
     this.workspaceRoot = canonicalRoot;
     this.artifactRoot = join(canonicalRoot, 'artifacts');
     this.purgeIntentPath = join(this.artifactRoot, ARTIFACT_PURGE_INTENT_FILE);
-    this.replaceRecords([]);
+    this.records = [];
     this.recoverableOrphans.clear();
     if (this.recoveryMode === 'self_managed') this.selfManagedRecoveryRequired = true;
   }
 
-  private replaceRecords(records: ArtifactRecord[]): void {
-    const bySession = new Map<string, ArtifactRecord[]>();
-    for (const record of records) {
-      const sessionRecords = bySession.get(record.sessionId);
-      if (sessionRecords) sessionRecords.push(record);
-      else bySession.set(record.sessionId, [record]);
-    }
-    const snapshots = new Map<string, ArtifactSessionSnapshot>();
-    for (const [sessionId, sessionRecords] of bySession) {
-      sessionRecords.sort(compareArtifactRecords);
-      snapshots.set(sessionId, {
-        records: sessionRecords,
-        revision: artifactListRevision(sessionRecords),
-      });
-    }
-    this.records = records;
-    this.sessionSnapshots = snapshots;
+  /**
+   * Orders one session's records and stamps the revision readers compare on.
+   *
+   * Sealed on the way out rather than kept in a map. A revision hashes every
+   * record in its session, and every reader reloads the whole store from the
+   * database before it reads one, so a kept snapshot never survived to be read
+   * -- sealing all of them on load only charged each reader for the sessions it
+   * did not ask about.
+   */
+  private sessionSnapshot(sessionId: string): ArtifactSessionSnapshot {
+    const records = this.records
+      .filter((record) => record.sessionId === sessionId)
+      .sort(compareArtifactRecords);
+    return { records, revision: artifactListRevision(records) };
   }
 
   private async publishPurgeIntentUnlocked(artifactIds: readonly string[]): Promise<void> {
@@ -1907,31 +1926,15 @@ function isAlreadyExists(error: unknown): boolean {
 }
 
 function sniffAllowedBinaryMime(bytes: Uint8Array): string | null {
-  if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png';
-  if (startsWith(bytes, [0xff, 0xd8, 0xff])) return 'image/jpeg';
-  if (asciiStartsWith(bytes, 'GIF87a') || asciiStartsWith(bytes, 'GIF89a')) return 'image/gif';
-  if (
-    asciiStartsWith(bytes, 'RIFF') &&
-    bytes.length >= 12 &&
-    String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP'
-  ) {
-    return 'image/webp';
-  }
-  if (asciiStartsWith(bytes, '%PDF-')) return 'application/pdf';
+  // Core owns the binary signatures, shared with the attachment and image-read
+  // paths so the three cannot drift. SVG needs a wider text scan than a fixed
+  // prefix, so it stays local to this reader.
+  const sniffed = sniffAttachmentMimeType(bytes);
+  if (sniffed) return sniffed;
   const leading = new TextDecoder('utf-8', { fatal: false })
     .decode(bytes.slice(0, Math.min(bytes.length, 512)))
     .trimStart();
   if (/^<svg[\s>]/i.test(leading) || /^<\?xml[\s\S]*<svg[\s>]/i.test(leading))
     return 'image/svg+xml';
   return null;
-}
-
-function startsWith(bytes: Uint8Array, prefix: number[]): boolean {
-  if (bytes.length < prefix.length) return false;
-  return prefix.every((value, index) => bytes[index] === value);
-}
-
-function asciiStartsWith(bytes: Uint8Array, prefix: string): boolean {
-  if (bytes.length < prefix.length) return false;
-  return prefix.split('').every((char, index) => bytes[index] === char.charCodeAt(0));
 }

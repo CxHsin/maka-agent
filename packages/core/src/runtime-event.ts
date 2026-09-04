@@ -39,8 +39,29 @@ import {
   type MessageContent,
   type PermissionClosureReason,
 } from './events.js';
-import { INTERACTION_ID_MAX_BYTES, INTERACTION_TOOL_NAME_MAX_BYTES } from './interaction.js';
-import type { PermissionRequestPayload, PermissionResponse } from './permission.js';
+import {
+  INTERACTION_ID_MAX_BYTES,
+  INTERACTION_TOOL_NAME_MAX_BYTES,
+  decodeInteractionRequest,
+  type InteractionFormInput,
+} from './interaction.js';
+import {
+  isPermissionMode,
+  type PermissionMode,
+  type PermissionRequestPayload,
+  type PermissionResponse,
+} from './permission.js';
+import { isCollaborationMode, type CollaborationMode } from './collaboration.js';
+import {
+  isAgentSwarmAuthorizationSource,
+  isEffectiveOrchestrationSource,
+  isOrchestrationMode,
+  type AgentSwarmAuthorizationSource,
+  type EffectiveOrchestrationSource,
+  type OrchestrationMode,
+} from './orchestration.js';
+import { isToolMode, type ToolMode } from './tool-mode.js';
+import type { PersistedBackendKind } from './session.js';
 import { decodeTurnOrigin, type TurnOrigin } from './turn-origin.js';
 import type { UserQuestionRequest } from './user-question.js';
 import {
@@ -63,6 +84,10 @@ import {
   isRuntimeEventWorkspaceFactEnvelope,
   type RuntimeEventWorkspaceFactEnvelope,
 } from './workspace-version-authority.js';
+import {
+  decodeDurableToolResultProjection,
+  type DurableToolResultProjection,
+} from './durable-tool-result-projection.js';
 
 // ============================================================================
 // Role / Author / Status
@@ -188,6 +213,8 @@ export interface RuntimeEventFunctionResponseContent {
   providerExecuted?: boolean;
   /** Raw provider result retained for provider-native replay; never rendered directly. */
   providerOutput?: unknown;
+  /** Frozen provider-neutral content consumed by every model-history projection. */
+  modelProjection?: DurableToolResultProjection;
 }
 
 export interface RuntimeEventErrorContent {
@@ -201,16 +228,116 @@ export interface RuntimeEventErrorContent {
 }
 
 /**
+ * Where an invocation's provider route came from. `unknown` is the fail-closed
+ * marker for data that predates the opening fact: the transcript and tool
+ * evidence stay readable, but nothing may treat the route as authenticated.
+ */
+export type RuntimeInvocationRoute =
+  | {
+      provenance: 'runtime';
+      backendKind: PersistedBackendKind;
+      llmConnectionId: string;
+      llmConnectionSlug: string;
+      modelId: string;
+      /** Frozen provider endpoint and credential ownership; absent on non-provider runs. */
+      providerStateIdentity?: `sha256:${string}`;
+    }
+  | {
+      provenance: 'unknown';
+      backendKind: PersistedBackendKind;
+      llmConnectionSlug: string;
+      modelId: string;
+    };
+
+/** Execution configuration frozen before an invocation's first dispatch. */
+export interface RuntimeInvocationConfiguration {
+  cwd: string;
+  permissionMode: PermissionMode;
+  collaborationMode: CollaborationMode;
+  orchestrationMode: OrchestrationMode;
+  orchestrationSource: EffectiveOrchestrationSource;
+  toolMode: ToolMode;
+  agentSwarmAuthorization?: AgentSwarmAuthorizationSource;
+  /** Authoritative host identity for the workspace observed at open. */
+  workspaceIdentity?: string;
+}
+
+/**
+ * The authority that caused this invocation to exist. Closed and discriminated,
+ * so a reader names the root it wants instead of asserting that every other
+ * optional root field is absent.
+ */
+export type RuntimeInvocationRootAuthority =
+  | { kind: 'user' }
+  | { kind: 'context_compact' }
+  | { kind: 'scheduled_task'; scheduledTaskId: string }
+  | { kind: 'goal'; goalId: string }
+  | { kind: 'agent_graph_supervisor_wake'; wakeId: string; attemptId: string }
+  | { kind: 'legacy_automation'; legacyAutomationId: string };
+
+/** Turn/session lineage that is immutable once the invocation opens. */
+export interface RuntimeInvocationLineage {
+  parentRunId?: string;
+  /** The run this one continues, and the run it re-attempts. Never both. */
+  resumedFromRunId?: string;
+  retriedFromRunId?: string;
+  parentTurnId?: string;
+  parentSessionId?: string;
+  retriedFromTurnId?: string;
+  regeneratedFromTurnId?: string;
+  branchOfTurnId?: string;
+  agentId?: string;
+  agentName?: string;
+}
+
+/**
+ * How this invocation was opened. `continuation` carries the same source
+ * identity the continuation-start action authenticates, so a migrated opening
+ * fact keeps the lineage edge even where no start event exists.
+ */
+export type RuntimeInvocationOpenSource =
+  | { kind: 'fresh' }
+  | {
+      kind: 'continuation';
+      sourceInvocationId: string;
+      sourceRunId: string;
+      sourceTurnId: string;
+      sourceRuntimeEventHighWater: number;
+      claimId?: string;
+      boundaryDigest?: `sha256:${string}`;
+    };
+
+/**
+ * The one immutable opening fact of a run-kind invocation, committed before any
+ * provider or tool dispatch. Route provenance lives here once per invocation
+ * and is joined by `invocationId`; it is never copied onto other events.
+ *
+ * Reserved control-plane streams (history compaction checkpoints, workspace
+ * version authority) have no run and therefore no opening fact.
+ */
+export interface RuntimeEventInvocationOpenedContent {
+  kind: 'invocation_opened';
+  protocol: 'invocation_opened_v1';
+  route: RuntimeInvocationRoute;
+  configuration: RuntimeInvocationConfiguration;
+  root: RuntimeInvocationRootAuthority;
+  source: RuntimeInvocationOpenSource;
+  /** Omitted entirely when the invocation has no lineage edges. */
+  lineage?: RuntimeInvocationLineage;
+}
+
+/**
  * Content union for user/model text, model thinking, function call,
- * function response, and error payloads. Discriminated by `kind` to
- * match the existing ToolResultContent convention.
+ * function response, error payloads, and the invocation opening fact.
+ * Discriminated by `kind` to match the existing ToolResultContent convention.
  */
 export type RuntimeEventContent =
   | RuntimeEventTextContent
   | RuntimeEventThinkingContent
   | RuntimeEventFunctionCallContent
   | RuntimeEventFunctionResponseContent
-  | RuntimeEventErrorContent;
+  | RuntimeEventErrorContent
+  | RuntimeEventInvocationOpenedContent;
 
 export const RUNTIME_EVENT_CONTENT_KINDS = [
   'text',
@@ -218,6 +345,7 @@ export const RUNTIME_EVENT_CONTENT_KINDS = [
   'function_call',
   'function_response',
   'error',
+  'invocation_opened',
 ] as const;
 export type RuntimeEventContentKind = (typeof RUNTIME_EVENT_CONTENT_KINDS)[number];
 
@@ -249,6 +377,8 @@ export type ToolBoundaryProtocol = typeof TOOL_BOUNDARY_PROTOCOL_V1;
  */
 export interface RuntimeEventToolDispatch {
   protocol: ToolBoundaryProtocol;
+  /** New writes require this exact durable Tool Result projection protocol. */
+  resultProjectionVersion?: 1;
   operationId: string;
   providerToolCallId: string;
   toolName: string;
@@ -328,7 +458,7 @@ export interface RuntimeEventContinuationStartV2 {
     prefixDigest: `sha256:${string}`;
   };
   replayManifestDigest: `sha256:${string}`;
-  providerProjectionVersion: 1;
+  providerProjectionVersion: 1 | 2;
   providerReplayDigest: `sha256:${string}`;
 }
 
@@ -338,6 +468,13 @@ interface RuntimeEventAnswerAcceptedIdentity {
 
 export interface RuntimeEventUserQuestionAnswerAccepted
   extends RuntimeEventAnswerAcceptedIdentity {}
+
+export interface RuntimeEventFormRequest extends InteractionFormInput {
+  requestId: string;
+  toolUseId: string;
+}
+
+export interface RuntimeEventFormAnswerAccepted extends RuntimeEventAnswerAcceptedIdentity {}
 
 export interface RuntimeEventPermissionAnswerAccepted extends RuntimeEventAnswerAcceptedIdentity {}
 
@@ -368,6 +505,10 @@ export interface RuntimeEventActions {
   userQuestionRequest?: UserQuestionRequest;
   /** Audit fact only; the canonical answer remains in InteractionStore. */
   userQuestionAnswerAccepted?: RuntimeEventUserQuestionAnswerAccepted;
+  /** A provider-neutral structured form raised by a tool call. */
+  formRequest?: RuntimeEventFormRequest;
+  /** Audit fact only; the canonical form result remains in InteractionStore. */
+  formAnswerAccepted?: RuntimeEventFormAnswerAccepted;
   /** Hand off the invocation to another agent (multi-agent transfer). */
   transferToAgent?: string;
   /** Marks the event that closes the invocation. */
@@ -461,7 +602,7 @@ export interface RuntimeEvent {
   id: string;
   /** Durable invocation spine id; groups every run/turn of one request. */
   invocationId: string;
-  /** Durable operational run identity (maps to AgentRunHeader.runId). */
+  /** Durable operational run identity; names one execution of the invocation. */
   runId: string;
   sessionId: string;
   /** Groups all events from one agent turn (maps to StoredMessage.turnId). */
@@ -532,6 +673,7 @@ const TEXT_CONTENT_SHAPE = defineObjectShape<RuntimeEventTextContent>()(
     'displayText',
     'origin',
     'attachments',
+    'directoryReferences',
     'quotes',
     'inlineReferences',
     'steering',
@@ -548,12 +690,82 @@ const FUNCTION_CALL_CONTENT_SHAPE = defineObjectShape<RuntimeEventFunctionCallCo
 );
 const FUNCTION_RESPONSE_CONTENT_SHAPE = defineObjectShape<RuntimeEventFunctionResponseContent>()(
   ['kind', 'id', 'name', 'result'],
-  ['isError', 'providerExecuted', 'providerOutput'],
+  ['isError', 'providerExecuted', 'providerOutput', 'modelProjection'],
 );
 const ERROR_CONTENT_SHAPE = defineObjectShape<RuntimeEventErrorContent>()(
   ['kind', 'message'],
   ['code', 'reason', 'details'],
 );
+const INVOCATION_OPENED_CONTENT_SHAPE = defineObjectShape<RuntimeEventInvocationOpenedContent>()(
+  ['kind', 'protocol', 'route', 'configuration', 'root', 'source'],
+  ['lineage'],
+);
+const INVOCATION_ROUTE_RUNTIME_SHAPE = defineObjectShape<
+  Extract<RuntimeInvocationRoute, { provenance: 'runtime' }>
+>()(
+  ['provenance', 'backendKind', 'llmConnectionId', 'llmConnectionSlug', 'modelId'],
+  ['providerStateIdentity'],
+);
+const INVOCATION_ROUTE_UNKNOWN_SHAPE = defineObjectShape<
+  Extract<RuntimeInvocationRoute, { provenance: 'unknown' }>
+>()(['provenance', 'backendKind', 'llmConnectionSlug', 'modelId'], []);
+const INVOCATION_CONFIGURATION_SHAPE = defineObjectShape<RuntimeInvocationConfiguration>()(
+  [
+    'cwd',
+    'permissionMode',
+    'collaborationMode',
+    'orchestrationMode',
+    'orchestrationSource',
+    'toolMode',
+  ],
+  ['agentSwarmAuthorization', 'workspaceIdentity'],
+);
+const INVOCATION_LINEAGE_SHAPE = defineObjectShape<RuntimeInvocationLineage>()(
+  [],
+  [
+    'parentRunId',
+    'resumedFromRunId',
+    'retriedFromRunId',
+    'parentTurnId',
+    'parentSessionId',
+    'retriedFromTurnId',
+    'regeneratedFromTurnId',
+    'branchOfTurnId',
+    'agentId',
+    'agentName',
+  ],
+);
+const INVOCATION_CONTINUATION_SOURCE_SHAPE = defineObjectShape<
+  Extract<RuntimeInvocationOpenSource, { kind: 'continuation' }>
+>()(
+  ['kind', 'sourceInvocationId', 'sourceRunId', 'sourceTurnId', 'sourceRuntimeEventHighWater'],
+  ['claimId', 'boundaryDigest'],
+);
+const INVOCATION_FRESH_SOURCE_SHAPE = defineObjectShape<
+  Extract<RuntimeInvocationOpenSource, { kind: 'fresh' }>
+>()(['kind'], []);
+const INVOCATION_ROOT_SHAPES = {
+  user: defineObjectShape<Extract<RuntimeInvocationRootAuthority, { kind: 'user' }>>()(
+    ['kind'],
+    [],
+  ),
+  context_compact: defineObjectShape<
+    Extract<RuntimeInvocationRootAuthority, { kind: 'context_compact' }>
+  >()(['kind'], []),
+  scheduled_task: defineObjectShape<
+    Extract<RuntimeInvocationRootAuthority, { kind: 'scheduled_task' }>
+  >()(['kind', 'scheduledTaskId'], []),
+  goal: defineObjectShape<Extract<RuntimeInvocationRootAuthority, { kind: 'goal' }>>()(
+    ['kind', 'goalId'],
+    [],
+  ),
+  agent_graph_supervisor_wake: defineObjectShape<
+    Extract<RuntimeInvocationRootAuthority, { kind: 'agent_graph_supervisor_wake' }>
+  >()(['kind', 'wakeId', 'attemptId'], []),
+  legacy_automation: defineObjectShape<
+    Extract<RuntimeInvocationRootAuthority, { kind: 'legacy_automation' }>
+  >()(['kind', 'legacyAutomationId'], []),
+} as const;
 const RUNTIME_ACTIONS_SHAPE = defineObjectShape<RuntimeEventActions>()(
   [],
   [
@@ -565,6 +777,8 @@ const RUNTIME_ACTIONS_SHAPE = defineObjectShape<RuntimeEventActions>()(
     'permissionClosureAccepted',
     'userQuestionRequest',
     'userQuestionAnswerAccepted',
+    'formRequest',
+    'formAnswerAccepted',
     'transferToAgent',
     'endInvocation',
     'tokenUsage',
@@ -601,7 +815,7 @@ const RUNTIME_TOOL_DISPATCH_SHAPE = defineObjectShape<RuntimeEventToolDispatch>(
     'canonicalArgsHash',
     'recoveryMode',
   ],
-  ['managedMutation'],
+  ['managedMutation', 'resultProjectionVersion'],
 );
 const RUNTIME_MANAGED_WORKSPACE_MUTATION_SHAPE =
   defineObjectShape<RuntimeEventManagedWorkspaceMutationV2>()(
@@ -666,6 +880,7 @@ const RUNTIME_TOKEN_USAGE_SHAPE = defineObjectShape<RuntimeEventTokenUsage>()(
     'promptSegments',
     'contextBudget',
     'providerRequestTraceId',
+    'lastRequestAnchor',
   ],
 );
 const RUNTIME_REFS_SHAPE = defineObjectShape<RuntimeEventRefs>()(
@@ -712,6 +927,7 @@ export function decodeRuntimeEvent(value: unknown): RuntimeEvent {
     !isOptionalMember(value.modelVisibility, RUNTIME_EVENT_MODEL_VISIBILITIES) ||
     (value.status !== undefined && !isRuntimeEventStatus(value.status)) ||
     (value.content !== undefined && !isRuntimeEventContent(value.content)) ||
+    !hasOwnedModelProjection(value.content, value.sessionId) ||
     (value.actions !== undefined && !isRuntimeEventActions(value.actions)) ||
     (value.refs !== undefined && !isRuntimeEventRefs(value.refs))
   ) {
@@ -733,6 +949,20 @@ export function decodeRuntimeEvent(value: unknown): RuntimeEvent {
   return value as unknown as RuntimeEvent;
 }
 
+function hasOwnedModelProjection(content: unknown, sessionId: string): boolean {
+  if (!isRecord(content) || content.kind !== 'function_response') return true;
+  const projection = content.modelProjection;
+  if (!isRecord(projection) || projection.kind !== 'content' || !Array.isArray(projection.parts)) {
+    return true;
+  }
+  return projection.parts.every(
+    (part) =>
+      !isRecord(part) ||
+      part.kind !== 'artifact' ||
+      (isRecord(part.ref) && part.ref.sessionId === sessionId),
+  );
+}
+
 function isRuntimeEventContent(value: unknown): value is RuntimeEventContent {
   if (!isRecord(value)) return false;
   switch (value.kind) {
@@ -749,6 +979,9 @@ function isRuntimeEventContent(value: unknown): value is RuntimeEventContent {
         text: value.text,
         ...(value.displayText !== undefined ? { displayText: value.displayText } : {}),
         ...(value.attachments !== undefined ? { attachments: value.attachments } : {}),
+        ...(value.directoryReferences !== undefined
+          ? { directoryReferences: value.directoryReferences }
+          : {}),
         ...(value.quotes !== undefined ? { quotes: value.quotes } : {}),
         ...(value.inlineReferences !== undefined
           ? { inlineReferences: value.inlineReferences }
@@ -777,7 +1010,9 @@ function isRuntimeEventContent(value: unknown): value is RuntimeEventContent {
         typeof value.name === 'string' &&
         Object.hasOwn(value, 'result') &&
         (value.isError === undefined || typeof value.isError === 'boolean') &&
-        (value.providerExecuted === undefined || typeof value.providerExecuted === 'boolean')
+        (value.providerExecuted === undefined || typeof value.providerExecuted === 'boolean') &&
+        (value.modelProjection === undefined ||
+          decodesDurableToolResultProjection(value.modelProjection))
       );
     case 'error':
       return (
@@ -787,8 +1022,156 @@ function isRuntimeEventContent(value: unknown): value is RuntimeEventContent {
         typeof value.message === 'string' &&
         (value.details === undefined || isStringArray(value.details) || isRecord(value.details))
       );
+    case 'invocation_opened':
+      return isRuntimeInvocationOpened(value);
     default:
       return false;
+  }
+}
+
+/**
+ * True when the event is the immutable opening fact of its invocation.
+ * Narrowing here keeps every reader off a hand-rolled `content.kind` test.
+ */
+export function runtimeEventInvocationOpening(
+  event: RuntimeEvent,
+): RuntimeEventInvocationOpenedContent | undefined {
+  return event.content?.kind === 'invocation_opened' ? event.content : undefined;
+}
+
+/** Strict decode for one persisted opening fact; throws on any drift. */
+export function decodeRuntimeInvocationOpened(value: unknown): RuntimeEventInvocationOpenedContent {
+  if (!isRuntimeInvocationOpened(value)) {
+    throw new Error('Invalid RuntimeEvent invocation_opened schema');
+  }
+  return value;
+}
+
+function isRuntimeInvocationOpened(value: unknown): value is RuntimeEventInvocationOpenedContent {
+  return (
+    isRecord(value) &&
+    value.kind === 'invocation_opened' &&
+    hasExactShape(value, INVOCATION_OPENED_CONTENT_SHAPE) &&
+    value.protocol === 'invocation_opened_v1' &&
+    isRuntimeInvocationRoute(value.route) &&
+    isRuntimeInvocationConfiguration(value.configuration) &&
+    isRuntimeInvocationRootAuthority(value.root) &&
+    isRuntimeInvocationOpenSource(value.source) &&
+    (value.lineage === undefined || isRuntimeInvocationLineage(value.lineage))
+  );
+}
+
+function isRuntimeInvocationRoute(value: unknown): value is RuntimeInvocationRoute {
+  if (!isRecord(value)) return false;
+  if (
+    !isPersistedBackendKind(value.backendKind) ||
+    !isNonEmptyString(value.llmConnectionSlug) ||
+    !isNonEmptyString(value.modelId)
+  ) {
+    return false;
+  }
+  if (value.provenance === 'runtime') {
+    return (
+      hasExactShape(value, INVOCATION_ROUTE_RUNTIME_SHAPE) &&
+      isNonEmptyString(value.llmConnectionId) &&
+      (value.providerStateIdentity === undefined || isSha256Digest(value.providerStateIdentity))
+    );
+  }
+  return value.provenance === 'unknown' && hasExactShape(value, INVOCATION_ROUTE_UNKNOWN_SHAPE);
+}
+
+function isPersistedBackendKind(value: unknown): value is PersistedBackendKind {
+  return value === 'ai-sdk' || value === 'fake';
+}
+
+function isRuntimeInvocationConfiguration(value: unknown): value is RuntimeInvocationConfiguration {
+  return (
+    isRecord(value) &&
+    hasExactShape(value, INVOCATION_CONFIGURATION_SHAPE) &&
+    typeof value.cwd === 'string' &&
+    isPermissionMode(value.permissionMode) &&
+    isCollaborationMode(value.collaborationMode) &&
+    isOrchestrationMode(value.orchestrationMode) &&
+    isEffectiveOrchestrationSource(value.orchestrationSource) &&
+    isToolMode(value.toolMode) &&
+    (value.agentSwarmAuthorization === undefined ||
+      isAgentSwarmAuthorizationSource(value.agentSwarmAuthorization)) &&
+    (value.workspaceIdentity === undefined || isNonEmptyString(value.workspaceIdentity))
+  );
+}
+
+function isRuntimeInvocationRootAuthority(value: unknown): value is RuntimeInvocationRootAuthority {
+  if (!isRecord(value)) return false;
+  switch (value.kind) {
+    case 'user':
+      return hasExactShape(value, INVOCATION_ROOT_SHAPES.user);
+    case 'context_compact':
+      return hasExactShape(value, INVOCATION_ROOT_SHAPES.context_compact);
+    case 'scheduled_task':
+      return (
+        hasExactShape(value, INVOCATION_ROOT_SHAPES.scheduled_task) &&
+        isNonEmptyString(value.scheduledTaskId)
+      );
+    case 'goal':
+      return hasExactShape(value, INVOCATION_ROOT_SHAPES.goal) && isNonEmptyString(value.goalId);
+    case 'agent_graph_supervisor_wake':
+      return (
+        hasExactShape(value, INVOCATION_ROOT_SHAPES.agent_graph_supervisor_wake) &&
+        isNonEmptyString(value.wakeId) &&
+        isNonEmptyString(value.attemptId)
+      );
+    case 'legacy_automation':
+      return (
+        hasExactShape(value, INVOCATION_ROOT_SHAPES.legacy_automation) &&
+        isNonEmptyString(value.legacyAutomationId)
+      );
+    default:
+      return false;
+  }
+}
+
+function isRuntimeInvocationOpenSource(value: unknown): value is RuntimeInvocationOpenSource {
+  if (!isRecord(value)) return false;
+  if (value.kind === 'fresh') return hasExactShape(value, INVOCATION_FRESH_SOURCE_SHAPE);
+  return (
+    value.kind === 'continuation' &&
+    hasExactShape(value, INVOCATION_CONTINUATION_SOURCE_SHAPE) &&
+    isNonEmptyString(value.sourceInvocationId) &&
+    isNonEmptyString(value.sourceRunId) &&
+    isNonEmptyString(value.sourceTurnId) &&
+    Number.isSafeInteger(value.sourceRuntimeEventHighWater) &&
+    (value.sourceRuntimeEventHighWater as number) >= 0 &&
+    (value.claimId === undefined || isNonEmptyString(value.claimId)) &&
+    (value.boundaryDigest === undefined || isSha256Digest(value.boundaryDigest))
+  );
+}
+
+function isRuntimeInvocationLineage(value: unknown): value is RuntimeInvocationLineage {
+  return (
+    isRecord(value) &&
+    hasExactShape(value, INVOCATION_LINEAGE_SHAPE) &&
+    Object.keys(value).length > 0 &&
+    [
+      value.parentRunId,
+      value.resumedFromRunId,
+      value.retriedFromRunId,
+      value.parentTurnId,
+      value.parentSessionId,
+      value.retriedFromTurnId,
+      value.regeneratedFromTurnId,
+      value.branchOfTurnId,
+      value.agentId,
+      value.agentName,
+    ].every(isOptionalString)
+  );
+}
+
+function decodesDurableToolResultProjection(value: unknown): boolean {
+  try {
+    decodeDurableToolResultProjection(value);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -822,6 +1205,9 @@ function isRuntimeEventActions(value: unknown): value is RuntimeEventActions {
     (value.userQuestionRequest === undefined || isUserQuestionRequest(value.userQuestionRequest)) &&
     (value.userQuestionAnswerAccepted === undefined ||
       isRuntimeEventAnswerAcceptedIdentity(value.userQuestionAnswerAccepted)) &&
+    (value.formRequest === undefined || isRuntimeEventFormRequest(value.formRequest)) &&
+    (value.formAnswerAccepted === undefined ||
+      isRuntimeEventAnswerAcceptedIdentity(value.formAnswerAccepted)) &&
     isOptionalString(value.transferToAgent) &&
     (value.endInvocation === undefined || typeof value.endInvocation === 'boolean') &&
     (value.tokenUsage === undefined || isRuntimeTokenUsage(value.tokenUsage)) &&
@@ -835,6 +1221,24 @@ function isRuntimeEventActions(value: unknown): value is RuntimeEventActions {
     (value.managedMutationTerminal === undefined ||
       isRuntimeManagedMutationTerminal(value.managedMutationTerminal))
   );
+}
+
+function isRuntimeEventFormRequest(value: unknown): value is RuntimeEventFormRequest {
+  if (!isRecord(value)) return false;
+  const { requestId, ...request } = value;
+  if (
+    typeof requestId !== 'string' ||
+    requestId.length === 0 ||
+    UTF8.encode(requestId).byteLength > INTERACTION_ID_MAX_BYTES
+  ) {
+    return false;
+  }
+  try {
+    decodeInteractionRequest({ kind: 'form', ...request });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isRuntimeManagedMutationTerminal(
@@ -896,6 +1300,7 @@ function isRuntimeToolDispatch(value: unknown): value is RuntimeEventToolDispatc
     isRecord(value) &&
     hasExactShape(value, RUNTIME_TOOL_DISPATCH_SHAPE) &&
     value.protocol === TOOL_BOUNDARY_PROTOCOL_V1 &&
+    (value.resultProjectionVersion === undefined || value.resultProjectionVersion === 1) &&
     typeof value.operationId === 'string' &&
     typeof value.providerToolCallId === 'string' &&
     typeof value.toolName === 'string' &&
@@ -995,7 +1400,7 @@ function isRuntimeContinuationStart(value: unknown): value is RuntimeEventContin
     (value.immediateSource.highWater as number) > 0 &&
     isSha256Digest(value.immediateSource.prefixDigest) &&
     isSha256Digest(value.replayManifestDigest) &&
-    value.providerProjectionVersion === 1 &&
+    (value.providerProjectionVersion === 1 || value.providerProjectionVersion === 2) &&
     isSha256Digest(value.providerReplayDigest)
   );
 }
@@ -1080,6 +1485,7 @@ export function runtimeEventHasModelVisibleContent(event: RuntimeEvent): boolean
     case 'function_response':
       return true;
     case 'error':
+    case 'invocation_opened':
       return false;
   }
 }

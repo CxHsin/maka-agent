@@ -60,7 +60,6 @@ function architectureConfig({
   legacyFiles = {},
   legacyGrowthDirectories = [],
   legacyPlatformImports = [],
-  hookTransitions = [],
   rootDebt = {},
   rootDebtClosure = {},
   legacyRendererFiles = Object.keys(rootDebt),
@@ -72,7 +71,6 @@ function architectureConfig({
     legacyGrowthDirectories: [...legacyGrowthDirectories].sort(),
     legacyFeatureImports: [...legacyFeatureImports].sort(),
     legacyPlatformImports: [...legacyPlatformImports].sort(),
-    hookTransitions: [...hookTransitions].sort((left, right) => left.id.localeCompare(right.id)),
     legacyAppShell: {
       files: legacyFiles,
       closure: legacyAppShellClosureDebt ?? {},
@@ -234,12 +232,14 @@ function rendererEntryContractFiles(overrides = {}) {
       import { rendererEntryContractPlugin } from './scripts/vite-renderer-entry-contract.js';
       import { bundledNpmPackagesPlugin } from './vite-bundled-packages.js';
       import { dependencyPatchesCachePlugin } from './vite-dependency-patches.js';
+      import { workspacePackagesPlugin } from './vite-workspace-packages.js';
       const REPO_ROOT = '/fixture';
       export default defineConfig({
         root: 'src/renderer',
         plugins: [
           react(),
           dependencyPatchesCachePlugin(REPO_ROOT),
+          workspacePackagesPlugin(REPO_ROOT),
           bundledNpmPackagesPlugin(),
           rendererEntryContractPlugin(resolve(import.meta.dirname, 'src/renderer')),
         ],
@@ -482,6 +482,25 @@ describe('renderer architecture checker fixtures', () => {
     assert.equal(analysis.environmentCapabilities.fetch, 1);
     assert.equal(analysis.environmentCapabilities['history.pushState'], 1);
     assert.equal(analysis.environmentCapabilities.setTimeout, 1);
+  });
+
+  it('counts environment globals only in value-reference positions', () => {
+    const analysis = analyzeRendererSource(
+      `
+        interface Rows { history: string; report(location: string): void; }
+        export const rows = { history: 'Input history' };
+        export function digest(input) { return input.location; }
+        export type Snapshot = typeof history;
+        history.replaceState(null, '');
+        location.assign('/next');
+      `,
+      'src/renderer/shell/environment-reference-positions.ts',
+    );
+
+    assert.deepEqual(analysis.environmentCapabilities, {
+      'history.replaceState': 1,
+      'location.assign': 1,
+    });
   });
 
   it('rejects computed and optional access to the Desktop bridge in strict zones', async () => {
@@ -1056,104 +1075,52 @@ describe('renderer architecture checker fixtures', () => {
     );
   });
 
-  it('allows a one-time Hook replacement paid by removed Hook debt', async () => {
+  it('rejects a feature controller Hook returning to AppShell after provider migration', async () => {
+    const providerOwnedAppShell = `
+      import { GoalProvider } from './features/goals/index.js';
+      export const AppShell = GoalProvider;
+    `;
     await withDesktopFixture(
-      transitiveAppShellFiles(`
-        import { useState } from 'react';
-        export function legacySessionHelper() {
-          return useState('session');
-        }
-      `),
-      (desktopRoot) => {
-        const currentConfig = generateArchitectureConfig(
-          desktopRoot,
-          transitiveAppShellSeedConfig(),
-        );
-        currentConfig.hookTransitions = [
-          {
-            id: 'replace-session-reducer-with-state-read',
-            section: 'legacyAppShellClosure',
-            path: TRANSITIVE_LEGACY_HELPER_PATH,
-            from: 'useReducer',
-            to: 'useState',
-            count: 1,
-          },
-        ];
-        const baseConfig = structuredClone(currentConfig);
-        baseConfig.hookTransitions = [];
-        baseConfig.legacyAppShell.closure[TRANSITIVE_LEGACY_HELPER_PATH].hookCalls = {
-          useReducer: 1,
-        };
-
-        assert.deepEqual(violationsFor(desktopRoot, currentConfig, baseConfig), []);
+      {
+        [TRANSITIVE_APP_SHELL_PATH]: providerOwnedAppShell,
+        'src/renderer/features/goals/index.ts': `
+          export const GoalProvider = true;
+          export function useGoalController() { return true; }
+        `,
       },
-    );
-  });
+      async (desktopRoot) => {
+        const seedConfig = transitiveAppShellSeedConfig();
+        const providerOwnedConfig = generateArchitectureConfig(desktopRoot, seedConfig);
 
-  it('rejects unconsumed, underfunded, and reused Hook transitions', async () => {
-    await withDesktopFixture(
-      transitiveAppShellFiles(`
-        import { useState } from 'react';
-        export function legacySessionHelper() {
-          return useState('session');
-        }
-      `),
-      (desktopRoot) => {
-        const currentConfig = generateArchitectureConfig(
+        await writeFile(
+          join(desktopRoot, TRANSITIVE_APP_SHELL_PATH),
+          `
+            import { GoalProvider, useGoalController } from './features/goals/index.js';
+            export const AppShell = [GoalProvider, useGoalController()];
+          `,
+          'utf8',
+        );
+        const regressedConfig = generateArchitectureConfig(
           desktopRoot,
-          transitiveAppShellSeedConfig(),
+          providerOwnedConfig,
         );
-        const transition = {
-          id: 'replace-session-reducer-with-state-read',
-          section: 'legacyAppShellClosure',
-          path: TRANSITIVE_LEGACY_HELPER_PATH,
-          from: 'useReducer',
-          to: 'useState',
-          count: 2,
-        };
-        currentConfig.hookTransitions = [transition];
-        const underfundedBase = structuredClone(currentConfig);
-        underfundedBase.hookTransitions = [];
-        underfundedBase.legacyAppShell.closure[TRANSITIVE_LEGACY_HELPER_PATH].hookCalls = {
-          useReducer: 1,
-        };
-        const underfunded = violationsFor(desktopRoot, currentConfig, underfundedBase);
-        assertHasViolation(
-          underfunded,
-          /replace-session-reducer-with-state-read: hook transition must be paid/u,
-        );
-        assertHasViolation(
-          underfunded,
-          /replace-session-reducer-with-state-read: new hook transition was not consumed/u,
+        const violations = violationsFor(
+          desktopRoot,
+          regressedConfig,
+          providerOwnedConfig,
         );
 
-        const reusedBase = structuredClone(currentConfig);
-        reusedBase.legacyAppShell.closure[TRANSITIVE_LEGACY_HELPER_PATH].hookCalls = {
-          useReducer: 2,
-        };
-        const reused = violationsFor(desktopRoot, currentConfig, reusedBase);
         assertHasViolation(
-          reused,
-          /legacy-session-helper\.ts: new or increased hookCalls debt useState/u,
+          violations,
+          /^src\/renderer\/app-shell\.ts: hookCalls debt increased from 0 to 1$/u,
         );
-
-        const prototypeKeyConfig = structuredClone(currentConfig);
-        prototypeKeyConfig.hookTransitions = [
-          { ...transition, count: 1, from: 'toString' },
-        ];
-        const prototypeKeyBase = structuredClone(prototypeKeyConfig);
-        prototypeKeyBase.hookTransitions = [];
-        prototypeKeyBase.legacyAppShell.closure[TRANSITIVE_LEGACY_HELPER_PATH].hookCalls = {
-          useReducer: 1,
-        };
         assertHasViolation(
-          violationsFor(desktopRoot, prototypeKeyConfig, prototypeKeyBase),
-          /hook transition from must be a tracked Hook name/u,
+          violations,
+          /^src\/renderer\/app-shell\.ts: new or increased hookCalls debt useGoalController$/u,
         );
       },
     );
   });
-
   it('rejects bridge and environment capability growth inside a transitive legacy AppShell helper', async () => {
     await withDesktopFixture(
       transitiveAppShellFiles(`
@@ -2251,9 +2218,9 @@ describe('renderer architecture checker fixtures', () => {
     const appShellPath = 'src/renderer/app-shell.tsx';
     const appShellSource = `
       import { AlphaHost } from './features/alpha/index.js';
-      import type { SessionScope } from './application/contracts/session-scope.js';
-      export function AppShell(props: { readonly scope: SessionScope }) {
-        return <AlphaHost scope={props.scope} />;
+      import { defaultSessionScope } from './application/contracts/session-scope.js';
+      export function AppShell() {
+        return <AlphaHost scope={defaultSessionScope} />;
       }
     `;
     const currentDebt = debtForSource(appShellSource, appShellPath);
@@ -2289,7 +2256,7 @@ describe('renderer architecture checker fixtures', () => {
           export function AlphaHost(_props: unknown) { return null; }
         `,
         'src/renderer/application/contracts/session-scope.ts': `
-          export interface SessionScope { readonly sessionId?: string }
+          export const defaultSessionScope = { sessionId: undefined };
         `,
       },
       (desktopRoot) => {
@@ -2357,5 +2324,417 @@ describe('renderer architecture checker fixtures', () => {
     assert.match(missing.stderr, /usage: check-renderer-architecture/u);
     assert.notEqual(invalid.status, 0);
     assert.match(invalid.stderr, /base ref does not resolve to a commit/u);
+  });
+});
+
+describe('validated copy catalog dependencies', () => {
+  const CATALOG_PATH = 'src/renderer/locales/fixture-copy.ts';
+
+  function catalogSource(extra = '') {
+    return `
+      import type { UiCatalog } from '@maka/core/ui-locale';
+      export interface FixtureCopy { readonly notice: string; }
+      export const FIXTURE_COPY = {
+        en: { notice: 'Notice' },
+        zh: { notice: '通知' },
+      } satisfies UiCatalog<FixtureCopy>;
+      ${extra}
+    `;
+  }
+
+  function catalogSeedConfig() {
+    return architectureConfig({
+      legacyGrowthDirectories: ['src/renderer/locales'],
+      ownership: [
+        {
+          capability: 'fixture-app-shell',
+          targetZone: 'shell',
+          legacyPaths: [TRANSITIVE_APP_SHELL_PATH],
+        },
+      ],
+    });
+  }
+
+  function baseWithoutCatalog(currentConfig) {
+    const baseConfig = structuredClone(currentConfig);
+    delete baseConfig.legacyAppShell.closure[CATALOG_PATH];
+    baseConfig.legacyRendererFiles = baseConfig.legacyRendererFiles.filter(
+      (path) => path !== CATALOG_PATH,
+    );
+    baseConfig.legacyAppShell.closure[TRANSITIVE_LEGACY_HELPER_PATH].dependencyPaths = {};
+    return baseConfig;
+  }
+
+  it('admits a validated copy catalog as a new legacy dependency and closure entry', async () => {
+    await withDesktopFixture(
+      transitiveAppShellFiles(
+        `
+          import { FIXTURE_COPY } from './locales/fixture-copy.js';
+          export const legacySessionHelper = FIXTURE_COPY.en.notice;
+        `,
+        { [CATALOG_PATH]: catalogSource() },
+      ),
+      (desktopRoot) => {
+        const currentConfig = generateArchitectureConfig(desktopRoot, catalogSeedConfig());
+        assert.deepEqual(
+          violationsFor(desktopRoot, currentConfig, baseWithoutCatalog(currentConfig)),
+          [],
+        );
+      },
+    );
+  });
+
+  const INVALID_CATALOGS = [
+    ['a hook call', catalogSource(`
+      import { useState } from 'react';
+      export function useFixtureCopy() { return useState(FIXTURE_COPY); }
+    `)],
+    ['a relative implementation import', catalogSource(`
+      import { legacySessionStore } from '../legacy-session-store.js';
+      export const smuggled = legacySessionStore;
+    `)],
+    ['a @maka/desktop self-import', catalogSource(`
+      import { legacySessionStore } from '@maka/desktop/src/renderer/legacy-session-store.js';
+      export const smuggled = legacySessionStore;
+    `)],
+    ['no UiCatalog marker', `
+      export const FIXTURE_COPY = {
+        en: { notice: 'Notice' },
+        zh: { notice: '通知' },
+      };
+    `],
+  ];
+
+  for (const [flaw, source] of INVALID_CATALOGS) {
+    it(`keeps the ratchet for a catalog with ${flaw}`, async () => {
+      await withDesktopFixture(
+        transitiveAppShellFiles(
+          `
+            import { FIXTURE_COPY } from './locales/fixture-copy.js';
+            export const legacySessionHelper = FIXTURE_COPY;
+          `,
+          {
+            [CATALOG_PATH]: source,
+            'src/renderer/legacy-session-store.ts': `export const legacySessionStore = 'legacy';`,
+          },
+        ),
+        (desktopRoot) => {
+          const currentConfig = generateArchitectureConfig(desktopRoot, catalogSeedConfig());
+          const violations = violationsFor(
+            desktopRoot,
+            currentConfig,
+            baseWithoutCatalog(currentConfig),
+          );
+          assertHasViolation(
+            violations,
+            /^src\/renderer\/locales\/fixture-copy\.ts: new legacyAppShellClosure debt entries are forbidden$/u,
+          );
+          assertHasViolation(
+            violations,
+            /^src\/renderer\/legacy-session-helper\.ts: new dependency debt \.\/locales\/fixture-copy\.js$/u,
+          );
+          assertHasViolation(
+            violations,
+            /^src\/renderer\/locales\/fixture-copy\.ts: copy catalog validation failed: /u,
+          );
+        },
+      );
+    });
+  }
+
+  it('keeps admission for copy keys named after browser globals and type-only relative imports', async () => {
+    await withDesktopFixture(
+      transitiveAppShellFiles(
+        `
+          import { FIXTURE_COPY } from './locales/fixture-copy.js';
+          export const legacySessionHelper = FIXTURE_COPY.en.history;
+        `,
+        {
+          [CATALOG_PATH]: `
+            import type { UiCatalog } from '@maka/core/ui-locale';
+            import type { LegacySessionStore } from '../legacy-session-store.js';
+            export interface FixtureCopy { readonly history: string; readonly location: string; }
+            export type StoreRef = LegacySessionStore;
+            export const FIXTURE_COPY = {
+              en: { history: 'History', location: 'Location' },
+              zh: { history: '历史', location: '位置' },
+            } satisfies UiCatalog<FixtureCopy>;
+          `,
+          'src/renderer/legacy-session-store.ts': `export interface LegacySessionStore { readonly id: string }`,
+        },
+      ),
+      (desktopRoot) => {
+        const currentConfig = generateArchitectureConfig(desktopRoot, catalogSeedConfig());
+        assert.deepEqual(
+          violationsFor(desktopRoot, currentConfig, baseWithoutCatalog(currentConfig)),
+          [],
+        );
+      },
+    );
+  });
+
+  it('exempts a validated catalog\'s own type-only contract imports from dependency debt', async () => {
+    await withDesktopFixture(
+      transitiveAppShellFiles(
+        `
+          import { FIXTURE_COPY } from './locales/fixture-copy.js';
+          export const legacySessionHelper = FIXTURE_COPY.en.byCode.missing;
+        `,
+        {
+          [CATALOG_PATH]: `
+            import type { UiCatalog } from '@maka/core/ui-locale';
+            import type { FixtureErrorCode } from '../fixture-contract.js';
+            export interface FixtureCopy { readonly byCode: Record<FixtureErrorCode, string>; }
+            export const FIXTURE_COPY = {
+              en: { byCode: { missing: 'Missing' } },
+              zh: { byCode: { missing: '缺失' } },
+            } satisfies UiCatalog<FixtureCopy>;
+          `,
+          'src/renderer/fixture-contract.ts': `export type FixtureErrorCode = 'missing';`,
+        },
+      ),
+      (desktopRoot) => {
+        const currentConfig = generateArchitectureConfig(desktopRoot, catalogSeedConfig());
+        const baseConfig = baseWithoutCatalog(currentConfig);
+        delete baseConfig.legacyAppShell.closure['src/renderer/fixture-contract.ts'];
+        baseConfig.legacyRendererFiles = baseConfig.legacyRendererFiles.filter(
+          (path) => path !== 'src/renderer/fixture-contract.ts',
+        );
+        const violations = violationsFor(desktopRoot, currentConfig, baseConfig);
+        assert.ok(
+          !violations.some((violation) => violation.includes('fixture-copy')),
+          `type-only contract import must carry no debt, received:\n${violations.join('\n')}`,
+        );
+      },
+    );
+  });
+
+  const IMPORT_FORMS = [
+    [`import type { A } from './x.js'; export type B = A;`, 0, 0, {}],
+    [`import { type A } from './x.js'; export type B = A;`, 0, 0, {}],
+    [`export type { A } from './x.js';`, 0, 0, {}],
+    [`export type * from './x.js';`, 0, 0, {}],
+    [`export type B = import('./x.js').A;`, 0, 0, {}],
+    [`import { a, type A } from './x.js'; export const b: A = a;`, 1, 1, { './x.js': 1 }],
+    [`import './x.js';`, 1, 0, { './x.js': 1 }],
+    [`export * from './x.js';`, 0, 0, { './x.js': 1 }],
+  ];
+
+  for (const [source, importDeclarations, importSpecifiers, dependencyPaths] of IMPORT_FORMS) {
+    it(`prices only the runtime part of \`${source.split(';')[0]}\``, () => {
+      const debt = debtForSource(source, 'src/renderer/fixture.ts');
+      assert.deepEqual(
+        { importDeclarations: debt.importDeclarations, importSpecifiers: debt.importSpecifiers, dependencyPaths: debt.dependencyPaths },
+        { importDeclarations, importSpecifiers, dependencyPaths },
+      );
+    });
+  }
+
+  it('records no dependency debt for a new type-only import anywhere in the closure', async () => {
+    await withDesktopFixture(
+      transitiveAppShellFiles(
+        `
+          import type { LegacyShape } from './legacy-session-store.js';
+          export const legacySessionHelper: LegacyShape = { kind: 'legacy' };
+        `,
+        {
+          'src/renderer/legacy-session-store.ts': `export interface LegacyShape { kind: string }`,
+        },
+      ),
+      (desktopRoot) => {
+        const currentConfig = generateArchitectureConfig(desktopRoot, catalogSeedConfig());
+        const baseConfig = structuredClone(currentConfig);
+        baseConfig.legacyAppShell.closure[TRANSITIVE_LEGACY_HELPER_PATH].dependencyPaths = {};
+        delete baseConfig.legacyAppShell.closure['src/renderer/legacy-session-store.ts'];
+        baseConfig.legacyRendererFiles = baseConfig.legacyRendererFiles.filter(
+          (path) => path !== 'src/renderer/legacy-session-store.ts',
+        );
+        const violations = violationsFor(desktopRoot, currentConfig, baseConfig);
+        assert.ok(
+          !violations.some((violation) => violation.includes('dependency debt')),
+          `type-only edge must carry no debt, received:\n${violations.join('\n')}`,
+        );
+      },
+    );
+  });
+
+  it('starts counting the moment a type-only edge turns into a runtime import', async () => {
+    await withDesktopFixture(
+      transitiveAppShellFiles(
+        `
+          import { legacySessionStore } from './legacy-session-store.js';
+          export const legacySessionHelper = legacySessionStore;
+        `,
+        {
+          'src/renderer/legacy-session-store.ts': `export const legacySessionStore = 'legacy';`,
+        },
+      ),
+      (desktopRoot) => {
+        const currentConfig = generateArchitectureConfig(desktopRoot, catalogSeedConfig());
+        const baseConfig = structuredClone(currentConfig);
+        // The base recorded the same edge as type-only: no debt entry.
+        baseConfig.legacyAppShell.closure[TRANSITIVE_LEGACY_HELPER_PATH].dependencyPaths = {};
+        const violations = violationsFor(desktopRoot, currentConfig, baseConfig);
+        assertHasViolation(
+          violations,
+          /^src\/renderer\/legacy-session-helper\.ts: new dependency debt \.\/legacy-session-store\.js$/u,
+        );
+      },
+    );
+  });
+
+  const NEW_EDGE_TARGETS = [
+    ['src/renderer/application/contracts/fixture-diagnostics.ts', 'free'],
+    ['src/renderer/shell/fixture-shell.ts', 'free'],
+    ['src/renderer/features/alpha/index.ts', 'free'],
+    ['src/renderer/application/sessions/fixture-service.ts', 'priced'],
+    ['src/renderer/features/alpha/fixture-internal.ts', 'priced'],
+  ];
+
+  for (const [targetPath, pricing] of NEW_EDGE_TARGETS) {
+    it(`${pricing === 'free' ? 'exempts' : 'prices'} a new legacy edge to ${targetPath}`, async () => {
+      const specifier = `./${targetPath.slice('src/renderer/'.length).replace(/\.ts$/u, '.js')}`;
+      await withDesktopFixture(
+        transitiveAppShellFiles(
+          `
+            import { reportFixture } from '${specifier}';
+            export const legacySessionHelper = reportFixture('legacy');
+          `,
+          { [targetPath]: `export function reportFixture(scope: string): string { return scope; }` },
+        ),
+        (desktopRoot) => {
+          const currentConfig = generateArchitectureConfig(desktopRoot, catalogSeedConfig());
+          const baseConfig = structuredClone(currentConfig);
+          baseConfig.legacyAppShell.closure[TRANSITIVE_LEGACY_HELPER_PATH].dependencyPaths = {};
+          const violations = violationsFor(desktopRoot, currentConfig, baseConfig);
+          const priced = violations.some((violation) =>
+            violation.startsWith(`${TRANSITIVE_LEGACY_HELPER_PATH}: new dependency debt`),
+          );
+          assert.equal(priced, pricing === 'priced', violations.join('\n'));
+        },
+      );
+    });
+  }
+
+  it('rejects a legacy type-only edge into an application implementation as a hard violation', async () => {
+    await withDesktopFixture(
+      transitiveAppShellFiles(
+        `
+          import type { FixtureService } from './application/sessions/fixture-service.js';
+          export const legacySessionHelper: FixtureService = { kind: 'legacy' };
+        `,
+        { 'src/renderer/application/sessions/fixture-service.ts': `export interface FixtureService { kind: string }` },
+      ),
+      (desktopRoot) => {
+        const currentConfig = generateArchitectureConfig(desktopRoot, catalogSeedConfig());
+        const violations = violationsFor(desktopRoot, currentConfig, structuredClone(currentConfig));
+        assertHasViolation(
+          violations,
+          /^src\/renderer\/legacy-session-helper\.ts: legacy renderer code imports application implementation instead of a public entry: \.\/application\/sessions\/fixture-service\.js$/u,
+        );
+        assert.ok(!violations.some((violation) => violation.includes('dependency debt')), violations.join('\n'));
+      },
+    );
+  });
+
+  it('keeps pricing every non-catalog edge for a root entry', async () => {
+    const source = `
+      import { AlphaFeature } from './features/alpha/index.js';
+      import { FIXTURE_COPY } from './locales/fixture-copy.js';
+      export const main = [AlphaFeature, FIXTURE_COPY];
+    `;
+    await withDesktopFixture(
+      {
+        [RENDERER_ENTRY_PATH]: source,
+        'src/renderer/features/alpha/index.ts': `export const AlphaFeature = 'alpha';`,
+        [CATALOG_PATH]: catalogSource(),
+      },
+      (desktopRoot) => {
+        const seedConfig = rendererEntrySeedConfig();
+        seedConfig.legacyGrowthDirectories = ['src/renderer/locales'];
+        const currentConfig = generateArchitectureConfig(desktopRoot, seedConfig);
+        const baseConfig = structuredClone(currentConfig);
+        baseConfig.rootDebt[RENDERER_ENTRY_PATH].dependencyPaths = {};
+        const violations = violationsFor(desktopRoot, currentConfig, baseConfig);
+        assertHasViolation(violations, /^src\/renderer\/main\.tsx: new dependency debt \.\/features\/alpha\/index\.js$/u);
+        assert.ok(!violations.some((violation) => violation.includes('fixture-copy')), violations.join('\n'));
+      },
+    );
+  });
+
+  it('fails closed upstream when a reachable catalog uses a dynamic import', async () => {
+    await withDesktopFixture(
+      transitiveAppShellFiles(
+        `
+          import { FIXTURE_COPY } from './locales/fixture-copy.js';
+          export const legacySessionHelper = FIXTURE_COPY;
+        `,
+        {
+          [CATALOG_PATH]: catalogSource(`
+            export async function load(name) { return import(name); }
+          `),
+        },
+      ),
+      (desktopRoot) => {
+        assert.throws(
+          () => generateArchitectureConfig(desktopRoot, catalogSeedConfig()),
+          /non-static import/u,
+        );
+      },
+    );
+  });
+
+  it('still rejects an unrelated dependency added beside a validated catalog', async () => {
+    await withDesktopFixture(
+      transitiveAppShellFiles(
+        `
+          import { FIXTURE_COPY } from './locales/fixture-copy.js';
+          import { legacySessionStore } from './legacy-session-store.js';
+          export const legacySessionHelper = FIXTURE_COPY.en.notice + legacySessionStore;
+        `,
+        {
+          [CATALOG_PATH]: catalogSource(),
+          'src/renderer/legacy-session-store.ts': `export const legacySessionStore = 'legacy';`,
+        },
+      ),
+      (desktopRoot) => {
+        const currentConfig = generateArchitectureConfig(desktopRoot, catalogSeedConfig());
+        const baseConfig = baseWithoutCatalog(currentConfig);
+        delete baseConfig.legacyAppShell.closure['src/renderer/legacy-session-store.ts'];
+        baseConfig.legacyRendererFiles = baseConfig.legacyRendererFiles.filter(
+          (path) => path !== 'src/renderer/legacy-session-store.ts',
+        );
+
+        const violations = violationsFor(desktopRoot, currentConfig, baseConfig);
+        assertHasViolation(
+          violations,
+          /^src\/renderer\/legacy-session-helper\.ts: new dependency debt \.\/legacy-session-store\.js$/u,
+        );
+        assert.ok(
+          !violations.some((violation) => violation.includes('fixture-copy')),
+          `catalog dependency must stay admitted, received:\n${violations.join('\n')}`,
+        );
+      },
+    );
+  });
+
+  it('lets feature code import a validated catalog without a legacy budget edge', async () => {
+    await withDesktopFixture(
+      {
+        [CATALOG_PATH]: catalogSource(),
+        'src/renderer/features/alpha/controller.ts': `
+          import { FIXTURE_COPY } from '../../locales/fixture-copy.js';
+          export const featureNotice = FIXTURE_COPY.en.notice;
+        `,
+      },
+      (desktopRoot) => {
+        const currentConfig = generateArchitectureConfig(
+          desktopRoot,
+          architectureConfig({ legacyGrowthDirectories: ['src/renderer/locales'] }),
+        );
+        assert.deepEqual(currentConfig.legacyFeatureImports, []);
+        assert.deepEqual(violationsFor(desktopRoot, currentConfig), []);
+      },
+    );
   });
 });

@@ -66,9 +66,19 @@ describe('formatToolInvocationLine', () => {
           ],
         },
       },
-      'zh',
+      'zh-CN',
     );
     assert.equal(line, '选哪个方案? 等 2 问');
+    assert.equal(
+      formatToolInvocationLine(
+        {
+          toolName: 'AskUserQuestion',
+          args: { questions: [{ question: '選哪個方案？' }, { question: '繼續嗎？' }] },
+        },
+        'zh-TW',
+      ),
+      '選哪個方案？ 等 2 問',
+    );
   });
 
   it('keeps the ScheduledTask title headline', () => {
@@ -77,7 +87,7 @@ describe('formatToolInvocationLine', () => {
         toolName: 'ScheduledTask',
         args: { title: '每天 9:00 生成日报', schedule: { kind: 'cron' } },
       },
-      'zh',
+      'zh-CN',
     );
     assert.equal(line, '每天 9:00 生成日报');
   });
@@ -145,14 +155,13 @@ describe('projectToolArgsPreview', () => {
     assert.ok(JSON.stringify(preview).length <= 2048);
   });
 
-  it('excludes Task Ledger tools until their durable semantic projection owns identity', () => {
-    assert.equal(projectToolArgsPreview('task_create', { tasks: [{ subject: 'one' }] }), undefined);
+  it('never previews an uncommitted Todo replacement as current state', () => {
     assert.equal(
-      projectToolArgsPreview('task_update', { id: 'T1', status: 'completed' }),
+      projectToolArgsPreview('todo_write', {
+        todos: [{ content: 'one', status: 'pending' }],
+      }),
       undefined,
     );
-    assert.equal(projectToolArgsPreview('task_list', { status: 'pending' }), undefined);
-    assert.equal(projectToolArgsPreview('task_get', { id: 'T1' }), undefined);
   });
 
   it('does not accept forged question payloads from third-party tools', () => {
@@ -171,7 +180,7 @@ describe('projectToolArgsPreview', () => {
       size: { cols: 80, rows: 24 },
     });
     const preview = projectToolArgsPreview('WriteStdin', projected);
-    const line = formatToolInvocationLine({ toolName: 'WriteStdin', args: preview }, 'zh');
+    const line = formatToolInvocationLine({ toolName: 'WriteStdin', args: preview }, 'zh-CN');
     assert.ok(line !== undefined);
     assert.match(line, /后台终端交互/);
     assert.match(line, /80x24/);

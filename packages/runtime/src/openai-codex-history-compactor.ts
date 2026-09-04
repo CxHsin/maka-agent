@@ -23,26 +23,27 @@ import type {
 } from './ai-sdk-compaction-contract.js';
 import { HistoryCompactSummarizerError } from './history-compact-error.js';
 import {
+  canContinueHistoryCompactCheckpointForModel,
   historyCompactCheckpointToModelMessage,
   isProviderHistoryCompactCheckpoint,
   type HistoryCompactProviderState,
 } from './history-compact-checkpoint.js';
 import type { RuntimeEvent } from '@maka/core/runtime-event';
 import type { ModelMessage } from './model-protocol.js';
-import { fitHistoryCompactMessages } from './history-compact-input-fit.js';
 import {
+  admitProviderReasoningReplayItems,
   buildRuntimeEventModelReplayPlan,
+  compatibleProviderReasoningReplayEventIds,
   type RuntimeEventModelReplayItem,
 } from './model-history.js';
 import { withProviderStreamTracking } from './provider-request-telemetry.js';
-import { toolResultOutput } from './tool-result-output.js';
-import { providerFailureDiagnostic } from './provider-error-classification.js';
-
-export { fitHistoryCompactMessages as fitOpenAiCodexCompactionMessages } from './history-compact-input-fit.js';
+import { effectiveReplayToolResultOutput } from './durable-tool-result-projection.js';
+import { classifyError, providerFailureDiagnostic } from './provider-error-classification.js';
 
 export interface BuildOpenAiCodexHistoryCompactorOptions {
   resolveModel: () => unknown;
-  connectionSlug: string;
+  connectionId: string;
+  providerStateIdentity?: `sha256:${string}`;
   modelId: string;
   providerOptions?: Record<string, unknown>;
 }
@@ -66,20 +67,32 @@ export function buildOpenAiCodexHistoryCompactor(options: BuildOpenAiCodexHistor
       const canContinuePrevious =
         previous &&
         isProviderHistoryCompactCheckpoint(previous) &&
-        previous.providerState.kind === 'openai_codex_remote_v2' &&
-        previous.providerState.connectionSlug === options.connectionSlug &&
-        previous.providerState.modelId === options.modelId;
+        canContinueHistoryCompactCheckpointForModel(
+          previous,
+          { providerType: 'openai-codex' },
+          options.connectionId,
+          options.modelId,
+        );
       const events = canContinuePrevious
         ? (input.newlyFoldedRuntimeEvents ?? [])
         : input.source.foldedRuntimeEvents;
-      const projectedMessages = openAiCodexCompactionMessages(events);
+      const providerReasoningReplayEventIds = compatibleProviderReasoningReplayEventIds(
+        events,
+        input.source.invocations,
+        options.providerStateIdentity,
+        options.modelId,
+        input.runId,
+      );
+      const projectedMessages = openAiCodexCompactionMessages(
+        events,
+        providerReasoningReplayEventIds,
+      );
       if (canContinuePrevious) {
         projectedMessages.unshift(historyCompactCheckpointToModelMessage(previous));
       }
-      const messages = fitHistoryCompactMessages(projectedMessages, {
-        maxInputEstimatedTokens: input.inputBudget?.maxEstimatedTokens,
-        charsPerToken: input.inputBudget?.charsPerToken,
-      });
+      // Whether this input fits the compaction endpoint is its own answer;
+      // nothing is trimmed on a local estimate beforehand (#4559).
+      const messages = projectedMessages;
 
       const providerRequestTracker = input.providerRequestTracker;
       const ai = await loadAiSdkModule();
@@ -111,13 +124,16 @@ export function buildOpenAiCodexHistoryCompactor(options: BuildOpenAiCodexHistor
       if (streamError) throw streamError;
       const state = extractOpenAiCodexCompactionState(
         content,
-        options.connectionSlug,
+        options.connectionId,
         options.modelId,
       );
       if (!state) throw new HistoryCompactSummarizerError('invalid_provider_state');
       return state;
     } catch (error) {
       if (error instanceof HistoryCompactSummarizerError) throw error;
+      if (classifyError(error) === 'ContextLength') {
+        throw new HistoryCompactSummarizerError('input_too_large', { cause: error });
+      }
       throw new HistoryCompactSummarizerError('provider_error', { cause: error });
     }
   };
@@ -174,7 +190,10 @@ function hasAbortCause(error: unknown): boolean {
  * Runtime persists tool calls/results before a step's reasoning/text closer;
  * grouping lets the compactor keep settled tool evidence before grounded text.
  */
-export function openAiCodexCompactionMessages(events: readonly RuntimeEvent[]): ModelMessage[] {
+function openAiCodexCompactionMessages(
+  events: readonly RuntimeEvent[],
+  providerReasoningReplayEventIds: ReadonlySet<string>,
+): ModelMessage[] {
   type ToolCall = Extract<RuntimeEventModelReplayItem, { kind: 'tool_call' }>;
   type ToolResult = Extract<RuntimeEventModelReplayItem, { kind: 'tool_result' }>;
   type Thinking = Extract<RuntimeEventModelReplayItem, { kind: 'thinking' }>;
@@ -185,26 +204,26 @@ export function openAiCodexCompactionMessages(events: readonly RuntimeEvent[]): 
     text?: Text;
   };
   type TimelineEntry =
-    | { kind: 'step'; stepId: string }
+    | { kind: 'step'; stepId: string; value: Step }
     | { kind: 'legacy_call'; call: ToolCall }
     | { kind: 'text'; item: Text }
     | { kind: 'thinking'; item: Thinking };
 
-  const items = buildRuntimeEventModelReplayPlan(events).items;
+  const items = admitProviderReasoningReplayItems(
+    buildRuntimeEventModelReplayPlan(events).items,
+    providerReasoningReplayEventIds,
+  );
   const results = new Map<string, ToolResult>();
   for (const item of items) {
     if (item.kind === 'tool_result') results.set(item.toolCallId, item);
   }
 
-  const steps = new Map<string, Step>();
   const timeline: TimelineEntry[] = [];
   const step = (stepId: string): Step => {
-    let value = steps.get(stepId);
-    if (!value) {
-      value = { calls: [], reasoning: [] };
-      steps.set(stepId, value);
-      timeline.push({ kind: 'step', stepId });
-    }
+    const last = timeline.at(-1);
+    if (last?.kind === 'step' && last.stepId === stepId) return last.value;
+    const value = { calls: [], reasoning: [] };
+    timeline.push({ kind: 'step', stepId, value });
     return value;
   };
   for (const item of items) {
@@ -232,7 +251,7 @@ export function openAiCodexCompactionMessages(events: readonly RuntimeEvent[]): 
           type: 'tool-result',
           toolCallId: result.toolCallId,
           toolName: result.toolName,
-          output: toolResultOutput(result.output, result.isError),
+          output: effectiveReplayToolResultOutput(result),
         },
       ],
     });
@@ -300,7 +319,7 @@ export function openAiCodexCompactionMessages(events: readonly RuntimeEvent[]): 
 
   for (const entry of timeline) {
     if (entry.kind === 'step') {
-      pushStep(steps.get(entry.stepId)!);
+      pushStep(entry.value);
     } else if (entry.kind === 'legacy_call') {
       pushStep({ calls: [entry.call], reasoning: [] });
     } else if (entry.kind === 'thinking') {
@@ -328,7 +347,7 @@ export function openAiCodexCompactionMessages(events: readonly RuntimeEvent[]): 
 
 export function extractOpenAiCodexCompactionState(
   content: readonly unknown[] | undefined,
-  connectionSlug: string,
+  connectionId: string,
   modelId: string,
 ): HistoryCompactProviderState | undefined {
   const parts = (content ?? []).filter(isOpenAiCompactionPart);
@@ -337,7 +356,7 @@ export function extractOpenAiCodexCompactionState(
   if (!nonEmpty(metadata.itemId) || !nonEmpty(metadata.encryptedContent)) return undefined;
   return {
     kind: 'openai_codex_remote_v2',
-    connectionSlug,
+    connectionId,
     modelId,
     itemId: metadata.itemId,
     encryptedContent: metadata.encryptedContent,

@@ -52,7 +52,7 @@ interface QuietPreviewStrings {
 }
 
 const STRINGS_BY_LOCALE: Record<UiLocale, QuietPreviewStrings> = {
-  zh: {
+  'zh-CN': {
     backgroundTerminal: '后台终端交互',
     empty: '（空）',
     done: '已完成',
@@ -61,6 +61,16 @@ const STRINGS_BY_LOCALE: Record<UiLocale, QuietPreviewStrings> = {
     written: '已写入',
     bytes: (n) => `共 ${n} 字节`,
     moreQuestions: (total) => (total > 1 ? ` 等 ${total} 问` : ''),
+  },
+  'zh-TW': {
+    backgroundTerminal: '後臺終端互動',
+    empty: '（空）',
+    done: '已完成',
+    notDone: '未完成',
+    replacements: (n) => `${n} 處`,
+    written: '已寫入',
+    bytes: (n) => `共 ${n} 位元組`,
+    moreQuestions: (total) => (total > 1 ? ` 等 ${total} 問` : ''),
   },
   en: {
     backgroundTerminal: 'Background terminal interaction',
@@ -75,7 +85,7 @@ const STRINGS_BY_LOCALE: Record<UiLocale, QuietPreviewStrings> = {
 };
 
 function strings(locale: UiLocale): QuietPreviewStrings {
-  return STRINGS_BY_LOCALE[locale] ?? STRINGS_BY_LOCALE.zh;
+  return STRINGS_BY_LOCALE[locale] ?? STRINGS_BY_LOCALE['zh-CN'];
 }
 
 // ── Tool command extraction ──────────────────────────────────────────────
@@ -230,7 +240,7 @@ export interface ToolInvocationInput {
  */
 export function formatToolInvocationLine(
   item: ToolInvocationInput,
-  locale: UiLocale = 'zh',
+  locale: UiLocale = 'zh-CN',
 ): string | undefined {
   const s = strings(locale);
   const args = asRecord(item.args);
@@ -328,7 +338,7 @@ const ARGS_PREVIEW_MAX_CHARS = 2048;
 /** Question lists keep only their leading entries. */
 const ARGS_PREVIEW_LIST_MAX_ITEMS = 4;
 
-const TASK_LEDGER_TOOL_NAMES = new Set(['task_create', 'task_update', 'task_list', 'task_get']);
+const COMMIT_RESULT_ONLY_TOOL_NAMES = new Set(['todo_write']);
 
 /**
  * Whitelist of scalar args keys {@link formatToolInvocationLine} can read, in
@@ -435,10 +445,10 @@ export function projectToolArgsPreview(
 ): Record<string, unknown> | undefined {
   const record = asRecord(args);
   if (!record) return undefined;
-  // Task rows need committed IDs and the exact Task Ledger mutation snapshot;
-  // args alone cannot identify the user-facing task reliably. Keep them out of
-  // the generic live preview until the Host-owned semantic timeline (#4179).
-  if (TASK_LEDGER_TOOL_NAMES.has(toolName)) return undefined;
+  // A Todo write's args are only a proposal. Showing them while the call is
+  // live would present uncommitted state as fact; the settled tool_result owns
+  // the complete committed snapshot.
+  if (COMMIT_RESULT_ONLY_TOOL_NAMES.has(toolName)) return undefined;
 
   // Apply the canonical activity projection first so WriteStdin's inputPreview
   // shape (bounded, display-safe) is what the whitelist picks up.
@@ -518,7 +528,7 @@ export interface QuietPreview {
  * Primary list/text fields become the main body; remaining fields (error, ok,
  * truncated, …) are appended so diagnostics cannot vanish.
  */
-export function formatQuietJsonValue(value: unknown, locale: UiLocale = 'zh'): QuietPreview {
+export function formatQuietJsonValue(value: unknown, locale: UiLocale = 'zh-CN'): QuietPreview {
   const s = strings(locale);
   if (value === null || value === undefined) {
     return { body: s.empty };
@@ -677,7 +687,7 @@ function formatArrayAsBody(values: unknown[], locale: UiLocale): string {
 export function formatAsKeyValueLines(
   record: Record<string, unknown>,
   depth = 0,
-  locale: UiLocale = 'zh',
+  locale: UiLocale = 'zh-CN',
 ): string {
   const s = strings(locale);
   if (depth > 3) return redactSecrets(String(record));

@@ -161,12 +161,6 @@ export function goalAttachedNoticeText(
   return `Autonomous goal is running (${goal.iterations}/${goal.maxIterations}): ${short} — /goal shows details, /goal pause pauses it.`;
 }
 
-export function shouldAnnounceGoalAttachment(
-  goal: Pick<GoalProjection, 'status' | 'armedAt' | 'boundTurnId'>,
-): boolean {
-  return (goal.status === 'active' || goal.status === 'waiting') && !isArmedGoal(goal);
-}
-
 /** Full `/goal` summary. Terminal goals are as welcome here as live ones. */
 export function goalSummaryLines(goal: GoalProjection, now: number): string[] {
   const status = `Status: ${isArmedGoal(goal) ? 'set' : goalStatusLabel(goal.status)} · ${goal.iterations}/${goal.maxIterations} iterations`;

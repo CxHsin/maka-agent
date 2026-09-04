@@ -248,7 +248,7 @@ describe('useGoalController', () => {
     });
 
     await act(async () => renderController(root, services, input('a')));
-    assert.equal(controller().selectors.indicator?.armedAt, 150);
+    assert.equal(controller().selectors.indicator?.isArmed, true);
 
     const boundServices = createFakeGoalServices({
       goal: {
@@ -257,7 +257,7 @@ describe('useGoalController', () => {
       },
     });
     await act(async () => renderController(root, boundServices, input('a')));
-    assert.equal(controller().selectors.indicator?.armedAt, undefined);
+    assert.equal(controller().selectors.indicator?.isArmed, false);
   });
 
   it('routes resume and clear controls for paused Goals', async () => {

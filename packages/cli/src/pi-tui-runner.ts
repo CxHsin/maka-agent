@@ -184,7 +184,6 @@ import {
   goalStatusLabel,
   goalSummaryLines,
   isLiveGoalStatus,
-  shouldAnnounceGoalAttachment,
 } from './pi-goal.js';
 import { getTuiPrimaryGuidance } from './tui-primary-guidance.js';
 import { TUI_COPY_RESOURCES } from './tui-copy-catalog.js';
@@ -629,7 +628,10 @@ export async function runMakaPiTui(input: MakaPiTuiInput): Promise<void> {
   // must never resume a token-burning loop silently. This covers a driver
   // that is already attached at startup; a resumeSessionId attach happens
   // later, so switchSession repeats the check after adopting the session.
-  if (currentGoal !== null && shouldAnnounceGoalAttachment(currentGoal)) {
+  if (
+    currentGoal !== null &&
+    (currentGoal.status === 'active' || currentGoal.status === 'waiting')
+  ) {
     state.entries.push({
       kind: 'notice',
       level: 'info',
@@ -1765,7 +1767,10 @@ export async function runMakaPiTui(input: MakaPiTuiInput): Promise<void> {
     // would erase a notice from adoption time — keeps an auto-continuing
     // token-burning loop from resuming silently.
     currentGoal = input.driver.getGoal?.() ?? null;
-    if (currentGoal !== null && shouldAnnounceGoalAttachment(currentGoal)) {
+    if (
+      currentGoal !== null &&
+      (currentGoal.status === 'active' || currentGoal.status === 'waiting')
+    ) {
       state.entries.push({
         kind: 'notice',
         level: 'info',

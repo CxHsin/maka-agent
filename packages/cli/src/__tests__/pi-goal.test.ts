@@ -32,7 +32,6 @@ import {
   goalStatusLineText,
   goalSummaryLines,
   isLiveGoalStatus,
-  shouldAnnounceGoalAttachment,
 } from '../pi-goal.js';
 
 function goal(overrides: Partial<GoalProjection> = {}): GoalProjection {
@@ -113,14 +112,11 @@ describe('pi-goal display helpers', () => {
       goalAttachedNoticeText(armed),
       'Autonomous goal is set (3/50): Ship the feature — it takes hold on the next Turn.',
     );
-    assert.equal(shouldAnnounceGoalAttachment(armed), false);
-    assert.equal(shouldAnnounceGoalAttachment(goal()), true);
   });
 
   test('a bound first Turn makes the same Goal running again', () => {
     const running = goal({ armedAt: 1_000, boundTurnId: 'turn-1' });
     assert.equal(goalStatusLineText(running, 61_000), 'goal 3/50 1m');
-    assert.equal(shouldAnnounceGoalAttachment(running), true);
     assert.match(goalAttachedNoticeText(running), /Autonomous goal is running/);
   });
 

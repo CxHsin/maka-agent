@@ -18,7 +18,6 @@
  */
 
 import { useEffect, useReducer, type ReactElement } from 'react';
-import { isGoalArmedAwaitingFirstTurn } from '@maka/core/goal';
 import {
   BreadcrumbItem,
   Breadcrumbs,
@@ -59,10 +58,8 @@ interface SessionContextGoalBase {
   maxIterations: number;
   /** Epoch ms when the goal was set; the chip derives wall-clock elapsed. */
   setAt: number;
-  /** Present while a user-armed Goal waits for its first Turn. */
-  armedAt?: number;
-  /** Present while the first Turn carrying an armed Goal is running. */
-  boundTurnId?: string | null;
+  /** Whether the Goal is set and waiting for its first Turn. */
+  isArmed: boolean;
   tokensSpent?: number;
   /** When present (a budget exists), the chip shows spent / budget. */
   tokenBudget?: number;
@@ -124,7 +121,7 @@ export function SessionContextLayer(props: {
     // attention tone.
     const paused = goal.status === 'paused';
     const waiting = goal.status === 'waiting';
-    const armed = isGoalArmedAwaitingFirstTurn(goal);
+    const armed = goal.isArmed;
     const phase: GoalDisplayPhase = paused
       ? 'paused'
       : armed

@@ -145,9 +145,7 @@ export function useGoalController(
       iterations: activeGoal.iterations,
       maxIterations: activeGoal.maxIterations,
       setAt: activeGoal.setAt,
-      ...(isGoalArmedAwaitingFirstTurn(activeGoal)
-        ? { armedAt: activeGoal.armedAt }
-        : {}),
+      isArmed: isGoalArmedAwaitingFirstTurn(activeGoal),
       tokensSpent: activeGoal.tokensNow,
       ...(activeGoal.tokenBudget !== undefined
         ? { tokenBudget: activeGoal.tokenBudget }

@@ -172,7 +172,6 @@ test('keeps the Desktop candidate usable when an optional MCP tool has an invali
       })),
     });
     const ipc = ipcHarness();
-    const diagnostics: unknown[] = [];
     const invalidTool = {
       ...nativeTool(),
       name: 'mcp_invalid',
@@ -193,6 +192,7 @@ test('keeps the Desktop candidate usable when an optional MCP tool has an invali
       resizeImage: async (bytes) => bytes,
       nativeCapabilities: {
         browserTools: [],
+        resolveBrowserUrl: () => 'https://example.com/',
         releaseBrowserSession() {},
         computerUseTools: Object.assign([], {
           clearSession() {},
@@ -203,7 +203,7 @@ test('keeps the Desktop candidate usable when an optional MCP tool has an invali
             offerId: 'desktop_mcp',
             label: 'MCP',
             description: 'MCP tools',
-            invalidToolPolicy: 'omit',
+            dynamic: true,
             tools: [invalidTool, validTool],
           },
         ],
@@ -215,7 +215,6 @@ test('keeps the Desktop candidate usable when an optional MCP tool has an invali
       resolveSessionCreateProject: async () => ({ kind: 'host_path', path: base }),
       emitSessionsChanged() {},
       completeComputerUseTurn() {},
-      onError: (error) => diagnostics.push(error),
       createSessionCopyCleanup: () => ({
         ownCreation: (_creation, operation) => operation(),
         rejectCreation: async () => undefined,
@@ -234,8 +233,6 @@ test('keeps the Desktop candidate usable when an optional MCP tool has an invali
       ((await ipc.invoke('sessions:list')) as SessionCatalogProjection[]).map(({ id }) => id),
       [projected.id],
     );
-    assert.equal(diagnostics.length, 1);
-    assert.match(String(diagnostics[0]), /desktop_mcp\/mcp_invalid/);
     await candidate.close();
   } finally {
     await host?.close().catch(() => undefined);

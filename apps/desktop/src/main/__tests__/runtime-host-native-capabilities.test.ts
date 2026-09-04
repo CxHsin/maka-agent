@@ -212,6 +212,7 @@ test('publishes and invokes an MCP tool backed by an AI SDK JSON Schema', async 
   assert.ok(mcpTool);
   const provider = createDesktopNativeCapabilityProvider({
     browserTools: [],
+    resolveBrowserUrl: () => 'https://example.com/',
     releaseBrowserSession() {},
     computerUseTools: computerTools(),
     releaseComputerUseSession() {},
@@ -220,7 +221,7 @@ test('publishes and invokes an MCP tool backed by an AI SDK JSON Schema', async 
         offerId: 'desktop_mcp',
         label: 'MCP',
         description: 'MCP tools',
-        invalidToolPolicy: 'omit',
+        dynamic: true,
         tools: [mcpTool],
       },
     ],
@@ -272,11 +273,12 @@ test('publishes and invokes an MCP tool backed by an AI SDK JSON Schema', async 
   assert.equal(accepted, true);
 });
 
-test('omits optional MCP tools that would exceed one offer\'s tool limit', () => {
-  const diagnostics: Error[] = [];
+test('chunks optional MCP tools that exceed one offer\'s tool limit', () => {
+  const diagnostics: string[] = [];
   const provider = createDesktopNativeCapabilityProvider(
     {
       browserTools: [],
+      resolveBrowserUrl: () => 'https://example.com/',
       releaseBrowserSession() {},
       computerUseTools: computerTools(),
       releaseComputerUseSession() {},
@@ -285,32 +287,35 @@ test('omits optional MCP tools that would exceed one offer\'s tool limit', () =>
           offerId: 'desktop_mcp',
           label: 'MCP',
           description: 'MCP tools',
-          invalidToolPolicy: 'omit',
+          dynamic: true,
           tools: Array.from({ length: 65 }, (_, index) =>
             tool(`mcp_tool_${index + 1}`, z.object({}), async () => 'ok'),
           ),
         },
       ],
     },
-    { onInvalidTool: (error) => diagnostics.push(error) },
+    { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
   );
 
   assert.deepEqual(
-    provider.offers()[0]?.tools.map(({ name }) => name),
-    Array.from({ length: 64 }, (_, index) => `mcp_tool_${index + 1}`),
+    provider.offers().map((offer) => [offer.offerId, offer.tools.length] as const),
+    [
+      ['desktop_mcp', 64],
+      ['desktop_mcp_2', 1],
+    ],
   );
-  assert.equal(diagnostics.length, 1);
-  assert.match(diagnostics[0]?.message ?? '', /desktop_mcp\/mcp_tool_65/u);
+  assert.equal(diagnostics.length, 0);
   assert.doesNotThrow(() =>
     decodeClientCapabilityReplaceInput({ registrationId: 'registration-1', offers: provider.offers() }),
   );
 });
 
 test('omits optional MCP tools that would exceed the complete manifest byte limit', () => {
-  const diagnostics: Error[] = [];
+  const diagnostics: string[] = [];
   const provider = createDesktopNativeCapabilityProvider(
     {
       browserTools: [],
+      resolveBrowserUrl: () => 'https://example.com/',
       releaseBrowserSession() {},
       computerUseTools: computerTools(),
       releaseComputerUseSession() {},
@@ -319,21 +324,22 @@ test('omits optional MCP tools that would exceed the complete manifest byte limi
         optionalMcpGroup('desktop_mcp_second', 'mcp_second', 28 * 1024),
       ],
     },
-    { onInvalidTool: (error) => diagnostics.push(error) },
+    { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
   );
 
   assert.deepEqual(provider.offers().map(({ offerId }) => offerId), ['desktop_mcp_first']);
   assert.equal(diagnostics.length, 1);
-  assert.match(diagnostics[0]?.message ?? '', /desktop_mcp_second\/mcp_second/u);
+  assert.match(diagnostics[0] ?? '', /mcp_second/u);
   assert.doesNotThrow(() =>
     decodeClientCapabilityReplaceInput({ registrationId: 'registration-1', offers: provider.offers() }),
   );
 });
 
 test('accounts for services when omitting optional MCP tools for the manifest budget', () => {
-  const diagnostics: Error[] = [];
+  const diagnostics: string[] = [];
   const offersOnlyProvider = createDesktopNativeCapabilityProvider({
     browserTools: [],
+    resolveBrowserUrl: () => 'https://example.com/',
     releaseBrowserSession() {},
     computerUseTools: computerTools(),
     releaseComputerUseSession() {},
@@ -344,6 +350,7 @@ test('accounts for services when omitting optional MCP tools for the manifest bu
   const provider = createDesktopNativeCapabilityProvider(
     {
       browserTools: [],
+      resolveBrowserUrl: () => 'https://example.com/',
       releaseBrowserSession() {},
       computerUseTools: computerTools(),
       releaseComputerUseSession() {},
@@ -361,7 +368,7 @@ test('accounts for services when omitting optional MCP tools for the manifest bu
     },
     {
       targetScope: { hostId: 'host-1', targetEpoch: 'epoch-1' },
-      onInvalidTool: (error) => diagnostics.push(error),
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
     },
   );
 
@@ -380,7 +387,7 @@ test('accounts for services when omitting optional MCP tools for the manifest bu
     }), /manifest is too large/u);
   assert.deepEqual(provider.offers()[0]?.tools.map(({ name }) => name), ['mcp_tool_1']);
   assert.equal(diagnostics.length, 1);
-  assert.match(diagnostics[0]?.message ?? '', /desktop_mcp\/mcp_tool_2/u);
+  assert.match(diagnostics[0] ?? '', /mcp_tool_2/u);
   assert.doesNotThrow(() =>
     decodeClientCapabilityReplaceInput({
       registrationId: 'registration-1',
@@ -1131,7 +1138,7 @@ function optionalMcpGroupWithTools(
     offerId,
     label: 'MCP',
     description: 'MCP tools',
-    invalidToolPolicy: 'omit' as const,
+    dynamic: true as const,
     tools: Array.from({ length: toolCount }, (_, index) => ({
       name: toolCount === 1 ? name : `${name}_${index + 1}`,
       displayName: toolCount === 1 ? name : `${name}_${index + 1}`,

@@ -33,6 +33,8 @@ import type {
   BackendSendInput,
   HostedInteractionBridge,
 } from '@maka/core/backend-types';
+import type { RuntimeEvent } from '@maka/core/runtime-event';
+import type { PermissionRules } from '@maka/core/runtime-policy';
 import type { SandboxBoundaryResponse } from '@maka/core/sandbox-boundary';
 import type { UserQuestionResponse } from '@maka/core/user-question';
 import type { EffectiveOrchestration } from '@maka/core/orchestration';
@@ -120,6 +122,10 @@ export interface AiSdkBackendInput extends AiSdkCompactionCapabilities {
   readExecutionBoundary: ToolRuntimeInput['readExecutionBoundary'];
   createSandboxBoundaryRequest?: ToolRuntimeInput['createSandboxBoundaryRequest'];
   settleSandboxBoundaryRequest?: ToolRuntimeInput['settleSandboxBoundaryRequest'];
+  /** Host-owned persistent deny rules, captured for the backend generation. */
+  permissionRules?: PermissionRules;
+  /** Session-scoped state retained when the Host rebuilds this backend. */
+  permissionRuntimeState?: ToolRuntimeInput['permissionRuntimeState'];
 
   // ── Process-singleton deps ─────────────────────────────────────────────
   /** Canonical-named tools available this session. */
@@ -345,7 +351,10 @@ export class AiSdkBackend implements AgentBackend {
       beforeRunProviderDispatch: input.beforeRunProviderDispatch,
     });
     const runtime = resolveModelRuntime(input.connection, input.modelId);
-    const applyPatchProfile = runtime.applyPatchProfile;
+    const applyPatchProfile =
+      input.permissionRules === undefined || input.permissionRules.denyPaths.length === 0
+        ? runtime.applyPatchProfile
+        : null;
     this.messageProjection = new AiSdkMessageProjection({
       modelAdapter: this.modelAdapter,
       applyPatchProfile,
@@ -448,6 +457,8 @@ export class AiSdkBackend implements AgentBackend {
       readExecutionBoundary: input.readExecutionBoundary,
       createSandboxBoundaryRequest: input.createSandboxBoundaryRequest,
       settleSandboxBoundaryRequest: input.settleSandboxBoundaryRequest,
+      permissionRules: input.permissionRules,
+      permissionRuntimeState: input.permissionRuntimeState,
       newId: this.newId,
       now: this.now,
       getPermissionPauseTarget: () => identity.scope().watchdog,

@@ -364,6 +364,8 @@ async function buildHostAiSdkBackend(
                 input.context.store.settleSandboxBoundaryRequest!(request),
             }
           : {}),
+        permissionRules: runtimePolicySnapshot.policy.permissionRules,
+        permissionRuntimeState: input.context.permissionRuntimeState,
         connection: target.connection,
         providerStateIdentity: target.providerStateIdentity,
         apiKey,

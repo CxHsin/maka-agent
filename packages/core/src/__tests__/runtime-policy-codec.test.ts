@@ -23,6 +23,9 @@ import {
   createDefaultRuntimePolicy,
   decodeCanonicalConnectionCatalogEntry,
   decodeCanonicalRuntimePolicy,
+  decodeCanonicalPermissionRules,
+  matchPermissionRules,
+  normalizePermissionRules,
   decodeRelayModelProfilesTable,
   normalizeCreateCatalogConnectionInput,
   normalizeConnectionCatalogEntryUpdate,
@@ -32,6 +35,69 @@ import {
   normalizeSetCredentialInput,
   RuntimePolicyDomainDecodeError,
 } from '../runtime-policy.js';
+
+test('normalizes and matches persistent deny rules without treating patterns as regexes', () => {
+  const rules = normalizePermissionRules({
+    denyCommands: ['git push *', 'git commit *'],
+    denyPaths: [
+      { path: '/mnt', scope: 'subtree' },
+      { path: '/etc/wsl.conf', scope: 'exact' },
+    ],
+  });
+  assert.deepEqual(rules, {
+    denyCommands: ['git commit *', 'git push *'],
+    denyPaths: [
+      { path: '/etc/wsl.conf', scope: 'exact' },
+      { path: '/mnt', scope: 'subtree' },
+    ],
+  });
+  assert.equal(matchPermissionRules(rules, { command: 'git push origin main' })?.kind, 'command');
+  assert.equal(matchPermissionRules(rules, { command: 'git push origin\nmain' })?.kind, 'command');
+  assert.equal(matchPermissionRules(rules, { command: 'git pull origin main' }), undefined);
+  assert.equal(matchPermissionRules(rules, { path: '/mnt/project/file.txt' })?.kind, 'path');
+  assert.equal(matchPermissionRules(rules, { path: '/mnt-other/file.txt' }), undefined);
+  assert.equal(matchPermissionRules(rules, { path: '/etc/wsl.conf' })?.kind, 'path');
+  assert.equal(matchPermissionRules(rules, { path: '/etc/wsl.conf.d/extra' }), undefined);
+});
+
+test('normalizes permission-rule mutations and rejects unsafe path rules', () => {
+  const mutation = normalizeRuntimePolicyMutation({
+    expectedRevision: 0,
+    operation: {
+      kind: 'set_permission_rules',
+      value: {
+        denyCommands: ['  git commit *  ', 'git commit *'],
+        denyPaths: [{ path: '/tmp/', scope: 'subtree' }],
+      },
+    },
+  });
+  assert.deepEqual(mutation.operation, {
+    kind: 'set_permission_rules',
+    value: { denyCommands: ['git commit *'], denyPaths: [{ path: '/tmp', scope: 'subtree' }] },
+  });
+  assert.throws(
+    () =>
+      normalizeRuntimePolicyMutation({
+        expectedRevision: 0,
+        operation: {
+          kind: 'set_permission_rules',
+          value: { denyCommands: [], denyPaths: [{ path: 'etc/passwd', scope: 'exact' }] },
+        },
+      }),
+    RuntimePolicyDomainDecodeError,
+  );
+  assert.throws(
+    () =>
+      normalizeRuntimePolicyMutation({
+        expectedRevision: 0,
+        operation: {
+          kind: 'set_permission_rules',
+          value: { denyCommands: [], denyPaths: [{ path: '/tmp/../etc', scope: 'subtree' }] },
+        },
+      }),
+    RuntimePolicyDomainDecodeError,
+  );
+});
 
 test('normalizes policy input while canonical policy decode rejects producer drift', () => {
   const mutation = normalizeRuntimePolicyMutation({

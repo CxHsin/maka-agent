@@ -446,6 +446,44 @@ test('persistent path denies cover literal paths used by Bash', async () => {
   }
 });
 
+test('an existing ToolRuntime reads updated persistent rules before the next dispatch', async () => {
+  const h = harness();
+  let rules = normalizePermissionRules({ denyCommands: [], denyPaths: [] });
+  let executions = 0;
+  const runtime = createTestToolRuntime({
+    ...runtimeInput(h),
+    readPermissionRules: () => rules,
+  });
+  const tool: MakaTool = {
+    name: 'Bash',
+    description: 'test',
+    parameters: z.object({ command: z.string() }),
+    impl: async () => {
+      executions += 1;
+      return { ok: true };
+    },
+  };
+
+  const allowed = await settle(
+    h,
+    tool,
+    { command: 'git push origin main' },
+    { runtime, toolCallId: 'call_live_rules_allowed' },
+  );
+  assert.deepEqual((allowed.result as { ok: boolean }).ok, true);
+
+  rules = normalizePermissionRules({ denyCommands: ['git push *'], denyPaths: [] });
+  const denied = await settle(
+    h,
+    tool,
+    { command: 'git push origin main' },
+    { runtime, toolCallId: 'call_live_rules_denied' },
+  );
+  assert.match((denied.result as { error: string }).error, /persistent permission rule/);
+  assert.equal(executions, 1);
+  assert.deepEqual(ledgerIssues(h), []);
+});
+
 test('persistent path denies cover recursive Glob and Grep search scopes', async () => {
   const cases: Array<{ tool: MakaTool; input: unknown }> = [
     {

@@ -24,6 +24,7 @@ import {
   decodeCanonicalConnectionCatalogEntry,
   decodeCanonicalRuntimePolicy,
   decodeCanonicalPermissionRules,
+  compilePermissionRules,
   matchPermissionRules,
   normalizePermissionRules,
   decodeRelayModelProfilesTable,
@@ -58,6 +59,19 @@ test('normalizes and matches persistent deny rules without treating patterns as 
   assert.equal(matchPermissionRules(rules, { path: '/mnt-other/file.txt' }), undefined);
   assert.equal(matchPermissionRules(rules, { path: '/etc/wsl.conf' })?.kind, 'path');
   assert.equal(matchPermissionRules(rules, { path: '/etc/wsl.conf.d/extra' }), undefined);
+});
+
+test('reuses the compiled matcher for one immutable permission-rule snapshot', () => {
+  const rules = normalizePermissionRules({
+    denyCommands: ['git push *'],
+    denyPaths: [{ path: '/mnt', scope: 'subtree' }],
+  });
+  const first = compilePermissionRules(rules);
+  const second = compilePermissionRules(rules);
+
+  assert.strictEqual(second, first);
+  assert.equal(first.match({ command: 'git push origin main' })?.kind, 'command');
+  assert.equal(first.match({ path: '/mnt/worktree/file.txt' })?.kind, 'path');
 });
 
 test('normalizes permission-rule mutations and rejects unsafe path rules', () => {

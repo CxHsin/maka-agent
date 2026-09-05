@@ -122,8 +122,10 @@ export interface AiSdkBackendInput extends AiSdkCompactionCapabilities {
   readExecutionBoundary: ToolRuntimeInput['readExecutionBoundary'];
   createSandboxBoundaryRequest?: ToolRuntimeInput['createSandboxBoundaryRequest'];
   settleSandboxBoundaryRequest?: ToolRuntimeInput['settleSandboxBoundaryRequest'];
-  /** Host-owned persistent deny rules, captured for the backend generation. */
+  /** Host-owned persistent deny rules used when no live provider is supplied. */
   permissionRules?: PermissionRules;
+  /** Reads the current Host-owned deny rules before each local tool dispatch. */
+  readPermissionRules?: ToolRuntimeInput['readPermissionRules'];
   /** Session-scoped state retained when the Host rebuilds this backend. */
   permissionRuntimeState?: ToolRuntimeInput['permissionRuntimeState'];
 
@@ -458,6 +460,7 @@ export class AiSdkBackend implements AgentBackend {
       createSandboxBoundaryRequest: input.createSandboxBoundaryRequest,
       settleSandboxBoundaryRequest: input.settleSandboxBoundaryRequest,
       permissionRules: input.permissionRules,
+      readPermissionRules: input.readPermissionRules,
       permissionRuntimeState: input.permissionRuntimeState,
       newId: this.newId,
       now: this.now,

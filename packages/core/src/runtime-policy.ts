@@ -60,6 +60,7 @@ export {
 } from './runtime-policy/policy-codec.js';
 export {
   decodeCanonicalPermissionRules,
+  compilePermissionRules,
   EMPTY_PERMISSION_RULES,
   matchPermissionRules,
   normalizePermissionRules,
@@ -72,6 +73,7 @@ export {
 } from './runtime-policy/permission-rules.js';
 export type {
   PermissionPathRule,
+  CompiledPermissionRules,
   PermissionRuleMatch,
   PermissionRules,
 } from './runtime-policy/permission-rules.js';

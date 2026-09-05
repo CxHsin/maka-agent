@@ -45,10 +45,22 @@ export type PermissionRuleMatch =
   | { readonly kind: 'command'; readonly pattern: string }
   | { readonly kind: 'path'; readonly rule: PermissionPathRule };
 
+export interface CompiledPermissionRules {
+  readonly rules: PermissionRules;
+  match(request: PermissionRuleRequest): PermissionRuleMatch | undefined;
+}
+
+interface PermissionRuleRequest {
+  readonly command?: string;
+  readonly path?: string;
+}
+
 export const EMPTY_PERMISSION_RULES: PermissionRules = Object.freeze({
   denyCommands: Object.freeze([]),
   denyPaths: Object.freeze([]),
 });
+
+const compiledRulesCache = new WeakMap<object, CompiledPermissionRules>();
 
 export function normalizePermissionRules(value: unknown): PermissionRules {
   const item = exactRecord(value, 'permission rules', ['denyCommands', 'denyPaths']);
@@ -79,7 +91,10 @@ export function normalizePermissionRules(value: unknown): PermissionRules {
     )
     .sort(comparePathRules);
 
-  return { denyCommands, denyPaths };
+  return Object.freeze({
+    denyCommands: Object.freeze(denyCommands),
+    denyPaths: Object.freeze(denyPaths.map((rule) => Object.freeze(rule))),
+  });
 }
 
 export function decodeCanonicalPermissionRules(value: unknown): PermissionRules {
@@ -90,25 +105,46 @@ export function decodeCanonicalPermissionRules(value: unknown): PermissionRules 
 
 export function matchPermissionRules(
   rules: PermissionRules,
-  request: { readonly command?: string; readonly path?: string },
+  request: PermissionRuleRequest,
 ): PermissionRuleMatch | undefined {
-  if (request.command !== undefined) {
-    for (const pattern of rules.denyCommands) {
-      if (globMatches(pattern, request.command)) return { kind: 'command', pattern };
-    }
-  }
-  if (request.path !== undefined) {
-    for (const rule of rules.denyPaths) {
-      if (
-        rule.scope === 'exact'
-          ? samePath(rule.path, request.path)
-          : pathWithinRoot(request.path, rule.path)
-      ) {
-        return { kind: 'path', rule };
+  return compilePermissionRules(rules).match(request);
+}
+
+/** Compile one immutable rule set once and reuse it for subsequent matches. */
+export function compilePermissionRules(rules: PermissionRules): CompiledPermissionRules {
+  const cached = compiledRulesCache.get(rules);
+  if (cached) return cached;
+
+  const commandMatchers = rules.denyCommands.map((pattern) => ({
+    pattern,
+    matcher: compileGlob(pattern),
+  }));
+  const compiled: CompiledPermissionRules = Object.freeze({
+    rules,
+    match(request: PermissionRuleRequest): PermissionRuleMatch | undefined {
+      if (request.command !== undefined) {
+        for (const entry of commandMatchers) {
+          if (entry.matcher.test(request.command)) {
+            return { kind: 'command', pattern: entry.pattern };
+          }
+        }
       }
-    }
-  }
-  return undefined;
+      if (request.path !== undefined) {
+        for (const rule of rules.denyPaths) {
+          if (
+            rule.scope === 'exact'
+              ? samePath(rule.path, request.path)
+              : pathWithinRoot(request.path, rule.path)
+          ) {
+            return { kind: 'path', rule };
+          }
+        }
+      }
+      return undefined;
+    },
+  });
+  compiledRulesCache.set(rules, compiled);
+  return compiled;
 }
 
 /** Compare canonical permission paths using the platform-aware path rules. */
@@ -159,7 +195,7 @@ function comparePathRules(left: PermissionPathRule, right: PermissionPathRule): 
   );
 }
 
-function globMatches(pattern: string, value: string): boolean {
+function compileGlob(pattern: string): RegExp {
   let source = '^';
   for (let index = 0; index < pattern.length; index += 1) {
     const character = pattern[index]!;
@@ -183,7 +219,7 @@ function globMatches(pattern: string, value: string): boolean {
     }
   }
   source += '$';
-  return new RegExp(source).test(value);
+  return new RegExp(source);
 }
 
 function escapeRegExp(value: string): string {

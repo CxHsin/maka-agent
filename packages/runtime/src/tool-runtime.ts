@@ -19,6 +19,7 @@
 
 import { decodeCanonicalToolResultContent } from '@maka/core/tool-result-record-schema';
 import {
+  compilePermissionRules,
   matchPermissionRules,
   permissionPathWithinRoot,
   type PermissionRules,
@@ -402,6 +403,8 @@ export interface ToolRuntimeInput {
   turnId: string;
   /** Host-owned persistent deny rules. These outrank the session boundary mode. */
   permissionRules?: PermissionRules;
+  /** Reads the current Host-owned deny rules for each pre-dispatch check. */
+  readPermissionRules?: () => PermissionRules;
   /** Session-scoped state for PTY command fragments across backend generations. */
   permissionRuntimeState?: PermissionRuntimeState;
   hostedInteraction?: HostedInteractionBridge;
@@ -3327,12 +3330,13 @@ export class ToolRuntime {
     tool: MakaTool,
     args: unknown,
   ): Promise<string | undefined> {
-    const configuredRules = this.input.permissionRules;
+    const configuredRules = this.input.readPermissionRules?.() ?? this.input.permissionRules;
     if (!configuredRules) return undefined;
     const rules = permissionRulesForCurrentHost(configuredRules);
+    const matcher = compilePermissionRules(rules);
 
     if (tool.name === 'Bash' && isRecord(args) && typeof args.command === 'string') {
-      const match = matchPermissionRules(rules, { command: args.command });
+      const match = matcher.match({ command: args.command });
       if (match?.kind === 'command') {
         return `Tool Bash was denied by a persistent permission rule matching ${JSON.stringify(match.pattern)}.`;
       }
@@ -3406,6 +3410,7 @@ export class ToolRuntime {
     rules: PermissionRules,
   ): Promise<string | undefined> {
     if (rules.denyPaths.length === 0) return undefined;
+    const matcher = compilePermissionRules(rules);
     for (const path of paths) {
       let canonicalPath: string;
       try {
@@ -3413,7 +3418,7 @@ export class ToolRuntime {
       } catch {
         return `${toolName} was denied by a persistent permission rule because its path could not be verified safely.`;
       }
-      const match = matchPermissionRules(rules, { path: canonicalPath });
+      const match = matcher.match({ path: canonicalPath });
       if (match?.kind === 'path') {
         return `${toolName} was denied by a persistent permission rule for ${match.rule.scope} path ${JSON.stringify(match.rule.path)}.`;
       }
@@ -3664,13 +3669,21 @@ function permissionPtyStateKey(sessionId: string, ref: string): string {
  */
 function permissionRulesForCurrentHost(rules: PermissionRules): PermissionRules {
   if (process.platform !== 'win32') return rules;
-  return {
+  const cached = hostPermissionRulesCache.get(rules);
+  if (cached) return cached;
+  const converted = Object.freeze({
     denyCommands: rules.denyCommands,
-    denyPaths: rules.denyPaths.map((rule) =>
-      rule.path.startsWith('/') ? { ...rule, path: resolve(rule.path) } : rule,
+    denyPaths: Object.freeze(
+      rules.denyPaths.map((rule) =>
+        Object.freeze(rule.path.startsWith('/') ? { ...rule, path: resolve(rule.path) } : rule),
+      ),
     ),
-  };
+  });
+  hostPermissionRulesCache.set(rules, converted);
+  return converted;
 }
+
+const hostPermissionRulesCache = new WeakMap<object, PermissionRules>();
 
 async function validateDeclaredToolArgs(parameters: unknown, args: unknown): Promise<void> {
   if (!parameters || (typeof parameters !== 'object' && typeof parameters !== 'function')) {
